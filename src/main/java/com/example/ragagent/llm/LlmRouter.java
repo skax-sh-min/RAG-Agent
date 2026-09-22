@@ -291,6 +291,9 @@ public class LlmRouter {
      */
     public void recordApproxUsage(String providerName, String promptText, String answerText) {
         if (answerText == null || answerText.isBlank()) return;
+        // 스트리밍 경로는 이 라우터의 호출 메서드를 거치지 않으므로, 비어 있지 않은 답변이 여기 온
+        // 것이 그 경로의 유일한 "성공" 신호다 — 연속 실패 횟수를 여기서 되돌린다.
+        circuitBreaker.recordSuccess(providerName);
         try {
             usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
         } catch (Exception e) {
@@ -528,13 +531,38 @@ public class LlmRouter {
      */
     private LlmProviderExhaustedException exhausted(TaskType taskType, List<ProviderRole> roleOrder) {
         int wait = secondsUntilAnyUnblocks(taskType, roleOrder);
+        int streak = maxConsecutiveFailures(taskType, roleOrder);
         String detail = " (task=" + taskType + ")";
+        if (streak >= LlmProviderExhaustedException.REPEATED_FAILURE_THRESHOLD) {
+            // 유일 프로바이더의 5초 차단은 "4초 후 다시"를 매번 참으로 만들지만, 서버 프로세스는 살았는데
+            // 엔진이 죽은 경우(GPU 소실)에는 기다려도 같은 실패다. 세 번째부터는 기다리라 하지 않는다.
+            log.warn("[REPEATED-FAILURE] task={} consecutive failures={} — the server keeps failing; "
+                    + "check GET /api/v1/llm/ping?deep=true (model reload / server restart usually needed)",
+                    taskType, streak);
+            String message = "AI 서버가 연속 " + streak + "회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요."
+                    + (wait >= 0 ? " (" + wait + "초 후 재시도 가능)" : "") + detail;
+            return new LlmProviderExhaustedException(message, wait, streak);
+        }
         if (wait < 0) {
             return new LlmProviderExhaustedException(
-                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail);
+                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail, -1, streak);
         }
         return new LlmProviderExhaustedException(
-                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait);
+                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait, streak);
+    }
+
+    /** 이 작업을 받을 수 있었을 프로바이더들 중 가장 긴 연속 실패 횟수 — 후보가 없으면 0. */
+    private int maxConsecutiveFailures(TaskType taskType, List<ProviderRole> roleOrder) {
+        boolean imageTask = isImageTask(taskType);
+        return providers.stream()
+                .filter(p -> roleOrder.contains(p.role())
+                        && p.supports(taskType)
+                        && p.hasValidApiKey()
+                        && !providerToggle.isDisabled(p.name())
+                        && !(imageTask && visionUnsupportedProviders.contains(p.name())))
+                .mapToInt(p -> circuitBreaker.consecutiveFailures(p.name()))
+                .max()
+                .orElse(0);
     }
 
     /**
@@ -836,6 +864,7 @@ public class LlmRouter {
             }
         }
         long elapsed = System.currentTimeMillis() - t0;
+        circuitBreaker.recordSuccess(provider.name());
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;

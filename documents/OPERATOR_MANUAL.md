@@ -2943,15 +2943,15 @@ docker compose logs app | grep -E "판정 없음으로 기록한다" | tail -20
 - **`{"error":"terminated"}`는 차단하지 않습니다** — `NOT blocking circuit breaker; the server is usually back within seconds.` 로그가 대신 남습니다.
 - **폴백이 없는 유일 프로바이더는 일반 실패도 5초만 차단합니다**(연결 거부 등). 프로바이더가 하나면 차단은 우회가 아니라 전면 중단이기 때문입니다. 차단을 아예 없애지는 않았습니다 — 서버가 정말 죽어 있으면 모든 요청이 각자 연결 타임아웃을 무는 편이 더 나쁩니다.
 
-사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`. 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 `잠시 후 다시 시도해 주세요.` 로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다.
+사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않습니다. 20초 후 다시 시도해 주세요.`(`error.llm.exhausted.retry`, 한/영). 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 예전의 일반 문구(`error.llm.exhausted`)로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다. **같은 프로바이더가 연속 3회 실패하면 문구가 바뀝니다** — `AI 서버가 연속 3회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요. (4초 후 재시도 가능)`(`error.llm.exhausted.repeated`). 5초 차단이 반복되는 죽은 서버(GPU 소실)에서 "잠시 후 다시"는 거짓이기 때문이며, 로그에는 `[REPEATED-FAILURE]` 가 남습니다. 횟수는 성공이 한 번 있어야 0 으로 돌아갑니다(차단이 풀려도 줄지 않음). 문장은 `LlmOutageMessages` 가 고르고, 예외 자체의 한국어 메시지(`(task=TEXT)` 꼬리 포함)는 화면에 나가지 않습니다.
 
 **여전히 이 증상이 보인다면** 먼저 서버가 실제로 어떤 상태인지 묻고(`curl -f http://localhost:8080/api/v1/llm/ping?deep=true` — "LLM 호출 오류 (500)" 의 표), 로그에서 실제 예외를 확인하세요:
 
 ```bash
-grep -E "threw |blocked for |NO-FALLBACK|LLM_PING" logs/rag-agent.log | tail -30
+grep -E "threw |blocked for |NO-FALLBACK|REPEATED-FAILURE|LLM_PING" logs/rag-agent.log | tail -30
 ```
 
-> **"4초 후 다시 시도" 가 거짓이 되는 경우** — 유일 프로바이더는 실패해도 5초만 차단하므로(위) 사용자 문구의 초는 그 잔여 시간입니다. GPU 소실처럼 서버 프로세스는 살았는데 엔진이 죽은 경우에는 5초가 지나도 같은 실패가 반복됩니다. 이때 `ping?deep=true` 가 `reachable=true, modelState=loaded, inference.ok=false` 를 내면 앱이 아니라 LLM 서버를 고칠 차례입니다(모델 Eject → Load, 런타임 Vulkan → CUDA, 컨텍스트·GPU 오프로드 축소, 드라이버).
+> **"4초 후 다시 시도" 가 거짓이 되는 경우** — 유일 프로바이더는 실패해도 5초만 차단하므로(위) 사용자 문구의 초는 그 잔여 시간입니다. GPU 소실처럼 서버 프로세스는 살았는데 엔진이 죽은 경우에는 5초가 지나도 같은 실패가 반복됩니다 — 그래서 **연속 3회째부터는 문구가 "서버(모델) 상태를 확인해 주세요" 로 바뀌고** 로그에 `[REPEATED-FAILURE]` 가 찍힙니다. 이때 `ping?deep=true` 가 `reachable=true, modelState=loaded, inference.ok=false` 를 내면 앱이 아니라 LLM 서버를 고칠 차례입니다(모델 Eject → Load, 런타임 Vulkan → CUDA, 컨텍스트·GPU 오프로드 축소, 드라이버).
 
 `Provider [x] threw ...` 줄이 진짜 원인입니다. `blocked for 30s`가 보이면 폴백이 있는 구성이라는 뜻이고, `blocked for 5s`면 유일 프로바이더 경로입니다.
 
@@ -3292,6 +3292,8 @@ sh scripts/install-hooks.sh
 | API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |
 | `X-Trace-Id` 요청 헤더 | 영숫자와 `_`·`-`, 최대 64자 | 거부가 아니라 **서버가 새로 발급**(요청은 정상 처리) |
 
+> **한 요청의 로그가 여러 스레드에 걸칩니다** — 채팅은 SSE 워커·사전 future·검색 축·Vision 호출이 전부 다른 (가상) 스레드인데, `MdcPropagation` 이 요청 스레드의 `traceId` 를 그 스레드들에 넘기므로 `grep <traceId> logs/rag-agent.log` 하나로 한 턴의 줄이 전부 잡힙니다(예전엔 그 줄들이 전부 `[-]` 였습니다). SSE 워커의 오류로 예외 핸들러가 다시 불릴 때(ASYNC 재디스패치)도 같은 id 입니다. 인덱싱은 업로드·재인덱싱 워커의 최상위 줄만 id 를 갖고, 그 안의 병렬 단계(키워드 추출·MD 교정)는 아직 `[-]` 입니다.
+>
 > **`X-Trace-Id`를 검증하는 이유**: 이 값은 모든 로그 줄의 `[traceId]` 자리에 그대로 들어갑니다. 줄바꿈이
 > 들어가면 로그 한 줄을 두 줄로 위조할 수 있고(가짜 ERROR 줄 주입), 수 KB짜리 값은 매 줄에 반복돼 로그
 > 파일을 부풀립니다. 채팅과 지식 제안이 게스트 개방이라 누구나 보낼 수 있는 헤더입니다. UUID는

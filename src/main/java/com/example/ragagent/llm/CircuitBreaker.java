@@ -26,6 +26,13 @@ public class CircuitBreaker {
     private static final Logger log = LoggerFactory.getLogger(CircuitBreaker.class);
 
     private final ConcurrentHashMap<String, Instant> blockedUntil = new ConcurrentHashMap<>();
+    /**
+     * 프로바이더별 연속 실패 횟수 — {@link #block} 마다 하나씩 오르고 {@link #recordSuccess} 에 0 이 된다.
+     * 차단 자체는 몇 초 뒤 풀리지만 이 수는 성공이 있어야만 풀린다: "삐끗했다"와 "죽었다"를 가르는
+     * 유일한 근거라({@code LlmProviderExhaustedException.consecutiveFailures}), 차단이 풀렸다고 함께
+     * 지우면 5초짜리 차단이 반복되는 죽은 서버가 매번 첫 실패처럼 보인다.
+     */
+    private final ConcurrentHashMap<String, Integer> consecutiveFailures = new ConcurrentHashMap<>();
     private final Duration defaultBlockDuration;
 
     public CircuitBreaker(
@@ -49,7 +56,24 @@ public class CircuitBreaker {
         Duration duration = parseRetryAfter(retryAfterHeader);
         Instant until = Instant.now().plus(duration);
         blockedUntil.put(providerName, until);
-        log.warn("Provider [{}] blocked for {}s until {}", providerName, duration.getSeconds(), until);
+        int streak = consecutiveFailures.merge(providerName, 1, Integer::sum);
+        log.warn("Provider [{}] blocked for {}s until {} (consecutive failures: {})",
+                providerName, duration.getSeconds(), until, streak);
+    }
+
+    /** 이 프로바이더가 요청 하나를 실제로 끝냈다 — 연속 실패 횟수를 0 으로. 라우터의 두 성공 경로가 부른다. */
+    public void recordSuccess(String providerName) {
+        consecutiveFailures.remove(providerName);
+    }
+
+    /** 마지막 성공 이후의 연속 실패 횟수(없으면 0). */
+    public int consecutiveFailures(String providerName) {
+        return consecutiveFailures.getOrDefault(providerName, 0);
+    }
+
+    /** 테스트 전용 — 차단 만료를 기다리지 않기 위해 차단만 걷는다. 연속 실패 횟수는 그대로다. */
+    void clearBlock(String providerName) {
+        blockedUntil.remove(providerName);
     }
 
     /**

@@ -105,4 +105,26 @@ class CircuitBreakerTest {
             .as("block() 직후에는 항상 isBlocked=true 가 보장되어야 한다")
                 .isZero();
     }
+
+    @Test
+    @DisplayName("연속 실패 횟수 — block() 마다 오르고 recordSuccess() 에 0, 차단이 풀려도 스스로 줄지 않는다")
+    void consecutiveFailuresCountBlocksUntilASuccess() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+
+        cb.block("lm", "1");
+        cb.block("lm", "1");
+        cb.block("lm", "1");
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(3);
+        assertThat(cb.consecutiveFailures("other")).isZero();
+
+        // 차단이 풀려도(만료를 기다리는 대신 테스트 훅으로 걷는다) 횟수는 남는다 — 5초짜리 차단이
+        // 반복되는 죽은 서버가 매번 첫 실패처럼 보이면 안 된다.
+        cb.clearBlock("lm");
+        assertThat(cb.isBlocked("lm")).isFalse();
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(3);
+
+        cb.recordSuccess("lm");
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+    }
 }

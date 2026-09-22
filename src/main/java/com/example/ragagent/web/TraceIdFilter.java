@@ -21,6 +21,8 @@ public class TraceIdFilter extends OncePerRequestFilter {
 
     static final String MDC_KEY = "traceId";
     static final String HEADER  = "X-Trace-Id";
+    /** 첫 통과에서 정한 id 를 같은 요청의 ASYNC/ERROR 재디스패치가 다시 쓰도록 남기는 요청 속성. */
+    static final String REQUEST_ATTR = TraceIdFilter.class.getName() + ".traceId";
 
     /**
      * 클라이언트가 보낸 trace id 로 받아들일 모양 — 영숫자와 {@code _-}, 최대 64자.
@@ -33,12 +35,28 @@ public class TraceIdFilter extends OncePerRequestFilter {
      */
     private static final Pattern SAFE_TRACE_ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
 
+    /**
+     * ASYNC 재디스패치에도 돈다. SSE 워커가 {@code completeWithError} 하면 컨테이너가 같은 요청을
+     * 비동기로 다시 디스패치해 {@code GlobalExceptionHandler} 를 부르는데, {@code OncePerRequestFilter}
+     * 의 기본값은 그 재디스패치를 건너뛰어 그때의 MDC 가 비어 있었다 — 2026-09-21 로그의
+     * {@code [RAG-INT-001][null]} 이 그것이다. 첫 통과가 남긴 요청 속성에서 <b>같은</b> id 를 다시 쓴다.
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res,
                                     FilterChain chain) throws ServletException, IOException {
-        String traceId = sanitize(req.getHeader(HEADER));
+        String traceId = req.getAttribute(REQUEST_ATTR) instanceof String existing
+                ? existing
+                : sanitize(req.getHeader(HEADER));
+        req.setAttribute(REQUEST_ATTR, traceId);
         MDC.put(MDC_KEY, traceId);
-        res.setHeader(HEADER, traceId);
+        if (!res.isCommitted()) {
+            res.setHeader(HEADER, traceId);
+        }
         try {
             chain.doFilter(req, res);
         } finally {

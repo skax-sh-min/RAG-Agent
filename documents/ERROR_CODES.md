@@ -11,7 +11,7 @@
 | RAG-UP-003  | 413 | (MaxUploadSizeExceededException) | 파일 크기 초과 |
 | RAG-INDEX-001 | 500 | `DocumentIndexingException` | 인덱싱 실패 (SHA-256 연산, 청크 저장 등) |
 | RAG-VEC-001 | 503 | `VectorStoreException` | Vector Store 호출 실패 |
-| RAG-LLM-001 | 503 | `LlmProviderExhaustedException` | 차단 때문이면 **남은 초와 `Retry-After` 헤더가 함께** 나간다(`AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다.`) — 시도했다가 실패해 후보가 없어진 경우엔 시간을 말하지 않는다(기다린다고 풀리지 않는다). 모든 LLM 프로바이더 차단 또는 소진 |
+| RAG-LLM-001 | 503 | `LlmProviderExhaustedException` | 차단 때문이면 **남은 초와 `Retry-After` 헤더가 함께** 나간다(`AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다.`). 같은 프로바이더가 **연속 3회** 실패하면 `AI 서버가 연속 N회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요.` 로 바뀐다(`consecutiveFailures`, `GET /api/v1/llm/ping?deep=true` 로 확인). 채팅 화면(SSE·HTMX)은 이 메시지 대신 같은 사실로 만든 현지화 문구(`error.llm.exhausted.*`)를 보인다 — 시도했다가 실패해 후보가 없어진 경우엔 시간을 말하지 않는다(기다린다고 풀리지 않는다). 모든 LLM 프로바이더 차단 또는 소진 |
 | RAG-LLM-002 | 429 | `LlmBackpressureException` | 프로바이더 동시성 게이트(§6.12)의 슬롯 대기가 `app.llm.permit-wait-timeout-seconds`(기본 60초)를 넘음 — **프로바이더 장애가 아니라 용량 압박**이라 Circuit Breaker 차단도, 다른 프로바이더 재시도도 하지 않고 즉시 전파한다. `Retry-After` 헤더가 함께 나가며, 스트리밍 경로에서는 `error.llm.backpressure` 메시지로 우아하게 종료된다 |
 | RAG-LLM-003 | 500 | `LlmContextOverflowException` | 프롬프트가 LLM 컨텍스트 윈도우 초과 — `LlmProviderExhaustedException` 의 **하위 타입**이라 소진을 잡던 자리들이 그대로 잡는다(도달 경로가 같다). 503 이 아닌 이유는 결정적 실패여서 — 같은 요청을 다시 보내도 똑같이 실패하므로 고칠 것은 시간이 아니라 프롬프트 크기(`search-top-k`·`max-tokens`)나 서버 컨텍스트 설정이다. **여기까지 온 것은 축소 재시도(§6.26-9)도 실패했다는 뜻이다** — 답변·검증 호출은 초과 시 문서를 `app.llm.shrink-step` 개(기본 1)씩 5회까지 덜어내며 다시 시도하므로(로그 `[SHRINK]`), 이 코드가 나갔다면 그 최대 축소폭(기본 5개)으로도 안 들어간 것이다 |
 | RAG-RATE-001 | 429 | (RateLimitFilter) | API 요청 빈도 제한 초과 — `Retry-After` 헤더(초)에 대기 시간 포함 |
@@ -34,7 +34,7 @@
 
 - 요청 헤더 `X-Trace-Id`로 직접 traceId를 지정할 수 있습니다. 단 **id 모양일 때만** 받아들입니다 — 영숫자와 `_`·`-`, 최대 64자(UUID는 하이픈째로 통과). 이 값은 모든 로그 줄의 `[traceId]` 자리에 그대로 들어가므로, 검증이 없으면 줄바꿈 하나로 가짜 로그 줄을 만들거나 긴 값이 매 줄에 반복돼 로그 파일이 부풀 수 있습니다.
 - 미지정이거나 위 모양이 아니면 서버에서 12자리 랜덤 ID를 생성합니다(요청을 거부하지는 않습니다 — 추적 id가 이상하다고 실패시킬 이유는 없습니다).
-- 응답 헤더 `X-Trace-Id`와 로그에서 동일 ID로 검색하면 해당 요청의 전체 흐름을 추적할 수 있습니다.
+- 응답 헤더 `X-Trace-Id`와 로그에서 동일 ID로 검색하면 해당 요청의 전체 흐름을 추적할 수 있습니다. 채팅 한 턴은 SSE 워커·사전 future·검색·Vision 스레드에 걸치지만 `MdcPropagation` 이 같은 id 를 넘기므로 한 번의 검색으로 전부 잡힙니다.
 
 ## 관련 파일
 

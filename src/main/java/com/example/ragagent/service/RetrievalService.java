@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.ConcurrencyLimitingChatModel;
 import com.example.ragagent.llm.LlmProvider;
@@ -30,6 +31,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 /**
@@ -194,7 +196,8 @@ public class RetrievalService {
             List<List<Document>> ranked;
             List<Document> keywordHits;
             CuratedHits curatedHits;
-            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                Executor exec = MdcPropagation.propagating(pool);   // 축별 검색 로그도 이 턴의 traceId 로
                 CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
                         () -> hybridEnabled
                                 ? ragService.keywordSearch(state.version(), searchQuestion, fetchK)

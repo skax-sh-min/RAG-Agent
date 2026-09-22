@@ -20,20 +20,45 @@ public sealed class LlmProviderExhaustedException extends RagException
      */
     private final int retryAfterSeconds;
 
+    /**
+     * 이 소진을 낸 프로바이더가 <b>연속으로</b> 실패한 횟수(성공이 한 번이라도 있으면 0 부터).
+     *
+     * <p>{@link #retryAfterSeconds} 만으로는 부족한 경우가 있다. 유일한 로컬 프로바이더는 실패해도 5초만
+     * 차단되므로 문구는 늘 "4초 후 다시"인데, 2026-09-21 의 GPU 소실처럼 서버 프로세스는 살았는데
+     * 엔진이 죽은 경우에는 5초가 지나도 같은 실패가 반복된다 — 그때 "잠시 후 다시"는 거짓이고,
+     * 사용자에게 필요한 말은 "기다리지 말고 서버를 보라"다. 한 번의 실패로는 삐끗한 것과 죽은 것을
+     * 가를 수 없어 횟수를 센다({@link #REPEATED_FAILURE_THRESHOLD}).
+     */
+    private final int consecutiveFailures;
+
+    /** 이 횟수부터 "잠시 후 다시" 대신 "서버 상태를 확인하라"고 말한다. */
+    public static final int REPEATED_FAILURE_THRESHOLD = 3;
+
     public LlmProviderExhaustedException(String message) { this(message, -1); }
 
     public LlmProviderExhaustedException(String message, int retryAfterSeconds) {
+        this(message, retryAfterSeconds, 0);
+    }
+
+    public LlmProviderExhaustedException(String message, int retryAfterSeconds, int consecutiveFailures) {
         super("RAG-LLM-001", message);
         this.retryAfterSeconds = retryAfterSeconds;
+        this.consecutiveFailures = Math.max(0, consecutiveFailures);
     }
 
     /** 하위 타입 전용 — 자기 코드와 원인을 실어 보낸다. */
     protected LlmProviderExhaustedException(String errorCode, String message, Throwable cause) {
         super(errorCode, message, cause);
         this.retryAfterSeconds = -1;   // 프롬프트 크기 문제라 기다린다고 풀리지 않는다
+        this.consecutiveFailures = 0;
     }
 
     @Override public int httpStatus() { return 503; }
 
     @Override public int retryAfterSeconds() { return retryAfterSeconds; }
+
+    public int consecutiveFailures() { return consecutiveFailures; }
+
+    /** 연속 실패가 문턱을 넘었는가 — 문구를 "기다려라"에서 "서버를 보라"로 바꾸는 기준. */
+    public boolean repeated() { return consecutiveFailures >= REPEATED_FAILURE_THRESHOLD; }
 }

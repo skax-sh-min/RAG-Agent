@@ -1,6 +1,8 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.web.MdcPropagation;
+import com.example.ragagent.service.LlmOutageMessages;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
@@ -152,7 +154,7 @@ public class ChatController {
     public void precomputeSummary(ThreadContext ctx, @RequestParam String threadId) {
         String userId = ctx.userId();
         Locale locale = ctx.locale();
-        Thread.ofVirtual().start(() -> summarizerService.precompute(userId, threadId, locale));
+        Thread.ofVirtual().start(MdcPropagation.wrap(() -> summarizerService.precompute(userId, threadId, locale)));
     }
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -168,7 +170,9 @@ public class ChatController {
         String userId = ctx.userId();
         threadMetaService.getOrCreate(userId, normalizedForm.threadId(), normalizedForm.version());
         threadMetaService.updateTags(userId, normalizedForm.threadId(), normalizedForm.selectedTags());
-        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, normalizedForm, emitter));
+        // MdcPropagation — 워커(와 그 안의 future·검색·Vision)가 이 요청의 traceId 로 로그를 남긴다.
+        Thread worker = Thread.ofVirtual().start(
+                MdcPropagation.wrap(() -> streamingAgentService.run(userId, normalizedForm, emitter)));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
                     normalizedForm.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
@@ -267,8 +271,8 @@ public class ChatController {
             return "fragments/message-error :: message";
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
-            model.addAttribute("errorMessage", messageSource.getMessage(
-                    "error.llm.exhausted", null, LocaleContextHolder.getLocale()));
+            model.addAttribute("errorMessage",
+                    LlmOutageMessages.resolve(messageSource, e, LocaleContextHolder.getLocale()));
             return "fragments/message-error :: message";
         } catch (Exception e) {
             log.error("Chat error", e);
