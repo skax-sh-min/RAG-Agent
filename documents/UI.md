@@ -142,7 +142,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 - 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 매칭은 서버가 한다 — `QuestionKeywords`가 의문·기능어·조사·어미를 뺀 내용어(최대 6개)를 뽑고 그 전부가 든 질문을 찾는다(어순·대소문자 무관); 내용어가 없으면 입력 전체 부분 일치로 폴백. 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
 - 항목 앞에 출처 배지가 붙는다 — **현재 대화**(`thread`, 파랑·↑) / **내 대화**(`mine`, 초록) / **다른 사용자**(`others`, 회색) / **다른 대화**(`elsewhere`, 회색). 마지막 것은 `guest-identity=shared`처럼 모든 방문자가 한 id를 쓰는 배포용이다 — 그 id로는 내 것과 남의 것이 같아서, 그대로 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다(`QuestionReuseService.originOf()`). 목록 순서는 현재 대화 → 내 대화 → 그 외, 그 안에서 최신순(SQL `ORDER BY`)이고, 같은 질문이 여럿이면 그 순서의 첫 항목만 남는다.
-- **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 좋아요·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
+- **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 제외·활성 출처·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
 - 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).
 - 재사용 성공(`reused=true`)이면 페이지 새로고침 없이 사용자 버블 + 어시스턴트 버블을 즉시 렌더링하고 provider 배지에 `db-reuse`를 표시한다. 질문 버블의 두 글자 표기는 **응답의 `responseMode`/`directMode`**(= 원본 답변이 만들어진 모드·검색 축, 서버가 새 턴에 그대로 저장한 값)로 그린다 — 폼에 지금 선택된 모드가 아니다(그렇게 그리면 새로고침 뒤 서버 렌더와 어긋난다).
 - 서버는 턴을 저장하기 **전에** `threadMetaService.getOrCreate()`로 대화 행을 보장한다 — HTMX·SSE 경로와 같은 순서다. 예전에는 이 경로만 그것을 빠뜨려, 재사용 답변이 **새 대화의 첫 메시지**일 때 `thread_meta` 행이 없어 사이드바에 뜨지 않고 제목 생성도 건너뛰었으며, `/chat/{threadId}`를 다시 열면 `meta == null`이라 턴을 아예 싣지 않아 **대화가 사라진 것처럼** 보였다(일반 메시지를 한 번 보내야 나타났다).
@@ -695,7 +695,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 | 파일 업로드 실패 | 파일 행 상태 ❌ + 오류 토스트 |
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
 | 문서 내보내기 실패 | `fetch` 응답이 실패(`!res.ok`)면 `ProblemDetail`(JSON)의 `detail`을 파싱해 오류 토스트로 표시(§3.2 문서 내보내기 다이얼로그 참고) — 저장 다이얼로그가 뜨지 않고 조용히 실패하는 대신 사유가 보임 |
-| LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
+| LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmOutageMessages` 가 고른 현지화 문구 — 차단 잔여가 있으면 "AI 서버가 일시적으로 응답하지 않습니다. N초 후 다시 시도해 주세요.", 같은 프로바이더가 연속 3회 실패하면 "AI 서버가 연속 N회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요.", 둘 다 아니면 `error.llm.exhausted`. 헤더 표시기는 그동안 `LLM: 차단 중 Ns` |
 | 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
 | 제안 등록 검증 실패 | 폼 POST → 플래시 리다이렉트로 페이지 상단 빨간 안내 + 입력 초안 복원(제목 200자 초과·태그 정책 위반·대기 20건 초과). 본문 길이는 애초에 제한이 없다 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |

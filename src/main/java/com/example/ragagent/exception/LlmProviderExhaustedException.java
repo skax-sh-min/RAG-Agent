@@ -13,10 +13,11 @@ public sealed class LlmProviderExhaustedException extends RagException
     /**
      * 다시 시도할 수 있게 되기까지 남은 초. 차단 때문이 아니면 {@code -1}(= 해당 없음).
      *
-     * <p><b>왜 필요한가.</b> 이 예외의 메시지는 SSE {@code error} 이벤트로 <b>그대로</b> 채팅 버블에
-     * 찍힌다({@code chat-stream.js} 의 {@code onError}). 남은 시간을 말해 주지 않으면 사용자가 할 수
-     * 있는 일은 계속 눌러 보는 것뿐이고, 실제로 그렇게 됐다 — 실측 로그에서 30초 차단 하나에 재시도
-     * 3번이 전부 같은 오류로 죽었다. 언제부터 되는지 알면 기다릴 수 있다.
+     * <p><b>왜 필요한가.</b> 남은 시간을 말해 주지 않으면 사용자가 할 수 있는 일은 계속 눌러 보는
+     * 것뿐이고, 실제로 그렇게 됐다 — 실측 로그에서 30초 차단 하나에 재시도 3번이 전부 같은 오류로
+     * 죽었다. 언제부터 되는지 알면 기다릴 수 있다. 채팅 화면(SSE {@code error} 이벤트·HTMX 오류 조각)은
+     * 이 메시지를 그대로 내보내지 않고 {@code LlmOutageMessages} 가 이 값과 {@link #consecutiveFailures}
+     * 로 현지화 문장을 고른다; 메시지 자체는 REST 의 {@code ProblemDetail.detail} 과 로그에 쓰인다.
      */
     private final int retryAfterSeconds;
 
