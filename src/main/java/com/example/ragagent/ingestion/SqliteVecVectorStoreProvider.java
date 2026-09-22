@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.VectorStoreException;
 import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
@@ -262,7 +263,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             List<Future<?>> futures = new ArrayList<>(subBatches.size());
             for (List<Document> batch : subBatches) {
                 acquire(gate);
-                futures.add(exec.submit(() -> {
+                futures.add(exec.submit(MdcPropagation.wrap(() -> {
                     try {
                         List<float[]> emb = embedBatchWithFallback(
                                 indexingEmbeddingModel, batch.stream().map(Document::getText).toList());
@@ -272,7 +273,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                     } finally {
                         gate.release();
                     }
-                }));
+                })));
             }
             awaitAll(futures);
         }

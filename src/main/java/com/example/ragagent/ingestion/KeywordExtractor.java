@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -86,7 +88,8 @@ public class KeywordExtractor {
         // single-chunk path below — behavior-identical to pre-§10.8.2.
         int batchSize = Math.max(1, props.indexingSafe().keywordBatchSize());
         List<List<Document>> batches = partition(chunks, batchSize);
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             List<CompletableFuture<List<Document>>> futures = batches.stream()
                 .map(batch -> CompletableFuture.supplyAsync(() -> {
                     llmGate.acquireUninterruptibly();
@@ -113,7 +116,7 @@ public class KeywordExtractor {
                 return results;
             } catch (InterruptedException e) {
                 log.warn("[ENRICH] cancelled — interrupting in-flight keyword extraction: {}", filename);
-                exec.shutdownNow();
+                pool.shutdownNow();
                 Thread.currentThread().interrupt();
                 throw new IndexingCancelledException("keyword extraction cancelled: " + filename);
             } catch (ExecutionException e) {

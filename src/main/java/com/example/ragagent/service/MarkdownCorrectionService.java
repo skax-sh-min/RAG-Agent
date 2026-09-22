@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.IndexingOutputCap;
@@ -32,6 +33,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -411,7 +413,8 @@ public class MarkdownCorrectionService {
         Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> corrected;
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
             for (int i = 0; i < sections.size(); i++) {
                 final String sec = sections.get(i);
@@ -1037,7 +1040,8 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 이미지 설명 병렬 생성: {}장, maxConcurrent={}", total, maxConcurrent);
         Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             List<CompletableFuture<Void>> futures = new ArrayList<>(toDescribe.size());
             int seq = 0;
             for (Map.Entry<String, Path> e : toDescribe.entrySet()) {

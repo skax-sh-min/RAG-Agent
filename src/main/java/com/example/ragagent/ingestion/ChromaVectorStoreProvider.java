@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.VectorStoreRegistry;
@@ -180,7 +181,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
                 List<Future<?>> futures = new ArrayList<>(subBatches.size());
                 for (List<Document> batch : subBatches) {
                     acquire(gate);
-                    futures.add(exec.submit(() -> {
+                    futures.add(exec.submit(MdcPropagation.wrap(() -> {
                         try {
                             embedInto(batch, embeddingByDocId);
                             int d = done.addAndGet(batch.size());
@@ -188,7 +189,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
                         } finally {
                             gate.release();
                         }
-                    }));
+                    })));
                 }
                 awaitAll(futures);
             }

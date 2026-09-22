@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
@@ -570,6 +571,9 @@ public class DocumentIndexer {
 
         try (ExecutorService filePool = Executors.newFixedThreadPool(
                 fileConcurrency, Thread.ofVirtual().factory())) {
+            // 파일별 작업이 동기화를 시작한 요청의 traceId 를 잇는다 — 그 아래 청킹·키워드 추출의
+            // 중첩 실행기도 각자 같은 식으로 감싸, 한 문서의 인덱싱 줄이 전부 한 id 로 묶인다.
+            Executor fileExec = MdcPropagation.propagating(filePool);
             List<CompletableFuture<Void>> futures = filesToIndex.entrySet().stream()
                 .map(e -> CompletableFuture.runAsync(() -> {
                     boolean failed = false;
@@ -592,7 +596,7 @@ public class DocumentIndexer {
                         onProgress.accept(IndexingProgressEvent.of("sync_file_done", k, totalFiles,
                                 e.getKey(), k + "/" + totalFiles + " 완료"));
                     }
-                }, filePool))
+                }, fileExec))
                 .toList();
             // .get() (not .join()) so a cancel-driven interrupt of this coordinating thread
             // actually unblocks the wait instead of parking through it (§6.16.1).

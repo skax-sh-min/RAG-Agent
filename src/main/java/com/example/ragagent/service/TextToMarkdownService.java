@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -118,7 +120,8 @@ public class TextToMarkdownService {
         Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> structured;
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             structured = blocks.stream()
                     .map(block -> CompletableFuture.supplyAsync(() -> {
                         gate.acquireUninterruptibly();
