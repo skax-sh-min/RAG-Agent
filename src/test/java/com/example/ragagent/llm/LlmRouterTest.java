@@ -391,6 +391,80 @@ class LlmRouterTest {
                         .isBetween(25, 30));
     }
 
+    /**
+     * 유일 프로바이더는 실패해도 5초만 차단되므로 문구는 늘 "4초 후 다시"다. 서버 프로세스는 살았는데
+     * 엔진이 죽은 경우(2026-09-21 GPU 소실)에는 5초 뒤에도 같은 실패라 세 번째부터는 기다리라 하지 않고
+     * 서버(모델) 상태를 보라고 한다. 성공이 한 번 있으면 처음부터 다시 센다.
+     */
+    @Test
+    @DisplayName("연속 3회 실패부터는 '잠시 후 다시' 대신 '서버 상태를 확인하라' — 성공 한 번에 리셋")
+    void repeatedFailures_escalateTheMessage_andASuccessResets() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        ChatModel cm = mock(ChatModel.class);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("500 - decode() failed: ErrorDeviceLost"));
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                    m -> m.call(new Prompt("x"))))
+                    .isInstanceOf(LlmProviderExhaustedException.class)
+                    .hasMessageNotContaining("연속")
+                    .satisfies(e -> assertThat(((LlmProviderExhaustedException) e).repeated()).isFalse());
+            // 다음 시도가 차단에 막히지 않도록 — 실제로는 5초를 기다리는 자리다.
+            forceUnblock(cb, "lm");
+        }
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class)
+                .hasMessageContaining("연속 3회")
+                .hasMessageContaining("서버(모델) 상태")
+                .satisfies(e -> {
+                    var ex = (LlmProviderExhaustedException) e;
+                    assertThat(ex.repeated()).isTrue();
+                    assertThat(ex.consecutiveFailures()).isEqualTo(3);
+                    assertThat(ex.retryAfterSeconds()).as("차단 잔여 초는 여전히 실린다").isBetween(1, 5);
+                });
+
+        // 성공 한 번 — 다음 실패는 다시 첫 실패처럼 말한다.
+        forceUnblock(cb, "lm");
+        ChatResponse ok = new ChatResponse(List.of(new Generation(new AssistantMessage("답변"))));
+        org.mockito.Mockito.reset(cm);
+        when(cm.call(any(Prompt.class))).thenReturn(ok);
+        r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+
+        org.mockito.Mockito.reset(cm);
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("500 - decode() failed: ErrorDeviceLost"));
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .hasMessageNotContaining("연속");
+    }
+
+    @Test
+    @DisplayName("스트리밍 경로의 성공(recordApproxUsage 에 비어 있지 않은 답변)도 연속 실패 횟수를 되돌린다")
+    void streamingSuccess_resetsTheStreak() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, mock(ChatModel.class), null);
+        var r = new LlmRouter(List.of(p), mock(LlmUsageRepository.class), cb,
+                RoutingMode.COST_FIRST, 180, Map.of(), 3, 20, new ProviderToggle());
+        cb.block("lm", "1");
+        cb.block("lm", "1");
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(2);
+
+        r.recordApproxUsage("lm", "prompt", "");        // 빈 답변 = 실패한 스트림 — 성공이 아니다
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(2);
+        r.recordApproxUsage("lm", "prompt", "답변");
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+    }
+
+    /** 5초 차단의 만료를 기다리는 대신 차단만 걷는다 — 연속 실패 횟수는 그대로다(성공이 아니라 시계 조작). */
+    private static void forceUnblock(CircuitBreaker cb, String name) {
+        cb.clearBlock(name);
+    }
+
     @Test
     @DisplayName("차단이 아니라 시도했다가 실패한 경우엔 시간을 말하지 않는다 — 기다린다고 풀리지 않는다")
     void exhaustedAfterTrying_doesNotPromiseATime() {

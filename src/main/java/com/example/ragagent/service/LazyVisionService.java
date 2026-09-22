@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.repository.ImageDescriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -106,6 +108,7 @@ public class LazyVisionService {
         // already-running Vision calls keep going in the background). shutdown() near the end just
         // stops new submissions — this executor already has everything it will ever get.
         ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
+        Executor mdcExec = MdcPropagation.propagating(exec);   // Vision 호출 로그도 이 턴의 traceId 로
         List<CompletableFuture<Void>> futures = misses.stream()
                 .map(imgPath -> CompletableFuture.runAsync(() -> {
                     try {
@@ -144,7 +147,7 @@ public class LazyVisionService {
                         // reach total or the client's progress indicator would stall short.
                         if (onProgress != null) onProgress.accept(doneCount.incrementAndGet(), total);
                     }
-                }, exec))
+                }, mdcExec))
                 .toList();
 
         CompletableFuture<Void> allDone = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));

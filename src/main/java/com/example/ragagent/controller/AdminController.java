@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
@@ -700,7 +701,7 @@ public class AdminController {
 
         String taskId = progressService.newTaskId();
 
-        Thread worker = Thread.ofVirtual().name("idx-reindex-" + taskId).start(() -> {
+        Thread worker = Thread.ofVirtual().name("idx-reindex-" + taskId).start(MdcPropagation.wrap(() -> {
             try {
                 ragService.reindexFromMd(docId, event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.of("done", 0, 0, docId, "재인덱싱 완료"));
@@ -708,7 +709,7 @@ public class AdminController {
                 log.warn("[REINDEX] 재인덱싱 실패: docId={}, {}", docId, e.getMessage());
                 progressService.publish(taskId, IndexingProgressEvent.error(docId, e.getMessage()));
             }
-        });
+        }));
         progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));

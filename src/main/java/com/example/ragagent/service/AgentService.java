@@ -1,6 +1,8 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
+import com.example.ragagent.exception.AsyncExceptions;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.RoutingMode;
@@ -17,6 +19,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 /**
@@ -84,35 +88,41 @@ public class AgentService {
             initial = AgentState.of(request.question(), request.version(), request.threadId(),
                     userId, history, request.routingMode(), true, ctx.locale());
         } else {
-            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-                CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                        () -> resolveHistory(userId, request.threadId(), false,
-                                request.responseMode(), request.routingMode(), request.question()), exec);
-                // §10.12 — 짧은 후속 질문이면 먼저 독립화하고, 분류는 그 결과를 본다. 게이트가
-                // 순수해서(길이만 본다) 긴 질문에서는 이 future 가 이미 완료된 채로 만들어지므로
-                // 분류가 즉시 출발한다 — 오늘의 병렬성이 그대로다.
-                CompletableFuture<QuestionCondenser.Condensed> condensedF =
-                        condenseAsync(userId, request.threadId(), request.question(), ctx.locale(), exec);
-                CompletableFuture<String> typeF = condensedF.thenApplyAsync(
-                        c -> classifierService.classifyOnly(
-                                c == null ? request.question() : c.searchQuestion(), ctx.locale()), exec);
-                QuestionCondenser.Condensed condensed = condensedF.join();
-                AgentState.Builder builder = AgentState.of(
-                        request.question(),
-                        request.version(),
-                        request.threadId(),
-                        userId,
-                        historyF.join(),
-                        request.routingMode(),
-                        false, ctx.locale())
-                    .toBuilder().questionType(typeF.join());
-                if (condensed != null) {
-                    // 그래프 바깥에서 일어난 호출이라 여기서 실어 준다 — 안 실으면 사용자가 보는
-                    // LLM 호출 수·토큰이 실제보다 적게 나온다(classifyOnly 의 알려진 누락과 같은 함정).
-                    builder.searchQuestion(condensed.searchQuestion())
-                           .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+            // StreamingAgentService.run() 과 같은 두 가지 — MDC 전파 + CompletionException 풀기.
+            try {
+                try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                    Executor exec = MdcPropagation.propagating(pool);
+                    CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
+                            () -> resolveHistory(userId, request.threadId(), false,
+                                    request.responseMode(), request.routingMode(), request.question()), exec);
+                    // §10.12 — 짧은 후속 질문이면 먼저 독립화하고, 분류는 그 결과를 본다. 게이트가
+                    // 순수해서(길이만 본다) 긴 질문에서는 이 future 가 이미 완료된 채로 만들어지므로
+                    // 분류가 즉시 출발한다 — 오늘의 병렬성이 그대로다.
+                    CompletableFuture<QuestionCondenser.Condensed> condensedF =
+                            condenseAsync(userId, request.threadId(), request.question(), ctx.locale(), exec);
+                    CompletableFuture<String> typeF = condensedF.thenApplyAsync(
+                            c -> classifierService.classifyOnly(
+                                    c == null ? request.question() : c.searchQuestion(), ctx.locale()), exec);
+                    QuestionCondenser.Condensed condensed = condensedF.join();
+                    AgentState.Builder builder = AgentState.of(
+                            request.question(),
+                            request.version(),
+                            request.threadId(),
+                            userId,
+                            historyF.join(),
+                            request.routingMode(),
+                            false, ctx.locale())
+                        .toBuilder().questionType(typeF.join());
+                    if (condensed != null) {
+                        // 그래프 바깥에서 일어난 호출이라 여기서 실어 준다 — 안 실으면 사용자가 보는
+                        // LLM 호출 수·토큰이 실제보다 적게 나온다(classifyOnly 의 알려진 누락과 같은 함정).
+                        builder.searchQuestion(condensed.searchQuestion())
+                               .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                    }
+                    initial = builder.build();
                 }
-                initial = builder.build();
+            } catch (CompletionException e) {
+                throw AsyncExceptions.unwrap(e);
             }
         }
         // carry the selected search-scope tags + answer-length mode into the graph state.

@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
@@ -168,7 +169,7 @@ public class DocumentController {
         final String fname = dest.getFileName().toString();
         final String ver = version;
 
-        Thread worker = Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
+        Thread worker = Thread.ofVirtual().name("idx-upload-" + taskId).start(MdcPropagation.wrap(() -> {
             try {
                 DocumentInfo info = ragService.indexDocument(userId, docPath, fname, ver, tagList,
                     addImageDescriptions, addHeadingNumbers, skipLlm,
@@ -187,7 +188,7 @@ public class DocumentController {
                 log.error("Async index error for {}", fname, e);
                 progressService.publish(taskId, IndexingProgressEvent.error(fname, msg));
             }
-        });
+        }));
         progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));

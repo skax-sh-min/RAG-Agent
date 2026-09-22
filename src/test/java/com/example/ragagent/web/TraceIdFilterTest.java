@@ -2,6 +2,12 @@ package com.example.ragagent.web;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,5 +61,38 @@ class TraceIdFilterTest {
         assertThat(TraceIdFilter.sanitize("   ")).hasSize(12);
         // 매번 다른 값이어야 요청을 구분할 수 있다.
         assertThat(TraceIdFilter.sanitize(null)).isNotEqualTo(TraceIdFilter.sanitize(null));
+    }
+
+    /**
+     * SSE 워커가 completeWithError 하면 컨테이너가 같은 요청을 ASYNC 로 다시 디스패치해 예외 핸들러를
+     * 부른다. 그 통과에서도 MDC 에 <b>같은</b> id 가 있어야 {@code [RAG-INT-001][null]} 이 아니라 첫
+     * 통과의 로그와 묶인다. 헤더가 없는 재디스패치를 흉내 내려면 첫 통과가 남긴 요청 속성만으로 충분해야 한다.
+     */
+    @Test
+    @DisplayName("ASYNC 재디스패치에도 돌고, 첫 통과가 정한 id 를 그대로 다시 쓴다")
+    void asyncDispatchReusesTheFirstPassId() throws Exception {
+        TraceIdFilter filter = new TraceIdFilter();
+        assertThat(filter.shouldNotFilterAsyncDispatch()).isFalse();
+
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/ui/chat/stream");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        AtomicReference<String> firstPass = new AtomicReference<>();
+        filter.doFilter(req, res, new MockFilterChain() {
+            @Override public void doFilter(jakarta.servlet.ServletRequest r, jakarta.servlet.ServletResponse p) {
+                firstPass.set(MDC.get("traceId"));
+            }
+        });
+        assertThat(firstPass.get()).hasSize(12);
+        assertThat(res.getHeader("X-Trace-Id")).isEqualTo(firstPass.get());
+        assertThat(MDC.get("traceId")).as("요청이 끝나면 MDC 는 비운다").isNull();
+
+        // 같은 요청 객체의 재디스패치 — 헤더는 없고 속성만 남아 있다.
+        AtomicReference<String> secondPass = new AtomicReference<>();
+        filter.doFilter(req, new MockHttpServletResponse(), new MockFilterChain() {
+            @Override public void doFilter(jakarta.servlet.ServletRequest r, jakarta.servlet.ServletResponse p) {
+                secondPass.set(MDC.get("traceId"));
+            }
+        });
+        assertThat(secondPass.get()).isEqualTo(firstPass.get());
     }
 }
