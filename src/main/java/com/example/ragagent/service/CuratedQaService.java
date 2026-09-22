@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.ingestion.ChunkSplitter;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
@@ -146,8 +147,8 @@ public class CuratedQaService {
         repository.deactivate(turnId);
         long curatedId = existing.get().id();
         int chunks = existing.get().chunkCount();
-        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() ->
-                deleteVectors(curatedId, chunks));
+        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() ->
+                deleteVectors(curatedId, chunks)));
     }
 
     /**
@@ -200,7 +201,7 @@ public class CuratedQaService {
         // 여기서 vectorStore 를 직접 부르던 동안 FTS 행이 남아, 대화를 지워도 그 항목이 BM25
         // 축에서 계속 근거로 붙었다.
         Thread.ofVirtual().name("curated-deindex-thread-" + threadId)
-                .start(() -> deindex(vectorIds, "threadId=" + threadId));
+                .start(MdcPropagation.wrap(() -> deindex(vectorIds, "threadId=" + threadId)));
         log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
                 threadId, rows.size(), vectorIds.size());
         return rows.size();
@@ -256,8 +257,8 @@ public class CuratedQaService {
         if (hasQuestion)   repository.updateQuestion(curatedId, newQuestion.strip());
         if (hasAnswer)     repository.updateAnswer(curatedId, newAnswer);
         if (hasEnrichment) repository.updateEnrichment(curatedId, newSummary, newKeywords);
-        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
-                embedActiveRow(curatedId, "edit"));
+        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(MdcPropagation.wrap(() ->
+                embedActiveRow(curatedId, "edit")));
         return true;
     }
 
@@ -285,8 +286,8 @@ public class CuratedQaService {
                     summary, keywords));
         }
         for (long curatedId : curatedIds) {
-            Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
-                    embedActiveRow(curatedId, "submission"));
+            Thread.ofVirtual().name("curated-embed-" + curatedId).start(MdcPropagation.wrap(() ->
+                    embedActiveRow(curatedId, "submission")));
         }
         return List.copyOf(curatedIds);
     }
@@ -316,8 +317,8 @@ public class CuratedQaService {
                 .orElse(null);
         long curatedId = repository.upsertActive(turnId, userId, threadId, title, body, version,
                 tags, submissionId, summary, keywords);
-        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
-                embedActiveRow(curatedId, "submission-like"));
+        Thread.ofVirtual().name("curated-embed-" + curatedId).start(MdcPropagation.wrap(() ->
+                embedActiveRow(curatedId, "submission-like")));
         return curatedId;
     }
 
@@ -334,7 +335,7 @@ public class CuratedQaService {
             repository.deactivateById(row.id());
             long curatedId = row.id();
             int chunks = row.chunkCount();
-            Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVectors(curatedId, chunks));
+            Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() -> deleteVectors(curatedId, chunks)));
         }
         if (!rows.isEmpty()) {
             log.info("[CURATED] 제안 {}의 청크 {}건 회수", submissionId, rows.size());
@@ -362,7 +363,7 @@ public class CuratedQaService {
         // WHERE source_turn_id = ? can ever match.
         repository.deactivateById(curatedId);
         int chunks = rowOpt.get().chunkCount();
-        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVectors(curatedId, chunks));
+        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() -> deleteVectors(curatedId, chunks)));
         return true;
     }
 

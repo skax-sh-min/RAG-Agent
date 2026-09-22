@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -126,7 +127,7 @@ public class ConversationSummarizerService {
      */
     public void precomputeAfterTurn(String userId, String threadId, Long turnId, Locale locale) {
         invalidate(threadId);
-        Thread.ofVirtual().start(() -> precompute(userId, threadId, turnId, locale));
+        Thread.ofVirtual().start(MdcPropagation.wrap(() -> precompute(userId, threadId, turnId, locale)));
     }
 
     /** Package-private for unit testing (bypasses the {@link #precomputeAfterTurn} background thread). */
