@@ -481,6 +481,44 @@ const I18N = {
         return (direct ? 'D' : 'R') + mode;
     }
 
+    /*
+     * 채팅 버블의 시각 표기 — 오늘이면 시:분만, 아니면 그 앞에 날짜를 붙인다.
+     *
+     * 시:분만 찍던 동안 대화 하나가 여러 날에 걸치면 그 사실이 화면 어디에도 없었다. 이 앱의
+     * 대화는 사이드바에 남아 며칠 뒤 다시 열리는 것이 정상이라, 지난주 대화를 열어도 모든
+     * 버블이 오늘 것과 똑같이 보였다. 반대로 한자리에서 오간 대화에 같은 날짜를 줄마다
+     * 반복하면 그건 그것대로 잡음이라, 오늘이 아닐 때만 붙인다.
+     *
+     * 해가 바뀌면 연도까지 — 없으면 작년 9월 21일과 올해 9월 21일이 같은 문자열이 된다.
+     *
+     * 여기(base.html 전역)에 두는 이유는 bubbleModeLabel() 과 같다: 이 표기를 만드는 자리가
+     * 넷이고(복원된 turn 의 applyMsgTimes · 재사용 · HTMX 낙관적 버블 · 스트리밍) 파일이
+     * 갈라져 있어, 각자 복사하면 같은 대화의 버블끼리 다른 형식을 달게 된다. 질문 내비게이션
+     * 목록도 버블의 텍스트를 그대로 읽으므로(qnavTimeOf) 자동으로 따라온다.
+     *
+     * 로케일은 <html lang> 을 따른다 — 시:분은 hour12:false 라 어느 로케일이든 같은 모양이고,
+     * 새로 생긴 날짜 부분만 언어 전환기를 따라간다.
+     */
+    function formatBubbleTime(when) {
+        /* null/빈 문자열은 new Date() 에서 epoch(1970-01-01)라는 '유효한' 날짜가 되어 isNaN 을
+           빠져나간다 — 시각을 모르는 자리에 1970년을 찍느니 아무것도 찍지 않는다. */
+        if (when === null || when === undefined || when === '') return '';
+        const d = (when instanceof Date) ? when : new Date(when);
+        if (isNaN(d)) return '';
+        const lang = document.documentElement.lang || 'ko';
+        const time = d.toLocaleTimeString(lang, {hour: '2-digit', minute: '2-digit', hour12: false});
+        const now = new Date();
+        if (d.getFullYear() === now.getFullYear()
+            && d.getMonth() === now.getMonth()
+            && d.getDate() === now.getDate()) {
+            return time;
+        }
+        const dateOpts = (d.getFullYear() === now.getFullYear())
+            ? {month: 'long', day: 'numeric'}
+            : {year: 'numeric', month: 'long', day: 'numeric'};
+        return d.toLocaleDateString(lang, dateOpts) + ' ' + time;
+    }
+
     const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
     /* ── 마크다운 원문/미리보기 전환 ────────────────────────────────────────
        같은 형식의 본문(표·코드펜스·[이미지: ...] 마커가 섞인 마크다운)을 편집·열람하는 화면이

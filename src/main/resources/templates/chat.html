@@ -1145,7 +1145,7 @@
     initSourcePopovers(document);
 
     function appendReusedTurn(question, answer, turnId, provider, sources, responseMode, directMode) {
-        const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+        const t = formatBubbleTime(new Date());
         const userBubble = document.createElement('div');
         // .user-turn + data-question + data-turn-id: 서버 렌더·스트리밍 경로와 같은 표식. 이게 없으면
         // 이 질문은 새로고침 전까지 질문 내비게이션에도, 추천 목록의 "현재 대화" 이동 대상에도 없다.
@@ -1442,7 +1442,7 @@
     chatForm.addEventListener('htmx:beforeRequest', function () {
         const q = questionInput.value.trim();
         if (q) {
-            const timeStr = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+            const timeStr = formatBubbleTime(new Date());
             const bubble = document.createElement('div');
             bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
             const optimisticMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
@@ -1589,17 +1589,16 @@
         if (wrapper) setTimeout(() => htmx.trigger(wrapper, 'refreshThreadListDelayed'), 5000);
     });
 
-    /* ── 복원된 turn 시간 포맷팅 (UTC DB 시간 → 로컬 HH:MM) ─────────────── */
+    /* ── 복원된 turn 시간 포맷팅 (UTC DB 시간 → 로컬 시각) ─────────────────
+       오늘이 아닌 turn 에는 날짜가 함께 붙는다 — 며칠에 걸친 대화를 다시 열었을 때 어느 날
+       이야기인지 알 수 있어야 한다(base.html 의 formatBubbleTime 이 규칙을 갖는다). */
     function applyMsgTimes() {
         document.querySelectorAll('.msg-time[data-utc-time]').forEach(function (el) {
             const raw = el.getAttribute('data-utc-time');
             if (!raw) return;
             try {
-                const d = new Date(raw.replace(' ', 'T') + 'Z');
-                if (!isNaN(d)) {
-                    const t = d.toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
-                    el.textContent = (el.textContent.includes('🕐') ? '🕐 ' : '') + t;
-                }
+                const t = formatBubbleTime(raw.replace(' ', 'T') + 'Z');
+                if (t) el.textContent = (el.textContent.includes('🕐') ? '🕐 ' : '') + t;
             } catch (e) {}
             el.removeAttribute('data-utc-time');
         });
