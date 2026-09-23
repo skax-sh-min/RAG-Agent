@@ -165,7 +165,7 @@ container system stop
 | `DOCX_WMF_CONVERT` | `false` | DOCX WMF 이미지를 LibreOffice headless로 변환 (`soffice`가 PATH에 있어야 해서 기본 off). 끄면 해당 이미지는 `[이미지(변환불가): …]` 마커로 남음 |
 | `RATE_LIMIT_ENABLED` | `true` | 사용자별 토큰 버킷 전체 스위치 (`app.rate-limit.*`) |
 | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | 사용자당 `/chat` 분당 요청 수 |
-| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기** 분당 요청 수(`POST /ui/documents/upload`, `POST /api/v1/documents`). 문서 화면 조회·목록 갱신·내보내기·태그 편집은 default 버킷을 쓴다 |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | **새 파일을 받는** 요청의 분당 수(`POST /ui/documents/upload`, `POST /api/v1/documents`, 그리고 게스트도 부를 수 있는 제안 본문 이미지 업로드 `POST /curated/submissions/images`). 문서 화면 조회·목록 갱신·내보내기·태그 편집은 default 버킷을 쓴다 |
 | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | 폴더 동기화 분당 요청 수 |
 | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 분당 요청 수 |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
@@ -431,7 +431,7 @@ rag_java/
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별). sqlite-vec에서는 토큰 서브배치가 임베딩되는 즉시 그 서브배치만 삽입하며 문서 전체 분량을 버퍼링하지 않아, 대용량 문서 인덱싱 시 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례
 - **키워드 추출 배치화** — 인덱싱 시 청크 N개(기본 2, `INDEXING_KEYWORD_BATCH_SIZE`)를 하나의 LLM 호출로 묶어 처리, 청크당 1콜이던 왕복 횟수를 대략 1/N로 절감. 배치 호출/파싱 실패 시 해당 청크는 개별 TF 키워드 추출로 폴백
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
-- **PPTX/PDF → Markdown 변환 정리** — 비스캔 PDF·PPTX는 Markdown으로 변환되며 `[페이지: N]` 마커(합성 헤딩이 아님)가 페이지/슬라이드 단위 섹션 경계 역할을 함. PPTX는 추가로 이미지 없는 중복 슬라이드, 목차/agenda 슬라이드(불릿이 다른 슬라이드 제목들과 대부분 일치), 제목만 있는 섹션 구분 슬라이드("PART 2"·"목차"·"결제 시스템" 같은 번호/키워드/짧은 명사구 제목)를 제거해 내용 없는 슬라이드가 검색 인덱스에 남지 않게 함(문장형 키 메시지 제목은 유지 — `app.pptx-remove-duplicate-slides`·`app.pptx-drop-divider-slides`, 둘 다 기본 on)
+- **PPTX/PDF → Markdown 변환 정리** — 비스캔 PDF·PPTX는 Markdown으로 변환되며 `[페이지: N]` 마커(합성 헤딩이 아님)가 페이지/슬라이드 단위 섹션 경계 역할을 함. PPTX는 추가로 이미지 없는 중복 슬라이드, 목차/agenda 슬라이드(불릿이 다른 슬라이드 제목들과 대부분 일치), 제목만 있는 섹션 구분 슬라이드("PART 2"·"목차"·"결제 시스템" 같은 번호/키워드/짧은 명사구 제목 — 문장형 키 메시지 제목은 유지), 다음 슬라이드가 그 제목을 그대로 반복하는 "예고 제목" 슬라이드, 마지막의 "끝"/"Thank you" 종료 슬라이드를 제거해 내용 없는 슬라이드가 검색 인덱스에 남지 않게 함(`app.pptx-remove-duplicate-slides`·`app.pptx-drop-divider-slides`·`app.pptx-drop-redundant-title-slides`·`app.pptx-drop-ending-slide`, 모두 기본 on)
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 
 ## 엔드포인트
@@ -446,7 +446,15 @@ rag_java/
 | `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
 | `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
+| `GET` | `/admin` | 벡터 스토어 관리 — 청크 브라우저, 큐레이션 Q&A, 제안 검토 (관리자 전용) |
+| `GET` | `/settings` | 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
+| `GET` | `/ui/documents/{docId}/export` | 인덱싱된 청크로 문서를 재조립해 내려받기 (MD/TXT/DOCX, 관리자 전용) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | 채팅 답변 썸네일에서 특정 이미지를 현재 대화 기록에서만 제외 |
+| `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | 그 턴의 출처 목록에서 청크 하나를 숨김 (표시 전용 — 재사용 검증은 계속 그 청크를 본다) |
+| `POST` | `/ui/chunk-reports` | 출처 원문 보기에서 청크를 "틀렸다/오래됐다"고 신고 (§10.14, 게스트 개방. 관리자에게는 대신 `/admin`으로 가는 "청크 수정" 바로가기가 보인다) |
+| `GET/POST` | `/login` | 로그인 페이지 (인증 모드, 또는 no-auth 의 관리 전용 서브모드) |
+| `GET/POST` | `/signup` | 회원가입 페이지 (인증 모드 전용) |
+| `GET/POST` | `/setup` | 최초 관리자 생성 — **모든** 인증 모드에서 열려 있다. `ROLE_ADMIN` 계정을 만드는 유일한 경로이고(`/signup` 은 `ROLE_USER` 만 만든다) 관리자 게이트가 걸린 화면은 그 계정 없이는 아무도 통과할 수 없기 때문이다. 관리자가 하나라도 생기면 스스로 리다이렉트로 닫힌다 |
 
 ### REST API
 
@@ -459,7 +467,12 @@ rag_java/
 | `GET` | `/api/v1/documents` | 인덱싱된 문서 목록 |
 | `DELETE` | `/api/v1/documents/{docId}` | 문서 삭제 |
 | `GET` | `/api/v1/images/{docId}/{filename}` | 추출된 이미지 파일 서빙 |
-| `GET` | `/api/v1/questions/suggest` | 입력 질문 기반 추천 목록 조회 (`scope`, `limit` 지원; 50자 초과 질문은 후보에서 제외) |
+| `GET` | `/api/v1/tags` | 사용 중인 태그 목록 (`?version`, `?excludeCommon`, `?includeCurated`) |
+| `GET` | `/api/v1/versions` | 인덱싱된 문서 버전 목록 (채팅의 버전 선택기가 읽는다) |
+| `GET` | `/api/v1/chunks/{chunkId}` | 출처 "원문 보기" 팝업이 쓰는 청크 전문(잘리지 않은 원문). 청크가 사라졌으면 404 |
+| `GET` | `/api/v1/questions/suggest` | 입력 중인 질문과 맞는 과거 질문 추천 (`?q`, `?limit`, `?threadId` — 항목마다 `origin`: `thread`/`mine`/`others`/`elsewhere`). 50자를 넘는 질문은 후보에서 제외된다 |
 | `POST` | `/api/v1/questions/reuse` | 선택한 과거 turn 재사용(출처 재검증 실패 시 일반 질의 폴백 신호 반환) |
 | `GET` | `/api/v1/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
 | `GET` | `/api/v1/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |
+| `GET` | `/api/v1/llm/concurrency` | 헤더 표시기가 읽는 LOCAL 계층 실시간 동시성 (`{"available","inUse","capacity","blockedSeconds"}`) |
+| `GET` | `/api/v1/llm/ping` | 로컬 LLM 이 살아 있는가 — LOCAL 1계층 프로바이더마다 세 답: 닿는가(`/models`), 모델이 로드됐는가(LM Studio `state` / llama.cpp `/health`), 그리고 `?deep=true` 면 실제 1토큰 완성까지. 모두 통과하면 200, 아니면 503 (`curl -f` 로 쓸 수 있다) |
