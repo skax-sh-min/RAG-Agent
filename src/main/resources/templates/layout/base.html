@@ -513,10 +513,14 @@ const I18N = {
             && d.getDate() === now.getDate()) {
             return time;
         }
-        const dateOpts = (d.getFullYear() === now.getFullYear())
-            ? {month: 'long', day: 'numeric'}
-            : {year: 'numeric', month: 'long', day: 'numeric'};
-        return d.toLocaleDateString(lang, dateOpts) + ' ' + time;
+        /* 날짜는 로케일 표기('2025년 9월 21일' / 'September 21, 2025') 대신 ISO 로 고정한다 —
+           시각과 한 줄에 붙여 놓으면 단위 글자가 섞인 표기는 어디까지가 날짜인지 읽기 어렵다.
+           구분자가 NBSP 두 개인 이유: HTML 은 연속 공백을 하나로 접으므로 일반 공백 두 개는
+           화면에서 한 칸이 되고(이 값은 textContent 와 innerHTML 양쪽으로 들어간다), NBSP 는
+           덤으로 날짜와 시각이 서로 다른 줄로 갈라지는 것도 막는다. */
+        const pad = function (n) { return String(n).padStart(2, '0'); };
+        const date = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        return date + '\u00A0\u00A0' + time;
     }
 
     const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
