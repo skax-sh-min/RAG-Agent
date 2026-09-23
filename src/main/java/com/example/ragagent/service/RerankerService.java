@@ -95,9 +95,10 @@ public class RerankerService {
      * §10.7.1 — prepends a "{@code (filename > heading)}" context header before the preview so
      * the LLM knows which document/section a chunk came from, not just its raw text. This reuses
      * {@link KeywordExtractor#buildStructuralContext(Document)}'s deterministic baseline rather
-     * than {@link MetaKey#CHUNK_CONTEXT} itself — that LLM-enhanced field is transient (§10.1,
-     * stripped before persistence in both vector store providers) and is never present on a
-     * Document once it comes back from a search.
+     * than {@link MetaKey#CHUNK_CONTEXT} itself: that field is persisted, but a hit coming back
+     * from the keyword (FTS) axis carries only the columns {@code chunk_fts} holds, so it is not
+     * reliably present on every candidate this method formats. The structural form is derivable
+     * from filename + heading, which every axis does carry.
      * Package-private for unit testing.
      */
     static String formatDocList(List<Document> docs) {

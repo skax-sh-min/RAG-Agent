@@ -11,7 +11,6 @@ import java.util.Locale;
 /**
  * Immutable state record passed through all agent graph nodes.
  * Each node returns a new instance via state.toBuilder().xxx().build() — no shared mutable state.
- * Equivalent to LangGraph's TypedDict AgentState in the Python version.
  */
 public record AgentState(
         String question,
@@ -40,7 +39,7 @@ public record AgentState(
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
         List<String> selectedTags, // 검색 스코프 태그 (빈 리스트 = version-only 검색)
-        ResponseMode responseMode, // 답변 성격 (S/N, 기본 N) — AnswerService/DirectAnswerService가 사용
+        ResponseMode responseMode, // 답변 성격 (S/N/C, 기본 N) — AnswerService/DirectAnswerService가 사용
         List<Integer> usedDocIndices, // 평가 LLM이 "실제로 근거로 썼다"고 보고한 [D n] 번호(1-based).
                                      // 2단계 응답 참여도의 후보 축소 신호일 뿐 판정에는 쓰이지 않으며,
                                      // 모델이 주지 않으면 빈 리스트(=신호 없음, 전체 문서가 후보)

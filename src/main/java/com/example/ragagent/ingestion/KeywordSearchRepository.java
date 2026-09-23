@@ -394,12 +394,6 @@ public class KeywordSearchRepository {
     }
 
     /**
-     * Removes specific rows by their {@code spring_doc_id} (chunk identity), not by {@code doc_id}
-     * (document identity) — needed when new and old chunk rows momentarily share the same
-     * {@code doc_id} (reindex-in-place), where a {@code doc_id}-based delete would also wipe the
-     * rows just inserted. No-op when FTS5 is unavailable.
-     */
-    /**
      * 한 버전(네임스페이스)이 FTS 에 들고 있는 {@code spring_doc_id} 전부.
      *
      * <p>{@code chunk_fts_key} 만 읽는다 — 평범한 테이블이라 코퍼스 스캔이 아니다({@code chunk_fts}
@@ -417,6 +411,12 @@ public class KeywordSearchRepository {
         }
     }
 
+    /**
+     * Removes specific rows by their {@code spring_doc_id} (chunk identity), not by {@code doc_id}
+     * (document identity) — needed when new and old chunk rows momentarily share the same
+     * {@code doc_id} (reindex-in-place), where a {@code doc_id}-based delete would also wipe the
+     * rows just inserted. No-op when FTS5 is unavailable.
+     */
     public void deleteBySpringDocIds(List<String> springDocIds) {
         if (!available || springDocIds == null || springDocIds.isEmpty()) return;
         try {

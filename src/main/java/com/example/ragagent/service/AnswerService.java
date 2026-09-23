@@ -96,9 +96,10 @@ public class AnswerService {
      * reach the JSON, since a truncated reply parses as a failure and degrades to
      * {@link #withoutVerdict} — trading a verdict for tokens is the wrong side of that bargain.
      * Clamped by the configured ceiling so it can never exceed what the operator allows.
+     *
+     * <p>package-private 인 이유: {@code RetrievalService} 의 컨텍스트 여유 판단이 같은 값을 써야
+     * 한다 — 두 곳이 다른 예약을 믿으면 여유 계산이 틀린다.
      */
-    /** 검증 호출이 스스로 거는 출력 예약. {@code RetrievalService} 의 컨텍스트 여유 판단이
-     *  같은 값을 써야 해서 package-private 이다 — 두 곳이 다른 예약을 믿으면 여유 계산이 틀린다. */
     static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
@@ -368,7 +369,7 @@ public class AnswerService {
         state = withBudgetNote(state, attempt.level());
         String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
-        // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
+        // (TokenEstimator) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
         // 프롬프트는 **보낸 것을 그대로** 쓴다 — 다시 조립하면 fitToBudget 이 한 번 더 돌고, 그
         // 재현이 실제로 나간 값과 어긋날 여지도 남는다(Streamed 참고).
@@ -473,7 +474,7 @@ public class AnswerService {
     }
 
     /**
-     * 컨텍스트 초과로 실패하면 프롬프트를 절반씩 줄여 다시 시도한다.
+     * 컨텍스트 초과로 실패하면 프롬프트를 {@code app.llm.shrink-step} 개씩 줄여 다시 시도한다.
      *
      * <p><b>사전 예산이 있는데도 이것이 필요한 이유.</b> {@code fitToBudget} 은 {@code TokenEstimator}
      * 의 <b>추정</b> 위에 서 있고(창을 아예 모르면 아무것도 자르지 않는다), 추정이 빗나가면 그대로
@@ -579,12 +580,6 @@ public class AnswerService {
     // ── Stream helpers ──────────────────────────────────────────────────────
 
     /**
-     * <b>토큰이 하나라도 나갔으면 재시도하지 않는다</b> — 화면에 앞부분이 두 번 찍히기 때문이다.
-     * 컨텍스트 초과는 생성이 시작되기 전에 거절되므로 실제로 그런 일은 없지만, 그 가정이 깨졌을 때
-     * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
-     * 있어 되감을 것이 없다.
-     */
-    /**
      * 스트리밍 한 번의 결과 — 답변과 <b>실제로 보낸</b> 사용자 프롬프트.
      *
      * <p>프롬프트를 함께 돌려주는 이유: 스트리밍에는 사용량을 읽을 {@code ChatResponse} 가 없어
@@ -595,6 +590,12 @@ public class AnswerService {
      */
     private record Streamed(String answer, String userPrompt) {}
 
+    /**
+     * <b>토큰이 하나라도 나갔으면 재시도하지 않는다</b> — 화면에 앞부분이 두 번 찍히기 때문이다.
+     * 컨텍스트 초과는 생성이 시작되기 전에 거절되므로 실제로 그런 일은 없지만, 그 가정이 깨졌을 때
+     * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
+     * 있어 되감을 것이 없다.
+     */
     private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
                                           String systemPrompt, Consumer<String> tokenSink) {
         StringBuilder full = new StringBuilder();
@@ -697,8 +698,9 @@ public class AnswerService {
     /**
      * single LLM call evaluating both gates at once.
      * needsRetry is driven by sufficiency (the ANSWER-node gate); grounded is stored for the
-     * CRITIC node to consume without a second LLM round-trip. When no docs were retrieved,
-     * grounding is trivially true (CRITIC short-circuits on empty docs anyway).
+     * CRITIC node to consume without a second LLM round-trip. The {@code docsPresent} guard below
+     * is defensive only — a turn that retrieved nothing never reaches this method, since
+     * {@link #answerWithoutDocuments} answers it without an LLM call and skips verification.
      *
      * <p>The same call also returns {@code reason} — one sentence naming what was missing. Without
      * it a failed verification is only ever observable as a boolean, so neither the user (who sees
@@ -901,22 +903,32 @@ public class AnswerService {
     }
 
     /**
-     * 검증 결과를 <b>읽지 못했을 때</b>의 상태 — 판정을 위조하지 않는다.
+     * 다음 재검색에서 밀어낼 청크를 고른다 — {@code sufficient=false} 재시도 전용.
      *
-     * <p>예전에는 이 자리에서 {@code grounded=true} 를 써넣었다. 재시도를 막는 것까지는 옳다
-     * (검증기 고장이 이미 완성된 답변의 전달을 막아서는 안 된다). 틀린 것은 그 다음이었다 —
-     * 그 {@code true} 가 그대로 {@code VerificationSnapshot} 으로 흘러가 <b>검증한 적 없는 답변에
-     * '검증됨'(N) / '생성'(C) 배지</b>가 붙었다. 실제로 관찰된 사고가 그것이다: 창의 검증이 빈
-     * 응답을 반환 → 파싱 실패 → 통과 처리 → 재시도({@code sufficient=false} 로 걸렸어야 할)도
-     * 돌지 않고 파란 '생성' 배지까지 붙은 답변이 나갔다.
+     * <p><b>여기서 계산하는 이유는 세 입력이 전부 이 자리에만 모여 있기 때문이다</b>: 직전 문서
+     * 목록({@code state.retrievedDocs()}), 평가가 보고한 사용 문서({@code usedDocs}), 그리고 발췌가
+     * 잘렸는지({@code excerpts.trimmed()}). 마지막 것은 {@code EvalExcerpts} 안에만 있어서
+     * {@code RetrievalService} 로 옮기려면 그 사실을 상태에 실어 날라야 한다 — 판단을 데이터가 있는
+     * 곳으로 가져오는 편이 데이터를 판단이 있는 곳으로 옮기는 것보다 낫다.
      *
-     * <p>{@code grounded=null} 은 이 앱에서 이미 <b>"검증 미실행"</b>을 뜻하고, 그 상태는 끝까지
-     * 그렇게 흐른다: {@code CriticService} 가 덮어쓰지 않고, {@code VerificationSnapshot.isEmpty()}
-     * 가 참이 되어 {@code MemoryService.saveVerification()} 이 저장을 건너뛰며(컬럼 NULL),
-     * {@code verdictLabel()} 과 {@code chat-stream.js} 의 {@code === true}/{@code === false} 비교가
-     * 둘 다 배지를 그리지 않는다. 즉 새 UI 상태를 만드는 것이 아니라 <b>이미 있는 상태로 정직하게
-     * 되돌리는 것</b>이다 — S 모드와 meta/Direct 턴이 늘 그렇게 표시돼 왔다.
+     * <p>{@code grounded=false} 에는 적용하지 않는다: 그건 답변이 문서 <b>밖으로</b> 나간 경우라
+     * 근거를 빼는 것이 방향상 반대다. 이 메서드가 {@code sufficient} 만 보는 이유다.
+     *
+     * <p>누적한다 — 직전에 밀어낸 청크는 다음 검색에서 다시 올라오면 안 된다. 그러지 않으면 교체가
+     * 앞으로 나아가지 못하고 같은 자리를 오간다.
      */
+    private static List<String> evictionsFor(AgentState state, boolean sufficient,
+                                             List<Integer> usedDocs, EvalExcerpts excerpts) {
+        if (sufficient) return state.excludedDocIds();
+        Set<String> fresh = RetrievalEviction.select(state.retrievedDocs(), usedDocs, excerpts.trimmed());
+        if (fresh.isEmpty()) return state.excludedDocIds();
+        List<String> merged = new ArrayList<>(state.excludedDocIds());
+        fresh.stream().filter(id -> !merged.contains(id)).forEach(merged::add);
+        log.info("[EVAL] 재시도에서 밀어낼 청크 {}개 (근거 미사용 + 하위 순위) thread={}",
+                fresh.size(), state.threadId());
+        return merged;
+    }
+
     /**
      * 축소된 근거로 내려진 <b>부정 판정</b>을 판정으로 인정할지 — 인정하면 안 된다.
      *
@@ -947,33 +959,6 @@ public class AnswerService {
      * 버리면 정당한 재시도와 PROGRESSIVE 업그레이드 신호가 함께 사라지는데, 업그레이드는 오히려
      * <b>창이 더 큰 프로바이더</b>로 가므로 이 상황에서 도움이 되는 쪽이다.
      */
-    /**
-     * 다음 재검색에서 밀어낼 청크를 고른다 — {@code sufficient=false} 재시도 전용.
-     *
-     * <p><b>여기서 계산하는 이유는 세 입력이 전부 이 자리에만 모여 있기 때문이다</b>: 직전 문서
-     * 목록({@code state.retrievedDocs()}), 평가가 보고한 사용 문서({@code usedDocs}), 그리고 발췌가
-     * 잘렸는지({@code excerpts.trimmed()}). 마지막 것은 {@code EvalExcerpts} 안에만 있어서
-     * {@code RetrievalService} 로 옮기려면 그 사실을 상태에 실어 날라야 한다 — 판단을 데이터가 있는
-     * 곳으로 가져오는 편이 데이터를 판단이 있는 곳으로 옮기는 것보다 낫다.
-     *
-     * <p>{@code grounded=false} 에는 적용하지 않는다: 그건 답변이 문서 <b>밖으로</b> 나간 경우라
-     * 근거를 빼는 것이 방향상 반대다. 이 메서드가 {@code sufficient} 만 보는 이유다.
-     *
-     * <p>누적한다 — 직전에 밀어낸 청크는 다음 검색에서 다시 올라오면 안 된다. 그러지 않으면 교체가
-     * 앞으로 나아가지 못하고 같은 자리를 오간다.
-     */
-    private static List<String> evictionsFor(AgentState state, boolean sufficient,
-                                             List<Integer> usedDocs, EvalExcerpts excerpts) {
-        if (sufficient) return state.excludedDocIds();
-        Set<String> fresh = RetrievalEviction.select(state.retrievedDocs(), usedDocs, excerpts.trimmed());
-        if (fresh.isEmpty()) return state.excludedDocIds();
-        List<String> merged = new ArrayList<>(state.excludedDocIds());
-        fresh.stream().filter(id -> !merged.contains(id)).forEach(merged::add);
-        log.info("[EVAL] 재시도에서 밀어낼 청크 {}개 (근거 미사용 + 하위 순위) thread={}",
-                fresh.size(), state.threadId());
-        return merged;
-    }
-
     private static boolean unreliableNegative(boolean grounded, EvalExcerpts excerpts, AgentState state) {
         if (grounded || !excerpts.trimmed()) return false;
         log.warn("[EVAL] 근거 없음 판정을 버린다(판정 없음으로 기록) — 검증이 답변보다 적은 문서를 봤다: "
@@ -984,6 +969,23 @@ public class AnswerService {
         return true;
     }
 
+    /**
+     * 검증 결과를 <b>읽지 못했을 때</b>의 상태 — 판정을 위조하지 않는다.
+     *
+     * <p>예전에는 이 자리에서 {@code grounded=true} 를 써넣었다. 재시도를 막는 것까지는 옳다
+     * (검증기 고장이 이미 완성된 답변의 전달을 막아서는 안 된다). 틀린 것은 그 다음이었다 —
+     * 그 {@code true} 가 그대로 {@code VerificationSnapshot} 으로 흘러가 <b>검증한 적 없는 답변에
+     * '검증됨'(N) / '생성'(C) 배지</b>가 붙었다. 실제로 관찰된 사고가 그것이다: 창의 검증이 빈
+     * 응답을 반환 → 파싱 실패 → 통과 처리 → 재시도({@code sufficient=false} 로 걸렸어야 할)도
+     * 돌지 않고 파란 '생성' 배지까지 붙은 답변이 나갔다.
+     *
+     * <p>{@code grounded=null} 은 이 앱에서 이미 <b>"검증 미실행"</b>을 뜻하고, 그 상태는 끝까지
+     * 그렇게 흐른다: {@code CriticService} 가 덮어쓰지 않고, {@code VerificationSnapshot.isEmpty()}
+     * 가 참이 되어 {@code MemoryService.saveVerification()} 이 저장을 건너뛰며(컬럼 NULL),
+     * {@code verdictLabel()} 과 {@code chat-stream.js} 의 {@code === true}/{@code === false} 비교가
+     * 둘 다 배지를 그리지 않는다. 즉 새 UI 상태를 만드는 것이 아니라 <b>이미 있는 상태로 정직하게
+     * 되돌리는 것</b>이다 — S 모드와 meta/Direct 턴이 늘 그렇게 표시돼 왔다.
+     */
     private static AgentState withoutVerdict(AgentState state) {
         return state.toBuilder()
                 .needsRetry(false)
@@ -1059,6 +1061,17 @@ public class AnswerService {
     }
 
     /**
+     * @param text     프롬프트에 실린 발췌 블록
+     * @param included 실제로 실린 문서 수
+     * @param total    답변이 봤던 문서 수. {@code included < total} 이면 <b>검증이 답변보다 적은
+     *                 근거를 보고 판정했다</b>는 뜻이고, 그 사실이 판정의 신뢰도를 가른다
+     *                 ({@link #evaluate} 의 축소 가드 참고)
+     */
+    private record EvalExcerpts(String text, int included, int total) {
+        boolean trimmed() { return included < total; }
+    }
+
+    /**
      * The evidence block the evaluator judges the answer against.
      *
      * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
@@ -1095,17 +1108,6 @@ public class AnswerService {
      *                    그쪽은 과대 설정을 막는 절대 안전판이고, 이쪽은 이 프로바이더에 실제로 들어가는
      *                    양이라 성격이 다르다. 둘 중 먼저 걸리는 쪽에서 멈춘다.
      */
-    /**
-     * @param text     프롬프트에 실린 발췌 블록
-     * @param included 실제로 실린 문서 수
-     * @param total    답변이 봤던 문서 수. {@code included < total} 이면 <b>검증이 답변보다 적은
-     *                 근거를 보고 판정했다</b>는 뜻이고, 그 사실이 판정의 신뢰도를 가른다
-     *                 ({@link #evaluate} 의 축소 가드 참고)
-     */
-    private record EvalExcerpts(String text, int included, int total) {
-        boolean trimmed() { return included < total; }
-    }
-
     private static EvalExcerpts buildEvalExcerpts(List<Document> docs, long tokenBudget) {
         return buildEvalExcerpts(docs, tokenBudget, docs.size());
     }
@@ -1213,10 +1215,11 @@ public class AnswerService {
         return mode.usesCreativeTemperature() ? llm.creativeTemperature() : llm.temperature();
     }
 
-    /** Sufficiency-evaluation call options: general/RAG temperature only (no maxTokens cap — the
-     *  structured JSON output is already short). Deliberately NOT the creative temperature even for
-     *  C: judging whether an identifier appears in an excerpt is a lookup, not a creative task.
-     *  Hot — read fresh per call. */
+    /** Sufficiency-evaluation call options: general/RAG temperature, plus an output cap of
+     *  {@link #MAX_EVAL_OUTPUT_TOKENS} (clamped by the configured ceiling) so a handful of JSON
+     *  fields cannot reserve the operator's whole completion budget — see that constant.
+     *  Deliberately NOT the creative temperature even for C: judging whether an identifier appears
+     *  in an excerpt is a lookup, not a creative task. Hot — read fresh per call. */
     private ChatOptions evalOptions() {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().temperature());
@@ -1295,7 +1298,8 @@ public class AnswerService {
      * 보인다.
      *
      * <p>시스템 프롬프트를 여기서 다시 읽는 이유: {@code buildAnswerPrompt()} 는 사용자 메시지만
-     * 만들고 시스템 프롬프트는 호출부 6곳이 각자 붙인다. 그 6곳에 로그를 흩는 대신 조립이 한 번
+     * 만들고 시스템 프롬프트는 호출부(블로킹·스트리밍·PROGRESSIVE 업그레이드)가 각자 붙인다.
+     * 그 호출부들에 로그를 흩는 대신 조립이 한 번
      * 일어나는 이 자리에서 같은 값을 다시 조회한다(MessageSource 조회 1회, 디버그일 때만).
      */
     private String answerPromptSize(AgentState state, String providerName, boolean streaming,
@@ -1379,8 +1383,11 @@ public class AnswerService {
           .append("이 메모 자체는 내부 기록이므로 답변에 언급하지 마라.\n\n");
     }
 
-    /** 예산에 맞춘 결과 — 무엇이 얼마나 남았는지. */
-    /** @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}. */
+    /**
+     * 예산에 맞춘 결과 — 무엇이 얼마나 남았는지.
+     *
+     * @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}.
+     */
     private record Fitted(List<Document> docs, String history, String note) {}
 
     /**

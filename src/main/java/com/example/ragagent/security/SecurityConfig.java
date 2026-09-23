@@ -55,8 +55,10 @@ public class SecurityConfig {
             // IF_REQUIRED creates one only when something actually needs it (a successful login),
             // not for anonymous/guest traffic. CookieCsrfTokenRepository keeps CSRF correctness
             // decoupled from that session lifecycle. /api/v1/** stays CSRF-exempt, same as the
-            // full-auth branch below, so scripted uploads/sync (documented in OPERATOR_MANUAL.md)
-            // keep working unauthenticated — only the web UI surface is gated.
+            // full-auth branch below, so a scripted client can call it without a token — but the
+            // document-write endpoints among them are ROLE_ADMIN all the same
+            // (gateDocumentManagement), so such a script authenticates via /login first
+            // (OPERATOR_MANUAL.md). Only REST reads and chat stay guest-open.
             http
                 .csrf(csrf -> csrf
                     .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())

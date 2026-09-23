@@ -22,7 +22,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * §10.10 — Q&A snapshot for turns promoted by a 👍. Independent of {@code conversation_turns}:
+ * §10.10/§10.11 — Q&A snapshot for an admin-approved 지식 제안 (either hand-written or opened from a
+ * 👍한 답변). Independent of {@code conversation_turns}:
  * it keeps its own {@code question}/{@code answer} copy, so edits never mutate the original turn
  * (the audit record stays immutable) and a row outlives its turn structurally.
  *
@@ -31,8 +32,8 @@ import java.util.Set;
  * the rows it promoted ({@code CuratedQaService.onThreadDeleted}), because an answer still being
  * used as search evidence after its conversation is gone proved more confusing than the shared-
  * knowledge loss the old rule protected, and because turn-level deletion had always retracted
- * ({@code onUnlike}), leaving the two paths inconsistent. Copies still matter: they are what let
- * the row be edited and re-embedded independently of the turn.
+ * (the retraction {@code onTurnDeleted} now performs), leaving the two paths inconsistent. Copies
+ * still matter: they are what let the row be edited and re-embedded independently of the turn.
  */
 @Repository
 public class CuratedQaRepository {
@@ -41,9 +42,9 @@ public class CuratedQaRepository {
 
     private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    /** {@code origin} value for a 👍-promoted row (the original §10.10 path). */
+    /** {@code origin} value for a row whose proposal came from a 👍한 채팅 답변 (§10.11). */
     public static final String ORIGIN_LIKE = "like";
-    /** {@code origin} value for a row created by admin approval of a user-submitted chunk. */
+    /** {@code origin} value for a row whose proposal was written by hand in the 지식 제안 form. */
     public static final String ORIGIN_MANUAL = "manual";
 
     private static final String COLUMNS =
@@ -312,7 +313,7 @@ public class CuratedQaRepository {
     }
 
     /**
-     * Every still-active 👍-promoted row of one chat thread, in creation order — the unit
+     * Every still-active 좋아요 출신 row of one chat thread, in creation order — the unit
      * {@code CuratedQaService.onThreadDeleted} takes down when a whole conversation is deleted
      * (§6.25).
      *
@@ -354,14 +355,6 @@ public class CuratedQaRepository {
     }
 
     /**
-     * 질문 문장만 갱신한다. 답변과 나누어 두는 이유는 둘의 수정 이유가 다르기 때문이다 — 답변은
-     * 내용이 틀렸을 때, 질문은 <b>검색에 걸리지 않을 때</b> 고친다.
-     *
-     * <p>질문은 {@code CuratedQaService.defaultSearchText()} 의 앞부분이자 모든 청크에 반복
-     * 부여되는 값이라, 이 한 줄을 바꾸면 그 항목이 어떤 질의에 걸리는지가 통째로 달라진다 —
-     * 호출부는 반드시 재임베딩해야 한다(이 메서드는 저장만 한다).
-     */
-    /**
      * 요약·키워드 갱신 — {@code null} 인 쪽은 건드리지 않고, 빈 문자열은 "비우기"로 저장한다
      * (그 구분이 필요해서 {@code Optional} 이 아니라 nullable 을 받는다: 화면이 한 칸만 보낼 수도
      * 있고, 관리자가 일부러 지운 것과 안 보낸 것은 다른 일이다).
@@ -378,6 +371,14 @@ public class CuratedQaRepository {
         jdbc.update(sql.toString(), args.toArray());
     }
 
+    /**
+     * 질문 문장만 갱신한다. 답변과 나누어 두는 이유는 둘의 수정 이유가 다르기 때문이다 — 답변은
+     * 내용이 틀렸을 때, 질문은 <b>검색에 걸리지 않을 때</b> 고친다.
+     *
+     * <p>질문은 {@code CuratedQaService.defaultSearchText()} 의 앞부분이자 모든 청크에 반복
+     * 부여되는 값이라, 이 한 줄을 바꾸면 그 항목이 어떤 질의에 걸리는지가 통째로 달라진다 —
+     * 호출부는 반드시 재임베딩해야 한다(이 메서드는 저장만 한다).
+     */
     public void updateQuestion(long id, String question) {
         jdbc.update("UPDATE curated_qa SET question=?, updated_at=? WHERE id=?", question, now(), id);
     }
@@ -466,9 +467,10 @@ public class CuratedQaRepository {
     }
 
     /**
-     * {@code sourceTurnId}/{@code sourceSubmissionId} are mutually exclusive and either may be
-     * null: a 👍-promoted row has a turn id, an admin-approved user submission has a submission id.
-     * {@code origin} says which ({@link #ORIGIN_LIKE} / {@link #ORIGIN_MANUAL}).
+     * {@code sourceTurnId} is set only for a 좋아요 출신 row; {@code sourceSubmissionId} is set for
+     * any row an approved 제안 owns, which since §10.11 is both kinds — so a 좋아요 출신 row carries
+     * both, and only a pre-§10.11 row carries a turn id alone. {@code origin} says which kind it is
+     * ({@link #ORIGIN_LIKE} / {@link #ORIGIN_MANUAL}).
      */
     public record CuratedQa(long id, Long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,

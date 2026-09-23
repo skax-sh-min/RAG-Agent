@@ -25,11 +25,11 @@ public interface MemoryRepository {
     }
 
     /** Returns the generated turn id (conversation_turns.id). {@code responseMode}: the turn's
-     *  S/N response mode ({@code ResponseMode.name()}), null-safe (nullable column). Legacy
+     *  S/N/C response mode ({@code ResponseMode.name()}), null-safe (nullable column). Legacy
      *  {@code "M"}/{@code "L"} rows parse back to {@code N} (see ResponseMode.parse).
      *  {@code selectedTags}: the search-scope tags this question was asked under (comma-joined,
-     *  null/blank = 전체 검색) — read back by {@code CuratedQaService.onLike} so a 👍-promoted
-     *  answer inherits the scope it was actually answered in. */
+     *  null/blank = 전체 검색) — read back by {@code CuratedSubmissionService.prefillFromTurn} so a
+     *  지식 제안 opened from a 👍 starts with the scope the answer was actually given in (§10.11). */
     long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
                  int elapsedMs, String provider, int llmCalls, String responseMode,
@@ -106,8 +106,9 @@ public interface MemoryRepository {
     void updateFeedback(String userId, String threadId, long turnId, String feedback);
 
     /**
-     * 3단계 — stores the turn's per-source retrieval diagnostics as a JSON array (see
-     * {@code RetrievalMetricsView}). Written right after the turn insert, in the same
+     * 3단계 — stores the turn's per-source retrieval diagnostics as a JSON array of
+     * {@code SourceRef} (written by {@code MemoryService.saveRetrievalMetrics}, read back by
+     * {@code RetrievalMetricsService}). Written right after the turn insert, in the same
      * post-insert slot as {@link #saveTurnImageRefs}. Diagnostic only: a failure here must never
      * cost the user their answer, so callers swallow, and {@code null}/blank is a no-op.
      */

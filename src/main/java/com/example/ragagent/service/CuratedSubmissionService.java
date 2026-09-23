@@ -354,8 +354,8 @@ public class CuratedSubmissionService {
      * @param modeLabel  the turn's two-letter 표기 ({@code RN}/{@code DN}/…) — the same label the
      *                   admin will review it under, shown here so the author knows a Direct answer
      *                   is being proposed as shared knowledge
+     * @param summary    답변의 {@code ## 요약} 섹션 — 본문({@code body})에서는 빠져 있다. 없으면 빈 문자열
      */
-    /** @param summary 답변의 {@code ## 요약} 섹션 — 본문({@code body})에서는 빠져 있다. 없으면 빈 문자열 */
     public record TurnPrefill(long turnId, String threadId, String title, String body,
                               String summary, String tags, int imageCount, String modeLabel) {}
 

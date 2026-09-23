@@ -160,7 +160,7 @@ public class CachingEmbeddingModel implements EmbeddingModel {
 
     /**
      * §10.9.4 — hashed instead of {@code prefix + rawText} so the cache/in-flight maps hold a
-     * fixed-size key (~40 bytes) regardless of query length, rather than retaining full question
+     * fixed-size key (64 hex chars) regardless of query length, rather than retaining full question
      * text as a live key.
      */
     private String cacheKey(String text) {

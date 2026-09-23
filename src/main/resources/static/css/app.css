@@ -348,7 +348,7 @@
     padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
 }
 
-/* ── 응답 모드 토글 버튼 (S/M/L) — 기본 btn-group-sm 폭의 1.5배 + 굵게 ──── */
+/* ── 응답 모드 토글 버튼 (S/N/C) — 기본 btn-group-sm 폭의 1.5배 + 굵게 ──── */
 .response-mode-btn {
     min-width: 2.6rem;
     font-weight: 700;

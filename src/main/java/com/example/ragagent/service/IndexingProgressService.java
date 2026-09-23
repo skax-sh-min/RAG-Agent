@@ -97,8 +97,9 @@ public class IndexingProgressService {
      */
     public SseEmitter subscribe(String taskId) {
         // Large uploads/keyword extraction can run well past 10 minutes; reuse the same
-        // generous absolute ceiling as chat SSE (default 1h) instead of a fixed 10-minute
-        // cap that a long-running-but-healthy indexing job would always exceed.
+        // generous absolute ceiling as chat SSE (app.sse-timeout-seconds, shipped at 2h) instead
+        // of a fixed 10-minute cap that a long-running-but-healthy indexing job would always
+        // exceed.
         SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
 
         List<IndexingProgressEvent> buffered = buffers.getIfPresent(taskId);

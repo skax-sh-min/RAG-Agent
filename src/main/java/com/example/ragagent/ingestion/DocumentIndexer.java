@@ -39,7 +39,10 @@ import java.util.stream.Stream;
 
 /**
  * Orchestrates single-document indexing: load → split → tag → enrich → store.
- * Does not call {@link DocRegistry#save()} — callers decide when to persist.
+ *
+ * <p>Registry writes are durable the moment {@link DocRegistry#put} runs (SQLite); the
+ * {@link DocRegistry#save()} calls left in the sync/re-index paths are no-ops kept for API
+ * compatibility, not a commit point.
  */
 @Component
 public class DocumentIndexer {
@@ -125,7 +128,7 @@ public class DocumentIndexer {
     // ── Public API ─────────────────────────────────────────────────────────
 
     /**
-     * Indexes one document. Does NOT call {@link DocRegistry#save()} — caller's responsibility.
+     * Indexes one document. Every registry write it makes is already durable (see this class's javadoc).
      */
     public DocumentInfo index(IndexRequest req) throws IOException {
         log.info("[INDEX] 시작: {} (version={})", req.filename(), req.version());
@@ -265,8 +268,9 @@ public class DocumentIndexer {
                                 "loading", done, total, req.filename(),
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
             } else {
-                // Non-scanned PDF has unambiguous page numbers → convert to MD ([페이지: N] marker
-                // + synthetic per-page heading, inline [이미지: ...] markers like DOCX) and run it
+                // Non-scanned PDF has unambiguous page numbers → convert to MD (a [페이지: N] marker
+                // per page — that marker IS the section boundary, no heading is synthesized — plus
+                // inline [이미지: ...] markers like DOCX) and run it
                 // through the same pipeline DOCX uses. loadFromMarkdown() promotes the image
                 // markers into image_paths metadata automatically — no separate attach step needed.
                 req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PDF → Markdown 변환 중..."));
@@ -282,11 +286,11 @@ public class DocumentIndexer {
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")),
                         imageDescribeProgress(req));
-                // skipChapterNumbers=true — PdfToMarkdownConverter's "## N페이지" heading is a
-                // synthetic per-page container (see its own class comment), never a real chapter;
-                // MetaKey.CHAPTER_NO would otherwise just re-derive the page count under a
-                // different name, and drift from the real page number the first time a page with
-                // no text/image is skipped (see PdfToMarkdownConverter).
+                // skipChapterNumbers=true — a plain PDF has no author headings at all (the
+                // converter emits only [페이지: N] markers), so whatever "##" survives extraction is
+                // incidental text, never a real chapter. Numbering it would re-derive the page count
+                // under a different name, and drift from the real page number the first time a page
+                // with no text/image is skipped (see PdfToMarkdownConverter).
                 rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
             }
         } else {
@@ -363,8 +367,9 @@ public class DocumentIndexer {
     }
 
     /**
-     * Re-indexes from a saved Markdown file (DOCX flow). Keeps MD files on disk.
-     * Calls {@link DocRegistry#save()} at the end.
+     * Re-indexes from the document's saved Markdown file — every format that produces one (DOCX,
+     * TXT, MD, PPTX and non-scanned PDF; a scanned PDF has none and is rejected). Keeps the MD
+     * files on disk.
      */
     public void reindexFromMd(String docId) throws IOException {
         reindexFromMd(docId, event -> {});
@@ -465,8 +470,8 @@ public class DocumentIndexer {
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         md = postProcessIfNeeded(md, mdPath, filename);
         // skipChapterNumbers: re-derived from the original filename extension (see the live-indexing
-        // PPTX/PDF branches above) — both have synthetic (not real chapter) headings, so
-        // MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
+        // PPTX/PDF branches above) — neither format carries real chapter structure (PPTX headings are
+        // slide title/subtitle labels; a plain PDF has none), so MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
         // PDFs never produce an MD file, so they fail the "MD 파일이 없습니다" check above instead.
         String lowerFilename = filename.toLowerCase();
         boolean skipChapterNumbers = lowerFilename.endsWith(".pptx") || lowerFilename.endsWith(".pdf");
@@ -520,7 +525,6 @@ public class DocumentIndexer {
 
     /**
      * Synchronises the documents directory with the vector store.
-     * Calls {@link DocRegistry#save()} once at the end.
      */
     public SyncResult syncDirectory(String userId, String version, Path documentsDir,
                                     Consumer<IndexingProgressEvent> onProgress) throws IOException {
@@ -611,8 +615,9 @@ public class DocumentIndexer {
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
-                // Persist whatever succeeded before cancellation so completed work isn't lost;
-                // step 3 (deletion detection) is skipped — it can run on the next normal sync.
+                // Whatever finished before the cancel is already durable (each index() wrote its
+                // own registry row); step 3 (deletion detection) is skipped — it can run on the
+                // next normal sync.
                 docRegistry.save();
                 throw new IndexingCancelledException(
                         "sync cancelled: " + doneFiles.get() + "/" + totalFiles + " files processed");
@@ -642,7 +647,6 @@ public class DocumentIndexer {
 
     /**
      * Deletes vector chunks, image/MD files, and removes the entry from {@link DocRegistry}.
-     * Does NOT call {@link DocRegistry#save()} — caller decides when to persist.
      */
     public void deleteArtifacts(String userId, String docId, String version) {
         deleteExistingVectorsOnly(userId, docId, version);
@@ -685,11 +689,6 @@ public class DocumentIndexer {
     }
 
     /**
-     * Recovers a document's search-scope tags from {@code doc_registry} so operator re-index /
-     * directory-sync paths — which carry no tag input — do not silently drop tags set at original
-     * upload. Returns an empty list when the document has no recorded tags.
-     */
-    /**
      * Reports Vision image-description progress ("이미지 분석 중 (N/M)") for the given request —
      * fires while {@code correctionService.correct()}'s image-description pre-pass runs, which
      * otherwise leaves the last pre-correction "loading" message (e.g. "PPTX → Markdown 변환 중...")
@@ -701,6 +700,11 @@ public class DocumentIndexer {
                         "이미지 분석 중 (" + done + "/" + total + ")"));
     }
 
+    /**
+     * Recovers a document's search-scope tags from {@code doc_registry} so operator re-index /
+     * directory-sync paths — which carry no tag input — do not silently drop tags set at original
+     * upload. Returns an empty list when the document has no recorded tags.
+     */
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return docRegistry.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());

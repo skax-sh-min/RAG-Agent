@@ -30,8 +30,10 @@ import java.util.function.Consumer;
  * RAG pipeline orchestrator.
  * Delegates indexing logic to {@link DocumentIndexer}, registry to {@link DocRegistry},
  * and vector-store operations to {@link VectorStoreFacade}.
- * Documents are stored in shared paths (data/documents, data/images, data/converted)
- * and indexed into a single shared Chroma collection — no per-user isolation.
+ * Documents are stored in shared paths (data/documents, data/images, data/converted) and indexed
+ * under the single shared owner key {@link DocRegistry#SHARED} — no per-user isolation. Which
+ * backend that lands in (a Chroma collection or the sqlite-vec tables) is
+ * {@link VectorStoreFacade}'s business, not this class's.
  */
 @Service
 public class RagService {
@@ -252,8 +254,8 @@ public class RagService {
      * TagUtils#normalize}) or when {@code docId} does not exist in {@code doc_registry}.
      *
      * <p>Verifies the {@code chunk_fts} write actually touched a row — a {@code doc_registry}
-     * entry can outlive its real chunk data (e.g. a prior indexing/reindex failure that never
-     * reached {@code saveRegistry()} for the new state), in which case the update would silently
+     * entry can outlive its real chunk data (e.g. a prior indexing/reindex failure that wrote the
+     * early "MD ready, not yet chunked" row and then died), in which case the update would silently
      * affect 0 rows and this method would otherwise return a falsely successful result. Throws
      * {@link DocumentIndexingException} in that case, telling the caller to re-sync/re-upload.
      */
@@ -286,7 +288,6 @@ public class RagService {
         return vectorStore.searchBatch(DocRegistry.SHARED, queries, version, topK);
     }
 
-    /** BM25 keyword (FTS5) search axis for hybrid retrieval. */
     /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
     public List<String> listTags(String version) {
         return docRegistry.distinctTags(version);
@@ -312,6 +313,7 @@ public class RagService {
         return versions.stream().sorted().toList();
     }
 
+    /** BM25 keyword (FTS5) search axis for hybrid retrieval. */
     public List<Document> keywordSearch(String version, String question, int topK) {
         return keywordRepo.search(version, question, topK);
     }

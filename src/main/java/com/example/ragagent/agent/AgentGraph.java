@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * Agent execution graph — equivalent to LangGraph StateGraph in the Python version.
+ * Agent execution graph — a state machine over the nodes below.
  *
  * Flow:
  *   START → CLASSIFIER

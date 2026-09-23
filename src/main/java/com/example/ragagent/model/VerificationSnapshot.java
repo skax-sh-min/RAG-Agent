@@ -13,8 +13,8 @@ import java.util.List;
  * 한 번 더 구현한다(스트리밍 이벤트는 템플릿을 거치지 않는다) — <b>규칙을 바꾸면 양쪽을 함께
  * 고쳐야 한다</b>.
  *
- * <p><b>{@code conversation_turns.verification} 에 JSON 으로 저장된다.</b> 컬럼 넷이 아니라 blob 인
- * 이유는 {@code retrieval_metrics} 와 같다 — 읽는 곳이 이 표시 하나뿐이고 항상 턴 하나의 검증
+ * <p><b>{@code conversation_turns.verification} 에 JSON 으로 저장된다.</b> 필드마다 컬럼을 두지 않고
+ * blob 하나인 이유는 {@code retrieval_metrics} 와 같다 — 읽는 곳이 이 표시 하나뿐이고 항상 턴 하나의 검증
  * 결과를 통째로 꺼내며, 스키마가 이 레코드를 따라가야 해서 컬럼으로 고정하면 필드가 하나 늘 때마다
  * 마이그레이션이 된다(실제로 이번 단계에서만 {@code envNote} 와 {@code inventedSymbols} 가 차례로
  * 늘었다). 컬럼이 {@code NULL} 이면 "검증 기록이 없는 턴"이고, 그건 이 기능 이전의 모든 턴과

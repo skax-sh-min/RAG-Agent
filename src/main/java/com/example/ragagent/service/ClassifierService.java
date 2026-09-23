@@ -25,7 +25,8 @@ import java.util.Set;
  * Classifies the user question into one of:
  * concept | usage | error | version | meta
  *
- * Equivalent to classifier_node in agents.py.
+ * <p>Only {@code meta} changes the graph's route (it skips retrieval — see {@code AgentGraph});
+ * the rest are recorded on the turn.
  */
 @Service
 public class ClassifierService {

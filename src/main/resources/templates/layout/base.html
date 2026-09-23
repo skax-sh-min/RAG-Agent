@@ -124,7 +124,7 @@
             <!-- LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — hidden until the
                  first poll confirms such a provider exists; refreshed every ~3s (script below).
                  Bootstrap Tooltip (not native title) for the same fast-appearance reason as the
-                 S/M/L response-mode buttons in chat.html — see that file's tooltip init comment. -->
+                 S/N/C response-mode buttons in chat.html — see that file's tooltip init comment. -->
             <span id="llm-concurrency" class="small text-secondary d-none"
                   data-bs-toggle="tooltip" th:title="#{nav.llm.tooltip}">
                 <span th:text="#{nav.llm.label}">LLM</span>: <span id="llm-concurrency-value">0/0</span>
@@ -430,7 +430,7 @@ const I18N = {
         }
         refreshLlmConcurrency();
         setInterval(refreshLlmConcurrency, 3000);
-        // Same fast-appearance rationale as chat.html's S/M/L tooltip init — native title's
+        // Same fast-appearance rationale as chat.html's response-mode tooltip init — native title's
         // ~1.5s browser default delay reads as unresponsive for a quick-glance header hint.
         new bootstrap.Tooltip(wrap, { delay: { show: 100, hide: 0 } });
     })();

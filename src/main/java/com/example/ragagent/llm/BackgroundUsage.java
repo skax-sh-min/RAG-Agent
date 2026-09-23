@@ -22,8 +22,8 @@ public final class BackgroundUsage {
     // bare provider name) so the dashboard shows indexing image cost distinctly.
     public static final String IMAGE_PREFIX     = "image:";
     // §10.1 — KeywordExtractor now extracts keywords + context in one call, tracked under this
-    // label. KEYWORD_PREFIX is kept below (no new rows) so isBackground() still recognizes
-    // historical keyword: rows recorded before this switch.
+    // label. KEYWORD_PREFIX is kept above (no new rows are written under it) so isBackground()
+    // still recognizes historical keyword: rows recorded before this switch.
     public static final String CONTEXT_PREFIX   = "context:";
     // 큐레이션 Q&A 의 질문 구체화 제안(/admin 편집 화면의 버튼). 관리자가 눌러야만 도는 호출이라
     // 빈도가 낮지만, 채팅 프로바이더 행에 섞이면 "답변 모델이 왜 이만큼 불렸지"가 설명되지 않는다.

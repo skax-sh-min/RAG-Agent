@@ -19,9 +19,10 @@ import java.util.List;
 
 /**
  * Activated only when app.auth.enabled=false.
- * Injects a fixed identity on every request:
+ * Injects an identity on every request:
  *   /admin/** → first ADMIN user in DB (requires /setup on first run)
- *   everything else → fixed "guest" principal
+ *   everything else → a guest principal, whose id comes from {@link GuestIdentityResolver}
+ *   (one shared constant under the default {@code guest-identity=shared}, per-visitor otherwise)
  *
  * §6.17 B안 (app.auth.management-only=true) changes this: {@code /admin/**} and the document-
  * management write UI ({@link #GATED_UI_DOCUMENT_ROUTES}) are excluded from auto-injection —
@@ -42,9 +43,11 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
     private record GatedRoute(String method, String pattern) {
     }
 
-    // Mirrors SecurityConfig's management-only authorizeHttpRequests() matchers exactly — kept in
-    // sync deliberately (see hasRole("ADMIN") vs authenticated() comment there for why a drift
-    // between these two lists fails safe rather than silently granting access).
+    // Mirrors the UI half of SecurityConfig's gateDocumentManagement() — kept in sync deliberately
+    // (see hasRole("ADMIN") vs authenticated() comment there for why a drift between these two
+    // lists fails safe rather than silently granting access). The REST document-write routes that
+    // list also gates are deliberately NOT here: leaving them anonymous would 302 an API caller to
+    // /login, where a 403 is the right answer (see gateDocumentManagement's javadoc).
     private static final List<GatedRoute> GATED_UI_DOCUMENT_ROUTES = List.of(
             new GatedRoute("POST", "/ui/documents/upload"),
             new GatedRoute("POST", "/ui/documents/progress/*/cancel"),

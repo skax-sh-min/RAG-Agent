@@ -7,7 +7,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Each provider's effective context window (tokens), recorded once at startup.
+ * Each provider's effective context window (tokens), recorded at startup and refreshed by the
+ * {@code /settings} re-probe button (§6.26 A5).
  *
  * <p>값의 출처는 둘이다 — 운영자가 {@code app.llm.providers[N].context-size} 로 선언했거나,
  * {@link ContextWindowProbe} 가 서버에게 물어봤거나. 어느 쪽도 못 구하면 <b>그 프로바이더는 항목이
@@ -19,9 +20,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * 그 레코드는 40곳에서 생성되는데, 런타임에 프로바이더를 <b>식별</b>하는 정보가 아니라 그 프로바이더에
  * <b>관해 관측된</b> 값이라 레코드가 나를 이유가 없다.
  *
- * <p>기동 시 한 번 채우고 그 뒤로는 읽기만 한다 — 서버가 다른 컨텍스트로 모델을 다시 로드하면 이
- * 값은 낡는다. 그래서 {@code /settings} 가 이 값을 <b>탐지된 값</b>으로 표시하고, 어긋나면 운영자가
- * {@code context-size} 로 못 박을 수 있게 한다.
+ * <p>기동 시 채우고, 그 뒤로 값이 바뀌는 자리는 하나다 — {@code /settings} 의 재탐지 버튼
+ * ({@code SettingsService.reprobeContextWindows()}, §6.26 A5). 자동으로 다시 묻지 않는 이유는 예산이
+ * 스스로 움직이면 같은 질문이 시각에 따라 다른 양의 근거를 받기 때문이다. 서버가 다른 컨텍스트로 모델을
+ * 다시 로드하면 이 값은 낡으므로, {@code /settings} 가 이 값을 <b>탐지된 값</b>으로 표시하고 어긋나면
+ * 운영자가 {@code context-size} 로 못 박거나 재탐지를 누를 수 있게 한다.
  */
 @Component
 public class ProviderContextWindows {

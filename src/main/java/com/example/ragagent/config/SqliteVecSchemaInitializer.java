@@ -56,9 +56,10 @@ public class SqliteVecSchemaInitializer {
     void init() {
         // Fail fast BEFORE touching the DB so a misconfigured dimension executes no statements.
         int dim = resolveDimension(props.embeddingSafe().dimensions());
-        // Replicate the operational DB's pragmas on the vector template's connection. Harmless when
-        // vectorJdbcTemplate aliases memory.db (non-separated); required for a dedicated vector.db
-        // since its connection is created separately from SqliteMemoryRepository's.
+        // Belt-and-braces: both DataSources already carry these on their JDBC URL
+        // (DataSourceConfig.SESSION_PRAGMAS), which is the only place they can be set reliably —
+        // see that constant's javadoc. Re-asserting them here is a no-op in normal wiring and costs
+        // two statements once at startup, so it is kept as a guard for a hand-built template.
         jdbc.execute("PRAGMA journal_mode=WAL");
         jdbc.execute("PRAGMA busy_timeout=5000");
         jdbc.execute(embeddingTableDdl(dim));

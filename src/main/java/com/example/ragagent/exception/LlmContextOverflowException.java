@@ -6,8 +6,9 @@ package com.example.ragagent.exception;
  *
  * <p><b>{@link LlmProviderExhaustedException} 을 상속하는 것이 핵심이다.</b> 도달 경로가 같기 때문에
  * (라우터가 모든 후보를 돌고 나서 던진다) 기존에 소진을 잡아 우아하게 물러나던 자리들 —
- * {@code MarkdownCorrectionService} 는 LLM 없이 원문을 그대로 두고, {@code LlmConfig} 의 기동 워밍업은
- * 조용히 넘어간다 — 이 그대로 동작해야 한다. 형제 클래스로 만들었다면 그 자리들이 이 예외를 못 잡아
+ * {@code MarkdownCorrectionService}/{@code TextToMarkdownService} 는 LLM 없이 원문을 그대로 두고,
+ * {@code VisionDescriptionService} 는 설명 없이 넘어가며, {@code LlmConfig.primaryChatModel()} 은
+ * 다음 TaskType 으로 넘어간다 — 이 그대로 동작해야 한다. 형제 클래스로 만들었다면 그 자리들이 이 예외를 못 잡아
  * 인덱싱이 우아한 강등 대신 실패했을 것이다. 구분된 문구가 필요한 곳만 이 타입을 <b>먼저</b> 잡는다
  * (자바는 하위 타입 catch 가 앞에 와야 하므로 순서가 곧 규약이다).
  *

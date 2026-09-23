@@ -9,15 +9,17 @@ import java.util.List;
 /**
  * One retrieved chunk as shown in the answer's source list.
  *
- * <p>The last three components are <b>retrieval diagnostics</b> (1단계): they explain why this
+ * <p>{@code similarity}/{@code retrievalShare}/{@code axisRanks} are <b>retrieval diagnostics</b>
+ * (1단계): they explain why this
  * chunk was retrieved, not how much of the answer came from it. All three are nullable and every
  * consumer must treat {@code null} as "not measured" rather than zero — a chunk that only matched
  * on the BM25/curated axes genuinely has no vector similarity, an answer restored from history or
  * reused from the DB has no fusion state at all, and the expansion-failure fallback path in
  * {@code RetrievalService} skips RRF entirely.
  *
- * <p>The 5-arg constructor exists for exactly those metric-less paths. Jackson always uses the
- * canonical (8-arg) one, so a record persisted before these fields existed deserializes with nulls.
+ * <p>The 5-arg constructor exists for exactly those metric-less paths, and the 8-arg one for
+ * retrieval time (the answer share is attached later). Jackson always uses the canonical (11-arg)
+ * one, so a record persisted before these fields existed deserializes with nulls/false.
  */
 public record SourceRef(
         String label,

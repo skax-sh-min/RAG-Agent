@@ -136,7 +136,7 @@ public class AdminController {
 
     // ── REST actions ──────────────────────────────────────────────────────────
 
-    /** Delete a single chunk by its ChromaDB ID. */
+    /** Delete a single chunk by its vector-store chunk id (both backends). */
     @DeleteMapping("/admin/chunks/{chunkId}")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> deleteChunk(@PathVariable String chunkId,
@@ -645,6 +645,14 @@ public class AdminController {
                         "status", "not_open", "message", "이미 처리된 신고입니다."));
     }
 
+    /** 0 when the document isn't in the registry — a missing document is the re-index call's own
+     *  error to report, not something the pre-flight should turn into a confusing warning. */
+    private long countEditedChunks(String userId, String docId) {
+        return ragService.findDocument(userId, docId)
+                .map(d -> adminService.countEditedChunks(adminService.collectionFor(d.version()), docId))
+                .orElse(0L);
+    }
+
     /**
      * Re-index a document from its saved Markdown file (corrected or raw). Async — starts the
      * work on a virtual thread and returns {@code {taskId}} immediately (202); progress and the
@@ -669,14 +677,6 @@ public class AdminController {
      * <p>Both are reported in one response: they are independent findings about the same click, and
      * asking the operator twice in a row would train them to click through both.
      */
-    /** 0 when the document isn't in the registry — a missing document is the re-index call's own
-     *  error to report, not something the pre-flight should turn into a confusing warning. */
-    private long countEditedChunks(String userId, String docId) {
-        return ragService.findDocument(userId, docId)
-                .map(d -> adminService.countEditedChunks(adminService.collectionFor(d.version()), docId))
-                .orElse(0L);
-    }
-
     @PostMapping("/admin/documents/{docId}/reindex")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> reindexFromMd(

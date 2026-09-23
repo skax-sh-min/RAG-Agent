@@ -283,8 +283,9 @@ public class LlmRouter {
     }
 
     /**
-     * Records approximate usage (chars/4, mirrors {@code TrackingEmbeddingModel}'s embedding
-     * fallback) for calls whose real token count isn't available — real-time SSE token streaming
+     * Records approximate usage ({@link TokenEstimator}, the same assumption
+     * {@code TrackingEmbeddingModel}'s embedding fallback uses) for calls whose real token count
+     * isn't available — real-time SSE token streaming
      * reads only content deltas, never a {@link ChatResponse} with usage metadata, and reading
      * one would mean buffering the full response first and breaking the token-by-token UX.
      * No-op when {@code answerText} is blank (failed/empty call — nothing was actually served).
@@ -676,17 +677,6 @@ public class LlmRouter {
     }
 
     /**
-     * For overload-type errors (429/402/503), a full circuit-breaker block is
-     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
-     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
-     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
-     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
-     * multi-minute total outage for every subsequent request — worse than leaving it open, since
-     * the concurrency gate already throttles how hard the app hammers it. An explicit
-     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
-     * guidance from the provider itself, not a default we're second-guessing).
-     */
-    /**
      * 오버로드가 아닌 일반 실패(연결 거부·리셋·5xx 등)의 차단.
      *
      * <p>{@link #blockForOverload} 와 <b>같은 판단</b>을 한다 — 넘겨줄 상대가 있으면 차단이 곧
@@ -707,6 +697,17 @@ public class LlmRouter {
         circuitBreaker.block(provider.name(), NO_FALLBACK_BLOCK_SECONDS);
     }
 
+    /**
+     * For overload-type errors (429/402/503), a full circuit-breaker block is
+     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
+     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
+     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
+     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
+     * multi-minute total outage for every subsequent request — worse than leaving it open, since
+     * the concurrency gate already throttles how hard the app hammers it. An explicit
+     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
+     * guidance from the provider itself, not a default we're second-guessing).
+     */
     private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
                                   Set<String> tried, String retryAfterHeader) {
         boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();

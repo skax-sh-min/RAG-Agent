@@ -4,8 +4,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * §10.10 — text transform specific to curated Q&A (liked chat turns promoted to a separate
- * searchable knowledge axis, see documents/PLAN.md §10.10). Pure text util, no {@code @Component}
+ * §10.10/§10.11 — text transform specific to curated Q&A (admin-approved 지식 제안 embedded as a
+ * separate searchable knowledge axis, see documents/PLAN.md). Pure text util, no {@code @Component}
  * — mirrors {@link MarkdownNoiseNormalizer}'s shape.
  */
 public final class CuratedTextUtils {

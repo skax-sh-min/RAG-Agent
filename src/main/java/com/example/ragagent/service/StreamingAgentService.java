@@ -238,7 +238,7 @@ public class StreamingAgentService {
                     throw AsyncExceptions.unwrap(e);
                 }
             }
-            // carry the selected search-scope tags + answer-length mode into the graph state.
+            // carry the selected search-scope tags + response mode into the graph state.
             initial = initial.toBuilder()
                     .selectedTags(form.selectedTags())
                     .responseMode(form.responseModeOrDefault())
@@ -480,10 +480,9 @@ public class StreamingAgentService {
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
         m.put("generative",        result.responseMode().generative());
-        // 이 턴에서 좋아요가 실제로 무언가를 하는가. LIKE의 유일한 소비자가 큐레이션이라
-        // S·C에서는 눌러도 curated_qa 행조차 생기지 않는데, 피드백 값은 저장돼 버튼만 눌린
-        // 채로 남는다 — 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이
-        // 아니라 성질을 내려보낸다.
+        // 이 턴에서 좋아요가 실제로 무언가를 열어 주는가. 좋아요의 값은 지식 제안 폼을 여는 것뿐인데
+        // (§10.11) S 에서는 그 폼 자체를 열 수 없다 — 그래도 버튼을 살려 두면 피드백 값만 저장되고
+        // 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이 아니라 성질을 내려보낸다.
         m.put("proposable",         result.responseMode().allowsSubmission());
         // 스트리밍 클라이언트에는 메시지 번들이 없으므로 사유 문구까지 서버가 해석해 보낸다
         // (서버 템플릿 두 곳은 키를 직접 읽는다). 사유는 모드마다 다르다 — ResponseMode 참조.

@@ -128,12 +128,13 @@ public class LlmConfig {
                             .openAiApi(api)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
                             // app.llm.temperature / app.llm.max-tokens (LLM_TEMPERATURE / LLM_MAX_TOKENS).
-                            // temperature here is only the startup-time fallback for framework-internal
+                            // Both values here are only the startup-time fallback for framework-internal
                             // callers that build their own ChatClient around this bean and never pass a
                             // per-call ChatOptions (e.g. RetrievalService's MultiQueryExpander) — every
                             // call site this app owns (Classifier/Answer/Reranker/Direct) attaches the
-                            // live effective temperature per call instead, so /settings changes apply
-                            // without a restart for those. maxTokens stays view-only (restart to change).
+                            // live effective temperature and maxTokens per call instead, and
+                            // MaxTokensCappingChatModel recomputes the per-provider ceiling per call
+                            // (§6.26 A6), so /settings changes apply without a restart for those.
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(effectiveModel)
                                     .temperature(llmCfg.temperature())
@@ -220,25 +221,6 @@ public class LlmConfig {
     }
 
     /**
-     * 출력 예약이 컨텍스트 창을 통째로 먹어버리는 설정을 기동 시점에 잡아낸다.
-     *
-     * <p>OpenAI 호환 서버에서 {@code max_tokens} 는 <b>예약</b>이다 — 프롬프트가 아무리 짧아도
-     * {@code 프롬프트 + max_tokens} 가 창을 넘으면 거절당한다. 그래서 {@code max-tokens} 가 창보다
-     * 크거나 같으면 <b>어떤 요청도 성공할 수 없다</b>: 입력에 남는 자리가 0 이하다. 설정만 보고는
-     * 아무도 눈치채지 못하고, 증상은 매 질문마다 "Context size has been exceeded" 로만 나타난다.
-     *
-     * <p>그래서 창을 아는 경우에 한해 <b>창의 절반</b>으로 눌러 준다. 절반인 이유는 그 이상을 출력에
-     * 예약하면 남는 입력 자리가 출력보다 작아지는데, 이 앱은 RAG 라 입력(검색 문서 + 대화 이력)이
-     * 출력보다 큰 것이 정상이기 때문이다. 임의의 안전 마진이 아니라 "입력이 출력보다 작아지면 안
-     * 된다"는 경계값이다.
-     *
-     * <p>조용히 고치지 않고 WARN 을 남긴다 — 운영자가 적어 둔 숫자와 실제로 쓰이는 숫자가 다른
-     * 상태이므로, {@code SettingsService.warnOnDivergingOverrides()} 와 같은 이유로 알려야 한다.
-     * 창을 모르면({@code null}) 아무것도 하지 않는다: 모르는 값으로 남의 설정을 깎을 수는 없다.
-     */
-    // package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
-    // (SettingsService.formatModeBudgetForTest 와 같은 선례).
-    /**
      * 이 프로바이더가 요청할 출력 상한 — 자기 값이 있으면 그것, 없으면 전역값
      * ({@code concurrency} 와 같은 폴백 규약).
      */
@@ -262,6 +244,26 @@ public class LlmConfig {
         return ProviderContextWindows.cappedMaxTokens(requested, window > 0 ? window : null);
     }
 
+    /**
+     * 출력 예약이 컨텍스트 창을 통째로 먹어버리는 설정을 기동 시점에 잡아낸다.
+     *
+     * <p>OpenAI 호환 서버에서 {@code max_tokens} 는 <b>예약</b>이다 — 프롬프트가 아무리 짧아도
+     * {@code 프롬프트 + max_tokens} 가 창을 넘으면 거절당한다. 그래서 {@code max-tokens} 가 창보다
+     * 크거나 같으면 <b>어떤 요청도 성공할 수 없다</b>: 입력에 남는 자리가 0 이하다. 설정만 보고는
+     * 아무도 눈치채지 못하고, 증상은 매 질문마다 "Context size has been exceeded" 로만 나타난다.
+     *
+     * <p>그래서 창을 아는 경우에 한해 <b>창의 절반</b>으로 눌러 준다({@link ProviderContextWindows#cappedMaxTokens}).
+     * 절반인 이유는 그 이상을 출력에 예약하면 남는 입력 자리가 출력보다 작아지는데, 이 앱은 RAG 라
+     * 입력(검색 문서 + 대화 이력)이 출력보다 큰 것이 정상이기 때문이다. 임의의 안전 마진이 아니라
+     * "입력이 출력보다 작아지면 안 된다"는 경계값이다.
+     *
+     * <p>조용히 고치지 않고 WARN 을 남긴다 — 운영자가 적어 둔 숫자와 실제로 쓰이는 숫자가 다른
+     * 상태이므로, {@code SettingsService.warnOnDivergingOverrides()} 와 같은 이유로 알려야 한다.
+     * 창을 모르면({@code null}) 아무것도 하지 않는다: 모르는 값으로 남의 설정을 깎을 수는 없다.
+     *
+     * <p>package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
+     * ({@code SettingsService.formatModeBudgetForTest} 와 같은 선례).
+     */
     static int capMaxTokensToContext(String providerName, int requested, Integer contextTokens) {
         int capped = ProviderContextWindows.cappedMaxTokens(requested, contextTokens);
         if (capped == requested) return requested;
