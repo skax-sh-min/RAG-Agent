@@ -26,7 +26,6 @@ import org.springframework.stereotype.Service;
 /**
  * Handles meta questions (greetings, service inquiries) without RAG retrieval.
  * Also handles directMode queries — general-purpose LLM calls bypassing RAG.
- * Equivalent to direct_answer_node in agents.py.
  */
 @Service
 public class DirectAnswerService {
@@ -93,7 +92,7 @@ public class DirectAnswerService {
         answer = enforceSummaryOnly(answer, state.responseMode());
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
-        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
+        // (TokenEstimator) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
         // and reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
         String promptText = systemPrompt + buildUserPrompt(state);
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);

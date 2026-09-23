@@ -35,10 +35,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * or degrades chat.
  *
  * <p>The summary itself is built without an LLM whenever the turns' answers already carry their
- * own "## 요약" section — a RAG answer always does (both {@code prompt.answer.system.n} and
- * {@code prompt.answer.system.s} mandate it), so
- * in practice the LLM path only ever exists to compress Direct-mode/meta answers, which have no
- * such section. And even then it runs only when the dedicated MICRO_TEXT offload model is
+ * own "## 요약" section — a RAG answer always does ({@code prompt.answer.system.s}/{@code .n}/{@code .c}
+ * all mandate it, and a Direct N answer is asked for one when the answer is long), so
+ * in practice the LLM path only ever exists to compress the answers that came back without one. And even then it runs only when the dedicated MICRO_TEXT offload model is
  * configured; without it the text is still assembled from the 요약 sections, with un-summarized
  * answers capped instead. See {@link #summarize}.
  */
@@ -185,8 +184,8 @@ public class ConversationSummarizerService {
     /**
      * Produces the thread summary, preferring the answers' own "## 요약" sections over an LLM call.
      *
-     * <p>A RAG answer already opens with an LLM-written recap of itself
-     * ({@code prompt.answer.system.n}'s fixed 요약 → 상세 설명 → … format), so re-summarizing it is
+     * <p>A RAG answer already opens with an LLM-written recap of itself (the fixed
+     * 요약 → 상세 설명 → … format every {@code prompt.answer.system.*} mandates), so re-summarizing it is
      * paying a second time for text the first call already produced. {@link #buildSummaryInput}
      * therefore substitutes each answer with its own 요약 section where one exists:
      * <ul>

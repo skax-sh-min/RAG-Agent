@@ -141,10 +141,11 @@ public class RetrievalService {
         // the cut stayed at defaultTopK, so every attempt handed the answer node exactly topK
         // documents. When the evidence a retry was supposed to surface lands just past that cut,
         // the retry re-fails for the same reason and burns the whole retry budget. The final cut
-        // therefore grows too, by one document per retry (topK + retryCount): enough to let a
-        // near-miss chunk in, small enough that the answer prompt does not balloon the way the
-        // ×(retryCount+1) candidate escalation would. Gated by the same app.search-retry-escalate
-        // flag — turning escalation off must switch off the whole behavior, not half of it.
+        // therefore grows too, by one document per re-retrieval (topK + retrievalRetries, unless the
+        // context-headroom check below vetoes it): enough to let a near-miss chunk in, small enough
+        // that the answer prompt does not balloon the way the old ×(retryCount+1) candidate
+        // escalation would. Gated by the same app.search-retry-escalate flag — turning escalation
+        // off must switch off the whole behavior, not half of it.
         // §6.24 Step 2-c — 응답 모드의 검색 부스트. 재시도 증가분과 '더해진다': 재시도는 "이번
         // 시도에 근거가 모자랐다"는 사후 신호이고, 부스트는 "이 모드는 원래 재료가 더 필요하다"는
         // 사전 성질이라 서로를 대체하지 않는다. 오늘은 모든 모드가 0이다 — 이 값을 실제로 올리면
@@ -371,21 +372,6 @@ public class RetrievalService {
     }
 
     /**
-     * 재시도에서 문서를 {@code extraDocs} 개 더 실어도 <b>검증 호출</b>이 발췌를 자르지 않을지 본다.
-     *
-     * <p><b>기준이 답변 호출이 아니라 검증 호출인 이유</b>: 이 앱에서 가장 큰 단일 요청은 검증이다
-     * (질문 + 답변 전문 + 발췌 + 응답 스키마가 한 번에 들어간다). 그리고 넘칠 때 나는 사고는
-     * 컨텍스트 초과가 아니라 조용한 품질 저하다 — 발췌가 잘리면 {@code AnswerService} 가 근거 없음
-     * 판정을 신뢰할 수 없다고 보고 {@code grounded=null}(판정 없음)로 떨어뜨린다. 즉 <b>재시도를
-     * 거듭할수록 판정이 사라지는</b> 구조라, 문서를 늘리는 결정은 그 예산을 보고 내려야 한다.
-     *
-     * <p>직전 답변을 실측에 쓴다 — 재시도 시점에는 방금 반려된 답변이 {@code state.answer()} 에
-     * 있고, 다음 답변의 길이를 추정하는 가장 좋은 재료가 그것이다. 없으면(첫 시도) 이 메서드는
-     * 호출되지 않는다.
-     *
-     * <p>창을 모르면 {@code true} — 늘리는 쪽이 기존 동작이므로, 모르는 상태에서 동작을 바꾸지 않는다.
-     */
-    /**
      * 재시도에서 추가로 검색할 질의 — 평가가 낸 반려 사유 한 문장.
      *
      * <p>원래 질문은 그대로 자기 축으로 검색되고, 이건 <b>별도 축</b>으로 들어가 RRF 로 융합된다.
@@ -402,6 +388,21 @@ public class RetrievalService {
         return Optional.of(reason.strip());
     }
 
+    /**
+     * 재시도에서 문서를 {@code extraDocs} 개 더 실어도 <b>검증 호출</b>이 발췌를 자르지 않을지 본다.
+     *
+     * <p><b>기준이 답변 호출이 아니라 검증 호출인 이유</b>: 이 앱에서 가장 큰 단일 요청은 검증이다
+     * (질문 + 답변 전문 + 발췌 + 응답 스키마가 한 번에 들어간다). 그리고 넘칠 때 나는 사고는
+     * 컨텍스트 초과가 아니라 조용한 품질 저하다 — 발췌가 잘리면 {@code AnswerService} 가 근거 없음
+     * 판정을 신뢰할 수 없다고 보고 {@code grounded=null}(판정 없음)로 떨어뜨린다. 즉 <b>재시도를
+     * 거듭할수록 판정이 사라지는</b> 구조라, 문서를 늘리는 결정은 그 예산을 보고 내려야 한다.
+     *
+     * <p>직전 답변을 실측에 쓴다 — 재시도 시점에는 방금 반려된 답변이 {@code state.answer()} 에
+     * 있고, 다음 답변의 길이를 추정하는 가장 좋은 재료가 그것이다. 없으면(첫 시도) 이 메서드는
+     * 호출되지 않는다.
+     *
+     * <p>창을 모르면 {@code true} — 늘리는 쪽이 기존 동작이므로, 모르는 상태에서 동작을 바꾸지 않는다.
+     */
     private boolean hasContextHeadroomFor(AgentState state, int extraDocs) {
         int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         if (window <= 0) return true;
@@ -451,8 +452,9 @@ public class RetrievalService {
      * <p><b>Curated exemption</b>: this filter runs on the <em>merged</em> pool, which includes the
      * curated-Q&A axis (§10.10), so an untagged curated entry would be dropped by every tag-scoped
      * search — that is what used to make liked answers silently vanish the moment a user touched a
-     * tag chip. A curated entry now carries the tags of the question it was promoted from
-     * ({@code CuratedQaService.onLike}) or the ones its submitter chose; when it has none, its scope
+     * tag chip. A curated entry now carries the tags its 지식 제안 was approved with (a 좋아요 출신
+     * proposal is prefilled with the scope the answer was given in, §10.11 —
+     * {@code CuratedQaService.buildDocument}); when it has none, its scope
      * is genuinely unknown and it is treated as belonging to all scopes rather than to none.
      * Document chunks keep the strict behavior — an untagged document is still excluded, since there
      * the tag selection is precisely a corpus filter.
@@ -469,6 +471,18 @@ public class RetrievalService {
         log.debug("[TAG] selectedTags={} candidateK={} postFilter={}/{}",
                 selectedTags, candidateK, filtered.size(), before);
         return filtered;
+    }
+
+    /**
+     * 큐레이션 축의 두 절반. <b>합쳐서 하나로 돌려주지 않는다</b> — 두 리스트의 순위는 서로 비교
+     * 불가능한 값(코사인 순 vs BM25 순)이라, 이어붙여 그 위치를 하나의 순위로 쓰면 키워드 검색
+     * 1위가 병합 리스트에서 2위가 되어 화면에도 RRF 에도 어느 쪽 순위도 아닌 숫자가 남는다.
+     *
+     * <p>{@code keyword} 는 {@code vector} 가 가져오지 못한 id 만 담는다 — 그래서 두 리스트는
+     * 서로소이고, 각각 축으로 융합해도 한 청크가 가중치를 두 번 받지 않는다.
+     */
+    record CuratedHits(List<Document> vector, List<Document> keyword) {
+        static final CuratedHits EMPTY = new CuratedHits(List.of(), List.of());
     }
 
     /**
@@ -490,18 +504,6 @@ public class RetrievalService {
      * 전제로 설계됐고, BM25 를 더한 목적은 <b>벡터가 놓친 정확한 단어</b>를 후보에 넣는 것이다.
      * 그런 항목은 정의상 벡터 목록에 없으므로 중요한 것은 등장 여부이지 정확한 등수가 아니다.
      */
-    /**
-     * 큐레이션 축의 두 절반. <b>합쳐서 하나로 돌려주지 않는다</b> — 두 리스트의 순위는 서로 비교
-     * 불가능한 값(코사인 순 vs BM25 순)이라, 이어붙여 그 위치를 하나의 순위로 쓰면 키워드 검색
-     * 1위가 병합 리스트에서 2위가 되어 화면에도 RRF 에도 어느 쪽 순위도 아닌 숫자가 남는다.
-     *
-     * <p>{@code keyword} 는 {@code vector} 가 가져오지 못한 id 만 담는다 — 그래서 두 리스트는
-     * 서로소이고, 각각 축으로 융합해도 한 청크가 가중치를 두 번 받지 않는다.
-     */
-    record CuratedHits(List<Document> vector, List<Document> keyword) {
-        static final CuratedHits EMPTY = new CuratedHits(List.of(), List.of());
-    }
-
     private CuratedHits curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
         List<Document> vectorHits =
                 ragService.search(userId, question, CuratedQaService.CURATED_VERSION, fetchK);
@@ -577,8 +579,9 @@ public class RetrievalService {
      * Vector axes are group-normalized (weight = 1/axisCount) so a document's score doesn't scale with
      * the number of MultiQuery variants (1~3) — otherwise the single keyword (BM25) axis is structurally
      * outvoted whenever it competes with 2-3 vector axes on an exact-term match. The keyword axis instead
-     * carries its own configurable {@code keywordWeight} (default 1.0 = parity with the normalized vector
-     * group). When there is no keyword axis (hybrid disabled or no hits), this reduces to unweighted RRF —
+     * carries its own configurable {@code keywordWeight} ({@code app.search-rrf-keyword-weight}, shipped
+     * at 0.5; 1.0 would be parity with the normalized vector group, and this method's own no-argument
+     * fallback). When there is no keyword axis (hybrid disabled or no hits), this reduces to unweighted RRF —
      * every vector axis is scaled by the same constant 1/axisCount, so ranking order is unchanged.
      * Kept for callers/tests that don't care about the curated axis (§10.10) — delegates to the 7-arg
      * overload with an empty curated axis. Package-private for unit testing.
@@ -590,7 +593,7 @@ public class RetrievalService {
 
     /**
      * Same as the 5-arg {@link #mergeRrf(List, List, int, int, double)}, plus a third axis for
-     * curated Q&A (§10.10, promoted-by-like answers embedded under the reserved {@code "curated"}
+     * curated Q&A (§10.10/§10.11, admin-approved 지식 제안 embedded under the reserved {@code "curated"}
      * version namespace) — its own configurable {@code curatedWeight}, same treatment as the
      * keyword axis (flat weight, not group-normalized with the vector axes). Empty/absent axis is
      * a no-op, so this reduces to the 5-arg behavior when curated search is disabled or has no
@@ -824,11 +827,6 @@ public class RetrievalService {
     }
 
     /**
-     * Safely extracts the "image_paths" metadata value. Chroma may deserialize
-     * comma-joined paths as either a String or a List depending on writer/version;
-     * a blind (String) cast crashes the entire retrieval on the latter.
-     */
-    /**
      * True when {@code text} already has a "[이미지 설명: ...]" line immediately following the
      * "[이미지: {imagePath}]" marker — i.e. the description was injected when the chunk was created
      * ("이미지 설명 추가" on a document upload, or 지식 제안 승인), so a fresh Lazy Vision call would
@@ -853,6 +851,11 @@ public class RetrievalService {
         return after.startsWith("[이미지 설명:");
     }
 
+    /**
+     * Safely extracts the "image_paths" metadata value. Chroma may deserialize
+     * comma-joined paths as either a String or a List depending on writer/version;
+     * a blind (String) cast crashes the entire retrieval on the latter.
+     */
     private static String imagePathsMeta(Map<String, Object> meta) {
         Object raw = meta.get(MetaKey.IMAGE_PATHS);
         if (raw instanceof String s) return s;

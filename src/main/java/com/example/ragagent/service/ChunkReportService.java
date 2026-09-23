@@ -60,8 +60,9 @@ public class ChunkReportService {
      */
     public record ReportResult(boolean created, long id) {}
 
-    /** 관리자 상세 — 한 청크에 달린 신고 전부 + 그 청크의 현재 상태. */
     /**
+     * 관리자 상세 — 한 청크에 달린 신고 전부 + 그 청크의 현재 상태.
+     *
      * @param newestSnapshot 가장 최근 신고가 붙잡은 원문. 비교의 기준이고, 화면이 신고 목록을
      *                       뒤에서부터 인덱싱해 꺼내지 않도록 여기서 골라 준다
      * @param diff           {@code newestSnapshot} 대 {@code currentContent}. 한쪽이라도 없으면

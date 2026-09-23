@@ -858,7 +858,7 @@ function openChunkEdit(chunkId, collection) {
 /**
  * innerHTML로 새로 그린 영역의 Bootstrap 툴팁을 활성화한다. 오프캔버스 본문은 열 때마다
  * 통째로 교체되므로 페이지 로드 시점의 일괄 초기화로는 잡히지 않는다.
- * 네이티브 title의 ~1.5초 지연을 피하는 이유는 chat.html의 S/M/L 툴팁 주석과 동일.
+ * 네이티브 title의 ~1.5초 지연을 피하는 이유는 chat.html의 응답 모드(S/N/C) 툴팁 주석과 동일.
  * 교체 전 인스턴스는 dispose 해 둔다 — 안 하면 이전 엘리먼트에 붙은 팝업이 열린 채로 남을 수 있다.
  */
 function initTooltipsIn(container) {

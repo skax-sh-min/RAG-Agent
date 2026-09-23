@@ -85,9 +85,9 @@ public class EmbeddingBeanConfig {
                         cfg.connectTimeoutSeconds(),
                         cfg.readTimeoutSeconds()))
                 .build();
-        // Limit retries to 2: DEFAULT_RETRY_TEMPLATE retries up to 10 times with exponential
-        // backoff, causing the UI to show "벡터 DB 저장 중..." for several minutes on
-        // connection failures (e.g. LM Studio not running).
+        // maxAttempts=2 (i.e. one retry): Spring AI's DEFAULT_RETRY_TEMPLATE attempts up to 10
+        // times with exponential backoff, causing the UI to show "벡터 DB 저장 중..." for several
+        // minutes on connection failures (e.g. LM Studio not running).
         RetryTemplate shortRetry = RetryTemplate.builder()
                 .maxAttempts(2)
                 .exponentialBackoff(500, 2.0, 5_000)

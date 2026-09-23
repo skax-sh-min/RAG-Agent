@@ -32,9 +32,9 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Admin-level access to the active vector store: ChromaDB collection/chunk browsing,
- * plus a backend-agnostic status view ({@link #vectorStoreView()}) covering both
- * chroma and sqlite-vec.
+ * Admin-level access to the active vector store: collection/chunk browsing and editing on both
+ * backends (Chroma via {@link ChromaApi}, sqlite-vec via the vector {@code JdbcTemplate}), plus a
+ * backend-agnostic status view ({@link #vectorStoreView()}).
  */
 @Service
 public class AdminService {

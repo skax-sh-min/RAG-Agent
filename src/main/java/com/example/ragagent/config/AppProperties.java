@@ -35,7 +35,7 @@ public record AppProperties(
         MemoryConfig memory,
         SummaryConfig summary,
         Integer searchTagCandidateMultiplier,  // 태그 선택 시 후보확대 배수 (기본 2)
-        Integer sseIdleTimeoutSeconds,          // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃 (기본 120초)
+        Integer sseIdleTimeoutSeconds,          // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃. application.properties 기본 300초, 미설정 시 코드 폴백 120초
         Double searchRrfKeywordWeight,          // 가중 RRF — 키워드(BM25) 축 가중치 (기본 0.5; 벡터축은 그룹 정규화되어 1.0이 동등 비중이므로 BM25를 절반으로 낮춘 값)
         Integer searchRrfK,                     // 가중 RRF — RRF 상수 k (기본 60, 원논문 표준값)
         Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
@@ -46,7 +46,7 @@ public record AppProperties(
         DocxShapeExtractionConfig docxImage,    // DOCX 레거시 VML 도형 + 사진 합성 튜닝
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
-        Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
+        Boolean searchCuratedQaEnabled,          // §10.10/§10.11 — 승인된 지식 제안(큐레이션 Q&A)을 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
         Double searchCuratedQaWeight,            // §10.10 — 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). §10.11 에서 지식 제안 축과 합쳐져 이 값 하나가 큐레이션 전체를 다룬다. 핫에디터블
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
@@ -61,9 +61,9 @@ public record AppProperties(
             String defaultRoutingMode,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
-            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
+            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService, QuestionCondenser); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
-            Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
+            Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService, CuratedQuestionSuggester) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 10000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
@@ -413,7 +413,6 @@ public record AppProperties(
         return o != null ? o : searchRetryEscalate;
     }
 
-    /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
     /** Chunk size (chars) used at indexing time. Hot-editable — {@code DocumentIndexer} re-reads it
      *  per index, so an override applies on the next indexing / ↺ re-index. Clamped to a sane floor. */
     public int chunkSizeSafe() {
@@ -488,7 +487,9 @@ public record AppProperties(
         return (effective == null || effective < 1) ? 2 : effective;
     }
 
-    /** Weighted RRF — keyword (BM25) axis weight. Defaults to 1.0 (parity with the group-normalized vector axes). */
+    /** Weighted RRF — keyword (BM25) axis weight ({@code app.search-rrf-keyword-weight}, shipped at
+     *  0.5). The 1.0 below is only the fallback for a missing/non-positive value — at that weight the
+     *  axis would be at parity with the group-normalized vector axes. */
     public double searchRrfKeywordWeightSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT);
         Double effective = (o != null) ? o : searchRrfKeywordWeight;
@@ -794,8 +795,10 @@ public record AppProperties(
         // per call; AnswerService reads creativeTemperature() per call for the C (creative) mode, on
         // the blocking AND the streaming path; creative-mode-enabled gates whether the C mode can be
         // picked at all (read per chat request by SettingsService.effectiveResponseMode()).
-        // maxTokens stays view-only: it's baked into the provider
-        // defaultOptions at bean creation, so an override couldn't take effect until a restart.
+        // maxTokens is hot too since §6.26 A6 — every consumer re-reads it per call and
+        // MaxTokensCappingChatModel recomputes the per-provider ceiling per call. Only the provider
+        // bean's defaultOptions still needs a restart (the fallback for framework-internal callers
+        // that attach no options of their own), exactly like temperature.
         Double tempOverride = overrideDouble(SettingsKeys.LLM_TEMPERATURE);
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);

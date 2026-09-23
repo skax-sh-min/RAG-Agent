@@ -60,8 +60,9 @@ public class DocumentController {
     private final AuditLogger auditLogger;
     private final DocumentExportService exportService;
     private final LlmRouter llmRouter;
-    /** Only for the {@code includeCurated} union in {@link #listTags} — curated rows never reach
-     *  {@code chunk_fts}, so their tags have to come straight from the table. */
+    /** Only for the {@code includeCurated} union in {@link #listTags} — the document tag list is
+     *  read from {@code doc_registry}, which curated rows are not in, so their tags have to come
+     *  straight from {@code curated_qa}. */
     private final com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
     /** §6.15 — deployment-wide storage cap, consulted before either upload path writes anything. */
     private final StorageQuotaService storageQuotaService;
@@ -376,8 +377,9 @@ public class DocumentController {
                 : ragService.listTags(version);
         if (!includeCurated) return docTags;
 
-        // 큐레이션 항목은 chunk_fts 에 색인되지 않으므로(벡터 축 전용) 문서 태그 목록에 잡히지 않는다.
-        // 제안 등록 폼은 합집합을 써야 다른 사용자가 만든 태그를 재사용할 수 있고 표기가 갈리지 않는다.
+        // 문서 태그 목록의 출처는 doc_registry 이고 큐레이션 항목은 거기 없으므로 그 목록에 잡히지
+        // 않는다. 제안 등록 폼은 합집합을 써야 다른 사용자가 만든 태그를 재사용할 수 있고 표기가
+        // 갈리지 않는다.
         java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(docTags);
         merged.addAll(curatedQaRepository.distinctActiveTags());
         return List.copyOf(merged);

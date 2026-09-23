@@ -270,7 +270,8 @@ public class CuratedQaService {
      *
      * <p>{@code title} lands in the {@code question} column on purpose — {@code defaultSearchText()}
      * embeds {@code question + answer}, so a descriptive title is what makes a manually written
-     * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
+     * chunk retrievable by a question-shaped query at all. Returns one curated row id per chunk the
+     * body was split into (see {@link #splitForEmbedding}).
      */
     public List<Long> createFromSubmission(long submissionId, String authorUserId, String title,
                                            List<String> bodyChunks, String tags,
@@ -384,8 +385,9 @@ public class CuratedQaService {
 
     /**
      * Embeds an already-active row and records the outcome in {@code embed_status} — used by both
-     * the owner/admin edit path and the submission-approval path. No like-state re-check (unlike
-     * {@link #embed}): both callers are explicit save/approve actions that can't race an unlike.
+     * the owner/admin edit path and the submission-approval path. No feedback re-check: both callers
+     * are explicit save/approve actions, and since §10.11 a curated row's existence is decoupled from
+     * the originating turn's 좋아요 anyway, so there is no unlike left to race.
      */
     private boolean embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
@@ -592,7 +594,8 @@ public class CuratedQaService {
         meta.put(MetaKey.FILENAME, "curated_qa");
         meta.put(MetaKey.VERSION, CURATED_VERSION);
         meta.put(MetaKey.DOC_TYPE, "curated_qa");
-        // 검색 시 좋아요 큐레이션과 지식 제안을 서로 다른 가중치의 RRF 축으로 나누기 위한 표식.
+        // 이 행이 좋아요 출신 제안인지 직접 작성 제안인지 — 감사·통계용 표식이다. §10.11 이후
+        // 검색은 이 값으로 갈리지 않는다(큐레이션은 가중치 하나짜리 축 하나다 — RetrievalService).
         // DOC_TYPE 을 갈라 쓰지 않는 이유: 출처 라벨("💬 큐레이션 Q&A")과 태그 면제 판정이 모두
         // DOC_TYPE="curated_qa" 를 보고 있어, 그쪽을 바꾸면 둘 다 조용히 깨진다.
         meta.put(MetaKey.CURATED_ORIGIN,

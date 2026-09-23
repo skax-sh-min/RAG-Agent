@@ -67,8 +67,6 @@ public class TextToMarkdownService {
         this.contextWindows = contextWindows;
     }
 
-    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
-    /** 온도 + 출력 상한 — 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}). */
     /**
      * 이번 구조화 호출에 넣을 블록의 글자 상한 — {@link #MAX_BLOCK_CHARS} 와 프로바이더 창에서 나온
      * 값 중 작은 쪽. 재작성이라 출력이 입력에 비례하므로 본문과 그 예약이 함께 창에 들어가야 한다
@@ -85,6 +83,10 @@ public class TextToMarkdownService {
         return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
     }
 
+    /**
+     * 온도(indexing/background, hot-editable — 매 호출 새로 읽는다: {@code AppProperties.LlmConfig})
+     * + 출력 상한. 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}).
+     */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
         OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().indexingTemperature());

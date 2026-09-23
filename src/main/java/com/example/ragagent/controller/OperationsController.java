@@ -103,7 +103,7 @@ public class OperationsController {
     }
 
     /**
-     * Deletes a whole conversation. Retracts the thread's 👍-promoted curated-Q&A entries
+     * Deletes a whole conversation. Retracts the curated-Q&A entries this thread's turns produced
      * <b>first</b>, for the same reason {@link #deleteTurn} does it for a single turn: a curated
      * row is linked to its turn by a copy of the id, not a foreign key, so without this the row
      * and its vectors outlive the conversation and keep contributing to search (§6.25).
@@ -143,9 +143,9 @@ public class OperationsController {
      * <p>LIKE writes nothing but the feedback value (§10.11). It used to promote the turn straight
      * into the curated-Q&A search axis, which made this endpoint an unreviewed door into the search
      * corpus; the chat UI now offers to open a 지식 제안 instead, and an admin's approval is what
-     * creates the curated entry. Two things still read the stored LIKE: the 재사용 filter, which
-     * requires it before a Direct turn's answer may be reused
-     * ({@code QuestionReuseRepository}), and the chat UI's own button state.
+     * creates the curated entry. What still reads the stored LIKE is the chat UI's own button state
+     * (and the 지식 제안 prefill it opens). Reuse does not: {@code QuestionReuseRepository} excludes
+     * a Direct turn regardless of feedback, and only DISLIKE filters a turn out there.
      */
     @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/feedback")
     @ResponseBody
@@ -598,8 +598,9 @@ public class OperationsController {
      * Comma-joined underlying provider names (the part after the prefix) that contributed to a
      * background category, e.g. {@code "title:"} → {@code "local, local-fast"}. Shown in the
      * card/row's model-name slot in place of a real model name, since a merged category has no
-     * single model — this is what actually answered the calls (LOCAL only; background calls never
-     * route to a cloud provider).
+     * single model — this is what actually answered the calls. In practice that is the LOCAL
+     * tier(s), though nothing forces it: background calls route COST_FIRST, so a deployment with no
+     * LOCAL provider falls through to a cloud one.
      */
     private String backgroundModelLabel(String prefix) {
         return usageRepo.usedProviderNamesWithPrefix(prefix).stream()

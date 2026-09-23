@@ -11,7 +11,6 @@ import java.util.List;
 /**
  * Last node of the agent graph — turn persistence has been moved to
  * AgentService and StreamingAgentService so elapsed time is available.
- * Equivalent to finalize_node in agents.py.
  *
  * <p>It does own one computation: the per-source 응답 참여도 (2단계). This is the only point in the
  * graph where the answer and the retrieved chunks are both final — ANSWER can run several times

@@ -27,7 +27,7 @@ import java.util.concurrent.Executors;
  * Entry point for the agent pipeline. Builds initial AgentState,
  * injects conversation history, runs the graph, and returns ChatResponse.
  *
- * Equivalent to run_agent() in agents.py.
+ * <p>This is the blocking (REST) path; {@link StreamingAgentService} is the SSE twin.
  */
 @Service
 public class AgentService {
@@ -125,7 +125,7 @@ public class AgentService {
                 throw AsyncExceptions.unwrap(e);
             }
         }
-        // carry the selected search-scope tags + answer-length mode into the graph state.
+        // carry the selected search-scope tags + response mode into the graph state.
         initial = initial.toBuilder()
                 .selectedTags(request.selectedTags())
                 .responseMode(request.responseMode())

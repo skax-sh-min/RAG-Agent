@@ -82,7 +82,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private static final double EMBED_SHRINK_RATIO = 0.8;
     // §10.7.4 — post-filtering by similarityThreshold can shrink the pool below topK when the
     // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
-    // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
+    // actually active (it is by default: app.search-similarity-threshold ships at 0.3). Only a
+    // threshold of 0.0 (accept-all) skips the over-fetch — nothing gets filtered out there.
     private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
         private static final Pattern TOKEN_LIMIT_PATTERN = Pattern.compile(
             "input \\((\\d+) tokens\\).+?current batch size: (\\d+)",
@@ -102,7 +103,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private final AppProperties props;
     // §10.8.3 — lazily built from jdbc.getDataSource() (never null in real wiring; null only for
     // fully-mocked JdbcTemplate test doubles, where the transaction wrap is harmlessly skipped —
-    // see addBatches()).
+    // see insertSubBatch()).
     private volatile TransactionTemplate transactionTemplate;
     // Same default Spring AI applies internally to ChromaVectorStore.add() — splits by token
     // count (8191 default, 10% reserve) so add() never sends an entire large document's chunks
