@@ -479,7 +479,7 @@ User question
 | `GET` | `/api/v1/tags` | Distinct tags in use (`?version`, `?excludeCommon`, `?includeCurated`) |
 | `GET` | `/api/v1/versions` | Indexed document versions (feeds the chat version selector) |
 | `GET` | `/api/v1/chunks/{chunkId}` | Full untruncated chunk text for the source "원문 보기" popup (404 once the chunk is gone) |
-| `GET` | `/api/v1/questions/suggest` | Previously asked questions matching the in-progress input (`?q`, `?limit`, `?threadId` — items carry an `origin`: `thread`/`mine`/`others`/`elsewhere`) |
+| `GET` | `/api/v1/questions/suggest` | Previously asked questions matching the in-progress input (`?q`, `?limit`, `?threadId` — items carry an `origin`: `thread`/`mine`/`others`/`elsewhere`). Questions longer than 50 characters are excluded as candidates |
 | `POST` | `/api/v1/questions/reuse` | Reuse a suggested question's stored answer; revalidates source chunks, else signals fallback |
 | `GET` | `/api/v1/llm/usage` | Per-provider token usage + Circuit Breaker status |
 | `GET` | `/api/v1/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |
