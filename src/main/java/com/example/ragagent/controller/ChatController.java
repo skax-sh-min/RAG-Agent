@@ -342,13 +342,20 @@ public class ChatController {
      * {@code ThreadContext.threadId()} 가 아니다(그 값은 어떤 컨트롤러도 읽지 않는다, CLAUDE.md).
      * 이 값으로 항목의 {@code origin} 이 갈리고(현재 대화 = 이동, 나머지 = 재사용), 비워 보내면
      * 전부 재사용 항목으로만 나온다.
+     *
+     * <p>범위는 {@link QuestionReuseService.Scope#SHARED} 고정이라 <b>HTTP 로 받지 않는다</b>.
+     * 예전에는 {@code scope} 파라미터를 선언해 놓고 값을 읽지 않았다 — 받되 읽지 않는 손잡이는
+     * {@code ?scope=me} 가 동작한다고 믿게 만든다. "내 질문만"이 성립하려면 화면 토글과 함께
+     * 기본 배포(no-auth {@code guest-identity=shared})의 공유 게스트 id 부터 풀어야 한다:
+     * 방문자 전원이 같은 {@code user_id} 라 그 필터가 아무것도 걸러내지 못하며,
+     * {@link QuestionReuseService#originOf} 가 같은 이유로 {@code elsewhere} 로 접는다.
+     * 출처 구분은 필터가 아니라 항목마다 붙는 {@code origin} 배지가 한다.
      */
     @GetMapping("/api/v1/questions/suggest")
     @ResponseBody
     public List<QuestionReuseService.Suggestion> suggestQuestions(
             ThreadContext ctx,
             @RequestParam(name = "q", defaultValue = "") String q,
-            @RequestParam(name = "scope", defaultValue = "shared") String scope,
             @RequestParam(name = "threadId", required = false) String threadId,
             @RequestParam(name = "limit", defaultValue = "12") int limit) {
         if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
@@ -357,14 +364,17 @@ public class ChatController {
         return questionReuseService.suggest(ctx.userId(), threadId, QuestionReuseService.Scope.SHARED, q, bounded);
     }
 
+    /**
+     * 추천 항목을 실제로 재사용한다. 범위는 {@code suggest} 와 같은 이유로
+     * {@link QuestionReuseService.Scope#SHARED} 고정이며 HTTP 로 받지 않는다.
+     */
     @PostMapping("/api/v1/questions/reuse")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> reuseQuestionAnswer(
             ThreadContext ctx,
             @RequestParam("turnId") long turnId,
             @RequestParam("threadId") String threadId,
-            @RequestParam(name = "version", defaultValue = "latest") String version,
-            @RequestParam(name = "scope", defaultValue = "shared") String scope) {
+            @RequestParam(name = "version", defaultValue = "latest") String version) {
         if (questionReuseService == null) {
             return ResponseEntity.ok(Map.of(
                 "reused", false,
