@@ -37,8 +37,10 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    /* 지금 보내는 메시지라 사실상 늘 시:분만 나오지만, 표기 규칙은 복원된 turn 과 한 곳
+       (base.html 의 formatBubbleTime)에서 나와야 같은 대화의 버블이 서로 다른 형식을 달지 않는다. */
     function nowTimeStr() {
-        return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+        return formatBubbleTime(new Date());
     }
 
     function stripImagePreviewFromSourceMarkdown(raw) {
