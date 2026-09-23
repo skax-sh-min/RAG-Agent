@@ -74,7 +74,7 @@ src/main/resources/
 | POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
 | POST | `/ui/chat/stream/skip-images` | `204` | 현재 스트리밍 중인 턴의 쿼리 시점 이미지 분석(Lazy Vision) 대기를 건너뜀(`threadId` 파라미터) — 턴 전체를 끊는 `/ui/chat/stream`의 abort/중지와는 별개, 아래 §8 참고 |
-| GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`, `threadId`; 서버는 항상 shared 기준 처리). 항목마다 `origin`(`thread`/`mine`/`others`/`elsewhere`)이 붙는다 — `threadId`와 같은 대화의 턴이 `thread`이고, 화면은 그 항목만 재사용 대신 **그 질문 위치로 이동**한다 |
+| GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`, `threadId` — 범위 파라미터는 받지 않는다, 항상 shared 기준). 항목마다 `origin`(`thread`/`mine`/`others`/`elsewhere`)이 붙는다 — `threadId`와 같은 대화의 턴이 `thread`이고, 화면은 그 항목만 재사용 대신 **그 질문 위치로 이동**한다 |
 | POST | `/api/v1/questions/reuse` | JSON | 추천 항목 재사용 시도. 반환 직전 출처 청크 유효성 재검증 후 성공 시 `reused=true`(+ `responseMode`/`directMode` — 원본 턴의 값, 새 턴에도 그대로 저장), 실패 시 `fallback=true`로 일반 질의 전환 신호 반환 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | POST | `/ui/chat/summary/precompute` | `202` | 입력창에 첫 글자를 칠 때 발화 — 이전 대화 요약 선계산(콜드스타트 안전망, OPERATOR_MANUAL §6.1) |
@@ -143,7 +143,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 매칭은 서버가 한다 — `QuestionKeywords`가 의문·기능어·조사·어미를 뺀 내용어(최대 6개)를 뽑고 그 전부가 든 질문을 찾는다(어순·대소문자 무관); 내용어가 없으면 입력 전체 부분 일치로 폴백. 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
 - 항목 앞에 출처 배지가 붙는다 — **현재 대화**(`thread`, 파랑·↑) / **내 대화**(`mine`, 초록) / **다른 사용자**(`others`, 회색) / **다른 대화**(`elsewhere`, 회색). 마지막 것은 `guest-identity=shared`처럼 모든 방문자가 한 id를 쓰는 배포용이다 — 그 id로는 내 것과 남의 것이 같아서, 그대로 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다(`QuestionReuseService.originOf()`). 목록 순서는 현재 대화 → 내 대화 → 그 외, 그 안에서 최신순(SQL `ORDER BY`)이고, 같은 질문이 여럿이면 그 순서의 첫 항목만 남는다.
 - **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 제외·활성 출처·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
-- 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).
+- 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(범위 파라미터는 없다 — 항상 shared 기준).
 - 재사용 성공(`reused=true`)이면 페이지 새로고침 없이 사용자 버블 + 어시스턴트 버블을 즉시 렌더링하고 provider 배지에 `db-reuse`를 표시한다. 질문 버블의 두 글자 표기는 **응답의 `responseMode`/`directMode`**(= 원본 답변이 만들어진 모드·검색 축, 서버가 새 턴에 그대로 저장한 값)로 그린다 — 폼에 지금 선택된 모드가 아니다(그렇게 그리면 새로고침 뒤 서버 렌더와 어긋난다).
 - 서버는 턴을 저장하기 **전에** `threadMetaService.getOrCreate()`로 대화 행을 보장한다 — HTMX·SSE 경로와 같은 순서다. 예전에는 이 경로만 그것을 빠뜨려, 재사용 답변이 **새 대화의 첫 메시지**일 때 `thread_meta` 행이 없어 사이드바에 뜨지 않고 제목 생성도 건너뛰었으며, `/chat/{threadId}`를 다시 열면 `meta == null`이라 턴을 아예 싣지 않아 **대화가 사라진 것처럼** 보였다(일반 메시지를 한 번 보내야 나타났다).
 - 재사용 실패(`fallback=true`)면 토스트 안내 후 질문 입력창에 질문을 채워 일반 질의를 바로 전송한다.

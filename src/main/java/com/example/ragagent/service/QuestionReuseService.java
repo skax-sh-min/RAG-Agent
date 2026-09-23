@@ -446,14 +446,15 @@ public class QuestionReuseService {
         return question.strip().length() > MAX_SUGGESTION_QUESTION_LENGTH;
     }
 
+    /**
+     * 재사용 후보를 고르는 범위. <b>오늘 {@link #ME} 를 만드는 경로는 없다</b> — 채팅의 두
+     * 엔드포인트가 {@link #SHARED} 로 고정이라(ChatController) 요청 문자열을 이 enum 으로
+     * 옮기던 {@code parse()} 도 호출자가 없어 지웠다. 되살리려면 화면 토글과 공유 게스트 id
+     * 문제를 함께 풀어야 한다.
+     */
     public enum Scope {
         ME,
-        SHARED;
-
-        public static Scope parse(String raw) {
-            if (raw == null || raw.isBlank()) return SHARED;
-            return "me".equalsIgnoreCase(raw) ? ME : SHARED;
-        }
+        SHARED
     }
 
     /**

@@ -1211,9 +1211,8 @@
     async function onSelectSuggestion(turnId) {
         const threadId = chatForm.querySelector('input[name="threadId"]').value;
         const version = document.getElementById('form-version').value || 'latest';
-        const scope = 'shared';
         try {
-            const body = new URLSearchParams({ turnId: String(turnId), threadId, version, scope });
+            const body = new URLSearchParams({ turnId: String(turnId), threadId, version });
             const res = await fetch('/api/v1/questions/reuse', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
@@ -1318,10 +1317,9 @@
             return;
         }
         const seq = ++suggestSeq;
-        const scope = 'shared';
         // threadId: 서버가 이 값으로 "현재 대화" 항목을 가른다 — 폼의 hidden 값이 곧 지금 열린 대화다.
         const threadId = chatForm.querySelector('input[name="threadId"]').value || '';
-        const params = new URLSearchParams({ q, scope, threadId, limit: '20' });
+        const params = new URLSearchParams({ q, threadId, limit: '20' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
                 headers: getCsrfHeaders()
