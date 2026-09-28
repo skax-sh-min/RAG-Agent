@@ -111,10 +111,28 @@ public class QuestionReuseService {
             String docId = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.DOC_ID, ""));
             String hash = hashes.getOrDefault(chunkId, "");
             if (hash.isBlank()) continue;
+            // 위치 스냅샷 — 청크가 지워지면 chunk_fts_key/vec_document_chunks 조인이 비어 이
+            // 값들을 다시 알아낼 방법이 없다. 해시를 "그때 그 청크였나"를 위해 떠 두는 것과
+            // 같은 이유이고, 재료는 이미 손에 있는 이 Document 의 메타데이터가 전부다.
             rows.add(new QuestionReuseRepository.SourceSnapshot(
-                    chunkId, docId, hash, sharesByChunkId.get(chunkId), "active"));
+                    chunkId, docId, hash, sharesByChunkId.get(chunkId), "active",
+                    metaString(doc, MetaKey.FILENAME),
+                    metaString(doc, MetaKey.PAGE_OR_SLIDE),
+                    metaString(doc, MetaKey.CHAPTER_NO)));
         }
         repository.saveTurnSourceRefs(turnId, userId, threadId, rows);
+    }
+
+    /**
+     * 메타데이터 값을 스냅샷용 문자열로. 비었거나 문자열 {@code "null"} 이면 {@code null} —
+     * 그래야 조회 쪽 {@code COALESCE} 가 그 자리를 "모름"으로 보고 다음 폴백으로 넘어간다.
+     * (벡터 스토어를 왕복한 메타데이터에는 문자열 {@code "null"} 이 실제로 섞여 들어온다.)
+     */
+    private static String metaString(Document doc, String key) {
+        Object raw = doc.getMetadata().get(key);
+        if (raw == null) return null;
+        String s = raw.toString().trim();
+        return (s.isEmpty() || "null".equalsIgnoreCase(s)) ? null : s;
     }
 
     private static Map<String, Double> sharesByChunkId(List<SourceRef> sources) {
