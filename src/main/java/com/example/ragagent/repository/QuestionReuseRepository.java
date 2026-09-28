@@ -369,10 +369,18 @@ public class QuestionReuseRepository {
                 LEFT JOIN chunk_fts_key k ON k.spring_doc_id = r.chunk_id
                 LEFT JOIN chunk_fts f ON f.rowid = k.fts_rowid
                 %s
-                -- status 필터가 없다: 무효화된 출처를 걸러내면 대화 기록에서 배지가 아니라 출처
-                -- 자체가 조용히 사라져(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
-                -- hidden_at은 그 반대로 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
+                -- 무효화된 출처를 status 만으로 걸러내지는 않는다: 답변을 떠받친 청크가 배지가
+                -- 아니라 출처 자체로 사라지면(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
+                -- 예외가 하나 있다 — **삭제됐고 답변에 한 글자도 기여하지 않은** 청크. 그건
+                -- 근거가 아니라 top-k 에 우연히 들어온 검색 잡음이라, 사라져도 감출 근거가 없고
+                -- 남으면 읽는 사람에게는 소음이다(지울 수도 없다: 이미 없는 청크다).
+                -- COALESCE(..., -1) 이 필요한 이유: answer_share 는 NULL 일 수 있고(참여도 계산이
+                -- 실패해 degrade 됐거나 컬럼 추가 이전 턴), SQL 에서 `NULL = 0` 은 FALSE 가 아니라
+                -- NULL 이라 그대로 쓰면 NOT(...) 도 NULL 이 되어 **그 행까지 함께 빠진다**.
+                -- 가르려는 것은 "측정해서 0" 과 "측정 못 함" 이고, 후자는 남겨야 한다.
+                -- hidden_at 은 반대로 언제나 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
                 WHERE r.turn_id = ? AND r.hidden_at IS NULL
+                  AND NOT (r.status = 'deleted' AND COALESCE(r.answer_share, -1) = 0)
                 """).formatted(vecChunkJoin("r.chunk_id")),
                 (rs, n) -> new SourcePreviewRow(
                         rs.getString("chunk_id"),
