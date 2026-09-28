@@ -31,6 +31,11 @@ public class CircuitBreaker {
      * 차단 자체는 몇 초 뒤 풀리지만 이 수는 성공이 있어야만 풀린다: "삐끗했다"와 "죽었다"를 가르는
      * 유일한 근거라({@code LlmProviderExhaustedException.consecutiveFailures}), 차단이 풀렸다고 함께
      * 지우면 5초짜리 차단이 반복되는 죽은 서버가 매번 첫 실패처럼 보인다.
+     *
+     * <p><b>이 수는 설계상 적게 센다.</b> 스트리밍 경로는 성공만 보고하고 실패는 보고하지 않으며,
+     * 임베딩은 라우터 밖이라 애초에 프로바이더 항목이 없다 — 결정과 근거는
+     * {@code LlmRouter.recordApproxUsage()} 에 적어 두었다. {@code repeated()} 가 기대만큼 안 뜬다면
+     * 그 비대칭이 먼저 볼 곳이고, 버그가 아니다.
      */
     private final ConcurrentHashMap<String, Integer> consecutiveFailures = new ConcurrentHashMap<>();
     private final Duration defaultBlockDuration;
