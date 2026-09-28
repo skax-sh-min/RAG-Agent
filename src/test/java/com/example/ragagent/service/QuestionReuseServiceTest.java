@@ -266,40 +266,37 @@ class QuestionReuseServiceTest {
         }
 
         @Test
-        @DisplayName("삭제된 청크: 파일명은 doc_registry 에서 되살리고 페이지 자리는 비운다")
+        @DisplayName("삭제된 청크(스냅샷 없는 구 턴): 파일명은 docId 에서 꺼내고 페이지 자리는 비운다")
         void sourceRefsForTurn_deletedChunk_recoversFilenameAndDropsThePagePlaceholder() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                DocRegistry registry = mock(DocRegistry.class);
-                QuestionReuseService service = new QuestionReuseService(repo, registry);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                 when(repo.findReusedFromTurnId(9L)).thenReturn(null);
-                // 청크가 지워지면 chunk_fts_key/vec_document_chunks 조인이 비어 파일명·페이지가 null 로 온다.
+                // 청크가 지워지면 chunk_fts_key/vec_document_chunks 조인이 비고, 위치 스냅샷 이전에 저장된
+                // 턴이면 스냅샷도 없어 파일명·페이지가 null 로 온다.
                 when(repo.findSourcePreviewRows(9L)).thenReturn(List.of(
                                 new QuestionReuseRepository.SourcePreviewRow(
-                                                "c1", "d1", null, null, null, "", "deleted")));
-                // '삭제됨'의 가장 흔한 원인은 재인덱싱이라 문서는 대개 살아 있다.
-                when(registry.findFilenames(anyList())).thenReturn(Map.of("d1", "설계문서.pdf"));
+                                                "c1", "설계문서.pdf_ab12cd34", null, null, null, "", "deleted")));
 
                 var refs = service.sourceRefsForTurn(9L);
 
                 assertThat(refs).hasSize(1);
-                // 예전에는 "d1 | p.?" 였다 — 16진 docId 와, 더는 존재하지 않는 페이지를 가리키는 물음표.
+                // 예전에는 "설계문서.pdf_ab12cd34 | p.?" 였다 — 해시가 붙은 docId 와, 더는 존재하지 않는
+                // 페이지를 가리키는 물음표.
                 assertThat(refs.get(0).label()).isEqualTo("설계문서.pdf");
                 assertThat(refs.get(0).staleBadge()).isEqualTo("삭제됨");
         }
 
         @Test
-        @DisplayName("문서까지 지워져 레지스트리에도 없으면 docId 로 떨어지되 'p.?' 는 붙지 않는다")
-        void sourceRefsForTurn_deletedDocument_fallsBackToDocIdWithoutPagePlaceholder() {
+        @DisplayName("docId 에 파일명 부분이 없으면 docId 그대로, 'p.?' 는 붙지 않는다")
+        void sourceRefsForTurn_docIdWithoutFilenamePart_fallsBackToDocIdWithoutPagePlaceholder() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                DocRegistry registry = mock(DocRegistry.class);
-                QuestionReuseService service = new QuestionReuseService(repo, registry);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                 when(repo.findReusedFromTurnId(10L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(10L)).thenReturn(List.of(
                                 new QuestionReuseRepository.SourcePreviewRow(
                                                 "c1", "d1", null, null, null, "", "deleted")));
-                when(registry.findFilenames(anyList())).thenReturn(Map.of());
 
                 var refs = service.sourceRefsForTurn(10L);
 
@@ -307,8 +304,8 @@ class QuestionReuseServiceTest {
         }
 
         @Test
-        @DisplayName("청크가 멀쩡한 턴은 doc_registry 를 추가로 읽지 않는다 (턴마다 도는 경로, pool=1)")
-        void sourceRefsForTurn_liveChunks_skipTheRegistryLookup() {
+        @DisplayName("청크가 지워진 턴도 doc_registry 는 표시 이름 한 번만 읽는다 (턴마다 도는 경로, pool=1)")
+        void sourceRefsForTurn_deletedChunk_readsTheRegistryOnlyForDisplayNames() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
                 DocRegistry registry = mock(DocRegistry.class);
                 QuestionReuseService service = new QuestionReuseService(repo, registry);
@@ -316,11 +313,14 @@ class QuestionReuseServiceTest {
                 when(repo.findReusedFromTurnId(11L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(11L)).thenReturn(List.of(
                                 new QuestionReuseRepository.SourcePreviewRow(
-                                                "c1", "d1", "manual.docx", "12", "1.2", "chunk")));
+                                                "c1", "manual.docx_0badc0de", null, null, null, "", "deleted"),
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c2", "manual.docx_0badc0de", "manual.docx", "12", "1.2", "chunk")));
 
                 service.sourceRefsForTurn(11L);
 
-                org.mockito.Mockito.verify(registry, org.mockito.Mockito.never()).findFilenames(anyList());
+                org.mockito.Mockito.verify(registry).findDisplayNames(anyList());
+                org.mockito.Mockito.verifyNoMoreInteractions(registry);
         }
 
         @Test

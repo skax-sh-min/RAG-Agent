@@ -374,7 +374,8 @@ public class QuestionReuseRepository {
                   -- 라이브 조인 → 그 다음이 턴 저장 시점의 위치 스냅샷(r.*). 순서가 중요하다:
                   -- 청크가 살아 있는데 재인덱싱으로 페이지가 바뀌었다면 **지금** 위치가 사실이고,
                   -- 스냅샷은 청크가 사라져 조인이 비었을 때만 쓰이는 폴백이다. 구 행은 스냅샷이
-                  -- NULL 이라 예전과 똑같이 동작한다(그 경우 파일명은 doc_registry 가 받는다).
+                  -- NULL 이라 예전과 똑같이 동작한다(그 경우 파일명은 서비스가 doc_id 에서 꺼낸다 —
+                  -- QuestionReuseService.toSourceRef()).
                   COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), ''),
                            NULLIF(TRIM(r.filename), '')) AS filename,
                   COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), ''),
