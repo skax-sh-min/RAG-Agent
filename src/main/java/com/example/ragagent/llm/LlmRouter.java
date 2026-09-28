@@ -312,6 +312,33 @@ public class LlmRouter {
         if (answerText == null || answerText.isBlank()) return;
         // 스트리밍 경로는 이 라우터의 호출 메서드를 거치지 않으므로, 비어 있지 않은 답변이 여기 온
         // 것이 그 경로의 유일한 "성공" 신호다 — 연속 실패 횟수를 여기서 되돌린다.
+        //
+        // ── 결정: 스트리밍은 건강의 증인이지 판정자가 아니다 (2026-09-28) ──────────────────
+        // 여기서 성공만 보고하고 실패는 보고하지 않는 것은 비대칭이고, 의도한 것이다.
+        // 스트리밍 경로(AnswerService.streamDirect / DirectAnswerService.callOrStream)는
+        // OpenAiApi.chatCompletionStream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
+        // try/catch 를 통째로 우회하므로, 실패를 브레이커에 넣으려면 분류를 그쪽에 다시 구현해야
+        // 한다. 그러지 않기로 했다:
+        //
+        //  1) 차단하지 않는다. 이 경로의 실패는 대부분 이미 "차단하면 안 되는 넷"이거나
+        //     (읽기 타임아웃·서버가 요청을 끊음·컨텍스트 초과) 사용자가 직접 중단한 것이다.
+        //     중단은 채팅의 정상 동작인데, 그걸 실패로 세어 차단하면 사용자가 멈춤을 누를 때마다
+        //     자기 대화를 막는다. 게다가 이 경로가 채팅의 유일한 전송 경로라, 여기서의 오탐은
+        //     다른 어디서보다 비싸다.
+        //  2) 차단 없이 '세기만' 하지도 않는다. consecutiveFailures 는 LlmOutageMessages.repeated()
+        //     를 먹여 "서버(모델) 상태를 확인하라"를 띄운다 — 사용자의 중단을 세면 멀쩡한 서버에
+        //     그 문구가 뜬다. 안전하게 세려면 결국 분류가 필요하고, 그건 (1)에서 피한 그것이다.
+        //  3) 성공 보고는 유지한다. 끝까지 흘러나온 답변은 오탐이 없는 건강 증거이고, 분류·검증
+        //     호출이 남긴 연속 실패를 그사이 회복한 서버에서 지워 주는 유일한 신호다.
+        //
+        // 대가는 안다: 서버가 죽었을 때 이 경로만으로는 브레이커가 배우지 못해 빠른 실패가 없다.
+        // 다만 RAG 턴은 분류·검증이 블로킹 호출이라 그쪽이 먼저 차단을 세우고, 그 둘이 없는
+        // Direct 턴에서만 요청마다 연결 타임아웃을 무는 것이 남는다 — 한계는 그만큼이다.
+        //
+        // 임베딩이 브레이커 밖인 것은 이것과 성격이 다르다: EmbeddingBeanConfig 는 LlmProvider 를
+        // 만들지 않아 라우터에 그 프로바이더 항목 자체가 없다(차단할 대상이 없다). 그쪽 복원력은
+        // 자체 재시도·축소 사다리(MAX_EMBED_RETRY / EMBED_SHRINK_RATIO)와
+        // LoadBalancingEmbeddingModel 이 맡는다.
         circuitBreaker.recordSuccess(providerName);
         try {
             usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
