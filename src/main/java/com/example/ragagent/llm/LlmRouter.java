@@ -108,6 +108,9 @@ public class LlmRouter {
      *  BackgroundLlmConcurrencyTracker} for why the header concurrency indicator needs this. */
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
+    /** 컨텍스트 초과를 본 순간 그 프로바이더의 창을 다시 재게 하는 자리 — 기본은 no-op. */
+    private final ContextWindowRefresher contextWindowRefresher;
+
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode) {
         this(providers, usageRepo, circuitBreaker, defaultMode, 180);
@@ -151,6 +154,21 @@ public class LlmRouter {
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
+        // 기존 호출부(테스트 포함)는 아무 일도 하지 않는 재탐지기를 받는다 — ProviderToggle/
+        // BackgroundLlmConcurrencyTracker 와 같은 규약. LlmConfig 만 진짜 구현을 넘긴다.
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
+                providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, providerToggle,
+                backgroundConcurrencyTracker, ContextWindowRefresher.NOOP);
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     int readTimeoutSeconds,
+                     Map<String, Integer> providerConcurrency,
+                     int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
+                     ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
+                     ContextWindowRefresher contextWindowRefresher) {
+        this.contextWindowRefresher = contextWindowRefresher;
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
@@ -640,6 +658,12 @@ public class LlmRouter {
                         + "app.search-top-k (hot, via /settings) first, then app.llm.max-tokens "
                         + "(restart required), or raise the LLM server's context size. "
                         + "See OPERATOR_MANUAL §8.", provider.name());
+                // 이 실패는 "기록된 창이 틀렸다"는 관측이기도 하다 — 서버를 다른 -c 로 재시작했거나
+                // LM Studio 가 JIT 로 다른 설정으로 올렸다면 예산이 매 요청 과대해지고 스스로 낫지
+                // 않는다. 여기가 그 사실을 아는 유일한 지점이라 재탐지를 건다(디바운스·비동기라
+                // 이 요청을 더 늦추지 않는다). 폴백이 받아 준 경우에도 걸어야 한다 — 그때는 아무도
+                // 창이 낡았다는 것을 눈치채지 못한 채 초과가 계속 반복된다.
+                contextWindowRefresher.refreshAfterOverflow(provider);
             } else if (isRequestTerminatedByServer(e)) {
                 // 서버가 내려가면서 이 요청을 끊었다. 차단하면 서버가 올라온 뒤까지 그 차단이 남아
                 // "재시작했는데도 계속 안 된다"가 된다 — isTimeoutLike 와 같은 이유로 통과시킨다.
@@ -829,7 +853,9 @@ public class LlmRouter {
             "\"error\": \"terminated\""
     );
 
-    private static boolean isVisionUnsupported(Throwable t) {
+    /** package-private — {@code isContextOverflow}/{@code isRequestTerminatedByServer} 와 같은 이유로
+     *  테스트가 마커를 직접 고정한다({@code LlmFailureClassificationTest}). */
+    static boolean isVisionUnsupported(Throwable t) {
         Throwable cur = t;
         while (cur != null) {
             String msg = cur.getMessage();

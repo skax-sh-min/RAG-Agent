@@ -199,7 +199,11 @@ public class LlmConfig {
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds(),
-                providerToggle, backgroundConcurrencyTracker);
+                providerToggle, backgroundConcurrencyTracker,
+                // 위에서 기동 시 한 번 채운 창은 낡는다(서버를 다른 -c 로 재시작, LM Studio 의 JIT
+                // 로딩). 컨텍스트 초과가 그 사실을 알려 주는 유일한 신호라, 그 순간 같은 탐지를
+                // 한 번 더 돌려 스스로 고치게 한다.
+                new ProbingContextWindowRefresher(contextWindows, connectTimeoutSeconds, readTimeoutSeconds));
     }
 
     @Bean
