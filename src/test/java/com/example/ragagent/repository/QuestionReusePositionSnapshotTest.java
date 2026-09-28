@@ -1,12 +1,15 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.service.QuestionReuseService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,7 +39,7 @@ class QuestionReusePositionSnapshotTest {
         dbFile = Files.createTempFile("rag-test-position-snapshot-", ".db");
         DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
         jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT)");
+        jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT, reused_from_turn_id INTEGER)");
         jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
         jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
                 + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
@@ -109,6 +112,25 @@ class QuestionReusePositionSnapshotTest {
 
         assertThat(row.filename()).isNull();
         assertThat(row.pageOrSlide()).isNull();
+    }
+
+    @Test
+    @DisplayName("구 행 + 지워진 청크로 대화를 다시 열면 — 실제 스키마 위에서 docId 의 파일명 부분이 라벨이 된다")
+    void legacyRowWithoutSnapshot_serviceLabelsItFromTheDocIdOnTheRealSchema() {
+        // 목이 아닌 진짜 DocRegistry 를 같은 파일에 — 예전 DocRegistry.findFilenames() 는 doc_registry 에
+        // 없는 filename 컬럼을 조회해 이 경로의 대화 열기(GET /chat/{threadId})를 500 으로 만들었는데,
+        // 서비스 테스트가 그 메서드를 목으로 대신해 SQL 이 한 번도 실행되지 않았다.
+        DocRegistry registry = new DocRegistry(jdbc);
+        ReflectionTestUtils.invokeMethod(registry, "init");
+        repo.saveTurnSourceRefs(7L, "u1", "t1", List.of(
+                new QuestionReuseRepository.SourceSnapshot("c1", "설계문서.pdf_ab12cd34", "h1", 0.5, "active")));
+        repo.markSourceRefsStaleByChunkIds(List.of("c1"), SourceRef.STALE_DELETED);
+
+        List<SourceRef> refs = new QuestionReuseService(repo, registry).sourceRefsForTurn(7L);
+
+        assertThat(refs).hasSize(1);
+        assertThat(refs.get(0).label()).isEqualTo("설계문서.pdf");
+        assertThat(refs.get(0).staleBadge()).isEqualTo("삭제됨");
     }
 
     @Test

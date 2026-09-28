@@ -306,16 +306,8 @@ public class QuestionReuseService {
                 .filter(id -> id != null && !id.isBlank())
                 .toList();
         Map<String, String> displayNames = docRegistry.findDisplayNames(docIds);
-        // 청크가 지워져 라이브 조인이 비어 온 행이 하나라도 있을 때만 레지스트리를 한 번 더
-        // 읽는다(DocRegistry.findFilenames 참고) — 평범한 턴은 이 쿼리를 내지 않는다.
-        // 이 메서드는 대화를 열 때 **턴마다** 불리고 SQLite 는 pool=1 이라, 조건 없이 걸면
-        // 턴 수만큼의 추가 쿼리가 유일한 커넥션을 차례로 잡는다.
-        boolean anyChunkGone = rows.stream().anyMatch(r -> isBlank(r.filename()));
-        Map<String, String> registryFilenames = anyChunkGone
-                ? docRegistry.findFilenames(docIds)
-                : Map.of();
         List<SourceRef> refs = rows.stream()
-                .map(row -> toSourceRef(row, displayNames, registryFilenames))
+                .map(row -> toSourceRef(row, displayNames))
                 .toList();
         if (!refs.isEmpty()) return refs;
         if (sourceTurnId != null && !repository.existsTurn(sourceTurnId)) {
@@ -424,18 +416,21 @@ public class QuestionReuseService {
     }
 
     private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row,
-                                  Map<String, String> displayNames,
-                                  Map<String, String> registryFilenames) {
+                                  Map<String, String> displayNames) {
         // CuratedQaService.buildDocument() always sets MetaKey.DOC_ID to "curated:<id>", regardless
         // of chunk index — the one stable signal this SQL-sourced row has for "this chunk came from
         // a curated Q&A entry, not a document" (no DOC_TYPE column here, unlike the live Document
         // metadata RetrievalService reads from).
         boolean curated = row.docId() != null && row.docId().startsWith("curated:");
-        // 파일명 폴백 순서: 라이브 조인 → doc_registry → docId → "source". 레지스트리가 가운데
-        // 끼는 이유는 '삭제됨'의 가장 흔한 원인이 재인덱싱이어서, 청크만 사라지고 문서는 남아
-        // 있는 경우가 많기 때문이다 — 그때 16진 docId 대신 진짜 파일명을 보여줄 수 있다.
+        // 파일명 폴백 순서: 라이브 조인 → 턴 저장 시점 스냅샷(여기까지가 row.filename(), 리포지토리의
+        // COALESCE) → docId 의 파일명 부분 → "source". 셋째는 스냅샷 컬럼이 생기기 전에 저장된 턴이
+        // 청크를 잃었을 때다. docId 는 `파일명_sha256앞8자리`(DocumentIndexer)라 파일명이 거기 있고,
+        // 문서 목록(RagService)도 같은 규칙으로 파일명을 얻는다. doc_registry 를 읽지 않는 이유: 그
+        // 테이블에는 파일명 컬럼이 없다 — 예전 DocRegistry.findFilenames() 가 없는 컬럼을 조회해 이
+        // 경로를 타는 대화는 열리지 않았다(서비스 테스트가 그 메서드를 목으로 대신해 SQL 이 한 번도
+        // 실행되지 않았다). 레지스트리를 거치지 않으니 문서까지 지워진 출처도 같은 이름을 얻는다.
         String filename = isBlank(row.filename())
-                ? registryFilenames.getOrDefault(row.docId(), row.docId() == null ? "source" : row.docId())
+                ? (isBlank(row.docId()) ? "source" : DocRegistry.filenameFromDocId(row.docId()))
                 : row.filename();
         // 페이지를 모르면 넣지 않는다 — "?" 를 채우면 formatSource 가 "p.?" 를 찍는다.
         // 그 자리표시자가 가리키는 페이지는 (청크가 지워졌으므로) 더는 존재하지 않는다.

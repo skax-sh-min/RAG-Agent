@@ -278,42 +278,6 @@ public class DocRegistry {
         return out;
     }
 
-    /**
-     * Batch real-filename lookup, keyed by docId — the fallback for a source whose <b>chunk</b> is
-     * gone but whose <b>document</b> is not.
-     *
-     * <p>다시 연 대화의 출처는 {@code turn_source_ref} 에 파일명을 스냅샷해 두지 않고
-     * {@code chunk_fts_key}/{@code vec_document_chunks} 를 라이브 조인해 가져온다. 청크가 지워졌으면
-     * 그 조인이 비어 예전에는 라벨이 {@code doc_id}(16진 문자열)로 떨어졌다 — 사용자에게는 아무
-     * 의미가 없는 값이다. 그런데 '삭제됨'의 가장 흔한 원인은 문서 삭제가 아니라 <b>재인덱싱</b>
-     * 이고({@code DocumentIndexer} 가 옛 청크 id 를 {@code markChunksDeleted} 한다) 그 경우 문서는
-     * 멀쩡히 살아 있으므로, 여기서 파일명을 되살릴 수 있다.
-     *
-     * <p>{@link #findDisplayNames} 와 나눠 둔 이유: 그쪽은 <b>오버라이드가 있는 것만</b> 돌려주는
-     * 계약이고 호출자가 그 부재를 "실제 파일명을 쓰라"로 읽는다. 여기에 실제 파일명을 섞으면
-     * 라이브 검색 경로(`RetrievalService`)에서 청크 메타데이터의 파일명 대신 레지스트리 값이
-     * 이기게 되어, 둘이 어긋난 문서에서 라벨이 조용히 달라진다.
-     */
-    public Map<String, String> findFilenames(Collection<String> docIds) {
-        if (docIds == null || docIds.isEmpty()) return Map.of();
-        List<String> ids = new ArrayList<>(new LinkedHashSet<>(docIds));
-        String placeholders = ids.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
-        List<Object> params = new ArrayList<>(ids.size() + 1);
-        params.add(SHARED);
-        params.addAll(ids);
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT doc_id, filename FROM doc_registry WHERE user_id = ? AND doc_id IN (" + placeholders + ")",
-                params.toArray());
-        Map<String, String> out = new HashMap<>();
-        for (Map<String, Object> row : rows) {
-            Object name = row.get("filename");
-            if (name instanceof String s && !s.isBlank()) {
-                out.put(String.valueOf(row.get("doc_id")), s);
-            }
-        }
-        return out;
-    }
-
     /** Finds by docId ignoring owner — for admin/reindex operations. */
     public Optional<DocRegistryEntry> findByDocId(String docId) {
         List<DocRegistryEntry> rows = jdbc.query(
