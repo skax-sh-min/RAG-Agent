@@ -44,7 +44,8 @@ fi
 # 초기화 대상 안내 및 확인
 echo "=== 초기화 대상 ==="
 echo "  data/chroma/       — ChromaDB 벡터 데이터"
-echo "  data/memory.db     — SQLite (채팅 히스토리, 문서 레지스트리, 사용자)"
+echo "  data/memory.db     — SQLite (채팅 히스토리, 문서 레지스트리, 사용자, sqlite-vec 벡터·키워드 색인)"
+echo "  data/vector.db     — 구 설정(SQLITE_VEC_DB_PATH)이 쓰던 DB 파일 — 있으면 이쪽에 전부 들어 있다"
 echo "  data/documents/    — 업로드 원본 문서"
 echo "  data/images/       — 추출 이미지"
 echo "  data/converted/    — 변환된 Markdown 파일"
@@ -70,7 +71,10 @@ else
 fi
 mkdir -p data/chroma
 
-for f in data/memory.db data/memory.db-wal data/memory.db-shm; do
+# vector.db: 예전 SQLITE_VEC_DB_PATH 기본값. 그 설정을 켰던 배포는 대화·계정·레지스트리·벡터가
+# 전부 이 파일에 있으므로(memory.db 가 아니라) 빼먹으면 초기화가 반쪽이 된다.
+for f in data/memory.db data/memory.db-wal data/memory.db-shm \
+         data/vector.db data/vector.db-wal data/vector.db-shm; do
   if [ -f "$f" ]; then
     rm -f "$f"
     echo "  ✓ $f 삭제 완료"

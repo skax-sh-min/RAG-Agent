@@ -30,7 +30,7 @@
 | **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
 | **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 | §5 |
 | **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트) · §6.15 전역 저장 상한 · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.19.2 `/admin`·actuator RBAC · §6.19.3 XFF 신뢰 옵트인 · §6.19.4 폐쇄망 실사 하드닝 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 · §6.22 접속자별 채팅 개인화(no-auth) · §6.23 청크 변경 시 답변 재사용 무효화·대화 기록 표시 · §6.24 응답 모드 재설계(S/N/C — L 제거·모드별 전용 프롬프트·오염 방지 3건, `4-c`만 미착수) · §6.25 관리자 대화 목록·삭제·검색 진단 연결 | §6 |
-| **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
+| **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리 — 5.10 은 2026-09-28 단일 파일로 환원) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도·속도·메모리 개선 + recall@k/nDCG@k 평가 하네스(baseline recall@10=0.962). **+ §10.10** — 좋아요 기반 큐레이션 Q&A 지식화(스냅샷·임베딩·검색 융합·관리 UI) 완료 | §10 |
 
@@ -576,7 +576,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
 | Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties`/`ObjectMapper` 주입, `/admin` 백엔드 공통 상태 카드 + 청크 브라우징 패리티, `AdminService`·`AdminController` 테스트 |
 | Step 5.9 ✅ | 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) | 업로드 다중 태그·채팅 태그 선택·백엔드별 엄격 필터·프리릴리즈 수동 초기화 런북 |
-| Step 5.10 ✅ | sqlite-vec 운영 DB 분리(최소 변경) | 운영 SQLite(`memory.db`)와 벡터 SQLite(`vector.db`)를 분리, DataSource/JdbcTemplate 2세트 구성, 무중단 롤백 스위치 |
+| Step 5.10 ✅ → ↩ 환원 | sqlite-vec 운영 DB 분리(최소 변경) | 운영 SQLite(`memory.db`)와 벡터 SQLite(`vector.db`)를 분리, DataSource/JdbcTemplate 2세트 구성, 무중단 롤백 스위치 — **배선 사고로 분리가 실효된 적이 없어 2026-09-28 단일 파일로 환원**(아래 본문) |
 
 ### Step 5.1~5.8 — 백엔드 추상화 + sqlite-vec 구현 ✅ 완료
 
@@ -586,9 +586,11 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 업로드 시 다중 태그 저장 + 채팅에서 선택한 태그로 **엄격 AND 필터**(Chroma·sqlite-vec·하이브리드 공통). provider가 배열 포함 연산자를 지원하지 않아 `RetrievalService.execute()`가 `mergeRrf()` 직후 Java post-filter로 적용하고, 결과 부족 대비 `candidateK`를 선제 확대(`app.search-tag-candidate-multiplier`). 태그 소스는 `chunk_fts.doc_tags` 단일 컬럼(태그 제안 UI + 재인덱싱 자동복원 공용). 스키마 변경은 프리릴리즈 정책상 마이그레이션 없이 수동 초기화(OPERATOR_MANUAL §4.6).
 
-### Step 5.10 — sqlite-vec 운영 DB 분리 ✅ 완료
+### Step 5.10 — sqlite-vec 운영 DB 분리 ✅ 완료 → ↩ 2026-09-28 단일 파일로 환원
 
 `SQLITE_VEC_DB_PATH` 설정 시 벡터/FTS 테이블을 별도 `vector.db`로 분리해 인덱싱 I/O와 운영 트랜잭션 락 경합을 감소(기본 비활성, 기존과 동일 동작). `vectorJdbcTemplate` 빈이 두 모드 모두 대응(분리 시 `vector.db`/아니면 `memory.db` 별칭)해 소비자 코드는 무변경, Chroma 경로는 완전 무영향. 파일 간 트랜잭션 원자성이 없어 인덱싱은 항상 벡터/FTS 먼저 → 레지스트리 마지막 순서로 커밋(고아 벡터는 재인덱싱이 덮어씀). 전용 DataSource도 pool=1+WAL+busy_timeout 동일 적용.
+
+**환원 (2026-09-28).** 분리는 한 번도 실효된 적이 없다 — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인), `memory.db` 는 Flyway 만 닿는 빈 파일, 초기화 스크립트는 반쪽, Flyway 이력과 실스키마는 서로 다른 파일이 됐다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보이고 출처 목록은 `no such table` 로 깨진다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 운영 테이블 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본은 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(그 배포의 데이터가 전부 거기 있으므로 데이터 이전 불필요). 이력 없는 옛 파일을 위해 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). `/admin` 카드는 파일 하나를 실제 DataSource 에서 읽어 표시, reset 스크립트는 `vector.db` 도 지운다. 성능 변화 없음(I/O 는 원래 한 파일·한 커넥션). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 이름 정리 절차는 OPERATOR_MANUAL §6.3.1. 재개 신호는 부록 결정표.
 
 ---
 
@@ -838,7 +840,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 **작업 단계**
 
 - **0단계 (선행, 독립 커밋 가능)** — `fragments/message-assistant.html` 의 출처 `<li>` 를 `.source-item` 래퍼 + `data-turn-id`/`data-share`/`data-chunk-id` 로 맞춰 렌더러 넷을 통일한다. 이것만으로 폴백 경로의 원문 보기가 살아난다.
-- **1단계 저장** — `ChunkReportRepository`(런타임 멱등 DDL, **한정자 없는 `JdbcTemplate`** — `@Qualifier("vectorJdbcTemplate")` 아니다. 그 빈이 실제로 어느 파일을 가리키는지는 배포 설정에 달렸다: `SQLITE_VEC_DB_PATH` 를 켜면 다른 운영 테이블과 함께 벡터 DB 파일에 생긴다 — 아래 «계획이 몰랐던 것» 참조). `chunk_report(id, chunk_id, doc_id, version, reporter_user_id, thread_id, turn_id, question, reason_code, comment, chunk_hash, chunk_snapshot, status, reviewer_user_id, review_note, created_at, reviewed_at)` + `idx_chunk_report_open(status, chunk_id)` · `idx_chunk_report_chunk(chunk_id)` · (청크, 신고자, 대화) 부분 UNIQUE 인덱스(열린 신고에만).
+- **1단계 저장** — `ChunkReportRepository`(런타임 멱등 DDL, **한정자 없는 `JdbcTemplate`** — `@Qualifier("vectorJdbcTemplate")` 아니다. 그 빈이 실제로 어느 파일을 가리키는지는 배포 설정에 달렸다: `SQLITE_VEC_DB_PATH` 를 켜면 다른 운영 테이블과 함께 벡터 DB 파일에 생긴다 — 아래 «계획이 몰랐던 것» 참조. 2026-09-28 이후 DB 파일은 하나다 — Step 5.10 환원). `chunk_report(id, chunk_id, doc_id, version, reporter_user_id, thread_id, turn_id, question, reason_code, comment, chunk_hash, chunk_snapshot, status, reviewer_user_id, review_note, created_at, reviewed_at)` + `idx_chunk_report_open(status, chunk_id)` · `idx_chunk_report_chunk(chunk_id)` · (청크, 신고자, 대화) 부분 UNIQUE 인덱스(열린 신고에만).
 - **2단계 서비스** — `ChunkReportService`: `report()` / `openGroups(offset, limit)`(청크별 집계) / `group(chunkId)`(그 청크의 열린 신고 전부 + 현재 청크 상태) / `resolveChunk(chunkId, reviewer, note)` / `rejectChunk(chunkId, reviewer, reason)`. 그룹 전이는 `chunk_id` + 열린 상태를 조건으로 하는 `UPDATE` 한 문장이라 자연히 compare-and-set 이고, 관리자가 보던 사이에 들어온 신고까지 함께 닫히는 것이 맞다(같은 청크에 대한 같은 조치다). `AuditLogger` 이벤트 `chunk.report` · `chunk.report.resolve` · `chunk.report.reject`(건수 포함).
 - **3단계 사용자 화면** — 모달 헤더에 🚩 「내용 오류 신고」(항상 노출) → 사유 라디오 4종 + 코멘트(필수, 500자) → `POST /ui/chunk-reports`. 중복은 "이미 신고하셨습니다"로 구분해 보여준다. 제거 버튼에는 "이 답변과 상관없는 청크일 때" 힌트를 붙여 둘을 갈라 놓는다. i18n 키는 `chat.chunk.report.*`(ko/en 양쪽).
 - **4단계 관리자 화면** — `/admin` 에 지연 로딩 카드(`GET /admin/chunk-reports` → `fragments/admin-chunk-reports`, **청크별 1행 + 신고 건수 배지**), 그룹 상세 오프캔버스(`GET /admin/chunk-reports/chunks/{chunkId}` — 신고 N건의 사유·코멘트·시각·당시 질문 + 최초/최근 본문 스냅샷 + 현재 청크 내용 + 변경 여부 + `openChunkEdit(chunkId, collection)` 바로가기), `POST …/chunks/{chunkId}/resolve`·`…/reject`, `GET /admin/chunk-reports/open-count`(= **열린 신고가 있는 청크 수**) + 헤더 배지.
@@ -957,7 +959,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 
 ## 13. DB 스키마 변경 요약
 
-> ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않는다** (2026-09-04 확인): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어지는데(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용되고 이력도 거기 남는다. 즉 **새 `V4__*.sql` 을 추가하면 빈 파일에만 적용되고 "성공"으로 보고된다.** 아래 지침(런타임 `ALTER` 패턴)은 이제 취향이 아니라 **그 배포에서 유일하게 동작하는 방법**이다.
+> ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않았다** (2026-09-04 확인 → 2026-09-28 해소): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어졌고(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용됐다. **Step 5.10 환원으로 DB 파일이 하나가 되어 Flyway 는 다시 실데이터 파일에 적용된다.** 이력 없이 런타임 DDL 로 만들어진 옛 벡터 DB 파일은 `spring.flyway.baseline-version=3` 으로 시작한다 — 1 이면 V2 의 `CREATE TABLE users`(`IF NOT EXISTS` 없음)가 `already exists` 로 기동을 멈춘다(`FlywayBaselineTest` 가 실제 설정값으로 고정). 아래 런타임 `ALTER` 패턴은 다시 "유일하게 동작하는 방법"이 아니라 **규약**이다.
 >
 > **신규 컬럼 추가 지침**: Flyway는 `V1__baseline`+`V2__users` 두 개만 존재하고, 그 이후 컬럼/인덱스(`user_id`, 피드백 컬럼 등)는 전부 **런타임 멱등 DDL**(`SqliteMemoryRepository`/`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 추가돼 왔다. **신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가**하는 것이 현재 코드와 정합적이다(멱등, 프리릴리즈 정책과도 부합). sqlite-vec 쪽 스키마(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)도 동일하게 Flyway가 아니라 `SqliteVecSchemaInitializer`의 동적 DDL(차원 파라미터화)로 관리된다.
 
@@ -971,6 +973,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 | 비밀번호 해시 | BCrypt cost=12 | Argon2 (CPU/메모리 변수 더 많음, 부하 테스트 후 결정) |
 | TLS 종료 | Caddy 리버스 프록시 | Spring 직접 TLS, Cloudflare |
 | DB | SQLite 유지 (WAL+busy_timeout) | PostgreSQL (한계 신호 발생 시) |
+| SQLite 파일 구성 | 단일 파일 `memory.db` (2026-09-28, Step 5.10 환원) | 운영/벡터 파일 분리 — Step 5.10 이 시도했으나 배선 사고로 실효된 적 없음. 재개 신호: 대량 인덱싱 중 채팅 지연이 **실측**될 때. 선행: `QuestionReuseRepository.findSourcePreviewRows()` 교차 조인 해소(ATTACH/2단계 조회) + 기존 배포 운영 테이블 이전 |
 | 마이그레이션 | Flyway + ANSI SQL | Liquibase |
 | 멀티테넌시 | Row-level + 사용자별 Chroma 컬렉션 | Schema/DB per tenant |
 | 세션 저장소 | 인메모리 (단일 인스턴스) | Spring Session + Redis (스케일아웃 시) |

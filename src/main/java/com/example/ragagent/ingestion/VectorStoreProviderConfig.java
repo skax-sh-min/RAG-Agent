@@ -18,8 +18,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *
  * <p>{@code chroma} (기본값, {@code matchIfMissing=true}) → {@link ChromaVectorStoreProvider}
  * ({@link VectorStoreRegistry}, {@link ChromaApi} 사용); {@code sqlite-vec} →
- * {@link SqliteVecVectorStoreProvider} ({@code @Qualifier("vectorJdbcTemplate")} 사용 — 분리된
- * vector.db 이거나, 분리하지 않았으면 운영 DB 를 가리키는 같은 템플릿).
+ * {@link SqliteVecVectorStoreProvider} ({@code @Qualifier("vectorJdbcTemplate")} 사용 — 운영 테이블과
+ * 같은 한 SQLite 파일이다, {@code DataSourceConfig} 참고).
  * 선택되지 않은 백엔드의 빈은 생성되지 않으므로 sqlite-vec 모드는 ChromaDB 없이 기동된다.
  */
 @Configuration

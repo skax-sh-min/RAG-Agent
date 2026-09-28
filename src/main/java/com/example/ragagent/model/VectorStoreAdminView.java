@@ -1,7 +1,5 @@
 package com.example.ragagent.model;
 
-import java.util.List;
-
 /**
  * Backend-agnostic vector store status for the {@code /admin} page.
  *
@@ -19,8 +17,7 @@ public record VectorStoreAdminView(
         Integer collectionCount,        // chroma only
         String vecVersion,              // sqlite-vec only (vec_version())
         Integer dimension,              // sqlite-vec only (embedding dimension)
-        String operationalDbPath,       // memory.db path (nullable)
-        String vectorDbPath             // vector.db path — separate file or same as operational; null when unknown
+        String dbPath                   // the one SQLite file the app opened; null when unknown (unit tests)
 ) {
     public boolean isSqliteVec() { return "sqlite-vec".equals(backend); }
     public boolean isChroma()    { return "chroma".equals(backend); }
@@ -28,19 +25,9 @@ public record VectorStoreAdminView(
     /** True when document count is known (sqlite-vec); chroma reports -1. */
     public boolean hasDocCount() { return totalDocs >= 0; }
 
-    /** True when the vector tables live in a dedicated file distinct from memory.db (active). */
-    public boolean isDbSeparated() {
-        return vectorDbPath != null && !vectorDbPath.equals(operationalDbPath);
-    }
-
     /** Bare filename (no directory) for the compact /admin status-card display — full path moves to a hover popover. */
-    public String operationalDbFileName() {
-        return extractFileName(operationalDbPath);
-    }
-
-    /** Same as {@link #operationalDbFileName()} for the vector DB file. */
-    public String vectorDbFileName() {
-        return extractFileName(vectorDbPath);
+    public String dbFileName() {
+        return extractFileName(dbPath);
     }
 
     /** Splits on both '/' and '\' regardless of the running OS, since a configured path may use either separator. */
@@ -52,12 +39,16 @@ public record VectorStoreAdminView(
         return idx >= 0 ? path.substring(idx + 1) : path;
     }
 
-    /** HTML content (line break, no escaping) for the /admin status card's DB-path hover popover. */
-    public String dbPathsPopoverHtml() {
-        String html = "운영 DB: " + operationalDbPath;
-        if (vectorDbPath != null) {
-            html += "<br>벡터 DB: " + vectorDbPath;
-        }
-        return html;
+    /**
+     * HTML content (line break, no escaping) for the /admin status card's DB-path hover popover: the
+     * full path and what that file holds. The contents line is the point — the card used to list an
+     * "operational DB" and a "vector DB", and on a split deployment the first of them held nothing.
+     * A chroma deployment keeps its vectors on the Chroma server, so the file holds everything else.
+     */
+    public String dbPathPopoverHtml() {
+        String contents = isChroma()
+                ? "운영 데이터 + 키워드 색인 (벡터는 Chroma 서버)"
+                : "운영 데이터 + 벡터 + 키워드 색인";
+        return dbPath + "<br>" + contents;
     }
 }

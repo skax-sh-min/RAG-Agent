@@ -41,8 +41,21 @@ import static org.mockito.Mockito.when;
                 "app.embedding.dimensions=4",
                 "app.auth.enabled=false",
                 "app.data-dir=target/sqlitevec-it",
-                // LLM provider 키(더미) — primaryChatModel 빌드용. 임베딩은 @MockitoBean, 실제 호출 없음.
-                "app.llm.providers[0].api-key=test-key"
+                // 더미 LOCAL 프로바이더 하나 — RetrievalService 생성자가 TEXT 계열 프로바이더를 요구한다
+                // (기본 base-url 이 비어 있으면 전부 비활성이라 컨텍스트가 뜨지 않는다). 목록 프로퍼티는
+                // 가장 우선하는 소스가 **통째로** 대체하므로 필드를 전부 적는다 — 한 필드만 적으면 이름·타입·
+                // 역할이 빈 원소가 된다. 주소는 호출되지 않으며(ChatModel·임베딩은 @MockitoBean) 기동 시
+                // 모델 확인도 끈다.
+                "app.llm.providers[0].name=it-local",
+                "app.llm.providers[0].base-url=http://127.0.0.1:9/v1",
+                "app.llm.providers[0].api-key=test-key",
+                "app.llm.providers[0].model=it-model",
+                "app.llm.providers[0].type=BOTH",
+                "app.llm.providers[0].role=LOCAL",
+                "app.llm.verify-local-models-on-startup=false",
+                // add→search 가 KNN 순서를 본다 — 기본 유사도 컷(0.3, §10.7.4)이면 직교 벡터("banana")가
+                // 걸러져 두 번째 결과가 사라진다. 컷은 이 테스트의 관심사가 아니다.
+                "app.search-similarity-threshold=0.0"
         })
 @EnabledIfSystemProperty(named = "sqlitevec.path", matches = ".+")
 @ResourceLock("global-state")

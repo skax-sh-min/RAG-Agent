@@ -63,18 +63,14 @@
                     <div class="text-muted">차원</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.dimension() ?: '—'}">—</div>
                 </div>
-                <!-- 운영 DB / 벡터 DB — 파일명만 표시, 전체 경로는 마우스 오버 팝오버로 (오인 방지) -->
-                <div class="col-6 col-md" th:if="${vectorStore.operationalDbPath() != null}">
-                    <div class="text-muted">DB 파일<span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1" style="font-size:0.62rem;">분리됨</span></div>
+                <!-- DB 파일(하나) — 파일명만 표시, 전체 경로와 담긴 내용은 마우스 오버 팝오버로 (오인 방지) -->
+                <div class="col-6 col-md" th:if="${vectorStore.dbPath() != null}">
+                    <div class="text-muted">DB 파일</div>
                     <span class="fs-6 lh-sm d-inline-block db-path-info" tabindex="0" style="cursor:default;"
-                          th:attr="data-bs-content=${vectorStore.dbPathsPopoverHtml()}"
+                          th:attr="data-bs-content=${vectorStore.dbPathPopoverHtml()}"
                           data-bs-toggle="popover" data-bs-trigger="hover focus"
-                          data-bs-placement="bottom" data-bs-html="true">
-                        운영 DB: <span th:text="${vectorStore.operationalDbFileName()}">memory.db</span><br>
-                        <th:block th:if="${vectorStore.vectorDbPath() != null}">
-                            벡터 DB: <span th:text="${vectorStore.vectorDbFileName()}">vector.db</span>
-                        </th:block>
-                    </span>
+                          data-bs-placement="bottom" data-bs-html="true"
+                          th:text="${vectorStore.dbFileName()}">memory.db</span>
                 </div>
             </div>
         </div>

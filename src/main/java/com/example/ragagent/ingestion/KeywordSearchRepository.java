@@ -114,8 +114,8 @@ public class KeywordSearchRepository {
      *  (unit tests), in which case the two-table writes below simply run unwrapped. */
     private volatile TransactionTemplate transactionTemplate;
 
-    // chunk_fts lives with the vector tables: vectorJdbcTemplate → vector.db when the
-    // separate-vector-DB switch is on, else the operational memory.db (chroma / non-separated).
+    // vectorJdbcTemplate marks the vec/FTS consumers; it is the same single SQLite file (and
+    // DataSource) as every other table — see DataSourceConfig.
     public KeywordSearchRepository(@Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }

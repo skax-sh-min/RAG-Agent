@@ -17,7 +17,7 @@ import java.util.List;
  * <p>Currently holds only the guest-identity HMAC key. Persistence is the whole point: a per-boot
  * random key would re-hash every visitor on restart, orphaning their entire chat history.
  *
- * <p>Lives in the operational {@code memory.db} (the {@code @Primary} JdbcTemplate) and uses the same
+ * <p>Lives in the app's single SQLite file ({@code memory.db} — see {@code DataSourceConfig}) and uses the same
  * idempotent {@code CREATE TABLE IF NOT EXISTS} + raw {@link JdbcTemplate} pattern as
  * {@link SettingsOverrideRepository} (SQLite is incompatible with JPA).
  */

@@ -161,7 +161,7 @@ class ManagementOnlyAuthorizationTest {
         // once it authenticates past the login gate.
         when(adminService.listCollections()).thenReturn(new AdminService.CollectionsResult(List.of(), true));
         when(adminService.vectorStoreView()).thenReturn(new VectorStoreAdminView(
-                "chroma", true, -1, 0, 0, null, null, "memory.db", "memory.db"));
+                "chroma", true, -1, 0, 0, null, null, "memory.db"));
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of());
     }
 

@@ -11,8 +11,8 @@ import java.util.Map;
 /**
  * Persistent store for runtime settings overrides (key → value).
  *
- * <p>Lives in the operational {@code memory.db} (the {@code @Primary} JdbcTemplate), not the vector
- * DB — these are app-config rows, unrelated to embeddings/FTS. Overrides survive restarts; deleting
+ * <p>Lives in the app's single SQLite file with the other operational tables ({@code DataSourceConfig}) —
+ * these are app-config rows, unrelated to embeddings/FTS. Overrides survive restarts; deleting
  * a row reverts that key to its {@code application.properties} default (see
  * {@code AppProperties.xxxSafe()}). Uses the same idempotent {@code CREATE TABLE IF NOT EXISTS} +
  * raw {@link JdbcTemplate} pattern as {@link LlmUsageRepository} (SQLite is incompatible with JPA).

@@ -56,7 +56,7 @@ public class SqliteVecSchemaInitializer {
     void init() {
         // Fail fast BEFORE touching the DB so a misconfigured dimension executes no statements.
         int dim = resolveDimension(props.embeddingSafe().dimensions());
-        // Belt-and-braces: both DataSources already carry these on their JDBC URL
+        // Belt-and-braces: the DataSource already carries these on its JDBC URL
         // (DataSourceConfig.SESSION_PRAGMAS), which is the only place they can be set reliably —
         // see that constant's javadoc. Re-asserting them here is a no-op in normal wiring and costs
         // two statements once at startup, so it is kept as a guard for a hand-built template.
