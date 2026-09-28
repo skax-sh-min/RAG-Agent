@@ -3052,7 +3052,8 @@ docker-compose logs app
 | 재접속 시점 | 동작 |
 |---|---|
 | 작업이 아직 실행 중 | 지금까지의 진행 이력을 재생하고 계속 실시간 추적 |
-| 작업이 끝난 지 4시간 이내 (`IndexingProgressService.BUFFER_RETENTION`, 코드 상수 — 프로퍼티화되어 있지 않음) | 마지막 상태(`done`/`error`/`cancelled`)를 즉시 재생 후 종료 |
+| 작업이 끝난 지 4시간 이내 (`IndexingProgressService.BUFFER_RETENTION`, 코드 상수 — 프로퍼티화되어 있지 않음. 4시간은 작업 **시작**이 아니라 **마지막 이벤트**부터 잰다) | 마지막 상태(`done`/`error`/`cancelled`)를 즉시 재생 후 종료 |
+| 재생되는 이력의 한계 | 태스크당 최근 **1,000건**(`MAX_EVENTS_PER_TASK`)까지만 보관한다 — 동기화는 파일마다 한 건을 내므로 사실상 "되돌려 받을 수 있는 파일 수"다. 넘으면 가장 오래된 것부터 버리며, 종결 이벤트는 언제나 마지막이라 보존된다. 기록을 남겨 두는 태스크 수도 **500개**(`MAX_TRACKED_TASKS`)가 상한이고 초과 시 가장 오래 안 쓰인 것부터 버려, 그 taskId 는 아래 `unknown` 경로를 탄다 |
 | 작업이 끝난 지 4시간 초과, 또는 애초에 존재한 적 없는 taskId | `unknown` 종결 이벤트를 즉시 보내고 종료 — 화면에는 실패가 아니라 "⚠️ 상태 확인 불가, 문서 목록에서 확인" 경고로 표시됨 |
 
 `GET /ui/documents/progress/{taskId}/status`로 SSE 없이 1회성 상태 조회도 가능합니다(`{"stage":"running"|"done"|"error"|"cancelled"|"unknown", ...}`) — 진단용으로 유용합니다.
