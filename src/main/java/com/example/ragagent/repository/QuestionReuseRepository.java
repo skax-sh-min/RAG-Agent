@@ -174,6 +174,19 @@ public class QuestionReuseRepository {
         try {
             jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN hidden_at TEXT");
         } catch (Exception ignored) { /* already present */ }
+        // 출처를 화면에 그릴 때 쓰는 위치 — 파일명·페이지·챕터. 이 테이블은 청크 id 와 해시만
+        // 스냅샷하고 위치는 chunk_fts_key/vec_document_chunks 를 라이브 조인해 가져왔는데, 청크가
+        // 지워지면 그 조인이 비어 파일명 자리에 16진 doc_id 가, 페이지 자리에 아무것도 남지
+        // 않았다. 해시를 "그때 그 청크였나"를 답하려고 떠 두는 것과 같은 이유로 위치도 떠 둔다.
+        // 라이브 값이 언제나 우선이다(findSourcePreviewRows 의 COALESCE 순서) — 청크가 살아 있는데
+        // 재인덱싱으로 페이지가 바뀌었다면 지금 위치가 사실이고, 스냅샷은 그것이 없을 때의 폴백이다.
+        // 구 행은 NULL 로 남고 backfill 은 불가능하다(청크가 이미 없다) — 앞으로 저장되는 턴부터
+        // 나아진다.
+        for (String column : new String[]{"filename TEXT", "page_or_slide TEXT", "chapter_no TEXT"}) {
+            try {
+                jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN " + column);
+            } catch (Exception ignored) { /* already present */ }
+        }
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_turn ON turn_source_ref(turn_id)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_chunk ON turn_source_ref(chunk_id)");
     }
@@ -181,7 +194,8 @@ public class QuestionReuseRepository {
     public void saveTurnSourceRefs(long turnId, String userId, String threadId, List<SourceSnapshot> refs) {
         if (refs == null || refs.isEmpty()) return;
         jdbc.batchUpdate(
-                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, "
+                + "answer_share, filename, page_or_slide, chapter_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 refs,
                 refs.size(),
                 (ps, ref) -> {
@@ -197,14 +211,22 @@ public class QuestionReuseRepository {
                     } else {
                         ps.setDouble(8, ref.answerShare());
                     }
+                    // 위치 스냅샷 — 청크가 지워진 뒤에도 "어느 문서 몇 쪽이었나"를 답할 수 있게.
+                    ps.setString(9, ref.filename());
+                    ps.setString(10, ref.pageOrSlide());
+                    ps.setString(11, ref.chapterNo());
                 }
         );
     }
 
     public void cloneTurnSourceRefs(long fromTurnId, long toTurnId, String userId, String threadId) {
+        // 위치 셋도 함께 복사한다 — 재사용 턴의 출처 미리보기는 원본 턴을 기준으로 그려지므로
+        // 여기서 빠뜨리면 재사용한 답변만 삭제된 청크의 위치를 잃는다.
         jdbc.update("""
-                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share)
-                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status, answer_share
+                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status,
+                                             answer_share, filename, page_or_slide, chapter_no)
+                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status,
+                       answer_share, filename, page_or_slide, chapter_no
                 FROM turn_source_ref
                 WHERE turn_id = ?
                 """, toTurnId, userId, threadId, fromTurnId);
@@ -349,11 +371,18 @@ public class QuestionReuseRepository {
                 SELECT r.chunk_id,
                        r.doc_id,
                        r.status,
-                  COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
-                  COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
+                  -- 라이브 조인 → 그 다음이 턴 저장 시점의 위치 스냅샷(r.*). 순서가 중요하다:
+                  -- 청크가 살아 있는데 재인덱싱으로 페이지가 바뀌었다면 **지금** 위치가 사실이고,
+                  -- 스냅샷은 청크가 사라져 조인이 비었을 때만 쓰이는 폴백이다. 구 행은 스냅샷이
+                  -- NULL 이라 예전과 똑같이 동작한다(그 경우 파일명은 doc_registry 가 받는다).
+                  COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), ''),
+                           NULLIF(TRIM(r.filename), '')) AS filename,
+                  COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), ''),
+                           NULLIF(TRIM(r.page_or_slide), '')) AS page,
                       COALESCE(
                           NULLIF(NULLIF(NULLIF(TRIM(json_extract(c.metadata, '$.chapter_no')), ''), '0'), '0.0'),
-                          NULLIF(NULLIF(NULLIF(TRIM(k.chapter), ''), '0'), '0.0')
+                          NULLIF(NULLIF(NULLIF(TRIM(k.chapter), ''), '0'), '0.0'),
+                          NULLIF(NULLIF(NULLIF(TRIM(r.chapter_no), ''), '0'), '0.0')
                       ) AS chapter,
                   -- c.content (vec_document_chunks, sqlite-vec only) is the untouched stored chunk
                   -- text — the same thing the live/in-session preview shows via Document.getText().
@@ -555,12 +584,28 @@ public class QuestionReuseRepository {
      * @param status 스냅샷 시점 이후 이 청크가 삭제/변경 처리되었는지. {@code findSourceRefs}가
      *        돌려주는 행은 정의상 항상 {@code active}다.
      */
+    /**
+     * 한 턴이 참조한 출처 1건.
+     *
+     * <p>뒤의 <b>위치 셋</b>({@code filename}/{@code pageOrSlide}/{@code chapterNo})은 <b>쓰기 전용</b>
+     * 이다 — 턴을 저장할 때 청크 메타데이터에서 그대로 떠 두고, 청크가 지워진 뒤 대화를 다시 열면
+     * 라이브 조인이 비어 오므로 그 자리를 메운다. 재사용 판정({@code validateTurn})은 위치를 보지
+     * 않으므로 읽기 매퍼는 채우지 않고 {@code null}로 둔다. {@code SourceRef}가 컴포넌트마다
+     * "측정 안 됨"을 {@code null}로 표현하고 부분 생성자를 두는 것과 같은 규약이다.
+     */
     public record SourceSnapshot(String chunkId, String docId, String chunkHash,
-                                 Double answerShare, String status) {
+                                 Double answerShare, String status,
+                                 String filename, String pageOrSlide, String chapterNo) {
 
         /** 하위 호환 — 응답 참여도를 모르는 호출부(테스트, 구 경로)용. */
         public SourceSnapshot(String chunkId, String docId, String chunkHash) {
-            this(chunkId, docId, chunkHash, null, "active");
+            this(chunkId, docId, chunkHash, null, "active", null, null, null);
+        }
+
+        /** 위치를 모르거나 쓸 일이 없는 호출부용 — 읽기 매퍼(검증 경로)와 기존 테스트가 쓴다. */
+        public SourceSnapshot(String chunkId, String docId, String chunkHash,
+                              Double answerShare, String status) {
+            this(chunkId, docId, chunkHash, answerShare, status, null, null, null);
         }
 
         /** 답변에 실제로 지분이 있었던 출처인가. */

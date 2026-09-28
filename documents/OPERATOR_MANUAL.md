@@ -1992,7 +1992,7 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 |---|---|---|
 | `conversation_turns` | 대화 턴(질문·답변·토큰·프로바이더·피드백·응답모드·검색 스코프 태그·**검색 진단 수치**) | `SqliteMemoryRepository` (Flyway V1 + 방어적 `ALTER`) |
 | `turn_image_ref` | 턴별 답변 썸네일 이미지 참조(개별 제외는 `status`) | `SqliteMemoryRepository` |
-| `turn_source_ref` | 턴별 출처 청크 스냅샷(재사용 검증용 `chunk_hash`) | `QuestionReuseRepository` |
+| `turn_source_ref` | 턴별 출처 청크 스냅샷 — 재사용 검증용 `chunk_hash` + 표시용 위치(`filename`/`page_or_slide`/`chapter_no`). 위치는 청크가 지워져 라이브 조인이 비었을 때만 쓰인다 | `QuestionReuseRepository` |
 | `thread_meta` | 대화 제목·버전·라우팅 모드·태그 | Flyway V1·V3 |
 | `image_descriptions` | Vision 이미지 설명 캐시 | Flyway V1 |
 | `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
