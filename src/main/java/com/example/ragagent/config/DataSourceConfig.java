@@ -67,14 +67,46 @@ public class DataSourceConfig {
      * 잡지 못한다. NORMAL 은 전원이 끊기면 마지막 트랜잭션 몇 개를 잃을 수 있지만 <b>DB 가
      * 깨지지는 않는다</b>(WAL 의 보장) — 잃는 것이 대화 한 턴의 꼬리라 이 앱에는 맞는 거래다.
      *
+     * <p><b>{@code mmap_size}</b> — 읽기를 메모리 맵으로 처리한다. SQLite 기본값은 <b>0(꺼짐)</b>
+     * 이라 모든 페이지가 OS 파일 캐시에서 SQLite 버퍼로 <b>복사</b>된 뒤 쓰인다. 이 앱의 검색은
+     * 그 복사가 가장 비싼 모양이다 — vec0 KNN 은 ANN 인덱스 없이 버전 파티션의 벡터를 전부
+     * 훑고(1024차원 × 청크 수), FTS5 trigram 인덱스도 크다. 맵이 걸리면 그 복사가 사라진다.
+     * 값은 <b>상한</b>이며 실제로는 파일 크기만큼만 매핑된다. 가상 주소 공간일 뿐이고 페이지는
+     * OS 파일 캐시와 <b>공유</b>되므로, 오히려 이중 버퍼링이 줄어 상주 메모리가 늘지 않는다.
+     * 쓰기는 영향받지 않는다 — SQLite 의 mmap 은 기본이 읽기 전용이고 쓰기는 평소 경로로 간다.
+     * <b>대가</b>: 매핑된 페이지에서 I/O 오류가 나면 오류 코드 대신 프로세스가 죽는다(SIGBUS).
+     * 로컬 디스크 전제라 받아들인 거래이며, DB 파일을 <b>네트워크 공유에 두는 배포라면 이 값을
+     * 0 으로 되돌려야 한다</b>.
+     *
+     * <p><b>{@code cache_size}</b> — 음수는 KiB 단위다. 기본값 {@code -2000}(2MB)은 코퍼스가
+     * 조금만 커져도 페이지 캐시 적중을 포기하는 크기다. mmap 이 켜져 있으면 대부분의 이득이
+     * 그쪽으로 흡수되지만(아래 측정), 이 값을 함께 두는 이유는 mmap 을 <b>쓸 수 없는 경우</b>가
+     * 있기 때문이다 — {@code SQLITE_MAX_MMAP_SIZE=0} 으로 빌드된 드라이버, 매핑이 실패하는 파일
+     * 시스템, 위의 네트워크 공유 예외. 그때 FTS 축의 이득을 남겨 두는 폴백이다. 상한일 뿐이고
+     * 지연 할당이라 작은 DB(분리 배포의 {@code memory.db})는 아무것도 더 쓰지 않는다.
+     *
+     * <p><b>실측</b>(2,389청크 / 58MB / 1024차원, 질의 100회, 5라운드 중앙값):
+     * <pre>
+     *                          vec0 KNN   FTS MATCH   LIKE 폴백
+     *   기본(2MB, mmap 꺼짐)      1,752ms      222ms      879ms
+     *   mmap 만                    577ms      153ms      480ms
+     *   cache 32MB + mmap          487ms      122ms      488ms
+     * </pre>
+     * KNN 은 mmap 이 전부이고(3.2배) cache_size 는 거기에 더 보태지 않는다. 반대로 mmap 없이
+     * cache_size 만 키우면 FTS 쪽은 2.2배(MATCH 281→125ms)가 나온다 — 그래서 둘 다 둔다.
+     *
      * <p><b>왜 URL 파라미터인가.</b> {@code connectionInitSql} 은 statement 하나만 실행하고,
      * sqlite-vec 백엔드에서는 그 자리를 {@code load_extension()} 이 이미 쓰고 있다. 세미콜론으로
      * 이어 붙이는 것도 방법이 아니다 — <b>드라이버가 첫 문장만 실행한다</b>(그래서 예전
      * {@code spring.datasource.hikari.connection-init-sql} 의 {@code busy_timeout=5000} 은 한 번도
      * 적용된 적이 없고 드라이버 기본값 3000 이 걸려 있었다). xerial 드라이버는 URL 쿼리
      * 파라미터로 PRAGMA 를 받으며, 그 값은 풀이 커넥션을 다시 열어도 유지된다.
+     * {@code DataSourceConfigTest} 가 <b>실제 커넥션을 열어 되물어본다</b> — 이 다섯 값 중 하나가
+     * 드라이버에 무시돼도 설정 문자열만 읽어서는 드러나지 않기 때문이다.
      */
-    private static final String SESSION_PRAGMAS = "journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL";
+    private static final String SESSION_PRAGMAS =
+            "journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL"
+            + "&cache_size=-32768&mmap_size=268435456";
 
     /**
      * 위 PRAGMA 를 얹은 SQLite JDBC URL. 경로에 {@code ?}/{@code &} 가 있으면 파라미터 경계가
