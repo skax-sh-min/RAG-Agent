@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -478,20 +479,58 @@ public class KeywordSearchRepository {
      * {@code LIKE} scan over content + keywords, appended after the ranked MATCH results (so they
      * land at a worse RRF position within this axis — no real BM25 score, just an existence
      * signal) and de-duplicated by {@code spring_doc_id} against the MATCH results.
+     *
+     * <p>That scan costs O(corpus) while the MATCH above costs O(matches), so it runs only for the
+     * short terms {@link #uncoveredShortTerms} says are missing from the MATCH hits — see there
+     * for why that gate and not "only when MATCH found nothing".
      */
     public List<Document> search(String version, String question, int topK) {
         if (!available) return List.of();
         List<Document> results = new ArrayList<>(matchSearch(question, version, topK));
-        List<String> shortTerms = shortTerms(question);
+        // 짧은 어절이 이미 MATCH 결과 안에 있으면 스캔하지 않는다 — 아래 메서드 참고.
+        List<String> uncovered = uncoveredShortTerms(results, shortTerms(question));
         int remaining = topK - results.size();
-        if (!shortTerms.isEmpty() && remaining > 0) {
+        if (!uncovered.isEmpty() && remaining > 0) {
             Set<String> seen = new java.util.HashSet<>();
             for (Document d : results) seen.add(d.getId());
-            for (Document d : likeSearch(shortTerms, version, remaining)) {
+            for (Document d : likeSearch(uncovered, version, remaining)) {
                 if (seen.add(d.getId())) results.add(d);
             }
         }
         return results;
+    }
+
+    /**
+     * {@link #likeSearch} 를 실제로 돌릴 필요가 있는 짧은 어절만 남긴다 — <b>이미 MATCH 결과
+     * 본문에 들어 있는 어절은 뺀다.</b>
+     *
+     * <p><b>왜 필요한가.</b> {@code likeSearch} 는 인덱스를 쓰지 못하는 {@code LIKE} 스캔이라
+     * 비용이 <b>코퍼스 크기에 비례</b>한다({@code MATCH} 는 일치 건수에 비례한다). 그런데
+     * 한국어 질문에는 {@code 오류·설정·경로·포트} 같은 2음절 어절이 거의 항상 하나는 들어 있어,
+     * 예전 게이트("MATCH 가 topK 를 못 채웠는가")는 평범한 질문마다 그 스캔을 한 번씩 켰다.
+     * 그 어절이 이미 BM25 히트 본문에 있다면 스캔이 가져올 것은 대체로 같은 청크이거나, 이 축에
+     * BM25 점수 없이 꼬리에 붙어 RRF 에서 거의 살아남지 못하는 행이다.
+     *
+     * <p><b>왜 "MATCH 가 0건일 때만"이 아닌가.</b> 그 게이트가 더 단순하지만 §10.7.3 이 노린
+     * 진짜 경우 — 긴 어절과 짧은 어절이 섞인 질문에서 짧은 쪽이 <b>다른</b> 청크를 가리키는 경우
+     * ({@code "코드확인 오류"}) — 를 통째로 잃는다. 그건 전용 테스트가 고정해 둔 의도된 동작이다.
+     * 여기서는 그 경우에만 스캔이 돌고, 빈손일 수 없는 경우에는 돌지 않는다.
+     *
+     * <p>본문만 본다 — {@code likeSearch} 는 {@code keywords} 열도 보지만 행 매퍼가 그 값을
+     * 싣지 않는다. 모르는 쪽은 "덮이지 않았다"로 두므로 판정이 <b>보수적</b>이고, 재현율은
+     * 어느 방향으로도 깎이지 않는다.
+     */
+    static List<String> uncoveredShortTerms(List<Document> matchHits, List<String> shortTerms) {
+        if (shortTerms.isEmpty() || matchHits.isEmpty()) return shortTerms;
+        List<String> haystacks = matchHits.stream()
+                .map(d -> d.getText() == null ? "" : d.getText().toLowerCase(Locale.ROOT))
+                .toList();
+        return shortTerms.stream()
+                .filter(t -> {
+                    String needle = t.toLowerCase(Locale.ROOT);
+                    return haystacks.stream().noneMatch(h -> h.contains(needle));
+                })
+                .toList();
     }
 
     private List<Document> matchSearch(String question, String version, int topK) {

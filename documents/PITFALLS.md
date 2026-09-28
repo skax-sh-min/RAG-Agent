@@ -533,6 +533,7 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 ### chunk_fts 의 trigram 토크나이저는 3글자 이상이어야 토큰이 나온다
 
 - `chunk_fts`'s `trigram` tokenizer requires 3+ characters to produce any trigram — `KeywordSearchRepository.toMatchQuery()` drops shorter terms, so a 2-char query (very common in Korean — e.g. "오류", "문서") gets zero contribution from the BM25 axis while the vector axis is unaffected; this is expected, not a bug
+- 그 손실을 메우는 `likeSearch()` 는 **인덱스를 쓰지 못하는 스캔**이라 비용이 일치 건수가 아니라 **코퍼스 크기**에 비례한다. 예전 게이트는 "MATCH 가 topK 를 못 채웠는가" 하나여서, `오류·설정·경로·포트` 처럼 한국어 질문에 거의 항상 들어 있는 2음절 어절 때문에 평범한 질의마다 그 스캔이 한 번씩 돌았다. 이제 `uncoveredShortTerms()` 가 **MATCH 결과 본문에 이미 있는 어절을 빼고** 남은 것이 있을 때만 스캔한다 — 이미 있는 어절로 스캔해 봐야 대체로 같은 청크이거나, BM25 점수 없이 꼬리에 붙어 RRF 에서 살아남지 못하는 행이다. **"MATCH 가 0건일 때만" 이라는 더 단순한 게이트를 쓰지 않은 이유**: 긴 어절과 짧은 어절이 섞인 질문에서 짧은 쪽이 다른 청크를 가리키는 경우(`코드확인 오류`)가 §10.7.3 이 노린 바로 그 경우이고 전용 테스트가 고정해 둔 동작인데, 그 게이트는 그것을 통째로 잃는다. 판정은 본문만 본다 — 행 매퍼가 `keywords` 를 싣지 않으므로 모르는 쪽은 "안 덮였다"로 두는 보수적 방향이며, 재현율은 어느 방향으로도 깎이지 않는다
 
 ### §6.12 동시성 게이트 · 단일 비행 · 과부하 차단 · 부하 분산
 

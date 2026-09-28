@@ -404,4 +404,38 @@ class KeywordSearchRepositoryTest {
 
         assertThat(hits).hasSize(2);
     }
+
+    // ── LIKE 폴백 게이트 — 코퍼스 전체 스캔을 언제 도는가 ──────────────────────
+
+    @Test
+    @DisplayName("uncoveredShortTerms — MATCH 본문에 이미 있는 어절은 빼고, 없는 어절만 남긴다")
+    void uncoveredShortTerms_dropsTermsAlreadyPresentInMatchHits() {
+        List<Document> hits = List.of(
+                Document.builder().id("s1").text("결제 오류 코드확인 절차").build());
+
+        assertThat(KeywordSearchRepository.uncoveredShortTerms(hits, List.of("오류")))
+                .as("MATCH 결과 본문에 이미 있다 → 스캔할 이유가 없다")
+                .isEmpty();
+        assertThat(KeywordSearchRepository.uncoveredShortTerms(hits, List.of("오류", "포트")))
+                .as("없는 어절만 남는다")
+                .containsExactly("포트");
+        assertThat(KeywordSearchRepository.uncoveredShortTerms(List.of(), List.of("오류")))
+                .as("MATCH 가 0건이면 판단할 근거가 없다 → 전부 남긴다(폴백이 유일한 출처)")
+                .containsExactly("오류");
+    }
+
+    @Test
+    @DisplayName("search — 짧은 어절이 MATCH 결과에 이미 있으면 LIKE 스캔을 건너뛴다")
+    void search_shortTermAlreadyCoveredByMatch_skipsLikeScan() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "코드확인 절차에서 오류가 나면 재시도", "코드확인"),
+                chunk("s2", "D1", "latest", 1, "관계없는 다른 문단의 오류 설명", "오류")));
+
+        List<Document> hits = repo.search("latest", "코드확인 오류", 10);
+
+        // s1 이 MATCH("코드확인")로 들어왔고 그 본문에 "오류"가 이미 있다 → 스캔하지 않으므로 s2 는 없다.
+        // 예전 게이트("topK 를 못 채웠는가")는 한국어 질문에 거의 항상 있는 2음절 어절 때문에
+        // 이런 평범한 질의마다 코퍼스 전체 LIKE 스캔을 한 번씩 켰다.
+        assertThat(hits).extracting(Document::getId).containsExactly("s1");
+    }
 }
