@@ -310,7 +310,7 @@ public class AnswerService {
         if (fitted.note() == null) return state;
         return state.toBuilder()
                 .budgetNote(fitted.note())
-                .sources(markExcludedSources(state.sources(), fitted.docs()))
+                .sources(markExcludedSources(state.sources(), fitted.documents()))
                 .build();
     }
 
@@ -1252,7 +1252,8 @@ public class AnswerService {
         }
 
         String docsContext = fitted.docs().stream()
-                .map(doc -> {
+                .map(sized -> {
+                    Document doc = sized.doc();
                     // §10.10 — a curated Q&A hit has no real filename/page; label it distinctly
                     // instead of leaking the "curated_qa | p.1" placeholder metadata into the prompt.
                     String label = "curated_qa".equals(doc.getMetadata().get(MetaKey.DOC_TYPE))
@@ -1262,7 +1263,8 @@ public class AnswerService {
                                     String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")));
                     // Normalized (no context header, §10.1) — decorative markdown is stripped so it
                     // doesn't consume prompt tokens; the stored/displayed text elsewhere stays raw.
-                    return label + "\n" + MarkdownNoiseNormalizer.normalize(doc.getText());
+                    // 정규화는 fitToBudget() 이 예산을 재면서 이미 해 두었다(SizedDoc).
+                    return label + "\n" + sized.promptText();
                 })
                 .collect(Collectors.joining("\n\n---\n\n"));
 
@@ -1388,7 +1390,45 @@ public class AnswerService {
      *
      * @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}.
      */
-    private record Fitted(List<Document> docs, String history, String note) {}
+    private record Fitted(List<SizedDoc> docs, String history, String note) {
+
+        /** 원본 {@link Document} 만 필요한 자리({@link #markExcludedSources}) 를 위해. */
+        List<Document> documents() {
+            return docs.stream().map(SizedDoc::doc).toList();
+        }
+    }
+
+    /**
+     * 프롬프트에 실을 청크 하나와 <b>그 정규화 결과·토큰 수</b>.
+     *
+     * <p>{@link MarkdownNoiseNormalizer#normalize} 는 줄 단위 정규식이라 같은 텍스트에 두 번
+     * 돌릴 이유가 없는데, 예전에는 {@code fitToBudget()} <b>한 번 안에서만</b> 문서당 두 번
+     * (예산에 맞춰 자르기 + 그 결과 합산) 돌고, {@code buildAnswerPrompt()} 가 조립하면서 또
+     * 한 번 돌았다. 예산을 재려면 어차피 정규화해야 하므로 그때 만든 값을 조립까지 들고 간다.
+     *
+     * <p>{@code normalized} 가 {@code null} 인 경우가 하나 있다 — <b>창을 몰라</b> 예산 계산
+     * 자체를 건너뛴 경로다. 거기서까지 미리 정규화하면, 개수만 보면 되는
+     * {@code withBudgetNote()} 가 문서 전량을 정규화하게 되어 없애려던 낭비가 그 경로에서
+     * 되살아난다. 그래서 그 경로는 {@link #unmeasured} 로 남기고 정규화는 조립 시점으로 미룬다.
+     */
+    private record SizedDoc(Document doc, String normalized, long tokens) {
+
+        /** 예산을 재면서 정규화까지 마친 청크. */
+        static SizedDoc measured(Document d) {
+            String normalized = MarkdownNoiseNormalizer.normalize(d.getText());
+            return new SizedDoc(d, normalized, TokenEstimator.estimate(normalized));
+        }
+
+        /** 창을 몰라 예산 계산을 건너뛴 경로 — 정규화는 프롬프트를 조립할 때 처음 일어난다. */
+        static SizedDoc unmeasured(Document d) {
+            return new SizedDoc(d, null, 0);
+        }
+
+        /** 프롬프트에 실을 텍스트. {@link #unmeasured} 였다면 여기서 한 번 정규화한다. */
+        String promptText() {
+            return normalized != null ? normalized : MarkdownNoiseNormalizer.normalize(doc.getText());
+        }
+    }
 
     /**
      * 프롬프트가 프로바이더의 창에 들어가도록 <b>문서를 먼저</b>, 그래도 넘치면 <b>대화 이력을</b>
@@ -1422,8 +1462,15 @@ public class AnswerService {
         PromptBudget budget = budgetFor(state, providerName, streaming);
         if (budget == null) {
             // 창 모름 → 예산 축소는 하지 않는다. 다만 재시도 축소는 창과 무관하게 적용된다.
-            return new Fitted(docs, history, noteFor(allDocs.size(), docs.size(), fullHistory, history));
+            // 정규화도 하지 않는다 — 이 경로에는 잴 것이 없고, 여기서 미리 돌리면 안내 문구만
+            // 필요한 withBudgetNote() 까지 문서 전량을 정규화한다(SizedDoc 참고).
+            return new Fitted(docs.stream().map(SizedDoc::unmeasured).toList(), history,
+                    noteFor(allDocs.size(), docs.size(), fullHistory, history));
         }
+
+        // 문서당 정확히 한 번만 정규화·추정한다 — 아래 두 계산과 buildAnswerPrompt() 의 조립이
+        // 모두 이 값을 쓴다. 예전에는 셋이 각자 normalize() 를 다시 돌렸다.
+        List<SizedDoc> sized = docs.stream().map(SizedDoc::measured).toList();
 
         // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
         // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
@@ -1433,14 +1480,11 @@ public class AnswerService {
                 + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
         long limit = budget.inputBudget();
 
-        List<Document> keptDocs = PromptBudget.fitByPrefix(docs,
-                d -> TokenEstimator.estimate(MarkdownNoiseNormalizer.normalize(d.getText())),
+        List<SizedDoc> keptDocs = PromptBudget.fitByPrefix(sized, SizedDoc::tokens,
                 fixedCost + TokenEstimator.estimate(history), limit);
 
         // 문서를 줄여도 안 들어가면 이력을 오래된 턴부터 덜어낸다.
-        long docCost = keptDocs.stream()
-                .mapToLong(d -> TokenEstimator.estimate(MarkdownNoiseNormalizer.normalize(d.getText())))
-                .sum();
+        long docCost = keptDocs.stream().mapToLong(SizedDoc::tokens).sum();
         String keptHistory = trimHistory(history, limit - fixedCost - docCost);
 
         String note = noteFor(allDocs.size(), keptDocs.size(), fullHistory, keptHistory);
