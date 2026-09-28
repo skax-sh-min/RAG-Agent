@@ -668,6 +668,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|--------|--------------|------|
 | `spring.threads.virtual.enabled` | `true` | ⚠️ 변경 비권장 | Java 21 Virtual Thread 활성화. LLM I/O 동시성에 핵심적 |
 | `spring.datasource.hikari.maximum-pool-size` | `1` | ❌ 변경 금지 | SQLite는 동시 쓰기 불가 — 반드시 1 유지 |
+| SQLite 세션 PRAGMA (`DataSourceConfig.SESSION_PRAGMAS`) | `journal_mode=WAL` · `busy_timeout=5000` · `synchronous=NORMAL` · `cache_size=-32768` · `mmap_size=268435456` | ⚠️ 조건부 | JDBC URL 파라미터로만 건다(`connection-init-sql`은 statement 하나만 실행되고 sqlite-vec에서는 그 자리를 `load_extension()`이 쓴다). **`mmap_size`는 DB 파일이 네트워크 공유(NFS/SMB)에 있으면 `0`으로 되돌릴 것** — 매핑된 페이지에서 I/O 오류가 나면 오류 코드가 아니라 SIGBUS로 프로세스가 죽는다. 로컬 디스크 전제로 켜 둔 값이다 |
 | `spring.autoconfigure.exclude` | Chroma 자동구성 + OpenAI 모델 자동구성 6종 제외 | ❌ 변경 금지 | `ChromaConfig`/`VectorStoreRegistry`가 직접 Chroma 빈을 관리하고, 채팅·임베딩 빈은 `LlmConfig`/`EmbeddingBeanConfig`가 직접 만든다. OpenAI 자동구성을 되살리면 `LOCAL_LLM_KEY` 가 빈 로컬 전용 배포가 `OpenAI API key must be set` 로 기동 실패([§8](#8-문제-해결)) |
 
 ---

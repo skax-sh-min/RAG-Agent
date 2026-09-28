@@ -149,6 +149,13 @@ class DataSourceConfigTest {
             assertThat(pragma(st, "synchronous"))
                     .as("1 = NORMAL (WAL 권장). 기본값 FULL(2) 이면 커밋마다 fsync 한다")
                     .isEqualTo("1");
+            assertThat(pragma(st, "cache_size"))
+                    .as("음수는 KiB. 드라이버 기본값 -2000(2MB)이면 코퍼스가 커질 때 페이지 캐시를 포기한다")
+                    .isEqualTo("-32768");
+            assertThat(pragma(st, "mmap_size"))
+                    .as("기본값 0 = mmap 꺼짐. 읽기마다 OS 캐시 → SQLite 버퍼 복사가 일어나는데, "
+                        + "ANN 인덱스 없는 vec0 KNN 이 이 앱에서 그 복사가 가장 비싼 자리다")
+                    .isEqualTo("268435456");
         }
     }
 
@@ -162,6 +169,8 @@ class DataSourceConfigTest {
              java.sql.Statement st = c.createStatement()) {
             assertThat(pragma(st, "busy_timeout")).isEqualTo("5000");
             assertThat(pragma(st, "synchronous")).isEqualTo("1");
+            assertThat(pragma(st, "cache_size")).isEqualTo("-32768");
+            assertThat(pragma(st, "mmap_size")).isEqualTo("268435456");
         }
     }
 
