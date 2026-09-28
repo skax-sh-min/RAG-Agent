@@ -69,9 +69,28 @@ class RetrievalServiceFormatSourceTest {
     }
 
     @Test
-    @DisplayName("둘 다 없으면 '파일 | p.?' — 파일명도 없으면 'unknown'")
-    void fallsBackToUnknownDefaults() {
-        assertThat(RetrievalService.formatSource(doc(Map.of()), Map.of())).isEqualTo("unknown | p.?");
+    @DisplayName("페이지를 모르면 'p.?' 대신 자리를 비운다 — 파일명도 없으면 'unknown'")
+    void omitsThePageSegmentWhenThePageIsUnknown() {
+        // 챕터 쪽은 원래 이 규칙이었다("ch ?" 대신 파일명만). 페이지 쪽만 물음표를 찍고 있었고,
+        // 그게 드러나는 자리가 삭제된 청크다 — 가리킬 페이지가 더는 존재하지 않는데 "못 읽었다"
+        // 처럼 보였다.
+        assertThat(RetrievalService.formatSource(doc(Map.of()), Map.of())).isEqualTo("unknown");
+
+        // "?" 자리표시자가 값으로 들어와도 같다(빈 문자열·"null" 도 마찬가지).
+        assertThat(RetrievalService.formatSource(
+                doc(Map.of(MetaKey.FILENAME, "old.pdf", MetaKey.PAGE_OR_SLIDE, "?")), Map.of()))
+                .isEqualTo("old.pdf");
+        assertThat(RetrievalService.formatSource(
+                doc(Map.of(MetaKey.FILENAME, "old.pdf", MetaKey.PAGE_OR_SLIDE, "  ")), Map.of()))
+                .isEqualTo("old.pdf");
+        assertThat(RetrievalService.formatSource(
+                doc(Map.of(MetaKey.FILENAME, "old.pdf", MetaKey.PAGE_OR_SLIDE, "null")), Map.of()))
+                .isEqualTo("old.pdf");
+
+        // 진짜 페이지는 그대로 붙는다 — 회귀 방지.
+        assertThat(RetrievalService.formatSource(
+                doc(Map.of(MetaKey.FILENAME, "old.pdf", MetaKey.PAGE_OR_SLIDE, 2)), Map.of()))
+                .isEqualTo("old.pdf | p.2");
     }
 
     /**
