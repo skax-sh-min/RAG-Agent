@@ -23,8 +23,9 @@ import java.util.Optional;
  * <p>순수 대기열이다: 여기 쓰인 값은 검색·재사용·벡터 스토어 어디에도 영향을 주지 않는다. 실제
  * 반영은 관리자가 기존 청크 편집 경로로 청크를 고칠 때 비로소 일어난다.
  *
- * <p><b>두 JdbcTemplate 을 든다</b>({@link QuestionReuseRepository} 선례): 신고 행 자체는 운영
- * DB(memory.db)에 살고, 신고 시점의 청크 위치·원문 스냅샷은 벡터/FTS DB 에서 읽어야 한다.
+ * <p><b>두 JdbcTemplate 을 든다</b>({@link QuestionReuseRepository} 선례): 신고 행 자체는 운영 테이블이고,
+ * 신고 시점의 청크 위치·원문 스냅샷은 벡터/FTS 테이블에서 읽는다. 둘은 같은 SQLite 파일·같은 DataSource 다
+ * ({@code DataSourceConfig}) — 한정자는 어느 쪽 테이블을 만지는지 표시할 뿐이다.
  */
 @Repository
 public class ChunkReportRepository {

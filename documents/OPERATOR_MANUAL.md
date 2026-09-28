@@ -104,8 +104,8 @@ rag_java/
 │   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본, 공유)
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
-│   └── memory.db               # 대화 이력 + LLM 사용량 + 인덱스 레지스트리 (SQLite WAL)
-│                               #   ※ SQLITE_VEC_DB_PATH 를 켜면 이 내용도 그 벡터 DB 파일로 간다 (§6.3.1)
+│   └── memory.db               # 유일한 SQLite 파일(WAL) — 대화·계정·설정·레지스트리 + 키워드 색인(+ sqlite-vec 벡터)
+│                               #   ※ 옛 SQLITE_VEC_DB_PATH 를 설정한 배포는 그 파일이 이 역할을 한다 (§6.3.1)
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
@@ -564,7 +564,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 >
 > **세는 대상**: `{app.data-dir}` 아래 `documents/` + `converted/` + `images/` 세 트리입니다.
 > 업로드 원본만이 아니라 인덱싱이 만들어 내는 변환 마크다운과 추출 이미지까지 포함하며, PPTX·스캔 PDF는 보통
-> 그쪽이 원본보다 큽니다. `memory.db`/`vector.db`·감사 로그·Chroma 볼륨은 업로드가 만드는 것이 아니라 제외됩니다.
+> 그쪽이 원본보다 큽니다. SQLite DB 파일(`memory.db`)·감사 로그·Chroma 볼륨은 업로드가 만드는 것이 아니라 제외됩니다.
 >
 > **`documents/backup/` 은 제외됩니다.** 문서를 삭제하면 원본이 지워지는 게 아니라 그 폴더로 **옮겨지므로**,
 > 그것까지 세면 "문서를 지워 자리를 만드세요"라는 이 상한의 유일한 해결책이 성립하지 않습니다(사용량이 거의
@@ -1312,7 +1312,7 @@ Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts +
 
 공통 삭제 대상:
 - `data/memory.db` (+`-wal`/`-shm`)
-- **`SQLITE_VEC_DB_PATH` 를 설정했다면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.3.1](#631-sqlite-파일별-테이블-구성))
+- **옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리·벡터가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.3.1](#631-sqlite-파일별-테이블-구성)). `scripts/*_reset_data.sh` 는 두 파일을 모두 지웁니다
 - `data/documents/`
 - `data/converted/`
 - `data/images/`
@@ -1324,7 +1324,7 @@ chroma 백엔드 추가 삭제 대상:
 ```bash
 # macOS / Linux
 rm -f data/memory.db data/memory.db-wal data/memory.db-shm
-rm -f data/vector.db data/vector.db-wal data/vector.db-shm   # SQLITE_VEC_DB_PATH 를 켠 경우
+rm -f data/vector.db data/vector.db-wal data/vector.db-shm   # 옛 SQLITE_VEC_DB_PATH 를 설정한 배포
 rm -rf data/documents data/converted data/images data/chroma
 mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```
@@ -1332,7 +1332,7 @@ mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```powershell
 # Windows PowerShell
 Remove-Item data/memory.db,data/memory.db-wal,data/memory.db-shm -Force -ErrorAction SilentlyContinue
-# SQLITE_VEC_DB_PATH 를 켠 경우
+# 옛 SQLITE_VEC_DB_PATH 를 설정한 배포
 Remove-Item data/vector.db,data/vector.db-wal,data/vector.db-shm -Force -ErrorAction SilentlyContinue
 Remove-Item data/documents,data/converted,data/images,data/chroma -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force data/documents,data/converted,data/images,data/chroma,data/audit | Out-Null
@@ -1970,23 +1970,46 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
 | 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX·TXT·PPTX·PDF(비스캔)·MD 인덱싱 시 자동 생성(MD는 업로드한 파일 그대로, 스캔 PDF는 없음); 문서 삭제 시 함께 삭제 |
 | 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장("LLM 교정 건너뛰기"로 올린 MD도 결정적 정리 결과가 여기 저장됨); 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `doc_registry` 테이블 — `SQLITE_VEC_DB_PATH`를 **비웠으면** `DATA_DIR/memory.db`, **설정했으면 그 벡터 DB 파일**([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
-| 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
-| 대화 이력 + LLM 사용량 | 인덱스 레지스트리와 **같은 파일** (위 행 참조 — `memory.db` 또는 벡터 DB 파일) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
+| 인덱스 레지스트리 | `doc_registry` 테이블 — 앱의 유일한 SQLite 파일 `DATA_DIR/memory.db`([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
+| 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: 같은 SQLite 파일 `DATA_DIR/memory.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
+| 대화 이력 + LLM 사용량 | 같은 SQLite 파일 `DATA_DIR/memory.db` | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
 >
-> ⚠️ **DB 파일만 골라 백업하려면 [§6.3.1](#631-sqlite-파일별-테이블-구성)을 먼저 읽으세요.** `SQLITE_VEC_DB_PATH`를 설정한 배포에서는 대화·계정·설정까지 **전부 그 벡터 DB 파일에 있고 `memory.db`는 빈 껍데기**입니다 — 이름만 보고 `memory.db`를 복사하면 0행짜리 파일을 백업하게 됩니다.
+> ⚠️ **DB 파일만 골라 백업하려면 [§6.3.1](#631-sqlite-파일별-테이블-구성)을 먼저 읽으세요.** 옛 `SQLITE_VEC_DB_PATH`를 설정한 배포에서는 대화·계정·설정·벡터가 **전부 그 파일**(예: `data/vector.db`)에 있습니다 — 이름만 보고 `memory.db`를 복사하면 엉뚱한 파일을 백업하게 됩니다.
 
 #### 6.3.1 SQLite 파일별 테이블 구성
 
-DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 두 번째 파일이 생깁니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 그 파일에는 FTS 색인만 남습니다.
+DB 파일은 **하나**입니다 — `DATA_DIR/memory.db`. 운영 테이블(대화·계정·설정·레지스트리), 키워드 색인(`chunk_fts`, 두 백엔드 공통), sqlite-vec 백엔드의 벡터가 모두 이 파일, 한 커넥션 풀(pool=1)을 씁니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 이 파일에는 나머지만 남습니다.
 
-> ⚠️ **분리를 켜면 벡터뿐 아니라 운영 테이블까지 그 파일로 갑니다** — 이름과 달리 `memory.db`에는 아무것도 쌓이지 않습니다. 이유는 아래 «어느 파일에 들어가는가»에 있습니다. 스위치를 켠 배포에서 **실데이터가 있는 파일은 벡터 DB 하나뿐**이라고 생각하는 편이 맞습니다.
+> ⚠️ **옛 `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 설정한 배포** — 예전에는 벡터 테이블을 별도 파일(예: `./data/vector.db`)로 "분리"하는 스위치였지만, 실제로는 **운영 테이블까지 전부 그 파일로 갔습니다**(`memory.db`에는 아무것도 쌓이지 않았습니다). 그래서 sqlite-vec 백엔드에서 이 값이 있으면 앱은 지금도 **그 파일을 유일한 DB로** 엽니다 — 설정을 바꾸지 않아도 데이터가 그대로 보이고, 기동 로그의 `[DB]` 경고가 그 상태를 알려 줍니다. (Chroma 백엔드에서는 예전처럼 이 값을 무시합니다.)
+>
+> **이 값만 지우면 안 됩니다** — 앱이 `memory.db`를 열어 계정·대화·설정·문서 목록이 사라진 것처럼 보입니다(데이터는 그 파일에 그대로 있습니다). 파일 이름까지 정리하려면 아래 순서를 따르세요.
 
-**운영 테이블** — 대화·계정·설정·레지스트리. 분리 **off**면 `memory.db`, **on**이면 벡터 DB 파일에 만들어집니다.
+**파일 이름 정리 (선택 — 옛 `vector.db`를 `memory.db`로)**
+
+1. 앱을 **정상 종료**합니다. `data/`에 `-wal`/`-shm` 파일이 남아 있지 않은지 확인하세요 — 남아 있다면 아직 실행 중이거나 비정상 종료된 것이니, 한 번 띄웠다가 정상 종료합니다.
+2. 기존 `data/memory.db`를 다른 이름으로 치웁니다. 스위치를 **처음부터** 켠 배포라면 빈 테이블과 Flyway 이력뿐이지만, **도중에** 켠 배포라면 켜기 전의 데이터가 들어 있을 수 있으니 확인한 뒤 지우세요.
+3. `data/vector.db`를 `data/memory.db`로 바꿉니다.
+4. `.env`(또는 실행 옵션)에서 `SQLITE_VEC_DB_PATH`를 지우고 기동합니다. 기동 로그에 `[DB]` 경고가 나오지 않으면 끝입니다.
+
+```bash
+# macOS / Linux — 앱을 내린 뒤
+mv data/memory.db data/memory.db.old
+mv data/vector.db data/memory.db
+```
+
+```powershell
+# Windows PowerShell — 앱을 내린 뒤
+Rename-Item data/memory.db memory.db.old
+Rename-Item data/vector.db memory.db
+```
+
+> 옛 벡터 DB 파일을 처음 여는 기동에서 Flyway가 그 파일에 이력 테이블을 만들고 `<< Flyway Baseline >>`(버전 3) 한 줄을 남깁니다. 기존 테이블과 행은 건드리지 않습니다(`spring.flyway.baseline-version=3` — 이유는 아래 «Flyway»).
+
+**운영 테이블** — 대화·계정·설정·레지스트리
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -2005,7 +2028,7 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 | `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
 | `flyway_schema_history` | 마이그레이션 이력 | Flyway |
 
-**벡터·검색 색인 테이블** — 분리 **on**이면 벡터 DB 파일, **off**면 위 운영 테이블과 같은 `memory.db`
+**벡터·검색 색인 테이블** — 위 운영 테이블과 같은 파일
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -2015,15 +2038,13 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 
 > 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
 >
-> **어느 파일에 들어가는가 — 코드가 주입받는 `JdbcTemplate`이 정합니다.** 그런데 **분리를 켜면 그 템플릿이 하나뿐**입니다: `DataSourceConfig`가 `vectorJdbcTemplate` 빈을 직접 정의하는 순간 Spring Boot의 `JdbcTemplateAutoConfiguration`(`@ConditionalOnMissingBean(JdbcOperations.class)`)이 통째로 물러나, 컨텍스트에 `memory.db`용 `JdbcTemplate`이 아예 만들어지지 않습니다. 그래서 `@Qualifier` 없이 `JdbcTemplate`을 받는 저장소(`SqliteMemoryRepository`·`SqliteUserDetailsService`·`ThreadMetaRepository`·`CuratedQaRepository`·`CuratedSubmissionRepository`·`ChunkReportRepository`·`LlmUsageRepository`·`SettingsOverrideRepository`·`AppSecretRepository`·`DocRegistry`…)도 **전부 벡터 DB 파일에 씁니다**. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만, 분리가 켜져 있으면 `turn_source_ref` 쓰기도 결국 같은 파일로 갑니다. 분리가 **꺼져 있으면** 그 한 빈이 운영 DataSource를 감싸므로 전부 `memory.db`이고, 이 사실은 겉으로 드러나지 않습니다. (동작 고정: `DataSourceJdbcTemplateWiringTest`, `-Dsqlitevec.path` 필요)
+> **왜 파일이 하나인가** — 예전 분리 스위치는 `DataSourceConfig`가 벡터용 `JdbcTemplate` 빈을 정의하는 바람에 Spring Boot의 기본 `JdbcTemplate`이 만들어지지 않아(`@ConditionalOnMissingBean(JdbcOperations.class)`), 운영 저장소까지 전부 벡터 파일에 쓰는 결과가 됐습니다. 분리의 목적(인덱싱 쓰기와 운영 쓰기의 락 분리)은 한 번도 이뤄진 적이 없고, 코드도 두 종류의 테이블을 한 쿼리로 조인하는 쪽으로 굳어졌습니다. 그래서 분리를 "제대로" 만드는 대신 파일을 하나로 합쳤습니다 — 실행 중 I/O는 원래도 한 파일·한 커넥션이었으므로 성능은 그대로입니다. 경위와 다시 나누려면 먼저 풀어야 할 것은 [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource).
 >
-> **그럼 `memory.db`는 지워도 되나?** 분리를 켠 배포에서 그 파일은 Flyway가 만든 **빈 테이블 + 마이그레이션 이력**뿐이라 데이터 손실 없이 지울 수 있지만, **얻는 것도 없습니다** — 앱은 기동할 때마다 `@Primary` DataSource로 그 파일을 다시 만들고 Flyway를 다시 적용합니다(빈 파일이므로 무해). 백업 대상에서 빼는 것은 괜찮고, 파일 자체를 없애려면 배선을 바꿔야 합니다.
+> **Flyway** — 실데이터가 있는 그 파일에 적용되고 이력(`flyway_schema_history`)도 거기 남습니다. 옛 벡터 DB 파일처럼 테이블은 있는데 이력이 없는 파일은 첫 기동 때 버전 3으로 baseline 됩니다 — 그 파일의 테이블은 저장소들의 런타임 DDL로 만들어져 V1–V3의 내용이 이미 다 있고, baseline을 1로 두면 V2의 `CREATE TABLE users`가 `already exists`로 기동을 멈춥니다. 신규 컬럼은 여전히 Flyway가 아니라 런타임 `ALTER` 패턴으로 추가하는 것이 규약입니다([PLAN §13](PLAN.md#13-db-스키마-변경-요약)).
 >
-> ⚠️ **Flyway는 실데이터에 닿지 않습니다.** Flyway는 `@Primary` DataSource(=`memory.db`)에 적용되고 이력(`flyway_schema_history`)도 거기 남는데, 분리를 켜면 실제 테이블은 벡터 DB 파일에 각 저장소의 런타임 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER`)로 만들어집니다. 그래서 **새 `V4__*.sql`을 추가하면 빈 파일에만 적용되고 "성공"으로 보고됩니다.** 신규 컬럼은 Flyway가 아니라 런타임 `ALTER` 패턴으로 추가한다는 규약([PLAN §13](PLAN.md#13-db-스키마-변경-요약))을 지키는 한 문제가 되지 않습니다 — 그 규약을 어기지 마세요.
+> ⚠️ **Chroma 배포는 저장소가 둘입니다** — 벡터는 Chroma 서버, 레지스트리는 이 SQLite 파일. 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준이므로, 백업 시 Chroma 볼륨과 `data/`를 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
 >
-> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 두 파일을 쓰는 배포라면(분리 off·Chroma 조합 등) 백업 시 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
->
-> **스키마는 기동 시 자동 정비됩니다** — 위 «생성 주체»에 Flyway로 적힌 테이블도 각 저장소가 런타임 `CREATE TABLE IF NOT EXISTS`를 함께 갖고 있고, Flyway 이후의 컬럼은 `@PostConstruct`의 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. Flyway가 닿지 않는 벡터 DB 파일에서도 같은 스키마가 만들어지는 것이 이 때문입니다. 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
+> **스키마는 기동 시 자동 정비됩니다** — 위 «생성 주체»에 Flyway로 적힌 테이블도 각 저장소가 런타임 `CREATE TABLE IF NOT EXISTS`를 함께 갖고 있고, Flyway 이후의 컬럼은 `@PostConstruct`의 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 옛 벡터 DB 파일이 Flyway 없이도 같은 스키마를 갖게 된 것이 이 때문입니다. 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
@@ -2488,7 +2509,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - **배지는 「수정됨」인데 차이가 「동일」로 나올 수 있습니다.** 변경 판정은 `chunk_fts` 의 **검색 텍스트 해시**로 내는데 그 텍스트에는 요약(맥락 헤더)이 섞여 있어, 본문은 그대로 두고 요약·키워드만 고쳐도 해시가 달라집니다. 그 조합일 때는 비교 위에 `본문은 같습니다 — 요약·키워드처럼 검색 텍스트에만 들어가는 부분이 바뀌었습니다` 가 함께 표시됩니다.
 - **비교가 생략되는 경우** — ① 신고 시점 원문이 없을 때(FTS 인덱스 없이 접수된 신고), ② 청크가 이미 사라졌을 때, ③ 내용이 너무 커서 줄 단위 비교 상한을 넘을 때. 셋 다 "차이 없음"으로 넘기지 않고 이유를 적은 안내가 뜨며 화면은 나란히 보기로 떨어집니다.
 - **감사 로그**: `chunk.report`(접수) · `chunk.report.resolve` · `chunk.report.reject`(닫은 건수 포함).
-- **저장 위치**: `chunk_report`(신고 내용 + 신고 시점 원문·질문 스냅샷) — 다른 운영 테이블과 같은 파일입니다([§6.3.1](#631-sqlite-파일별-테이블-구성): 분리를 켠 배포에서는 벡터 DB 파일). 문서나 대화가 지워져도 스냅샷은 남습니다 — 지워진 뒤에는 "무엇이 틀렸다는 것인지"를 그 복사본으로만 알 수 있기 때문입니다.
+- **저장 위치**: `chunk_report`(신고 내용 + 신고 시점 원문·질문 스냅샷) — 앱의 유일한 SQLite 파일입니다([§6.3.1](#631-sqlite-파일별-테이블-구성)). 문서나 대화가 지워져도 스냅샷은 남습니다 — 지워진 뒤에는 "무엇이 틀렸다는 것인지"를 그 복사본으로만 알 수 있기 때문입니다.
 
 ---
 
@@ -3524,7 +3545,7 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
 **지식 제안 게시판 (§6.9, 사용하는 경우)**:
-- [ ] 기존 DB 업그레이드라면 **적용 전 DB 파일 백업**(`data/memory.db` + 분리를 켰다면 벡터 DB 파일 — §6.3.1) + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
+- [ ] 기존 DB 업그레이드라면 **적용 전 DB 파일 백업**(`data/memory.db` — 옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일, §6.3.1) + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
 - [ ] (게스트 배포) `AUTH_GUEST_IDENTITY`가 `shared`가 아닌지 확인 — 기동 로그 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값 확인
 - [ ] `/curated/submissions`에서 제안 1건 등록 → 관리자 헤더 배지에 대기 건수 표시(최대 60초) 확인
 - [ ] 게스트로 `GET /admin/submissions/pending-count` 호출 → 로그인 리다이렉트(또는 403) 확인
@@ -3534,7 +3555,7 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 
 **태그 기반 검색 적용 시 (프리릴리즈 정책)**:
 - [ ] 적용 전 백업 여부 결정 및 수행 (선택)
-- [ ] `data/memory.db`(+wal/shm) — 분리를 켰다면 벡터 DB 파일도 함께 —, `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
+- [ ] `data/memory.db`(+wal/shm) — 옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 —, `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
 - [ ] (chroma) `data/chroma` 또는 `chroma_data` 볼륨 초기화 완료
 - [ ] 재기동 후 `/setup` 또는 로그인 경로 정상 확인
 - [ ] 문서 재업로드/동기화 후 태그 엄격 필터 동작 확인

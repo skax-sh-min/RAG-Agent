@@ -19,7 +19,7 @@ import java.util.Optional;
  *
  * <p>Read-only: this class owns no DDL. {@code thread_meta} is created by
  * {@link ThreadMetaRepository} and {@code conversation_turns} by {@link SqliteMemoryRepository};
- * both live in {@code memory.db} on the primary {@code JdbcTemplate}, which is what lets the
+ * both live in the app's one SQLite file ({@code DataSourceConfig}), which is what lets the
  * aggregate below be one join rather than two round-trips stitched in Java.
  */
 @Repository
