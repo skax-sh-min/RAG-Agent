@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Estimates how much of a finished answer came from each retrieved chunk (2단계 응답 참여도).
@@ -184,9 +185,13 @@ public final class AnswerAttribution {
      * decorative markdown that exists on one side only (the prompt carries stripped text, the
      * stored chunk keeps the raw form).
      */
+    private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
     private static String normalize(String text) {
-        return MarkdownNoiseNormalizer.normalize(text == null ? "" : text)
-                .replaceAll("\\s+", " ")
+        // 정적 Pattern — String.replaceAll 은 호출마다 컴파일하는데 이 메서드는 답변 문장 수 ×
+        // 청크 수만큼 돈다(MarkdownNoiseNormalizer.isDecorativeLine 이 같은 함정이었다).
+        return WHITESPACE_RUN.matcher(MarkdownNoiseNormalizer.normalize(text == null ? "" : text))
+                .replaceAll(" ")
                 .strip();
     }
 
