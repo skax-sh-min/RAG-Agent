@@ -1,11 +1,10 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,10 +25,8 @@ class LlmUsageRepositoryTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-usage-", ".db");
-        var ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        var jdbc = new JdbcTemplate(ds);
+        var jdbc = SqliteTestDatabase.open(dbFile);
         repo = new LlmUsageRepository(jdbc);
-        repo.init();
     }
 
     @AfterEach

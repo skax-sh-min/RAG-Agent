@@ -1,7 +1,6 @@
 package com.example.ragagent.repository;
 
 import com.example.ragagent.model.ThreadMeta;
-import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -19,33 +18,6 @@ public class ThreadMetaRepository {
 
     public ThreadMetaRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS thread_meta (
-                    thread_id    TEXT PRIMARY KEY,
-                    title        TEXT NOT NULL DEFAULT '새 대화',
-                    version      TEXT NOT NULL DEFAULT 'latest',
-                    created_at   TEXT NOT NULL,
-                    updated_at   TEXT NOT NULL,
-                    routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST',
-                    tags         TEXT NOT NULL DEFAULT ''
-                )
-                """);
-        // Migration: add columns for existing databases
-        var cols = jdbc.queryForList("PRAGMA table_info(thread_meta)");
-        if (cols.stream().noneMatch(c -> "routing_mode".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'");
-        }
-        if (cols.stream().noneMatch(c -> "user_id".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
-            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_thread_meta_user ON thread_meta(user_id)");
-        }
-        if (cols.stream().noneMatch(c -> "tags".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
-        }
     }
 
     private static ThreadMeta mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {

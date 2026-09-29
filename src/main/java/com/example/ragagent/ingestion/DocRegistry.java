@@ -3,10 +3,8 @@ package com.example.ragagent.ingestion;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.ragagent.model.TagUtils;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -15,8 +13,19 @@ import java.sql.SQLException;
 import java.util.*;
 
 /**
- * Registry of indexed documents — persisted in SQLite.
- * All mutations are immediately durable; save()/saveQuiet() are kept as no-ops for API compatibility.
+ * Registry of indexed documents — persisted in SQLite ({@code doc_registry}; the schema comes from the
+ * Flyway migrations). All mutations are immediately durable; save()/saveQuiet() are kept as no-ops for
+ * API compatibility.
+ *
+ * <p><b>{@code tags} — 문서 검색 스코프 태그(CSV)의 권위 있는 출처.</b> 태그는 문서 단위 속성인데 한동안
+ * <b>청크마다 복제된</b> {@code chunk_fts.doc_tags} 가 유일한 출처였다. {@code chunk_fts} 는 FTS5 가상 테이블이고
+ * 그 컬럼은 {@code UNINDEXED} 라 — FTS5 는 인덱스를 만들 수 없다 — {@code WHERE doc_id IN (...)} 이 <b>코퍼스
+ * 전체 스캔</b>이었는데, 그 조회를 {@code RagService.listDocuments()} 가 불러 문서 목록·관리자 화면·
+ * {@code /admin/chunks} 페이지 넘김마다 돌았다. 여기서는 문서 수만큼만 읽고 PK 인덱스도 탄다.
+ * {@code chunk_fts.doc_tags} 는 검색 결과에 태그를 동행시키는({@code CHUNK_ROW_MAPPER} → {@code MetaKey.TAGS} →
+ * {@code filterByTags}) 사본으로 남는다. {@code NULL} 과 빈 문자열은 다르다: {@code NULL} = 아직 백필되지 않음(옛
+ * 행), 빈 문자열 = 태그 없음 — {@code DocTagsBackfill} 이 그 구분으로 멱등성을 얻는다({@code chunk_overlap} 과 같은
+ * 패턴).
  */
 @Component
 public class DocRegistry {
@@ -31,60 +40,6 @@ public class DocRegistry {
 
     public DocRegistry(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS doc_registry (
-                    doc_id         TEXT NOT NULL,
-                    user_id        TEXT NOT NULL DEFAULT 'anonymous',
-                    sha256         TEXT NOT NULL,
-                    version        TEXT NOT NULL,
-                    indexed_at     TEXT NOT NULL,
-                    chunks         INTEGER NOT NULL,
-                    spring_doc_ids TEXT NOT NULL,
-                    errors         TEXT NOT NULL,
-                    PRIMARY KEY (doc_id, user_id)
-                )
-                """);
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_doc_registry_user_version ON doc_registry(user_id, version)");
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_doc_registry_sha_version ON doc_registry(sha256, version, user_id)");
-        addChunkOverlapColumn();
-        addDisplayNameColumn();
-        addTagsColumn();
-        log.debug("[REGISTRY] SQLite 초기화 완료");
-    }
-
-    /**
-     * Defensive ALTER for the {@code chunk_overlap} column (same precedent as
-     * {@code SqliteMemoryRepository.init()}'s added columns — {@code V1__baseline.sql} is never
-     * edited). Nullable on purpose: a pre-existing row's real overlap is genuinely unknown until
-     * {@link #backfillMissingChunkOverlap} fills it in at startup.
-     */
-    private void addChunkOverlapColumn() {
-        try {
-            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN chunk_overlap INTEGER");
-            log.info("[REGISTRY] doc_registry.chunk_overlap 컬럼 추가");
-        } catch (DataAccessException e) {
-            log.debug("[REGISTRY] chunk_overlap 컬럼이 이미 존재함");   // duplicate column name
-        }
-    }
-
-    /**
-     * Defensive ALTER for the {@code display_name} column — a purely cosmetic per-document
-     * override (see {@link DocRegistryEntry#displayName}). {@code NULL} means "no override, show
-     * the real filename", which is also what every pre-existing row gets automatically.
-     */
-    private void addDisplayNameColumn() {
-        try {
-            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN display_name TEXT");
-            log.info("[REGISTRY] doc_registry.display_name 컬럼 추가");
-        } catch (DataAccessException e) {
-            log.debug("[REGISTRY] display_name 컬럼이 이미 존재함");   // duplicate column name
-        }
     }
 
     /**
@@ -102,34 +57,6 @@ public class DocRegistry {
             log.info("[REGISTRY] chunk_overlap 미기록 문서 {}건에 현재 설정값({}) 적용", updated, currentOverlap);
         }
         return updated;
-    }
-
-    /**
-     * Defensive ALTER for the {@code tags} column — 문서의 검색 스코프 태그(CSV).
-     *
-     * <p><b>왜 여기인가.</b> 태그는 문서 단위 속성인데 그동안 <b>청크마다 복제된</b>
-     * {@code chunk_fts.doc_tags} 가 유일한 출처였다. {@code chunk_fts} 는 FTS5 가상 테이블이고
-     * 그 컬럼은 {@code UNINDEXED} 라 — FTS5 는 인덱스를 만들 수 없다 — {@code WHERE doc_id IN (...)}
-     * 이 <b>코퍼스 전체 스캔</b>이었다. 그런데 그 조회를 {@code RagService.listDocuments()} 가
-     * 부르고, 그건 문서 목록·관리자 화면·{@code /admin/chunks} 페이지 넘김마다 돈다. 즉 문서를
-     * 나열할 때마다 청크 수만 행(본문 포함)을 읽고 있었다. {@code doc_registry} 는 이미 문서 단위
-     * 일반 테이블이라 여기서는 문서 수만큼만 읽고 PK 인덱스도 탄다.
-     *
-     * <p>{@code chunk_fts.doc_tags} 는 <b>남는다</b> — 검색 결과에 태그를 동행시키는
-     * ({@code CHUNK_ROW_MAPPER} → {@code MetaKey.TAGS} → {@code filterByTags}) 비정규화 사본이다.
-     * 이 컬럼이 권위 있는 출처이고 그쪽은 검색 경로용 사본이라는 관계만 지키면 된다.
-     *
-     * <p>{@code NULL} 과 빈 문자열은 다르다: {@code NULL} = "아직 백필되지 않음"(옛 행),
-     * 빈 문자열 = "태그 없음"이다. {@code DocTagsBackfill} 이 그 구분으로 멱등성을 얻는다
-     * ({@code chunk_overlap} 과 같은 패턴).
-     */
-    private void addTagsColumn() {
-        try {
-            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN tags TEXT");
-            log.info("[REGISTRY] doc_registry.tags 컬럼 추가");
-        } catch (DataAccessException e) {
-            log.debug("[REGISTRY] tags 컬럼이 이미 존재함");   // duplicate column name
-        }
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────
@@ -159,7 +86,7 @@ public class DocRegistry {
 
     /** Updates only the search-scope tags, leaving every other column untouched (same shape as
      *  {@link #updateDisplayName}). {@code tagsCsv} 는 {@code TagUtils.toMetaValue()} 형식이며
-     *  빈 문자열은 "태그 없음"이다(NULL 과 다르다 — 위 {@link #addTagsColumn} 참조).
+     *  빈 문자열은 "태그 없음"이다(NULL 과 다르다 — 클래스 설명 참조).
      *  @return rows affected (0 = no such document) */
     public int updateTags(String docId, String userId, String tagsCsv) {
         return jdbc.update(

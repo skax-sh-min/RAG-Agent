@@ -1,6 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -102,64 +101,6 @@ public class CuratedSubmissionRepository {
 
     public CuratedSubmissionRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS curated_submission (
-                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                    author_user_id    TEXT NOT NULL,
-                    title             TEXT NOT NULL,
-                    body              TEXT NOT NULL,
-                    status            TEXT NOT NULL DEFAULT 'pending',
-                    reviewer_user_id  TEXT,
-                    review_note       TEXT,
-                    curated_qa_id     INTEGER,
-                    created_at        TEXT NOT NULL,
-                    updated_at        TEXT NOT NULL,
-                    reviewed_at       TEXT,
-                    author_read_at    TEXT,
-                    tags              TEXT,
-                    source_turn_id    INTEGER,
-                    source_thread_id  TEXT,
-                    summary           TEXT,
-                    keywords          TEXT
-                )
-                """);
-        // `tags` shipped after the initial table — plain ADD COLUMN (nullable TEXT).
-        if (jdbc.queryForList("PRAGMA table_info(curated_submission)").stream()
-                .noneMatch(c -> "tags".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN tags TEXT");
-        }
-        // §10.11 — 좋아요 출신 제안의 출처 턴. `tags` 와 같은 방어적 ADD COLUMN 이며 둘 다
-        // nullable 이다: 손으로 쓴 제안에는 출처 턴이 없고, 이 컬럼이 생기기 전 제안도 전부 없다.
-        var subCols = jdbc.queryForList("PRAGMA table_info(curated_submission)");
-        if (subCols.stream().noneMatch(c -> "source_turn_id".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN source_turn_id INTEGER");
-        }
-        if (subCols.stream().noneMatch(c -> "source_thread_id".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN source_thread_id TEXT");
-        }
-        // 요약·키워드 — 저자가 폼에서 직접 쓰거나 "빈 칸 자동 생성"으로 채우는 값. 승인 시
-        // curated_qa 로 복사되어 MetaKey.CHUNK_CONTEXT/EXCERPT_KEYWORDS 가 된다. 같은 방어적
-        // ADD COLUMN 이며 둘 다 nullable 이다(이 컬럼이 생기기 전 제안은 전부 NULL).
-        if (subCols.stream().noneMatch(c -> "summary".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN summary TEXT");
-        }
-        if (subCols.stream().noneMatch(c -> "keywords".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN keywords TEXT");
-        }
-        // 부분 인덱스 — 중복 제안 방지(findLiveByTurn)가 매 좋아요마다 이걸 탄다. UNIQUE 는 쓰지
-        // 않는다: 반려·철회된 제안이 같은 턴에 남으므로 한 턴에 여러 행이 정상이다.
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_turn " +
-                "ON curated_submission(source_turn_id) WHERE source_turn_id IS NOT NULL");
-        // (status, id DESC) — the admin panel's default "pending, newest first" listing.
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_status " +
-                "ON curated_submission(status, id DESC)");
-        // (author_user_id, id DESC) — "내 제안" listing + the unread-badge count.
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_author " +
-                "ON curated_submission(author_user_id, id DESC)");
     }
 
     /** Hand-written proposal — no originating chat turn. See {@link #insert(String, String,

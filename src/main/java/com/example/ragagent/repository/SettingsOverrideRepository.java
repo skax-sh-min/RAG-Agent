@@ -1,6 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -14,8 +13,8 @@ import java.util.Map;
  * <p>Lives in the app's single SQLite file with the other operational tables ({@code DataSourceConfig}) —
  * these are app-config rows, unrelated to embeddings/FTS. Overrides survive restarts; deleting
  * a row reverts that key to its {@code application.properties} default (see
- * {@code AppProperties.xxxSafe()}). Uses the same idempotent {@code CREATE TABLE IF NOT EXISTS} +
- * raw {@link JdbcTemplate} pattern as {@link LlmUsageRepository} (SQLite is incompatible with JPA).
+ * {@code AppProperties.xxxSafe()}). Raw {@link JdbcTemplate} like the other repositories (SQLite is
+ * incompatible with JPA); the table comes from the Flyway migrations (db/migration).
  */
 @Repository
 public class SettingsOverrideRepository {
@@ -24,17 +23,6 @@ public class SettingsOverrideRepository {
 
     public SettingsOverrideRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS settings_override (
-                    key        TEXT NOT NULL PRIMARY KEY,
-                    value      TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """);
     }
 
     /** All persisted overrides as an insertion-ordered key→value map (empty when none). */

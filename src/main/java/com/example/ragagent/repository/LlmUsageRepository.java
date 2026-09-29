@@ -1,6 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -12,7 +11,11 @@ import java.util.Set;
 
 /**
  * Tracks per-provider token usage in SQLite (daily UPSERT, period aggregation).
- * Shares the existing memory.db DataSource.
+ *
+ * <p>{@code llm_usage.user_id} is not read or written here — every row keeps the default
+ * {@code 'anonymous'}. It was added in prep for §6.5 (per-user LLM quota), whose recommended design
+ * aggregates from {@code conversation_turns.user_id} instead, so the column may stay dead; see
+ * documents/PLAN.md §6.5 before wiring it up.
  */
 @Repository
 public class LlmUsageRepository {
@@ -21,30 +24,6 @@ public class LlmUsageRepository {
 
     public LlmUsageRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS llm_usage (
-                    provider_name  TEXT    NOT NULL,
-                    usage_date     TEXT    NOT NULL,
-                    input_tokens   INTEGER NOT NULL DEFAULT 0,
-                    output_tokens  INTEGER NOT NULL DEFAULT 0,
-                    call_count     INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (provider_name, usage_date)
-                )
-                """);
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_llm_usage_date ON llm_usage(usage_date)");
-        try {
-            // Currently unused: record()/getByPeriod()/usedProviders()/deleteByProvider() never
-            // read or write this column, so every row stays at the default 'anonymous'. Added in
-            // prep for §6.5 (per-user LLM quota), whose recommended design aggregates from
-            // conversation_turns.user_id instead — this column may end up staying dead. See
-            // documents/PLAN.md §6.5 before wiring it up.
-            jdbc.execute("ALTER TABLE llm_usage ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
-        } catch (Exception ignored) {}
     }
 
     // ── Write ──────────────────────────────────────────────────────────────

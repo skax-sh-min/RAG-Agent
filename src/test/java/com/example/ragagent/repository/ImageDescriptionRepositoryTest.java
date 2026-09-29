@@ -1,11 +1,10 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,17 +27,7 @@ class ImageDescriptionRepositoryTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-image-desc-", ".db");
-        var ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        var jdbc = new JdbcTemplate(ds);
-        jdbc.execute("""
-                CREATE TABLE image_descriptions (
-                    image_path  TEXT PRIMARY KEY,
-                    description TEXT,
-                    image_type  TEXT,
-                    provider    TEXT
-                )
-                """);
-        repo = new ImageDescriptionRepository(jdbc);
+        repo = new ImageDescriptionRepository(SqliteTestDatabase.open(dbFile));
     }
 
     @AfterEach

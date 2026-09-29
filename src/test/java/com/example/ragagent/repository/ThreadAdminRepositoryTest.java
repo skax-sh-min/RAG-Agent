@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.ThreadMeta;
 import org.junit.jupiter.api.AfterEach;
@@ -7,7 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,16 +41,13 @@ class ThreadAdminRepositoryTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-thread-admin-", ".db");
-        DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        jdbc = new JdbcTemplate(ds);
+        jdbc = SqliteTestDatabase.open(dbFile);
 
         threads = new ThreadMetaRepository(jdbc);
-        threads.init();
         AppProperties props = org.mockito.Mockito.mock(AppProperties.class);
         org.mockito.Mockito.when(props.memorySafe())
                 .thenReturn(new AppProperties.MemoryConfig(50));
         turns = new SqliteMemoryRepository(jdbc, props);
-        turns.init();
 
         repo = new ThreadAdminRepository(jdbc);
     }

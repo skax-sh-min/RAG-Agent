@@ -1,9 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -11,11 +7,9 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
-import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -37,8 +31,6 @@ import java.util.Set;
  */
 @Repository
 public class CuratedQaRepository {
-
-    private static final Logger log = LoggerFactory.getLogger(CuratedQaRepository.class);
 
     private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -81,122 +73,6 @@ public class CuratedQaRepository {
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    /** Fresh-install schema. Legacy databases are brought here by {@link #migrateLegacySchema()}. */
-    private static final String CREATE_TABLE_BODY = """
-                (
-                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_turn_id        INTEGER,
-                    source_user_id        TEXT NOT NULL,
-                    source_thread_id      TEXT NOT NULL,
-                    question              TEXT NOT NULL,
-                    answer                TEXT NOT NULL,
-                    status                TEXT NOT NULL DEFAULT 'active',
-                    source_doc_version    TEXT,
-                    created_at            TEXT NOT NULL,
-                    updated_at            TEXT NOT NULL,
-                    embed_status          TEXT NOT NULL DEFAULT 'ok',
-                    origin                TEXT NOT NULL DEFAULT 'like',
-                    source_submission_id  INTEGER,
-                    tags                  TEXT,
-                    chunk_count           INTEGER NOT NULL DEFAULT 1,
-                    summary               TEXT,
-                    keywords              TEXT
-                )
-            """;
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS curated_qa " + CREATE_TABLE_BODY);
-        // Migration: add column for existing databases (this repository predates Flyway management
-        // for curated_qa — same defensive pattern as ThreadMetaRepository). Must run BEFORE
-        // migrateLegacySchema(), whose INSERT...SELECT references embed_status by name.
-        var cols = jdbc.queryForList("PRAGMA table_info(curated_qa)");
-        if (cols.stream().noneMatch(c -> "embed_status".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN embed_status TEXT NOT NULL DEFAULT 'ok'");
-        }
-        if (cols.stream().noneMatch(c -> "origin".equals(c.get("name")))) {
-            migrateLegacySchema();
-        }
-        // `tags` shipped one release after `origin`, so a database that already went through the
-        // rebuild above still lacks it — plain ADD COLUMN suffices (nullable TEXT). Re-reads
-        // PRAGMA because migrateLegacySchema() may have just replaced the table.
-        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
-                .noneMatch(c -> "tags".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN tags TEXT");
-        }
-        // `chunk_count` shipped with 임베딩 분할. Existing rows hold exactly one vector, which is
-        // what the DEFAULT 1 encodes — so de-indexing an old row keeps removing the single id it has.
-        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
-                .noneMatch(c -> "chunk_count".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1");
-        }
-        // 요약·키워드는 승인 시점에 제안에서 복사되어 MetaKey.CHUNK_CONTEXT/EXCERPT_KEYWORDS 로
-        // 실린다. nullable 인 채로 두는 것이 의미가 있다 — NULL 은 "이 행은 이 필드가 생기기 전에
-        // 등록됐다"이고, 빈 문자열은 "작성자가 비워 두기로 했다"이다. 둘 다 buildDocument() 에서
-        // 키를 싣지 않는 쪽으로 수렴하므로 동작은 같지만, 나중에 백필 대상을 고를 때 구분이 필요하다.
-        var enrichCols = jdbc.queryForList("PRAGMA table_info(curated_qa)");
-        if (enrichCols.stream().noneMatch(c -> "summary".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN summary TEXT");
-        }
-        if (enrichCols.stream().noneMatch(c -> "keywords".equals(c.get("name")))) {
-            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN keywords TEXT");
-        }
-        createIndexes();
-    }
-
-    /**
-     * User-submitted chunks (the 게시판 → admin approval path) have no originating chat turn, so
-     * {@code source_turn_id} must be nullable — which SQLite cannot express as an {@code ALTER}.
-     * Rebuilds the table once (guarded by the absence of the {@code origin} column) inside a single
-     * transaction: a crash mid-rebuild rolls back rather than leaving the table dropped. Existing
-     * rows are all {@link #ORIGIN_LIKE} by definition — the manual path didn't exist before this.
-     *
-     * <p>The {@code UNIQUE(source_turn_id)} constraint that keeps like→unlike→like idempotent
-     * ({@link #upsertActive}) becomes a <em>partial</em> index so the many NULLs of manual rows
-     * don't collide — see {@link #createIndexes()}.
-     */
-    private void migrateLegacySchema() {
-        jdbc.execute((ConnectionCallback<Void>) con -> {
-            boolean autoCommit = con.getAutoCommit();
-            con.setAutoCommit(false);
-            try (Statement st = con.createStatement()) {
-                st.executeUpdate("CREATE TABLE curated_qa_new " + CREATE_TABLE_BODY);
-                st.executeUpdate("""
-                        INSERT INTO curated_qa_new
-                            (id, source_turn_id, source_user_id, source_thread_id, question, answer,
-                             status, source_doc_version, created_at, updated_at, embed_status,
-                             origin, source_submission_id, tags, chunk_count)
-                        SELECT id, source_turn_id, source_user_id, source_thread_id, question, answer,
-                               status, source_doc_version, created_at, updated_at, embed_status,
-                               'like', NULL, NULL, 1
-                          FROM curated_qa
-                        """);
-                st.executeUpdate("DROP TABLE curated_qa");
-                st.executeUpdate("ALTER TABLE curated_qa_new RENAME TO curated_qa");
-                con.commit();
-                log.info("[CURATED] curated_qa 스키마 마이그레이션 완료 (source_turn_id nullable, origin 추가)");
-            } catch (SQLException e) {
-                con.rollback();
-                throw e;
-            } finally {
-                con.setAutoCommit(autoCommit);
-            }
-            return null;
-        });
-    }
-
-    /** Recreated after {@link #migrateLegacySchema()} too — {@code DROP TABLE} takes its indexes. */
-    private void createIndexes() {
-        // Partial: manual rows all carry source_turn_id IS NULL, and SQLite's plain UNIQUE index
-        // would already tolerate them (NULL != NULL), but the WHERE clause states the intent and
-        // keeps the index free of the NULL entries entirely.
-        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_curated_qa_turn " +
-                "ON curated_qa(source_turn_id) WHERE source_turn_id IS NOT NULL");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_status ON curated_qa(status)");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_submission " +
-                "ON curated_qa(source_submission_id) WHERE source_submission_id IS NOT NULL");
     }
 
     /**

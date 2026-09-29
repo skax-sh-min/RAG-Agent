@@ -1929,7 +1929,7 @@ app.llm.providers[8].concurrency=4
 - **요약 대상 자체도 무제한이 아닙니다**: 요약을 만들 때 읽어오는 원문(`MemoryService.getRecentTurns()`)은 `getHistory()`와 동일하게 `MEMORY_FETCH_LIMIT_TURNS`(기본 10턴)로 상한이 걸려 있습니다. 대화가 길어져도 매번 LLM에 보내는 요약용 입력 크기가 무한정 커지지 않도록 하기 위함이며, 이 턴 수보다 오래된 내용은 이 요약에서도 함께 유실됩니다(스레드를 다시 열었을 때 전체 메시지 버블을 복원하는 `MemoryService.getTurns()`는 이 제한과 무관하게 항상 전체를 반환합니다)
 - 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
-`conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
+`conversation_turns` 테이블 확장 컬럼 (앱 시작 시 Flyway 마이그레이션이 자동으로 추가):
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
@@ -2009,25 +2009,25 @@ Rename-Item data/memory.db memory.db.old
 Rename-Item data/vector.db memory.db
 ```
 
-> 옛 벡터 DB 파일을 처음 여는 기동에서 Flyway가 그 파일에 이력 테이블을 만들고 `<< Flyway Baseline >>`(버전 3) 한 줄을 남깁니다. 기존 테이블과 행은 건드리지 않습니다(`spring.flyway.baseline-version=3` — 이유는 아래 «Flyway»).
+> 옛 벡터 DB 파일을 처음 여는 기동에서 Flyway가 그 파일에 이력 테이블을 만들고 `<< Flyway Baseline >>`(버전 3) 한 줄을 남긴 뒤 V4 를 적용합니다. V4 는 빠진 테이블·컬럼·인덱스만 더하고 기존 행은 건드리지 않습니다(`spring.flyway.baseline-version=3` — 이유는 아래 «Flyway»).
 
 **운영 테이블** — 대화·계정·설정·레지스트리
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
-| `conversation_turns` | 대화 턴(질문·답변·토큰·프로바이더·피드백·응답모드·검색 스코프 태그·**검색 진단 수치**) | `SqliteMemoryRepository` (Flyway V1 + 방어적 `ALTER`) |
-| `turn_image_ref` | 턴별 답변 썸네일 이미지 참조(개별 제외는 `status`) | `SqliteMemoryRepository` |
-| `turn_source_ref` | 턴별 출처 청크 스냅샷 — 재사용 검증용 `chunk_hash` + 표시용 위치(`filename`/`page_or_slide`/`chapter_no`). 위치는 청크가 지워져 라이브 조인이 비었을 때만 쓰인다 | `QuestionReuseRepository` |
+| `conversation_turns` | 대화 턴(질문·답변·토큰·프로바이더·피드백·응답모드·검색 스코프 태그·**검색 진단 수치**) | Flyway V1·V4 |
+| `turn_image_ref` | 턴별 답변 썸네일 이미지 참조(개별 제외는 `status`) | Flyway V4 |
+| `turn_source_ref` | 턴별 출처 청크 스냅샷 — 재사용 검증용 `chunk_hash` + 표시용 위치(`filename`/`page_or_slide`/`chapter_no`). 위치는 청크가 지워져 라이브 조인이 비었을 때만 쓰인다 | Flyway V4 |
 | `thread_meta` | 대화 제목·버전·라우팅 모드·태그 | Flyway V1·V3 |
 | `image_descriptions` | Vision 이미지 설명 캐시 | Flyway V1 |
-| `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
+| `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | Flyway V4 |
 | `llm_usage` | 프로바이더별 일자별 토큰 사용량 | Flyway V1 |
-| `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | `CuratedQaRepository` |
-| `curated_submission` | 지식 제안 게시판 | `CuratedSubmissionRepository` |
-| `chunk_report` | 청크 오류 신고 대기열(사유·코멘트 + 신고 시점 원문·질문 스냅샷, §6.12) | `ChunkReportRepository` |
-| `settings_override` | `/settings` 핫 수정 오버라이드 | `SettingsOverrideRepository` |
-| `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 / `SqliteUserDetailsService` |
-| `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
+| `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | Flyway V4 |
+| `curated_submission` | 지식 제안 게시판 | Flyway V4 |
+| `chunk_report` | 청크 오류 신고 대기열(사유·코멘트 + 신고 시점 원문·질문 스냅샷, §6.12) | Flyway V4 |
+| `settings_override` | `/settings` 핫 수정 오버라이드 | Flyway V4 |
+| `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 |
+| `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | Flyway V4 |
 | `flyway_schema_history` | 마이그레이션 이력 | Flyway |
 
 **벡터·검색 색인 테이블** — 위 운영 테이블과 같은 파일
@@ -2043,11 +2043,11 @@ Rename-Item data/vector.db memory.db
 >
 > **왜 파일이 하나인가** — 예전 분리 스위치는 `DataSourceConfig`가 벡터용 `JdbcTemplate` 빈을 정의하는 바람에 Spring Boot의 기본 `JdbcTemplate`이 만들어지지 않아(`@ConditionalOnMissingBean(JdbcOperations.class)`), 운영 저장소까지 전부 벡터 파일에 쓰는 결과가 됐습니다. 분리의 목적(인덱싱 쓰기와 운영 쓰기의 락 분리)은 한 번도 이뤄진 적이 없고, 코드도 두 종류의 테이블을 한 쿼리로 조인하는 쪽으로 굳어졌습니다. 그래서 분리를 "제대로" 만드는 대신 파일을 하나로 합쳤습니다 — 실행 중 I/O는 원래도 한 파일·한 커넥션이었으므로 성능은 그대로입니다. 경위와 다시 나누려면 먼저 풀어야 할 것은 [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource).
 >
-> **Flyway** — 실데이터가 있는 그 파일에 적용되고 이력(`flyway_schema_history`)도 거기 남습니다. 옛 벡터 DB 파일처럼 테이블은 있는데 이력이 없는 파일은 첫 기동 때 버전 3으로 baseline 됩니다 — 그 파일의 테이블은 저장소들의 런타임 DDL로 만들어져 V1–V3의 내용이 이미 다 있고, baseline을 1로 두면 V2의 `CREATE TABLE users`가 `already exists`로 기동을 멈춥니다. 신규 컬럼은 여전히 Flyway가 아니라 런타임 `ALTER` 패턴으로 추가하는 것이 규약입니다([PLAN §13](PLAN.md#13-db-스키마-변경-요약)).
+> **Flyway** — 실데이터가 있는 그 파일에 적용되고 이력(`flyway_schema_history`)도 거기 남습니다. 옛 벡터 DB 파일처럼 테이블은 있는데 이력이 없는 파일은 첫 기동 때 버전 3으로 baseline 됩니다 — 그 파일의 테이블은 옛 버전 저장소들의 런타임 DDL로 만들어져 V1–V3의 내용이 이미 다 있고, baseline을 1로 두면 V2의 `CREATE TABLE users`가 `already exists`로 기동을 멈춥니다. baseline 뒤에는 V4 부터 평소처럼 적용됩니다. 신규 컬럼은 V5 이후의 Flyway 마이그레이션 파일로 추가하는 것이 규약입니다([PLAN §13](PLAN.md#13-db-스키마-변경-요약)).
 >
 > ⚠️ **Chroma 배포는 저장소가 둘입니다** — 벡터는 Chroma 서버, 레지스트리는 이 SQLite 파일. 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준이므로, 백업 시 Chroma 볼륨과 `data/`를 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
 >
-> **스키마는 기동 시 자동 정비됩니다** — 위 «생성 주체»에 Flyway로 적힌 테이블도 각 저장소가 런타임 `CREATE TABLE IF NOT EXISTS`를 함께 갖고 있고, Flyway 이후의 컬럼은 `@PostConstruct`의 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 옛 벡터 DB 파일이 Flyway 없이도 같은 스키마를 갖게 된 것이 이 때문입니다. 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
+> **스키마는 기동 시 자동 정비됩니다** — 운영 테이블은 전부 Flyway 마이그레이션이 만들고 고칩니다. 기동할 때 Flyway 가 아직 적용되지 않은 마이그레이션만 순서대로 적용하고, V4(`V4__Consolidate_runtime_schema`)는 옛 버전이 만든 DB 에 빠진 테이블·컬럼·인덱스만 더합니다(예전에는 각 저장소가 기동할 때마다 `CREATE TABLE IF NOT EXISTS`·`ALTER TABLE` 을 직접 실행했습니다). 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 기본값 또는 `NULL`). 기동 로그의 `[FLYWAY] V4 — 테이블 생성 […], 컬럼 추가 […]` 한 줄이 무엇을 더했는지 알려 줍니다. 검색 색인(`chunk_fts`·`chunk_fts_key`·`vec_*`)은 Flyway 가 아니라 위 표의 컴포넌트가 만듭니다. 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 

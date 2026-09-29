@@ -1,5 +1,6 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
@@ -31,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -93,11 +93,8 @@ class DocumentIndexerTest {
         vectorStore = mock(VectorStoreFacade.class);
 
         // Real DocRegistry backed by a temp SQLite file
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.sqlite.JDBC");
-        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("test.db"));
-        docRegistry = new DocRegistry(new JdbcTemplate(ds));
-        docRegistry.init();
+        JdbcTemplate jdbc = SqliteTestDatabase.open(tmpDir.resolve("test.db"));
+        docRegistry = new DocRegistry(jdbc);
 
         // Stub DocumentLoaderService — returns a single Document per call
         loaderService = mock(DocumentLoaderService.class);
@@ -149,7 +146,7 @@ class DocumentIndexerTest {
         when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
-        keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
+        keywordRepo = new KeywordSearchRepository(jdbc);
         keywordRepo.init();
 
         chunkSplitter = spy(new ChunkSplitter());
