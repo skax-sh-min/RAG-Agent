@@ -1984,6 +1984,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 
 DB 파일은 **하나**입니다 — `DATA_DIR/memory.db`. 운영 테이블(대화·계정·설정·레지스트리), 키워드 색인(`chunk_fts`, 두 백엔드 공통), sqlite-vec 백엔드의 벡터가 모두 이 파일, 한 커넥션 풀(pool=1)을 씁니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 이 파일에는 나머지만 남습니다.
 
+> 이 절은 운영에 필요한 테이블 목록입니다. 테이블별 컬럼·인덱스·관계와 벡터 저장 구조(메타데이터 키 포함)는 [DATABASE.md](DATABASE.md)에 있습니다.
+
 > ⚠️ **옛 `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 설정한 배포** — 예전에는 벡터 테이블을 별도 파일(예: `./data/vector.db`)로 "분리"하는 스위치였지만, 실제로는 **운영 테이블까지 전부 그 파일로 갔습니다**(`memory.db`에는 아무것도 쌓이지 않았습니다). 그래서 sqlite-vec 백엔드에서 이 값이 있으면 앱은 지금도 **그 파일을 유일한 DB로** 엽니다 — 설정을 바꾸지 않아도 데이터가 그대로 보이고, 기동 로그의 `[DB]` 경고가 그 상태를 알려 줍니다. (Chroma 백엔드에서는 예전처럼 이 값을 무시합니다.)
 >
 > **이 값만 지우면 안 됩니다** — 앱이 `memory.db`를 열어 계정·대화·설정·문서 목록이 사라진 것처럼 보입니다(데이터는 그 파일에 그대로 있습니다). 파일 이름까지 정리하려면 아래 순서를 따르세요.
@@ -2035,6 +2037,7 @@ Rename-Item data/vector.db memory.db
 | `vec_embeddings` | vec0 가상 테이블 — 임베딩 벡터(`FLOAT[app.embedding.dimensions]`) | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
 | `vec_document_chunks` | 청크 원문 + JSON 메타데이터. `spring_doc_id`로 위 테이블과 JOIN | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
 | `chunk_fts` | FTS5(trigram) 키워드 색인 — 하이브리드 검색의 BM25 축 | `KeywordSearchRepository` (**백엔드 무관, 항상 생성**) |
+| `chunk_fts_key` | `chunk_fts`의 짝인 일반 테이블 — 청크 id → FTS 행(`rowid`), 위치, 본문 해시. FTS5는 청크 id 컬럼에 인덱스를 걸 수 없어서, 청크 id로 FTS 행을 찾는 조회는 전부 이 테이블을 거칩니다. `chunk_fts`와 한 트랜잭션에서 함께 쓰고 지웁니다 | `KeywordSearchRepository` (**백엔드 무관, 항상 생성**) |
 
 > 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
 >

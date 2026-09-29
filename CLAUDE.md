@@ -4,6 +4,7 @@
 > 각 항목의 **결정 근거 · 함정 · 실패 기록**은 [documents/PITFALLS.md](documents/PITFALLS.md) 에 있고,
 > `↗` 링크가 해당 항목으로 바로 간다. **그 파일들을 고치기 전에는 링크를 따라가 읽을 것** —
 > 대부분이 실제로 한 번 깨졌던 것의 기록이라, 불필요해 보이는 코드가 왜 거기 있는지를 설명한다.
+> 테이블·컬럼·벡터 메타데이터 키는 [documents/DATABASE.md](documents/DATABASE.md) 에 있다 — 스키마나 메타데이터 키를 바꾸면 그 표도 함께 고칠 것.
 
 ## Stack
 
