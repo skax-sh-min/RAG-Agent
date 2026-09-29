@@ -415,7 +415,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    → excerpt_keywords 메타데이터 추가
   │    → chunk_context 메타데이터 추가 ("{파일명} > {heading}" 구조적 맥락 + LLM 1~2문장,
   │      LLM 실패 또는 배치 응답 파싱 실패 시 해당 청크(들)만 구조적 맥락만으로 폴백(TF 추출) —
-  │      임베딩/FTS 입력 전용, 영속 저장 안 함)
+  │      임베딩/FTS 입력 앞에 붙는다. 메타데이터로 영속 저장되어 /admin 청크 편집에서 확인·수정 가능)
   │
   ├─ 임베딩 입력 구성 = chunk_context + 정규화(원문) (§10.1-보완 — 마크다운 장식 제거)
   │    청크당 1회만 계산해 재사용(§10.8.5) — 벡터 스토어 저장과 FTS 인덱싱이 같은 결과를 공유

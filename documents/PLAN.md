@@ -962,6 +962,8 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 > ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않았다** (2026-09-04 확인 → 2026-09-28 해소): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어졌고(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용됐다. **Step 5.10 환원으로 DB 파일이 하나가 되어 Flyway 는 다시 실데이터 파일에 적용된다.** 이력 없이 런타임 DDL 로 만들어진 옛 벡터 DB 파일은 `spring.flyway.baseline-version=3` 으로 시작한다 — 1 이면 V2 의 `CREATE TABLE users`(`IF NOT EXISTS` 없음)가 `already exists` 로 기동을 멈춘다(`FlywayBaselineTest` 가 실제 설정값으로 고정). 아래 런타임 `ALTER` 패턴은 다시 "유일하게 동작하는 방법"이 아니라 **규약**이다.
 >
 > **신규 컬럼 추가 지침**: Flyway는 `V1__baseline`+`V2__users` 두 개만 존재하고, 그 이후 컬럼/인덱스(`user_id`, 피드백 컬럼 등)는 전부 **런타임 멱등 DDL**(`SqliteMemoryRepository`/`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 추가돼 왔다. **신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가**하는 것이 현재 코드와 정합적이다(멱등, 프리릴리즈 정책과도 부합). sqlite-vec 쪽 스키마(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)도 동일하게 Flyway가 아니라 `SqliteVecSchemaInitializer`의 동적 DDL(차원 파라미터화)로 관리된다.
+>
+> **테이블·컬럼·메타데이터 키를 추가하면 [DATABASE.md](DATABASE.md)의 해당 표도 함께 고친다** (2026-09-29 신설 — 테이블별 컬럼·인덱스·관계와 벡터 저장 구조 레퍼런스).
 
 ---
 
