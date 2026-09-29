@@ -2,8 +2,6 @@ package com.example.ragagent.repository;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.service.HistoryPolicy;
-import jakarta.annotation.PostConstruct;
-import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -66,80 +64,6 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
         this.fetchLimit = props.memorySafe().fetchLimitTurns();
-    }
-
-    @PostConstruct
-    void init() {
-        // WAL mode allows concurrent reads while one writer is active
-        jdbc.execute("PRAGMA journal_mode=WAL");
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS conversation_turns (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    thread_id  TEXT NOT NULL,
-                    question   TEXT NOT NULL,
-                    answer     TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """);
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_thread_id ON conversation_turns(thread_id)");
-        // Add metadata columns (ALTER TABLE fails silently if column already exists)
-        for (String ddl : List.of(
-                "ALTER TABLE conversation_turns ADD COLUMN asked_at TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN input_tokens INTEGER DEFAULT 0",
-                "ALTER TABLE conversation_turns ADD COLUMN output_tokens INTEGER DEFAULT 0",
-                "ALTER TABLE conversation_turns ADD COLUMN elapsed_ms INTEGER DEFAULT 0",
-                "ALTER TABLE conversation_turns ADD COLUMN provider TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN llm_calls INTEGER DEFAULT 0",
-                "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'",
-                "ALTER TABLE conversation_turns ADD COLUMN feedback TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT",
-            "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER",
-            "ALTER TABLE conversation_turns ADD COLUMN direct_mode INTEGER NOT NULL DEFAULT 0",
-            // 3단계 — 그 턴의 출처별 검색 진단 수치 + 응답 참여도를 JSON 배열로 보관한다.
-            // 정규화 테이블 대신 blob 하나인 이유: 읽는 쪽이 /admin 진단 패널 하나뿐이고 항상
-            // "턴 하나의 출처 전부"를 통째로 꺼내므로 조인할 이유가 없다. 스키마도 SourceRef를
-            // 따라가야 하는데(필드가 늘어날 수 있다) 컬럼으로 고정하면 그때마다 마이그레이션이다.
-            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT",
-            // 답변 검증 결과(VerificationSnapshot) JSON — 대화 기록의 검증 배지가 새로고침 후에도
-            // 남으려면 저장돼 있어야 한다. NULL 은 "검증 기록 없음"이고, 이 컬럼 이전의 모든
-            // 턴과 meta/Direct·S 턴이 그렇다 — 그 경우 배지를 띄우지 않는 예전 동작 그대로다.
-            "ALTER TABLE conversation_turns ADD COLUMN verification TEXT"
-        )) {
-            try { jdbc.execute(ddl); } catch (Exception ignored) {}
-        }
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_turns_user_thread ON conversation_turns(user_id, thread_id)");
-            jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_turns_reused_from ON conversation_turns(reused_from_turn_id)");
-            jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS turn_image_ref (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    turn_id    INTEGER NOT NULL,
-                    user_id    TEXT NOT NULL,
-                    thread_id  TEXT NOT NULL,
-                    image_ref  TEXT NOT NULL,
-                    status     TEXT NOT NULL DEFAULT 'active',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """);
-            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_turn ON turn_image_ref(turn_id)");
-            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_user_thread ON turn_image_ref(user_id, thread_id)");
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS image_descriptions (
-                    image_path  TEXT    PRIMARY KEY,
-                    description TEXT    NOT NULL,
-                    image_type  TEXT,
-                    provider    TEXT,
-                    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-                )
-                """);
-        try {
-            jdbc.execute("ALTER TABLE image_descriptions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
-        } catch (Exception ignored) {}
-        jdbc.execute(
-                "CREATE INDEX IF NOT EXISTS idx_img_user ON image_descriptions(user_id)");
     }
 
     @Override
@@ -228,11 +152,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
-        try {
-            jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
-        } catch (DataAccessException e) {
-            if (!isMissingTurnSourceRef(e)) throw e;
-        }
+        jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
     }
@@ -243,12 +163,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // conversation_turns row goes last so a failure part-way through can only leave orphaned
         // child rows (invisible to every read path, all of which start from conversation_turns),
         // never a turn whose sources have silently vanished.
-        try {
-            jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
-                    userId, threadId, turnId);
-        } catch (DataAccessException e) {
-            if (!isMissingTurnSourceRef(e)) throw e;
-        }
+        jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
+                userId, threadId, turnId);
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                 userId, threadId, turnId);
         int removed = jdbc.update(
@@ -256,26 +172,6 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 userId, threadId, turnId);
         return removed > 0;
     }
-
-    /**
-     * {@code turn_source_ref} belongs to {@code QuestionReuseRepository} (§6.23 runtime DDL), not to
-     * this repository. A context that never ran that init — an isolated repository test — has no such
-     * table, and then there is nothing to delete either; anything else must still surface.
-     *
-     * <p><b>Catch {@link DataAccessException}, not {@code BadSqlGrammarException}.</b> Spring ships no
-     * error-code mapping for SQLite, so a missing table arrives as a bare {@code SQLITE_ERROR}
-     * (code 1) and is translated to {@code UncategorizedSQLException}. This guard originally caught
-     * only {@code BadSqlGrammarException}, so it never actually applied and the four {@code deleteTurn}
-     * tests failed on the very case the guard was written for.
-     *
-     * <p>The message is read off {@code getMostSpecificCause()} — the wrapper's own text varies with
-     * the translation path, the underlying driver's does not.
-     */
-    private static boolean isMissingTurnSourceRef(DataAccessException e) {
-        String msg = e.getMostSpecificCause().getMessage();
-        return msg != null && msg.contains("no such table") && msg.contains("turn_source_ref");
-    }
-
 
     @Override
     public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
@@ -394,11 +290,6 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public List<MetricsRow> findRecentRetrievalMetrics(String userId, String threadId,
                                                        int offset, int limit) {
-        // Reads thread_meta, which ThreadMetaRepository owns — the same cross-repository reach
-        // clearHistory() already makes for turn_source_ref. Both tables are created by a
-        // @PostConstruct that always runs, so the only context lacking one is an isolated
-        // repository test, which inits the owner explicitly rather than copying its DDL.
-        //
         // LEFT JOIN, not JOIN: a turn whose thread_meta row is gone (see ThreadAdminRepository's
         // orphan count) must still appear here — its diagnostics are as valid as any other's, and
         // dropping it would make the panel silently disagree with its own "전체 N턴" badge.

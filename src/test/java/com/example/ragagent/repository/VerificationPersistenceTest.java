@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.service.MemoryService;
@@ -8,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,8 +26,8 @@ import static org.mockito.Mockito.when;
  * 사용자는 "문서 밖 이름" 경고를 본 뒤 새로고침 한 번으로 그것을 잃는데, C 모드에서 그 값은
  * 안전 신호다 — §6.24 Step 1-d 가 답변 본문에 대해 닫은 것과 같은 종류의 불일치다.
  *
- * <p>실제 SQLite 에 쓰고 읽는다. 진짜 컬럼(방어적 {@code ALTER TABLE})과 JSON 왕복이 이 기능의
- * 전부라, 목킹하면 검증되는 것이 없다.
+ * <p>실제 SQLite 에 쓰고 읽는다. 진짜 컬럼(Flyway 마이그레이션이 만든 {@code verification})과 JSON 왕복이
+ * 이 기능의 전부라, 목킹하면 검증되는 것이 없다.
  */
 class VerificationPersistenceTest {
 
@@ -38,13 +38,12 @@ class VerificationPersistenceTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-verification-", ".db");
-        JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:sqlite:" + dbFile));
+        JdbcTemplate jdbc = SqliteTestDatabase.open(dbFile);
         AppProperties props = mock(AppProperties.class);
         when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, false));
         repo = new SqliteMemoryRepository(jdbc, props);
-        repo.init();
         service = new MemoryService(repo, props);
     }
 

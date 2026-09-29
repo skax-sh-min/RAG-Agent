@@ -1,7 +1,6 @@
 package com.example.ragagent.repository;
 
 import com.example.ragagent.model.ResponseMode;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -14,6 +13,20 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * 질문 재사용 — 추천 후보 조회, 재사용 검증 재료, 그리고 턴마다 출처 청크를 떠 두는 {@code turn_source_ref}.
+ *
+ * <p>{@code turn_source_ref} 컬럼 중 둘은 코드만 봐서는 이유가 보이지 않는다:
+ * <ul>
+ *   <li>{@code invalidated_at} — 배지에는 쓰지 않지만 "언제부터 이 답변이 낡았나"는 사후 조사에서 가장 먼저
+ *       묻는 값이고, 상태가 바뀌는 순간에만 알 수 있어 그때 남기지 않으면 복구할 수 없다.</li>
+ *   <li>{@code hidden_at} 이 {@code status} 와 따로인 이유 — {@code status}(active/deleted/modified)는
+ *       "청크가 그 뒤 바뀌었나"라는 사실 관측이고 재사용 검증이 그 값에 의존한다. "현재 대화에서 이 청크 제거"는
+ *       표시 취향이라, 같은 컬럼에 섞으면 화면에서 치웠다는 이유만으로 재사용 판정이 달라진다.</li>
+ * </ul>
+ * 위치 스냅샷({@code filename}/{@code page_or_slide}/{@code chapter_no})과 {@code answer_share} 의 규칙은 그
+ * 값을 읽는 {@link #findSourcePreviewRows} 와 {@code QuestionReuseService.validateTurn()} 에 있다.
+ */
 @Repository
 public class QuestionReuseRepository {
 
@@ -139,56 +152,6 @@ public class QuestionReuseRepository {
                                    @Qualifier("vectorJdbcTemplate") JdbcTemplate vectorJdbc) {
         this.jdbc = jdbc;
         this.vectorJdbc = vectorJdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS turn_source_ref (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    turn_id     INTEGER NOT NULL,
-                    user_id     TEXT NOT NULL,
-                    thread_id   TEXT NOT NULL,
-                    chunk_id    TEXT NOT NULL,
-                    doc_id      TEXT,
-                    chunk_hash  TEXT NOT NULL,
-                    status      TEXT NOT NULL DEFAULT 'active',
-                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """);
-        // 응답 참여도(§2단계 AnswerAttribution)를 스냅샷과 함께 보관 — 기존 테이블에는 없으므로
-        // 방어적 ALTER (conversation_turns.response_mode 선례). 구 행은 NULL로 남고, 그 경우
-        // QuestionReuseService.validateTurn()이 예전처럼 전체 출처를 검증 대상으로 삼는다.
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN answer_share REAL");
-        } catch (Exception ignored) { /* already present */ }
-        // 무효화 시각 — 배지 자체에는 안 쓰지만, "언제부터 이 답변이 낡았나"는 사후 조사에서
-        // 가장 먼저 묻는 값이고 상태 전이 시점에만 알 수 있어 지금 남겨두지 않으면 복구 불가다.
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN invalidated_at TEXT");
-        } catch (Exception ignored) { /* already present */ }
-        // 사용자가 "현재 대화에서 이 청크 제거"로 직접 숨긴 시각. status와 별도 컬럼인 이유:
-        // status(active/deleted/modified)는 "청크가 그 뒤 바뀌었나"라는 사실 관측이고 재사용
-        // 검증이 그 값에 의존한다. 여기 숨김은 사실 관측이 아니라 표시 취향이라, 같은 컬럼에
-        // 섞으면 화면에서 치웠다는 이유만으로 재사용 판정이 달라진다(§ 표시 전용).
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN hidden_at TEXT");
-        } catch (Exception ignored) { /* already present */ }
-        // 출처를 화면에 그릴 때 쓰는 위치 — 파일명·페이지·챕터. 이 테이블은 청크 id 와 해시만
-        // 스냅샷하고 위치는 chunk_fts_key/vec_document_chunks 를 라이브 조인해 가져왔는데, 청크가
-        // 지워지면 그 조인이 비어 파일명 자리에 16진 doc_id 가, 페이지 자리에 아무것도 남지
-        // 않았다. 해시를 "그때 그 청크였나"를 답하려고 떠 두는 것과 같은 이유로 위치도 떠 둔다.
-        // 라이브 값이 언제나 우선이다(findSourcePreviewRows 의 COALESCE 순서) — 청크가 살아 있는데
-        // 재인덱싱으로 페이지가 바뀌었다면 지금 위치가 사실이고, 스냅샷은 그것이 없을 때의 폴백이다.
-        // 구 행은 NULL 로 남고 backfill 은 불가능하다(청크가 이미 없다) — 앞으로 저장되는 턴부터
-        // 나아진다.
-        for (String column : new String[]{"filename TEXT", "page_or_slide TEXT", "chapter_no TEXT"}) {
-            try {
-                jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN " + column);
-            } catch (Exception ignored) { /* already present */ }
-        }
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_turn ON turn_source_ref(turn_id)");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_chunk ON turn_source_ref(chunk_id)");
     }
 
     public void saveTurnSourceRefs(long turnId, String userId, String threadId, List<SourceSnapshot> refs) {

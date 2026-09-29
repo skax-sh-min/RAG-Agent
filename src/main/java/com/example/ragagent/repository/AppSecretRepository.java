@@ -1,6 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -17,9 +16,9 @@ import java.util.List;
  * <p>Currently holds only the guest-identity HMAC key. Persistence is the whole point: a per-boot
  * random key would re-hash every visitor on restart, orphaning their entire chat history.
  *
- * <p>Lives in the app's single SQLite file ({@code memory.db} — see {@code DataSourceConfig}) and uses the same
- * idempotent {@code CREATE TABLE IF NOT EXISTS} + raw {@link JdbcTemplate} pattern as
- * {@link SettingsOverrideRepository} (SQLite is incompatible with JPA).
+ * <p>Lives in the app's single SQLite file ({@code memory.db} — see {@code DataSourceConfig}); raw
+ * {@link JdbcTemplate} like {@link SettingsOverrideRepository}, and the table comes from the Flyway
+ * migrations (db/migration).
  */
 @Repository
 public class AppSecretRepository {
@@ -30,17 +29,6 @@ public class AppSecretRepository {
 
     public AppSecretRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS app_secret (
-                    name       TEXT NOT NULL PRIMARY KEY,
-                    value      TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """);
     }
 
     /**

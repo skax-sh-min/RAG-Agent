@@ -23,20 +23,20 @@
 
 DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥션 풀 1). 벡터 백엔드(`app.vectorstore.type`)가 `sqlite-vec`이면 벡터까지 이 파일에 있고, `chroma`이면 벡터만 Chroma 서버에 있습니다.
 
-| 테이블 | 한 행 = | 분류 | 만드는 곳 |
+| 테이블 | 한 행 = | 분류 | 스키마 / 쓰는 곳 |
 |---|---|---|---|
-| `conversation_turns` | 질문·답변 한 턴 | 대화 | `SqliteMemoryRepository` (Flyway V1 + 런타임 `ALTER`) |
-| `thread_meta` | 대화 하나 | 대화 | `ThreadMetaRepository` (Flyway V1·V3) |
-| `turn_source_ref` | 한 턴의 출처 청크 하나 | 대화 | `QuestionReuseRepository` |
-| `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | `SqliteMemoryRepository` |
-| `image_descriptions` | 이미지 하나의 Vision 설명(캐시) | 대화 | `SqliteMemoryRepository` (Flyway V1) |
-| `doc_registry` | 인덱싱된 문서 하나 | 문서 | `DocRegistry` |
-| `curated_qa` | 큐레이션 Q&A 한 건 (벡터는 N개) | 큐레이션 | `CuratedQaRepository` |
-| `curated_submission` | 지식 제안 한 건 | 큐레이션 | `CuratedSubmissionRepository` |
-| `chunk_report` | 청크 오류 신고 한 건 | 큐레이션 | `ChunkReportRepository` |
-| `llm_usage` | (프로바이더, 날짜)별 사용량 | 운영 | `LlmUsageRepository` (Flyway V1) |
-| `settings_override` | `/settings` 오버라이드 키 하나 | 운영 | `SettingsOverrideRepository` |
-| `app_secret` | 서버 비밀값 하나 | 운영 | `AppSecretRepository` |
+| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4 / `SqliteMemoryRepository` |
+| `thread_meta` | 대화 하나 | 대화 | Flyway V1·V3 / `ThreadMetaRepository` |
+| `turn_source_ref` | 한 턴의 출처 청크 하나 | 대화 | Flyway V4 / `QuestionReuseRepository` |
+| `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | Flyway V4 / `SqliteMemoryRepository` |
+| `image_descriptions` | 이미지 하나의 Vision 설명(캐시) | 대화 | Flyway V1 / `SqliteMemoryRepository` |
+| `doc_registry` | 인덱싱된 문서 하나 | 문서 | Flyway V4 / `DocRegistry` |
+| `curated_qa` | 큐레이션 Q&A 한 건 (벡터는 N개) | 큐레이션 | Flyway V4 / `CuratedQaRepository` |
+| `curated_submission` | 지식 제안 한 건 | 큐레이션 | Flyway V4 / `CuratedSubmissionRepository` |
+| `chunk_report` | 청크 오류 신고 한 건 | 큐레이션 | Flyway V4 / `ChunkReportRepository` |
+| `llm_usage` | (프로바이더, 날짜)별 사용량 | 운영 | Flyway V1 / `LlmUsageRepository` |
+| `settings_override` | `/settings` 오버라이드 키 하나 | 운영 | Flyway V4 / `SettingsOverrideRepository` |
+| `app_secret` | 서버 비밀값 하나 | 운영 | Flyway V4 / `AppSecretRepository` |
 | `users` | 계정 하나 | 계정 | Flyway V2 / `SqliteUserDetailsService` |
 | `persistent_logins` | remember-me 토큰 (현재 미사용) | 계정 | Flyway V2 / `SqliteUserDetailsService` |
 | `flyway_schema_history` | 마이그레이션 한 건 | 시스템 | Flyway |
@@ -51,14 +51,14 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ## 2. 공통 규약
 
-### 2.1 스키마는 코드가 만든다 — Flyway 파일만 보면 안 된다
+### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- Flyway 마이그레이션은 `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) 셋뿐이고, 테이블의 **처음 모양**만 담습니다.
-- 나머지 테이블과 그 뒤에 생긴 컬럼은 각 저장소 클래스가 기동할 때(`@PostConstruct`) 만듭니다 — `CREATE TABLE IF NOT EXISTS` 다음에 방어적 `ALTER TABLE … ADD COLUMN`(이미 있으면 오류를 삼킴). 예를 들어 `conversation_turns`는 V1에 컬럼 12개로 정의돼 있지만 실제로는 19개입니다.
-- 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다.
-- 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(옛 스키마면 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경, 한 트랜잭션), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
-- Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 런타임 DDL로 만들어진 파일을 버전 3으로 baseline합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
-- **새 컬럼은 런타임 `ALTER` 패턴으로 추가합니다**([PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — 그리고 이 문서의 표도 함께 고칩니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
+- 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
+- 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
+- Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 옛 런타임 DDL로 만들어진 파일을 버전 3으로 baseline한 뒤 V4 부터 적용합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
+- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V4)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
 
 ### 2.2 외래 키가 없다
 
@@ -378,7 +378,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 6.5 `flyway_schema_history`
 
-Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V3 적용 기록이, 런타임 DDL로 만들어진 옛 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
+Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V4 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
 
 ---
 
@@ -592,4 +592,4 @@ EOF
 
 `vec_embeddings`는 vec0 확장이 없으면 조회할 수 없어 오류만 찍힙니다(§8.2).
 
-**이 문서를 고쳐야 할 때** — 테이블이나 컬럼을 추가했을 때(런타임 `ALTER`), 메타데이터 키를 추가했을 때, 벡터·FTS 스키마를 바꿨을 때. 위 스크립트로 실제 DB와 대조한 뒤 해당 표를 고치고, 맨 위의 기준 날짜를 갱신하세요.
+**이 문서를 고쳐야 할 때** — 테이블이나 컬럼을 추가했을 때(새 Flyway 마이그레이션), 메타데이터 키를 추가했을 때, 벡터·FTS 스키마를 바꿨을 때. 위 스크립트로 실제 DB와 대조한 뒤 해당 표를 고치고, 맨 위의 기준 날짜를 갱신하세요.

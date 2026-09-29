@@ -1,10 +1,9 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.SqliteTestDatabase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -20,13 +19,9 @@ class DocRegistryTest {
     @TempDir
     Path tmpDir;
 
+    /** 같은 파일을 다시 열면 앞선 호출의 데이터가 그대로 보인다(재기동 흉내). */
     private DocRegistry buildRegistry() {
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.sqlite.JDBC");
-        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("test.db"));
-        DocRegistry reg = new DocRegistry(new JdbcTemplate(ds));
-        reg.init();
-        return reg;
+        return new DocRegistry(SqliteTestDatabase.open(tmpDir.resolve("test.db")));
     }
 
     private DocRegistry.DocRegistryEntry entry(String sha, String version) {
@@ -191,19 +186,6 @@ class DocRegistryTest {
                     .as("두 번째 실행은 채울 행이 없어야 한다").isZero();
             assertThat(reg.findByDocId("doc_legacy", "anonymous").orElseThrow().chunkOverlap())
                     .isEqualTo(100);
-        }
-
-        @Test
-        @DisplayName("init()을 다시 실행해도 컬럼 추가가 실패하지 않는다 (재기동 안전)")
-        void initIsRerunnable() {
-            DocRegistry reg = buildRegistry();
-            reg.put("doc_a", "anonymous", new DocRegistry.DocRegistryEntry(
-                    "sha", "v1", "2026-01-01T00:00:00Z", 3, List.of("id1"), List.of(), 42));
-
-            reg.init();   // 두 번째 기동 — ALTER TABLE은 이미 컬럼이 있어 무시되어야 한다
-
-            assertThat(reg.findByDocId("doc_a", "anonymous").orElseThrow().chunkOverlap())
-                    .isEqualTo(42);
         }
     }
 

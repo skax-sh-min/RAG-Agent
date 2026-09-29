@@ -1,12 +1,12 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,21 +39,9 @@ class QuestionReuseModeFilterTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-reuse-mode-", ".db");
-        DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        jdbc = new JdbcTemplate(ds);
-        jdbc.execute("""
-                CREATE TABLE conversation_turns (
-                    id INTEGER PRIMARY KEY, user_id TEXT, thread_id TEXT,
-                    question TEXT, answer TEXT, created_at TEXT,
-                    feedback TEXT, response_mode TEXT, direct_mode INTEGER,
-                    reused_from_turn_id INTEGER, selected_tags TEXT)
-                """);
-        jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
-        jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
-                + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
-        jdbc.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT, content TEXT, metadata TEXT)");
+        jdbc = SqliteTestDatabase.open(dbFile);
+        SqliteTestDatabase.createSearchIndexTables(jdbc);
         repo = new QuestionReuseRepository(jdbc, jdbc);
-        repo.init();
     }
 
     @AfterEach

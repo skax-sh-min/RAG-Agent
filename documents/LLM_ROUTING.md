@@ -458,7 +458,8 @@ findFirst(role, priority 오름차순 순회)
 ## 7. 사용량 추적 (SQLite — memory.db 공유)
 
 ```sql
-CREATE TABLE IF NOT EXISTS llm_usage (
+-- Flyway V1__baseline.sql (user_id 는 아래 설명 때문에 생략)
+CREATE TABLE llm_usage (
     provider_name  TEXT    NOT NULL,
     usage_date     TEXT    NOT NULL,   -- 'YYYY-MM-DD'
     input_tokens   INTEGER NOT NULL DEFAULT 0,
@@ -468,7 +469,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 ```
 
-> 실제 테이블에는 방어적 `ALTER TABLE`로 추가된 `user_id TEXT NOT NULL DEFAULT 'anonymous'` 컬럼이 하나 더 있다. **읽거나 쓰는 코드가 없어 모든 행이 기본값 그대로**이며(§6.5 사용자별 쿼터를 대비해 넣었으나, 권장 설계는 `conversation_turns.user_id`에서 집계하는 쪽이라 그대로 죽은 채 남을 수 있다), 그래서 위 DDL에서 뺐다 — 집계 쿼리는 이 컬럼을 보지 않는다.
+> 실제 테이블에는 `user_id TEXT NOT NULL DEFAULT 'anonymous'` 컬럼이 하나 더 있다(V1 부터 — 예전엔 저장소의 런타임 `ALTER TABLE`도 같은 컬럼을 더했다). **읽거나 쓰는 코드가 없어 모든 행이 기본값 그대로**이며(§6.5 사용자별 쿼터를 대비해 넣었으나, 권장 설계는 `conversation_turns.user_id`에서 집계하는 쪽이라 그대로 죽은 채 남을 수 있다), 그래서 위 DDL에서 뺐다 — 집계 쿼리는 이 컬럼을 보지 않는다.
 
 모니터링: `GET /api/v1/llm/usage` (일간·주간·월간), `GET /api/v1/llm/usage/history?days=N` (Chart.js용)
 

@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.ingestion.KeywordSearchRepository;
 import com.example.ragagent.ingestion.SearchTextBuilder;
 import com.example.ragagent.model.MetaKey;
@@ -9,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -38,19 +38,14 @@ class QuestionReuseChunkLookupTest {
 
     @BeforeEach
     void setUp() {
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.sqlite.JDBC");
-        ds.setUrl("jdbc:sqlite:" + tmp.resolve("lookup.db"));
-        jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT)");
-        jdbc.update("INSERT INTO conversation_turns (id, user_id) VALUES (7, 'u1')");
+        jdbc = SqliteTestDatabase.open(tmp.resolve("lookup.db"));
+        jdbc.update("INSERT INTO conversation_turns (id, user_id, thread_id, question, answer) VALUES (7, 'u1', 't1', 'q', 'a')");
 
         fts = new KeywordSearchRepository(jdbc);
         // init() 은 패키지 전용 — 운영 부트스트랩(@PostConstruct)과 같은 진입점을 그대로 쓴다.
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(fts, "init");
         assumeTrue(fts.isAvailable(), "FTS5 not available in this SQLite build");
         repo = new QuestionReuseRepository(jdbc, jdbc);
-        repo.init();
 
         c1 = chunk("c1", "D1", 0, "3", "1.2", "결제 오류 코드 ERR4521 발생 시 재시도");
         c2 = chunk("c2", "D1", 1, "4", "1.3", "로그인 화면 사용법 안내");
@@ -123,7 +118,6 @@ class QuestionReuseChunkLookupTest {
     @DisplayName("신고 스냅샷(ChunkReportRepository.findChunkLocation) — 같은 키 경로로 위치와 검색 텍스트를 읽는다")
     void chunkReportLocation_viaKeyRowid() {
         ChunkReportRepository reports = new ChunkReportRepository(jdbc, jdbc);
-        reports.init();
 
         Optional<ChunkReportRepository.ChunkLocation> loc = reports.findChunkLocation("c1");
 

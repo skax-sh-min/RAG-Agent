@@ -32,8 +32,8 @@ import java.util.List;
  * 데이터를 옮겨야 했고, 얻는 것은 측정된 적 없는 락 분리였다. 그래서 파일을 하나로 합쳤다 — 실행 중 I/O 는
  * 이미 한 파일·한 커넥션이었으므로 성능은 그대로다.
  *
- * <p>The data directory is created here, before HikariCP opens the file: the repositories'
- * {@code @PostConstruct} DDL runs before anything else (RagService) would create it.
+ * <p>The data directory is created here, before HikariCP opens the file: Flyway migrates the file
+ * during context startup, before anything else (RagService) would create the directory.
  */
 @Configuration
 public class DataSourceConfig {

@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.service.HistoryPolicy;
 import org.junit.jupiter.api.AfterEach;
@@ -7,7 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,11 +42,10 @@ class DirectHistoryFallbackTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-direct-history-", ".db");
-        jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:sqlite:" + dbFile));
+        jdbc = SqliteTestDatabase.open(dbFile);
         AppProperties props = mock(AppProperties.class);
         when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
         repo = new SqliteMemoryRepository(jdbc, props);
-        repo.init();
     }
 
     @AfterEach

@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.service.QuestionReuseService;
@@ -8,8 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,17 +36,11 @@ class QuestionReusePositionSnapshotTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-position-snapshot-", ".db");
-        DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT, reused_from_turn_id INTEGER)");
-        jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
-        jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
-                + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
-        jdbc.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT, content TEXT, metadata TEXT)");
-        jdbc.update("INSERT INTO conversation_turns (id, user_id) VALUES (7, 'u1')");
-        jdbc.update("INSERT INTO conversation_turns (id, user_id) VALUES (8, 'u1')");
+        jdbc = SqliteTestDatabase.open(dbFile);
+        SqliteTestDatabase.createSearchIndexTables(jdbc);
+        jdbc.update("INSERT INTO conversation_turns (id, user_id, thread_id, question, answer) VALUES (7, 'u1', 't1', 'q', 'a')");
+        jdbc.update("INSERT INTO conversation_turns (id, user_id, thread_id, question, answer) VALUES (8, 'u1', 't1', 'q', 'a')");
         repo = new QuestionReuseRepository(jdbc, jdbc);
-        repo.init();
     }
 
     @AfterEach
@@ -121,7 +114,6 @@ class QuestionReusePositionSnapshotTest {
         // 없는 filename 컬럼을 조회해 이 경로의 대화 열기(GET /chat/{threadId})를 500 으로 만들었는데,
         // 서비스 테스트가 그 메서드를 목으로 대신해 SQL 이 한 번도 실행되지 않았다.
         DocRegistry registry = new DocRegistry(jdbc);
-        ReflectionTestUtils.invokeMethod(registry, "init");
         repo.saveTurnSourceRefs(7L, "u1", "t1", List.of(
                 new QuestionReuseRepository.SourceSnapshot("c1", "설계문서.pdf_ab12cd34", "h1", 0.5, "active")));
         repo.markSourceRefsStaleByChunkIds(List.of("c1"), SourceRef.STALE_DELETED);

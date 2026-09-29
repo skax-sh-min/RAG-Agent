@@ -64,7 +64,7 @@
 
 > 검색 고도화 **Phase 7-D**(sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 재검토에서 범위 제외(사유·재개 신호는 §10.5) — Phase 7의 유일한 미착수였던 항목.
 >
-> 스키마 관리: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용** — 신규 컬럼은 새 Flyway 파일이 아니라 런타임 `ALTER TABLE ADD COLUMN` 패턴으로 추가한다(§13).
+> 스키마 관리: **운영 테이블은 Flyway 로 일원화**(2026-09-29, V4) — 신규 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가한다. 저장소의 런타임 DDL 은 없어졌다(§13).
 
 ---
 
@@ -497,7 +497,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 ### 6.20 사용자별 LLM 사용량 쿼터 🔵 미착수 — 멀티유저 활성화 시 후속 (우선순위 2)
 
 **현재 코드 확인 (2026-07-04 재확인)**:
-- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
+- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(Flyway V1 — 당시엔 `LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`도 있었다, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
 - 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
 - `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
 
@@ -840,7 +840,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 **작업 단계**
 
 - **0단계 (선행, 독립 커밋 가능)** — `fragments/message-assistant.html` 의 출처 `<li>` 를 `.source-item` 래퍼 + `data-turn-id`/`data-share`/`data-chunk-id` 로 맞춰 렌더러 넷을 통일한다. 이것만으로 폴백 경로의 원문 보기가 살아난다.
-- **1단계 저장** — `ChunkReportRepository`(런타임 멱등 DDL, **한정자 없는 `JdbcTemplate`** — `@Qualifier("vectorJdbcTemplate")` 아니다. 그 빈이 실제로 어느 파일을 가리키는지는 배포 설정에 달렸다: `SQLITE_VEC_DB_PATH` 를 켜면 다른 운영 테이블과 함께 벡터 DB 파일에 생긴다 — 아래 «계획이 몰랐던 것» 참조. 2026-09-28 이후 DB 파일은 하나다 — Step 5.10 환원). `chunk_report(id, chunk_id, doc_id, version, reporter_user_id, thread_id, turn_id, question, reason_code, comment, chunk_hash, chunk_snapshot, status, reviewer_user_id, review_note, created_at, reviewed_at)` + `idx_chunk_report_open(status, chunk_id)` · `idx_chunk_report_chunk(chunk_id)` · (청크, 신고자, 대화) 부분 UNIQUE 인덱스(열린 신고에만).
+- **1단계 저장** — `ChunkReportRepository`(당시 런타임 멱등 DDL — 2026-09-29 부터 Flyway V4, **한정자 없는 `JdbcTemplate`** — `@Qualifier("vectorJdbcTemplate")` 아니다. 그 빈이 실제로 어느 파일을 가리키는지는 배포 설정에 달렸다: `SQLITE_VEC_DB_PATH` 를 켜면 다른 운영 테이블과 함께 벡터 DB 파일에 생긴다 — 아래 «계획이 몰랐던 것» 참조. 2026-09-28 이후 DB 파일은 하나다 — Step 5.10 환원). `chunk_report(id, chunk_id, doc_id, version, reporter_user_id, thread_id, turn_id, question, reason_code, comment, chunk_hash, chunk_snapshot, status, reviewer_user_id, review_note, created_at, reviewed_at)` + `idx_chunk_report_open(status, chunk_id)` · `idx_chunk_report_chunk(chunk_id)` · (청크, 신고자, 대화) 부분 UNIQUE 인덱스(열린 신고에만).
 - **2단계 서비스** — `ChunkReportService`: `report()` / `openGroups(offset, limit)`(청크별 집계) / `group(chunkId)`(그 청크의 열린 신고 전부 + 현재 청크 상태) / `resolveChunk(chunkId, reviewer, note)` / `rejectChunk(chunkId, reviewer, reason)`. 그룹 전이는 `chunk_id` + 열린 상태를 조건으로 하는 `UPDATE` 한 문장이라 자연히 compare-and-set 이고, 관리자가 보던 사이에 들어온 신고까지 함께 닫히는 것이 맞다(같은 청크에 대한 같은 조치다). `AuditLogger` 이벤트 `chunk.report` · `chunk.report.resolve` · `chunk.report.reject`(건수 포함).
 - **3단계 사용자 화면** — 모달 헤더에 🚩 「내용 오류 신고」(항상 노출) → 사유 라디오 4종 + 코멘트(필수, 500자) → `POST /ui/chunk-reports`. 중복은 "이미 신고하셨습니다"로 구분해 보여준다. 제거 버튼에는 "이 답변과 상관없는 청크일 때" 힌트를 붙여 둘을 갈라 놓는다. i18n 키는 `chat.chunk.report.*`(ko/en 양쪽).
 - **4단계 관리자 화면** — `/admin` 에 지연 로딩 카드(`GET /admin/chunk-reports` → `fragments/admin-chunk-reports`, **청크별 1행 + 신고 건수 배지**), 그룹 상세 오프캔버스(`GET /admin/chunk-reports/chunks/{chunkId}` — 신고 N건의 사유·코멘트·시각·당시 질문 + 최초/최근 본문 스냅샷 + 현재 청크 내용 + 변경 여부 + `openChunkEdit(chunkId, collection)` 바로가기), `POST …/chunks/{chunkId}/resolve`·`…/reject`, `GET /admin/chunk-reports/open-count`(= **열린 신고가 있는 청크 수**) + 헤더 배지.
@@ -959,9 +959,11 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 
 ## 13. DB 스키마 변경 요약
 
-> ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않았다** (2026-09-04 확인 → 2026-09-28 해소): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어졌고(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용됐다. **Step 5.10 환원으로 DB 파일이 하나가 되어 Flyway 는 다시 실데이터 파일에 적용된다.** 이력 없이 런타임 DDL 로 만들어진 옛 벡터 DB 파일은 `spring.flyway.baseline-version=3` 으로 시작한다 — 1 이면 V2 의 `CREATE TABLE users`(`IF NOT EXISTS` 없음)가 `already exists` 로 기동을 멈춘다(`FlywayBaselineTest` 가 실제 설정값으로 고정). 아래 런타임 `ALTER` 패턴은 다시 "유일하게 동작하는 방법"이 아니라 **규약**이다.
+> ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않았다** (2026-09-04 확인 → 2026-09-28 해소): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어졌고(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용됐다. **Step 5.10 환원으로 DB 파일이 하나가 되어 Flyway 는 다시 실데이터 파일에 적용된다.** 이력 없이 런타임 DDL 로 만들어진 옛 벡터 DB 파일은 `spring.flyway.baseline-version=3` 으로 시작한다 — 1 이면 V2 의 `CREATE TABLE users`(`IF NOT EXISTS` 없음)가 `already exists` 로 기동을 멈춘다(`FlywayBaselineTest` 가 실제 설정값으로 고정).
 >
-> **신규 컬럼 추가 지침**: Flyway는 `V1__baseline`+`V2__users` 두 개만 존재하고, 그 이후 컬럼/인덱스(`user_id`, 피드백 컬럼 등)는 전부 **런타임 멱등 DDL**(`SqliteMemoryRepository`/`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 추가돼 왔다. **신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가**하는 것이 현재 코드와 정합적이다(멱등, 프리릴리즈 정책과도 부합). sqlite-vec 쪽 스키마(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)도 동일하게 Flyway가 아니라 `SqliteVecSchemaInitializer`의 동적 DDL(차원 파라미터화)로 관리된다.
+> **Flyway 일원화 (2026-09-29, V4)**: 그때까지 Flyway 는 V1–V3 로 네 테이블의 첫 모양만 만들고, 나머지 테이블과 이후 컬럼은 저장소 11개 클래스의 런타임 멱등 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE ADD COLUMN`)이 만들었다 — 스키마가 두 곳에 있었고 같은 테이블을 두 곳이 다른 모양으로 선언했다. `db.migration.V4__Consolidate_runtime_schema`(Java 마이그레이션 — SQLite 에 `ADD COLUMN IF NOT EXISTS` 가 없어 여러 옛 상태를 SQL 하나로 수렴시킬 수 없다)가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 좋아요 시절 `curated_qa`(`source_turn_id NOT NULL`)의 재생성도 옮겨 왔다. 저장소의 런타임 DDL 은 전부 제거했고, 저장소 테스트는 `SqliteTestDatabase`(앱과 같은 Flyway 설정으로 만든 템플릿 DB 복사)로 전환했다. 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 `FlywaySchemaConvergenceTest`(옛 새 설치·이력 없는 옛 벡터 DB·최근 컬럼이 빠진 옛 버전·좋아요 시절 `curated_qa` → 전부 새 설치와 같은 스키마, 그리고 V1–V4 의 결과 = 옛 DDL 의 결과)의 재료가 된다.
+>
+> **신규 컬럼 추가 지침**: 새 테이블·컬럼·인덱스는 **`V5` 이후의 SQL 마이그레이션 파일**(`src/main/resources/db/migration/`)로 추가한다 — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE ... ADD COLUMN` 한 줄이면 된다(재실행 방어 불필요). 저장소 클래스에 DDL 을 다시 넣지 않는다. V4 는 적용된 마이그레이션이므로 고치지 않는다(Java 마이그레이션은 체크섬이 없어 Flyway 가 수정을 모른다 — 위 테스트가 대신 잡는다). 예외: 다시 만들 수 있는 검색 색인(`chunk_fts`·`chunk_fts_key` 는 `KeywordSearchRepository`, `vec_embeddings`/`vec_document_chunks` 는 `SqliteVecSchemaInitializer` — 차원 파라미터화·vec0 확장 필요)은 계속 그 컴포넌트의 동적 DDL 로 관리된다.
 >
 > **테이블·컬럼·메타데이터 키를 추가하면 [DATABASE.md](DATABASE.md)의 해당 표도 함께 고친다** (2026-09-29 신설 — 테이블별 컬럼·인덱스·관계와 벡터 저장 구조 레퍼런스).
 
@@ -977,6 +979,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 | DB | SQLite 유지 (WAL+busy_timeout) | PostgreSQL (한계 신호 발생 시) |
 | SQLite 파일 구성 | 단일 파일 `memory.db` (2026-09-28, Step 5.10 환원) | 운영/벡터 파일 분리 — Step 5.10 이 시도했으나 배선 사고로 실효된 적 없음. 재개 신호: 대량 인덱싱 중 채팅 지연이 **실측**될 때. 선행: `QuestionReuseRepository.findSourcePreviewRows()` 교차 조인 해소(ATTACH/2단계 조회) + 기존 배포 운영 테이블 이전 |
 | 마이그레이션 | Flyway + ANSI SQL | Liquibase |
+| 운영 테이블 스키마 | Flyway 일원화 (2026-09-29) — V4(Java)가 옛 런타임 DDL 상태들을 한 모양으로 모으고, 이후 변경은 V5+ SQL 파일 (§13) | 저장소별 런타임 멱등 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER`) — 스키마가 V1–V3 와 저장소 11곳에 흩어지고 저장소 테스트가 손으로 만든 축소 스키마로 돌았다 |
 | 멀티테넌시 | Row-level + 사용자별 Chroma 컬렉션 | Schema/DB per tenant |
 | 세션 저장소 | 인메모리 (단일 인스턴스) | Spring Session + Redis (스케일아웃 시) |
 | CSRF | Spring Security 기본 + HTMX 자동 주입 | Double-submit cookie |
