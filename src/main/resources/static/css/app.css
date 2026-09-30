@@ -9,6 +9,8 @@
 /* Flex-based height so the input row stays pinned and the message list is the
    only scroll area (min-height:0 lets a flex child actually shrink + scroll). */
 #chat-messages {
+    /* Query container so .bubble-user can size against the chat area (cqw) — see there. */
+    container-type: inline-size;
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
@@ -99,7 +101,9 @@
     right: 1.25rem;
     bottom: 12.9rem;
     z-index: 7;
-    width: min(23rem, 84vw);
+    /* Positioned against the chat area, so 100% is its width — keeps the doubled panel
+       inside the chat column when the sidebar is open. */
+    width: min(46rem, calc(100% - 2.5rem));
     max-height: min(26rem, 48vh);
     display: flex;
     flex-direction: column;
@@ -199,8 +203,11 @@
        the same layout pass, which for Korean text (many CJK line-break opportunities)
        self-attenuates the computed width to ~75% of the correct one-line width and forces
        premature wrapping even with plenty of room. vw/px avoid the indeterminate-percentage
-       resolution entirely. */
-    max-width: min(70vw, 640px);
+       resolution entirely. cqw does too — it resolves against #chat-messages (a query
+       container), whose width never depends on its content — and, unlike vw, it tracks the
+       chat area rather than the viewport, so the sidebar doesn't eat into the 70%.
+       (A 640px cap used to sit here; it wrapped questions that fit on one line.) */
+    max-width: 70cqw;
 }
 .bubble-assistant {
     background: var(--bg-bubble-bot);
@@ -413,8 +420,8 @@
         font-size: 16px;
     }
     /* Roomier message bubbles on narrow screens.
-       .bubble-user uses vw (not %) — see the comment on the base rule above. */
-    .bubble-user      { max-width: 90vw; }
+       .bubble-user uses cqw (not %) — see the comment on the base rule above. */
+    .bubble-user      { max-width: 90cqw; }
     .bubble-assistant { max-width: 95%; }
 }
 
