@@ -154,6 +154,8 @@
         const wrap = document.createElement('div');
         wrap.id = `bubble-${bubbleId}`;
         wrap.className = 'd-flex align-items-end mb-3';
+        // 배지(본문 위) → 본문 → 안내 줄 → 이미지 → 출처 → 피드백+메타데이터 — 서버 렌더러 둘(chat.html 기록
+        // 루프 · fragments/message-assistant.html)과 같은 순서다. 배지·안내 줄은 done 에서야 채워진다.
         wrap.innerHTML = `
             <div class="bubble-assistant p-3 flex-grow-1">
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
@@ -162,10 +164,12 @@
                     <button type="button" id="stream-skip-images-${bubbleId}"
                             class="btn btn-sm btn-link p-0 ms-2 d-none" style="font-size:0.75rem; vertical-align:baseline;">건너뛰기</button>
                 </div>
+                <div id="stream-badges-${bubbleId}"></div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
+                <div id="stream-notices-${bubbleId}"></div>
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
-                <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
+                <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2"></div>
             </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
 
@@ -555,9 +559,90 @@
         applyAttribution(bubbleId, data.attribution);
         applyPromptExcluded(bubbleId, data.promptExcluded);
 
-        // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
-        //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
-        //    click handler listens for on #chat-messages.
+        // 4. 배지는 본문 위, 안내 줄은 본문 아래, 피드백+메타데이터는 맨 아래 한 줄 — 서버 렌더러 둘(chat.html
+        //    기록 루프 · fragments/message-assistant.html)과 같은 자리·같은 클래스다. 예전에는 배지와 안내 줄까지
+        //    font-size:0.72rem 인 메타 줄 안에 넣었는데, .badge(0.75em)·.small(0.875em)은 부모 기준이라 한 번 더
+        //    줄어 같은 답변이 새로고침 전후로 배지 8.6px↔12px, 안내 줄 10px↔14px 로 달랐다.
+        const invented = Array.isArray(data.inventedSymbols) ? data.inventedSymbols : [];
+        const badgesEl = document.getElementById(`stream-badges-${bubbleId}`);
+        if (badgesEl) {
+            const qt = data.questionType;
+            const badges = [];
+            if (qt)                   badges.push(`<span class="badge badge-${escHtml(qt)} me-1 mb-2">${escHtml(qt)}</span>`);
+            if (data.premiumUpgraded) badges.push(`<span class="badge-upgraded me-1 mb-2">⬆ 고추론 재분석 → ${escHtml(data.premiumUpgraded)}</span>`);
+            // 통과 배지는 '무엇을 검증했는가'에 따라 갈린다 — 표준 모드의 grounded 는 "답변이 문서에
+            // 근거하는가"를, 창의 모드의 apiGrounded 는 "문서 유래라고 제시한 이름이 실재하는가"를
+            // 물었다. 같은 초록 배지를 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는다.
+            // 판정(generative)은 서버가 ResponseMode.generative() 로 계산해 내려준다 — 여기서 모드
+            // 문자열을 비교하지 않는다(message-assistant.html 도 같은 필드를 쓴다).
+            if (data.grounded === true && data.generative) badges.push(
+                `<span class="badge bg-primary me-1 mb-2" title="문서를 재료로 생성된 답변입니다. 문서에 없는 이름을 지어내지 않았는지만 검증했습니다.">생성</span>`);
+            else if (data.grounded === true) badges.push(`<span class="badge bg-success me-1 mb-2">검증됨</span>`);
+            // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
+            // (네이티브 title. 사유는 본문 아래 안내 줄에도 한 번 더 나온다).
+            else if (data.grounded === false) badges.push(
+                `<span class="badge bg-warning text-dark me-1 mb-2"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
+            // 발명된 이름 경고 — 재시도를 걸지 않는 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다.
+            // 그래서 grounded 조건을 걸지 않는다(envNote 와 같은 규칙).
+            if (invented.length) badges.push(
+                `<span class="badge bg-warning text-dark me-1 mb-2" style="cursor:help;" title="${escHtml(invented.join(', '))}">문서 밖 이름 ${invented.length}</span>`);
+            badgesEl.innerHTML = badges.join('');
+        }
+
+        const noticesEl = document.getElementById(`stream-notices-${bubbleId}`);
+        if (noticesEl) {
+            let notices = '';
+            // 미검증으로 확정된 답변의 사유는 배지 툴팁에만 두지 않고 한 줄로도 보여준다 —
+            // 마우스를 올려봐야 알 수 있으면 모바일에서는 확인할 방법이 없다.
+            if (data.grounded === false && data.evalReason) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                        +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
+            }
+
+            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
+            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
+            // 발명된 이름 목록 — 배지 툴팁만으로는 모바일에서 확인할 방법이 없다(evalReason 과 같은
+            // 이유). C 에서는 이것이 안전 신호라 통과·미통과와 무관하게 항상 펼쳐 보여준다.
+            if (invented.length) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                        +  `문서에서 확인되지 않은 이름: ${escHtml(invented.join(', '))}</div>`;
+            }
+
+            if (data.envNote) {
+                notices += `<div class="small text-info mt-2">`
+                        +  `<i class="bi bi-info-circle me-1"></i>`
+                        +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
+            }
+
+            /* 축소 안내 — 서버가 문구를 통째로 만들어 내려주므로 여기서 조립하지 않는다.
+               출처 목록은 검색된 전부를 그대로 그리므로, 이 줄이 빠지면 사용자는 모델이
+               그 출처를 다 봤다고 믿게 된다(서버 렌더러 둘과 같은 규칙). */
+            if (data.budgetNote) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-scissors me-1"></i>`
+                        +  `${escHtml(data.budgetNote)}</div>`;
+            }
+
+            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
+               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
+               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
+               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
+            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
+                && window.isRetrievalMetricsEnabled();
+            if (data.condensedQuestion && condenseVisible) {
+                notices += `<div class="small text-muted mt-2">`
+                        +  `<i class="bi bi-search me-1"></i>`
+                        +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
+            }
+            noticesEl.innerHTML = notices;
+        }
+
+        // Feedback buttons (like/dislike) + metadata, same line — feedback first (left).
+        // Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
+        // click handler listens for on #chat-messages.
         if (metaEl) {
             let html = '';
             if (data.turnId != null) {
@@ -577,27 +662,7 @@
                 </div>`;
             }
 
-            const qt = data.questionType;
             const parts = [];
-            if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
-            // 통과 배지는 '무엇을 검증했는가'에 따라 갈린다 — 표준 모드의 grounded 는 "답변이 문서에
-            // 근거하는가"를, 창의 모드의 apiGrounded 는 "문서 유래라고 제시한 이름이 실재하는가"를
-            // 물었다. 같은 초록 배지를 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는다.
-            // 판정(generative)은 서버가 ResponseMode.generative() 로 계산해 내려준다 — 여기서 모드
-            // 문자열을 비교하지 않는다(message-assistant.html 도 같은 필드를 쓴다).
-            if (data.grounded === true && data.generative) parts.push(
-                `<span class="badge bg-primary me-1" title="문서를 재료로 생성된 답변입니다. 문서에 없는 이름을 지어내지 않았는지만 검증했습니다.">생성</span>`);
-            else if (data.grounded === true) parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
-            // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
-            // (네이티브 title: 메타데이터 줄이라 상시 노출하면 길어진다. 사유는 아래 줄에도 한 번 더 나온다).
-            else if (data.grounded === false) parts.push(
-                `<span class="badge bg-warning text-dark me-1"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
-            // 발명된 이름 경고 — 재시도를 걸지 않는 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다.
-            // 그래서 grounded 조건을 걸지 않는다(envNote 와 같은 규칙).
-            const invented = Array.isArray(data.inventedSymbols) ? data.inventedSymbols : [];
-            if (invented.length) parts.push(
-                `<span class="badge bg-warning text-dark me-1" style="cursor:help;" title="${escHtml(invented.join(', '))}">문서 밖 이름 ${invented.length}</span>`);
-            if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
             if (data.usedProvider)        parts.push(`🤖 ${escHtml(data.usedProvider)}`);
             if (data.elapsedMs != null)   parts.push(`⏱ ${(data.elapsedMs / 1000).toFixed(1)}s`);
             const inp = data.inputTokens  || 0;
@@ -606,54 +671,7 @@
             if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
             if (answerLen)                parts.push(`📝 ${answerLen}자`);
             parts.push(`🕐 ${nowTimeStr()}`);
-            html += `<span class="text-muted">${parts.join(' · ')}</span>`;
-
-            // 미검증으로 확정된 답변의 사유는 배지 툴팁에만 두지 않고 한 줄로도 보여준다 —
-            // 마우스를 올려봐야 알 수 있으면 모바일에서는 확인할 방법이 없다.
-            if (data.grounded === false && data.evalReason) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
-                     +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
-            }
-
-            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
-            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
-            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
-            // 발명된 이름 목록 — 배지 툴팁만으로는 모바일에서 확인할 방법이 없다(evalReason 과 같은
-            // 이유). C 에서는 이것이 안전 신호라 통과·미통과와 무관하게 항상 펼쳐 보여준다.
-            if (invented.length) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
-                     +  `문서에서 확인되지 않은 이름: ${escHtml(invented.join(', '))}</div>`;
-            }
-
-            if (data.envNote) {
-                html += `<div class="small text-info mt-1">`
-                     +  `<i class="bi bi-info-circle me-1"></i>`
-                     +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
-            }
-
-            /* 축소 안내 — 서버가 문구를 통째로 만들어 내려주므로 여기서 조립하지 않는다.
-               출처 목록은 검색된 전부를 그대로 그리므로, 이 줄이 빠지면 사용자는 모델이
-               그 출처를 다 봤다고 믿게 된다(서버 렌더러 둘과 같은 규칙). */
-            if (data.budgetNote) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-scissors me-1"></i>`
-                     +  `${escHtml(data.budgetNote)}</div>`;
-            }
-
-            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
-               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
-               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
-               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
-            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
-                && window.isRetrievalMetricsEnabled();
-            if (data.condensedQuestion && condenseVisible) {
-                html += `<div class="small text-muted mt-1">`
-                     +  `<i class="bi bi-search me-1"></i>`
-                     +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
-            }
-
+            html += `<span class="text-muted bubble-meta">${parts.join(' · ')}</span>`;
             metaEl.innerHTML = html;
         }
 
@@ -705,7 +723,7 @@
 
         const metaEl = document.getElementById(`stream-meta-${bubbleId}`);
         if (metaEl) {
-            metaEl.innerHTML = `<span class="text-muted"><i class="bi bi-stop-circle me-1"></i>사용자가 중단함 · ${escHtml(nowTimeStr())}</span>`;
+            metaEl.innerHTML = `<span class="text-muted bubble-meta"><i class="bi bi-stop-circle me-1"></i>사용자가 중단함 · ${escHtml(nowTimeStr())}</span>`;
         }
     }
 

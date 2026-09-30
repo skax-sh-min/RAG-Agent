@@ -568,6 +568,10 @@ class ChatControllerHtmxTest {
         // 평문 '검증됨' 은 템플릿 주석에도 있어 둘 다 이 대조에는 쓸 수 없다.
         assertThat(justSent).contains("bg-primary").doesNotContain(">검증됨<");
         assertThat(afterReload).contains("bg-primary").doesNotContain(">검증됨<");
+        // 메타데이터 줄도 같은 클래스 하나로 그린다(스트리밍 경로 chat-stream.js 도 같은 클래스) — 예전엔 두
+        // 템플릿이 인라인 style 로 0.72rem/0.68rem 을 따로 달아 같은 줄이 새로고침 전후로 크기가 달랐다.
+        assertThat(justSent).contains("class=\"text-muted bubble-meta\"");
+        assertThat(afterReload).contains("class=\"text-muted bubble-meta\"");
     }
 
     @Test

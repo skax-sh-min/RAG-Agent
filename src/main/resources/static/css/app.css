@@ -158,6 +158,12 @@
     opacity: 0.85;
 }
 
+/* 답변 말풍선 맨 아래 메타데이터 줄(모델·소요 시간·토큰·글자 수·시각). 렌더러가 넷(chat.html 기록 루프 ·
+   재사용 말풍선 · fragments/message-assistant.html · chat-stream.js)이라 예전엔 각자 인라인 style 로
+   0.68rem/0.72rem 을 달아 같은 줄이 새로고침 전후로 크기가 달랐다. 배지·안내 줄은 이 안에 넣지 않는다 —
+   .badge(0.75em)·.small(0.875em)은 부모 기준이라 이 안에서는 한 번 더 줄어든다. */
+.bubble-meta { font-size: 0.72em; }
+
 /* 질문 앞의 응답 모드 표기 '[S] '. 질문 본문과 같은 줄에 흐르되(inline) 한 눈에 갈라 보이도록
    흐리게 + 고정폭으로 둔다 — 답변 길이가 왜 다른지 대화 기록에서 바로 읽히게 하려는 표시라,
    눈에 띄되 질문을 읽는 흐름을 끊지 않는 세기가 목표다. */
@@ -267,26 +273,29 @@
 .dot-unknown { background: #6c757d; }
 
 /* ── Markdown content in assistant bubble ────────────────────────────── */
-/* 소제목 크기를 본문에 가깝게 유지 — 본문 기준 ~0.875rem(14px) 가정.
-   h2 +4px=18px≈1.125rem, h3 +3px=17px≈1.0625rem, h4 +2px=16px=1rem,
-   h5 +1px=15px≈0.9375rem, h6 동일=14px=0.875rem·굵게. */
-.md-content h1 { font-size: 1.2rem;    font-weight: 700; margin-top: 0.75rem; }
-.md-content h2 { font-size: 1.1875rem;  font-weight: 750; margin-top: 0.75rem; }
-.md-content h3 { font-size: 1.125rem; font-weight: 750; margin-top: 0.5rem; }
-.md-content h4 { font-size: 1.0625rem;      font-weight: 750; margin-top: 0.4rem; }
-.md-content h5 { font-size: 1rem; font-weight: 750; }
-.md-content h6 { font-size: 0.9375rem;  font-weight: 750; }
+/* 글자 크기는 전부 em — 이 블록이 놓인 자리(답변 본문 16px, 출처 미리보기 팝오버 11.2px)의 크기를 기준으로
+   함께 줄고 는다. rem 이던 때는 팝오버 안에서도 제목·표·코드가 루트(16px) 기준으로 커져 팝오버 전용 px 고정
+   규칙이 따로 있었고, 그 규칙이 데스크톱 미디어 쿼리 안에만 있어 모바일 팝오버는 제목이 본문보다 컸다.
+   소제목은 본문에 가깝게 — 본문보다 h6 +0 · h5 +1 · h4 +2 · h3 +3 · h2 +4 · h1 +5px(본문 16px 기준), 전부 700.
+   예전 주석은 본문을 14px 로 가정해 실제로는 h6 이 본문보다 작았다. 750 같은 중간 굵기는 가변 폰트가 아니면
+   없는 굵기라 브라우저가 가까운 굵기로 대체해 OS 마다 두께가 갈린다. */
+.md-content h1 { font-size: 1.3125em; font-weight: 700; margin-top: 0.75rem; }
+.md-content h2 { font-size: 1.25em;   font-weight: 700; margin-top: 0.75rem; }
+.md-content h3 { font-size: 1.1875em; font-weight: 700; margin-top: 0.5rem; }
+.md-content h4 { font-size: 1.125em;  font-weight: 700; margin-top: 0.4rem; }
+.md-content h5 { font-size: 1.0625em; font-weight: 700; }
+.md-content h6 { font-size: 1em;      font-weight: 700; }
 .md-content pre {
     background: var(--code-bg);
     border: 1px solid var(--border-default);
     border-radius: 6px;
     padding: 0.75rem;
-    font-size: 0.85rem;
+    font-size: 0.85em;
     overflow-x: auto;
 }
-/* 코드 블록 안의 code 는 pre 크기를 그대로 쓴다(≈13.6px). 아래 .md-content code 의 0.875em 이 pre 의
-   0.85rem 위에 한 번 더 곱해져 블록 코드가 11.9px 까지 줄던 이중 축소를 막는다 — 본문(16px)보다 4px
-   작아 읽기 어려웠다. 인라인 `code` 는 본문 대비 0.875em(14px) 그대로. */
+/* 코드 블록 안의 code 는 pre 크기를 그대로 쓴다(본문 16px 에서 13.6px). 아래 .md-content code 의 0.875em 이
+   pre 의 0.85em 위에 한 번 더 곱해져 블록 코드가 11.9px 까지 줄던 이중 축소를 막는다 — 본문보다 4px 작아
+   읽기 어려웠다. 인라인 `code` 는 본문 대비 0.875em(14px) 그대로. */
 .md-content pre code   { font-size: inherit; }
 .md-content code       { font-size: 0.875em; }
 .md-content ul,
@@ -298,13 +307,17 @@
     padding: 0.25rem 0.75rem;
     color: var(--fg-muted);
 }
-.md-content table      { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 0.5rem 0; }
+.md-content table      { width: 100%; border-collapse: collapse; font-size: 0.9em; margin: 0.5rem 0; }
 .md-content th,
 .md-content td         { border: 1px solid var(--border-default); padding: 0.35rem 0.6rem; text-align: left; }
 .md-content th         { background: var(--bg-elevated); font-weight: 600; }
 .md-content hr         { margin: 0.75rem 0; border-color: var(--border-default); }
 .md-content a          { color: #0d6efd; }
 .md-content p:last-child { margin-bottom: 0; }
+/* 출처 미리보기 팝오버(renderSourcePreviewHtml → .md-content.small)는 본문이 이미 작아(데스크톱 11.2px)
+   코드 블록·표를 본문보다 더 줄이지 않는다 — 말풍선의 0.85em·0.9em 을 그대로 곱하면 9~10px 가 된다. */
+.popover .md-content pre,
+.popover .md-content table { font-size: 1em; }
 
 /* ── Sidebar layout ──────────────────────────────────────────────────── */
 /* At md+ the offcanvas-md renders as a static flex child (fixed width).
@@ -326,21 +339,6 @@
         max-width: 620px;
         font-size: 0.8rem;
     }
-    /* 팝오버 내부 소제목 — .popover font-size(0.8rem)를 기준 삼으면 .md-content h*의
-       rem 값이 상대적으로 다시 커지므로 px로 고정한다. */
-    .popover .md-content h1 { font-size: 13px; }
-    .popover .md-content h2 { font-size: 12px; }
-    .popover .md-content h3 { font-size: 11px; }
-    .popover .md-content h4 { font-size: 10px; }
-    .popover .md-content h5 { font-size: 9px; }
-    .popover .md-content h6 { font-size: 9px; }
-    /* .md-content table 도 마찬가지로 rem(루트 기준)이라 .popover의 축소된
-       font-size를 무시하고 본문보다 커 보였다 — 헤딩과 같은 이유로 px 고정. */
-    .popover .md-content table,
-    .popover .md-content th,
-    .popover .md-content td { font-size: 11px; }
-    /* .md-content pre 도 동일 원인(rem). pre code 는 inherit 라 pre 만 고정하면 같은 11px 로 따라온다. */
-    .popover .md-content pre { font-size: 11px; }
 }
 
 /* ── Chat input safe-area (notched phones) ───────────────────────────── */
@@ -406,6 +404,10 @@
     align-items: center;
     min-height: 1.4rem;
 }
+/* 스트리밍 중에는 마크다운 렌더 전의 원문을 textContent 로 쌓으므로 줄바꿈을 살린다 — 기본값(normal)이면
+   문단이 한 줄로 합쳐진 채 흐르다 완료 시점에야 갈라졌다. 완료 뒤의 렌더된 HTML 에 걸리면 태그 사이 개행이
+   빈 줄이 되므로 커서 클래스와 수명을 같이한다(onDone/onAborted 가 렌더 직전에 뗀다). */
+.md-content.stream-cursor { white-space: pre-wrap; }
 /* Blinking cursor appended after streamed raw text */
 .stream-cursor::after {
     content: '▋';
