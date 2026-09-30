@@ -297,7 +297,7 @@ copy .env.example .env
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10).<br>임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
+| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10).<br>임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
 | `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다.<br>이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
 
 #### 임베딩 병렬화 (§6.21 E1~E3)
@@ -328,7 +328,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 정규화된 질의 텍스트 → 임베딩 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략합니다. 캐시 히트 시 `embed:<model>` usage도 기록되지 않습니다(실제 호출이 없었으므로) |
+| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 정규화된 질의 텍스트 → 임베딩 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략합니다. 캐시 히트 시 `embed` usage도 기록되지 않습니다(실제 호출이 없었으므로) |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 캐시 엔트리 TTL(초, write 기준 만료) |
 
@@ -1836,15 +1836,15 @@ app.llm.providers[8].concurrency=4
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 - 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (503 응답, `RAG-LLM-001` — 차단 때문이면 `Retry-After` 동반. 컨텍스트 초과로 온 하위 타입 `LlmContextOverflowException` 만 500/`RAG-LLM-003`, [ERROR_CODES.md](ERROR_CODES.md))
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
-- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
+- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
 - API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다.
 - **Circuit Breaker ≠ 동시성 백프레셔(§5.7)**: 429/402/기타 오류로 인한 차단은 "프로바이더가 고장났다"는 신호로 취급해 일정 시간 우회합니다. 반면 동시성 게이트가 대기 상한을 넘겨 던지는 429(`LlmBackpressureException`)는 "프로바이더는 정상이지만 지금 자리가 없다"는 신호이므로 Circuit Breaker를 차단하지 않고, 다른 프로바이더로 자동 전환하지도 않습니다 — 요청을 보낸 쪽에 그대로 즉시 전파됩니다.
 
 ### 5.6 Orphan 프로바이더 사용 기록 정리
 
-설정(`app.llm.providers`)에서 완전히 제거된 프로바이더나, `EMBED_MODEL`을 변경한 뒤 남은 이전 임베딩 모델의 `embed:<old-model>` 기록은 `llm_usage`에 그대로 남아 orphan이 됩니다. `/llm-usage`에서 회색 **ORPHAN** 배지 카드로 노출되며, 카드 우측 상단 🗑 아이콘으로 정리할 수 있습니다.
+설정(`app.llm.providers`)에서 완전히 제거된 프로바이더의 기록은 `llm_usage`에 그대로 남아 orphan이 됩니다. `/llm-usage`에서 회색 **ORPHAN** 배지 카드로 노출되며, 카드 우측 상단 🗑 아이콘으로 정리할 수 있습니다. 임베딩 사용량은 모델명 없이 `embed` 한 이름으로 기록되므로 `EMBED_MODEL`을 바꿔도 orphan이 생기지 않고 같은 카드에 이어서 쌓입니다(예전에 `embed:<모델>`로 쌓인 기록은 V5 마이그레이션이 날짜별로 합쳐 `embed`로 옮깁니다).
 
-- **삭제 대상 판별**: 현재 config에 없는 프로바이더 이름, 또는 현재 활성 임베딩 모델이 아닌 `embed:*` 이름만 orphan으로 분류됩니다. 활성 프로바이더·현재 임베딩 모델 카드에는 삭제 버튼 자체가 없고, API를 직접 호출해도 서버가 400으로 거부합니다.
+- **삭제 대상 판별**: 현재 config에 없는 프로바이더 이름만 orphan으로 분류됩니다(임베딩 `embed`와 백그라운드 사용량은 제외). 활성 프로바이더·임베딩 카드에는 삭제 버튼 자체가 없고, API를 직접 호출해도 서버가 400으로 거부합니다.
 - **엔드포인트**: `DELETE /admin/llm-usage/{provider}` — `/admin/**` 경로 아래에 있어 `ROLE_ADMIN` 전용입니다. no-auth 모드에서는 `/admin/**`에 대한 기존 관리자 자동 인증이 그대로 적용되어 별도 로그인 없이 동작합니다. 인증 모드에서는 CSRF 토큰이 필요합니다(HTMX 버튼은 자동 첨부).
 - **감사 로그**: 삭제 시 `AuditLogger`에 `llm-usage.delete-orphan` 이벤트(프로바이더명, 삭제 행 수)가 기록됩니다.
 - **API 예시** (no-auth 모드 — CSRF 비활성화라 세션/토큰 불필요):
@@ -3538,7 +3538,7 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
 - [ ] `/llm-usage` — 일별 차트 데이터 표시 확인
-- [ ] `/llm-usage` — `embed:<model>` 카드가 채팅 프로바이더와 분리 표시되고 인덱싱/검색 후 토큰이 누적되는지 확인
+- [ ] `/llm-usage` — `embed` 카드가 채팅 프로바이더와 분리 표시되고 인덱싱/검색 후 토큰이 누적되는지 확인
 - [ ] `/llm-usage` — 키 없는(비활성) 프로바이더 중 사용 이력 없는 항목이 카드·표·차트에서 숨겨지는지 확인
 - [ ] `/llm-usage` — orphan 카드(있다면) 삭제 버튼 클릭 → 카드 사라짐 + `AuditLogger`에 `llm-usage.delete-orphan` 기록 확인, 활성 프로바이더는 삭제 버튼이 없는지 확인
 - [ ] Circuit Breaker 차단 없음 확인

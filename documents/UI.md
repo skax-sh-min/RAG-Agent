@@ -123,7 +123,7 @@ src/main/resources/
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
-| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(`embed:<model>`, `EMBEDDING` 배지) + orphan(설정에 없는 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
+| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(제목 `embed`, `EMBEDDING` 배지, 모델명은 본문 — 표·차트도 같은 이름) + orphan(설정에 없는 채팅 프로바이더 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 | GET | `/api/v1/llm/ping` | JSON `{"available","ok","deep","checkedAt","providers":[{"name","model","reachable","latencyMs","modelListed","modelState","circuitBlockedSeconds","inference","error","ok"}]}` — 전부 통과면 200, 하나라도 실패면 503 | 로컬 LLM 생사 확인. `?deep=true` 면 `max_tokens=1` 완성을 실제로 보낸다(서버는 살았는데 엔진이 죽은 경우를 잡는 유일한 검사). 라우터·브레이커를 우회하는 날것의 HTTP 라 결과가 상태를 바꾸지 않는다. `baseUrl` 은 관리자 응답에만 실린다 |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N,"blockedSeconds":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |

@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 /**
  * QA — TrackingEmbeddingModel usage-recording decorator (§6.6)
  *
- * Covers: real usage recorded under "embed:<model>", chars/4 fallback when the delegate
+ * Covers: real usage recorded under the model-less "embed", chars/4 fallback when the delegate
  * doesn't report usage (EmptyUsage → promptTokens=0, not null), fallback disabled records 0,
  * embed(Document) still routes through call() rather than delegate.embed(Document), and
  * dimensions() bypasses tracking entirely.
@@ -47,14 +47,28 @@ class TrackingEmbeddingModelTest {
     }
 
     @Test
-    @DisplayName("call() — 응답 usage 그대로 embed:<model> 로 기록, output=0")
-    void recordsRealUsageUnderEmbedPrefix() {
+    @DisplayName("call() — 응답 usage 그대로 embed 로 기록, output=0")
+    void recordsRealUsageUnderEmbed() {
         when(delegate.call(any())).thenReturn(responseWithUsage(42));
         var model = new TrackingEmbeddingModel(delegate, usageRepo, "nomic", true);
 
         model.call(new EmbeddingRequest(List.of("hello"), null));
 
-        verify(usageRepo).record("embed:nomic", 42, 0);
+        verify(usageRepo).record("embed", 42, 0);
+    }
+
+    @Test
+    @DisplayName("기록 이름에 모델명이 없다 — 모델이 달라도 같은 embed 한 줄에 쌓인다")
+    void recordedNameDoesNotDependOnTheModel() {
+        when(delegate.call(any())).thenReturn(responseWithUsage(1));
+
+        new TrackingEmbeddingModel(delegate, usageRepo, "nomic", true)
+                .call(new EmbeddingRequest(List.of("a"), null));
+        new TrackingEmbeddingModel(delegate, usageRepo, "bge-m3", true)
+                .call(new EmbeddingRequest(List.of("b"), null));
+
+        verify(usageRepo, org.mockito.Mockito.times(2)).record(TrackingEmbeddingModel.PROVIDER_NAME, 1, 0);
+        assertThat(TrackingEmbeddingModel.PROVIDER_NAME).isEqualTo("embed");
     }
 
     @Test
@@ -65,7 +79,7 @@ class TrackingEmbeddingModelTest {
 
         model.call(new EmbeddingRequest(List.of("12345678"), null)); // 8 chars -> 2 tokens
 
-        verify(usageRepo).record("embed:nomic", 2, 0);
+        verify(usageRepo).record("embed", 2, 0);
     }
 
     @Test
@@ -76,7 +90,7 @@ class TrackingEmbeddingModelTest {
 
         model.call(new EmbeddingRequest(List.of("12345678"), null));
 
-        verify(usageRepo).record("embed:nomic", 0, 0);
+        verify(usageRepo).record("embed", 0, 0);
     }
 
     @Test
@@ -88,7 +102,7 @@ class TrackingEmbeddingModelTest {
         float[] out = model.embed(new Document("some content"));
 
         assertThat(out).isNotNull();
-        verify(usageRepo).record("embed:nomic", 5, 0);
+        verify(usageRepo).record("embed", 5, 0);
         verify(delegate, never()).embed(any(Document.class));
     }
 

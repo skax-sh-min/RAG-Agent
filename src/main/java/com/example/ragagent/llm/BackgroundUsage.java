@@ -7,7 +7,7 @@ import java.util.Set;
  * summarization, indexing keyword extraction, document format correction, TXT→MD structuring,
  * indexing-time image (Vision) description, thread title generation) — recorded into {@code llm_usage} via
  * {@link LlmRouter#executeWithTracking(TaskType, RoutingMode, String, java.util.function.Function)}
- * the same way {@link TrackingEmbeddingModel#PROVIDER_PREFIX} separates embedding usage from
+ * the same way {@link TrackingEmbeddingModel#PROVIDER_NAME} separates embedding usage from
  * chat provider rows, without any schema change.
  */
 public final class BackgroundUsage {

@@ -360,7 +360,7 @@ AI 모델이 한 번에 읽을 수 있는 분량에는 한계가 있습니다. �
 |------|------|
 | **프로바이더 카드** | 설정된 LLM 프로바이더별 상태 — 정상(초록) / 차단 중(빨강 + 남은 시간 카운트다운) |
 | **임베딩 카드** | 문서 인덱싱·검색 시 사용되는 임베딩 모델의 토큰 사용량을 `EMBEDDING` 배지가 붙은 별도 카드로 표시 — 채팅 프로바이더와 분리 집계되며 항상 "정상" 상태 |
-| **Orphan 카드** | 설정에서 완전히 제거된 프로바이더(또는 옛 임베딩 모델)의 과거 사용 기록을 회색 `ORPHAN` 배지 카드로 표시 — 관리자만 카드의 🗑 아이콘으로 삭제할 수 있습니다 |
+| **Orphan 카드** | 설정에서 완전히 제거된 프로바이더의 과거 사용 기록을 회색 `ORPHAN` 배지 카드로 표시 — 관리자만 카드의 🗑 아이콘으로 삭제할 수 있습니다 |
 | **일별 차트** | 누적 막대 차트 — 7일 / 30일 / 90일 기간 선택, 프로바이더별 색상 구분 (임베딩은 별도 막대로 구분 표시) |
 | **기간별 테이블** | 오늘 / 이번 주 / 이번 달 탭 — 프로바이더별 입력/출력/합계 토큰 및 호출 수 |
 
@@ -689,33 +689,27 @@ curl http://localhost:8080/api/v1/llm/usage
 ```json
 [
   {
-    "name": "local",
+    "provider": "local",
     "type": "BOTH",
-    "role": "LOCAL",
     "model": "google/gemma-4-e4b",
     "daily":   { "inputTokens": 1200, "outputTokens": 340, "callCount": 5 },
     "weekly":  { "inputTokens": 8400, "outputTokens": 2100, "callCount": 32 },
     "monthly": { "inputTokens": 32000, "outputTokens": 8500, "callCount": 120 },
-    "blockedUntil": null,
-    "configured": true,
-    "deletable": false
+    "blockedUntil": null
   },
   {
-    "name": "embed:text-embedding-nomic-embed-text-v1.5",
+    "provider": "embed",
     "type": "EMBEDDING",
-    "role": null,
     "model": "text-embedding-nomic-embed-text-v1.5",
     "daily":   { "inputTokens": 340, "outputTokens": 0, "callCount": 12 },
     "weekly":  { "inputTokens": 2100, "outputTokens": 0, "callCount": 58 },
     "monthly": { "inputTokens": 8500, "outputTokens": 0, "callCount": 210 },
-    "blockedUntil": null,
-    "configured": true,
-    "deletable": false
+    "blockedUntil": null
   }
 ]
 ```
 
-> 목록에는 API 키가 설정된 프로바이더와, 과거에 한 번이라도 사용된 적 있는 프로바이더만 포함됩니다(키가 없고 사용 이력도 없는 프로바이더는 제외). 임베딩(`embed:<model>`, `type: "EMBEDDING"`) 항목은 채팅 프로바이더와 별도로 항상 포함되며, 임베딩은 출력 토큰이 없어 `outputTokens`가 항상 `0`이고 차단(`blockedUntil`) 대상이 아닙니다. 설정에서 완전히 제거된 프로바이더(옛 임베딩 모델 포함)의 과거 기록은 `type: "ORPHAN"`으로 표시됩니다 — 삭제는 관리자 전용 엔드포인트가 필요하므로 [OPERATOR_MANUAL.md §5.6](OPERATOR_MANUAL.md#56-orphan-프로바이더-사용-기록-정리)을 참고하세요.
+> 목록에는 API 키가 설정된 프로바이더와, 과거에 한 번이라도 사용된 적 있는 프로바이더만 포함됩니다(키가 없고 사용 이력도 없는 프로바이더는 제외). 임베딩(`provider: "embed"`, `type: "EMBEDDING"` — 모델명은 `model` 에만 있다. 히스토리 응답의 키도 `embed`) 항목은 채팅 프로바이더와 별도로 항상 포함되며, 임베딩은 출력 토큰이 없어 `outputTokens`가 항상 `0`이고 차단(`blockedUntil`) 대상이 아닙니다. 설정에서 완전히 제거된 프로바이더의 과거 기록은 `type: "ORPHAN"`으로 표시됩니다(임베딩은 모델명 없이 `embed` 하나로 기록되므로 모델을 바꿔도 해당 없음) — 삭제는 관리자 전용 엔드포인트가 필요하므로 [OPERATOR_MANUAL.md §5.6](OPERATOR_MANUAL.md#56-orphan-프로바이더-사용-기록-정리)을 참고하세요.
 
 ```bash
 # 일별 히스토리 (days=7|30|90)

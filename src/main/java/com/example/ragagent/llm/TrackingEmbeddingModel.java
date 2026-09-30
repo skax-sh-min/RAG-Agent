@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Decorates the primary {@link EmbeddingModel} bean so every embedding call (search +
  * indexing, both vector store backends) is recorded into {@link LlmUsageRepository} under
- * a reserved {@code "embed:"} prefix — kept separate from chat provider rows without any
+ * the reserved name {@link #PROVIDER_NAME} — kept separate from chat provider rows without any
  * schema change.
  *
  * <p>Only {@link #call(EmbeddingRequest)} is overridden as the tracking point; {@code embed(String)},
@@ -34,12 +34,17 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
 
     private static final Logger log = LoggerFactory.getLogger(TrackingEmbeddingModel.class);
 
-    /** Reserved provider-name prefix so embedding rows never collide with chat provider names. */
-    public static final String PROVIDER_PREFIX = "embed:";
+    /**
+     * The one usage name for embedding calls, without the model. The embedding model is fixed for a
+     * deployment (changing {@code EMBED_MODEL} means dropping the vectors and re-indexing), so the
+     * old per-model {@code "embed:<model>"} only left an orphan row behind after such a change.
+     * V5 merged the rows recorded that way into this name.
+     */
+    public static final String PROVIDER_NAME = "embed";
 
     private final EmbeddingModel delegate;
     private final LlmUsageRepository usageRepo;
-    private final String providerName;
+    private final String modelName;
     private final boolean approximateFallback;
     private final EmbeddingConcurrencyTracker concurrencyTracker;
     private final AtomicBoolean fallbackWarned = new AtomicBoolean(false);
@@ -60,7 +65,7 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
                                   EmbeddingConcurrencyTracker concurrencyTracker) {
         this.delegate = delegate;
         this.usageRepo = usageRepo;
-        this.providerName = PROVIDER_PREFIX + modelName;
+        this.modelName = modelName;
         this.approximateFallback = approximateFallback;
         this.concurrencyTracker = concurrencyTracker;
     }
@@ -75,11 +80,11 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
             concurrencyTracker.decrement();
         }
         try {
-            usageRepo.record(providerName, extractInputTokens(response, request), 0);
+            usageRepo.record(PROVIDER_NAME, extractInputTokens(response, request), 0);
         } catch (Exception e) {
             // delegate.call() above already succeeded — a usage-table write failure (e.g.
             // SQLITE_FULL) must never fail the actual embedding call (would break indexing/search).
-            log.warn("[USAGE] Failed to record usage for provider={}: {}", providerName, e.getMessage());
+            log.warn("[USAGE] Failed to record usage for provider={}: {}", PROVIDER_NAME, e.getMessage());
         }
         return response;
     }
@@ -104,9 +109,9 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
             return 0;
         }
         if (fallbackWarned.compareAndSet(false, true)) {
-            log.warn("[embedding usage] provider={} did not report token usage; approximating "
+            log.warn("[embedding usage] model={} did not report token usage; approximating "
                     + "input tokens with TokenEstimator (CJK ~1/char, else chars/4) for llm_usage "
-                    + "tracking (this warning logs once)", providerName);
+                    + "tracking (this warning logs once)", modelName);
         }
         return approximateTokens(request.getInstructions());
     }
