@@ -208,11 +208,13 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("GET /ui/llm-usage/cards — EMBEDDING 배지 + embed:<model> 카드 렌더")
+    @DisplayName("GET /ui/llm-usage/cards — EMBEDDING 카드 제목은 모델명 없이 embed, 모델명은 본문에만")
     void usageCards_rendersEmbeddingCard() throws Exception {
         mvc.perform(get("/ui/llm-usage/cards"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("embed:nomic-embed")))
+                .andExpect(content().string(not(containsString("embed:nomic-embed"))))
+                .andExpect(content().string(containsString(">embed<")))
+                .andExpect(content().string(containsString("nomic-embed")))
                 .andExpect(content().string(containsString("EMBEDDING")));
     }
 

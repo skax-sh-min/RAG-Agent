@@ -499,8 +499,10 @@ public class OperationsController {
                         false
                 ));
         String embedName = embeddingProviderName();
+        // Card title is the bare "embed" (like background cards' "title"/"summary") — the model
+        // is already shown in the card body, so "embed:<model>" repeated it in the header.
         LlmProviderReport embedReport = new LlmProviderReport(
-                embedName,
+                BackgroundUsage.label(TrackingEmbeddingModel.PROVIDER_PREFIX),
                 "EMBEDDING",
                 null,
                 props.embeddingSafe().model(),
