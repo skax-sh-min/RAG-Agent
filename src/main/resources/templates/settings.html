@@ -23,11 +23,58 @@
 </style>
 
 
-    <h5 class="fw-semibold mb-1">
+    <h5 class="fw-semibold mb-3">
         <i class="bi bi-sliders me-2"></i>
-        <span th:text="#{settings.title}">Settings (LLM / RAG)</span>
+        <span th:text="#{settings.title}">Settings</span>
     </h5>
-    <p class="text-secondary small mb-4" th:text="#{settings.subtitle}">
+
+    <!-- ── 화면 표시 — 이 브라우저에만 저장되고 누구나 바꾼다(아래 서버 설정과 달리 관리자 권한과 무관하다).
+         적용·저장은 base.html 의 setChatFontSize(), 단계별 크기는 app.css '채팅 글자 크기'. ─────────────── -->
+    <div class="card mb-4" id="display-settings">
+        <div class="card-header fw-semibold" th:text="#{settings.display.title}">Display</div>
+        <div class="card-body">
+            <p class="text-secondary small mb-3" th:text="#{settings.display.hint}">
+                Saved in this browser only. Anyone can change it.
+            </p>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <span id="chat-font-size-label" class="me-1" th:text="#{settings.display.font-size}">Chat text size</span>
+                <div class="btn-group btn-group-sm" role="group" aria-labelledby="chat-font-size-label">
+                    <input type="radio" class="btn-check" name="chat-font-size" id="chat-font-xs" value="xs" autocomplete="off"/>
+                    <label class="btn btn-outline-secondary" for="chat-font-xs" th:text="#{settings.display.font-size.xs}">Smallest</label>
+                    <input type="radio" class="btn-check" name="chat-font-size" id="chat-font-sm" value="sm" autocomplete="off"/>
+                    <label class="btn btn-outline-secondary" for="chat-font-sm" th:text="#{settings.display.font-size.sm}">Small</label>
+                    <input type="radio" class="btn-check" name="chat-font-size" id="chat-font-md" value="md" autocomplete="off"/>
+                    <label class="btn btn-outline-secondary" for="chat-font-md" th:text="#{settings.display.font-size.md}">Normal</label>
+                    <input type="radio" class="btn-check" name="chat-font-size" id="chat-font-lg" value="lg" autocomplete="off"/>
+                    <label class="btn btn-outline-secondary" for="chat-font-lg" th:text="#{settings.display.font-size.lg}">Large</label>
+                </div>
+            </div>
+            <!-- 미리보기 — 설정 화면에는 채팅 말풍선이 없어 바꿔도 달라지는 것이 보이지 않으므로, 채팅과 같은 클래스로
+                 답변 말풍선 하나를 그린다(배지·제목·본문·코드·안내 줄·메타데이터 줄). -->
+            <div class="small text-secondary mb-1" th:text="#{settings.display.preview}">Preview</div>
+            <div id="chat-font-preview" class="chat-font-scope">
+                <div class="bubble-assistant p-3">
+                    <span class="badge bg-success mb-2" th:text="#{settings.display.preview.badge}">Verified</span>
+                    <div class="md-content">
+                        <h3 th:text="#{settings.display.preview.heading}">Installation</h3>
+                        <p><span th:text="#{settings.display.preview.body}">Answer text appears at this size.</span>
+                            <code>server.port=8080</code></p>
+                        <pre><code>mvn spring-boot:run</code></pre>
+                    </div>
+                    <div class="small text-info mt-2">
+                        <i class="bi bi-info-circle me-1"></i><span th:text="#{settings.display.preview.note}">Notes and metadata change with it.</span>
+                    </div>
+                    <div class="mt-2">
+                        <span class="text-muted bubble-meta">🤖 local · ⏱ 3.2s · 📥 1200 · 📤 300 · 🕐 10:24</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 서버 설정 — 전 사용자 공통, 변경은 관리자만 ─────────────────────────── -->
+    <h6 class="fw-semibold mb-1" th:text="#{settings.server.title}">Server settings (LLM / RAG)</h6>
+    <p class="text-secondary small mb-3" th:text="#{settings.subtitle}">
         View the effective configuration. Hot-editable items apply on the next search without a restart.
     </p>
 
@@ -80,6 +127,20 @@
             </div>
         </div>
     </div>
+
+<!-- 화면 표시 — 고르는 즉시 적용하고 이 브라우저에 저장한다. 쓰는 함수(getChatFontSize/setChatFontSize)는 base.html 의
+     스크립트에 있는데 그 블록이 이 콘텐츠보다 뒤에 오므로 DOMContentLoaded 에서 시작한다. -->
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const card = document.getElementById('display-settings');
+        if (!card) return;
+        const current = document.getElementById('chat-font-' + getChatFontSize());
+        if (current) current.checked = true;
+        card.addEventListener('change', function (e) {
+            if (e.target.name === 'chat-font-size') setChatFontSize(e.target.value);
+        });
+    });
+</script>
 
 </section>
 

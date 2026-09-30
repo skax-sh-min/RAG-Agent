@@ -129,6 +129,64 @@
     100% { box-shadow: 0 0 0 3px rgba(13, 110, 253, 0); }
 }
 
+/* ── 채팅 글자 크기 ──────────────────────────────────────────────────────
+   /settings 의 "화면 표시"가 고른 단계가 <html data-chat-font> 로 온다 — base.html <head> 가 localStorage 에서
+   읽어 첫 렌더 전에 건다(테마와 같은 자리). 속성이 없으면 보통. 이 변수 하나가 메시지 목록·원문 보기 모달·설정 화면
+   미리보기(.chat-font-scope)와 출처 미리보기 팝오버의 기준이고, 그 안의 크기는 전부 이 기준에 대한 비율(em)이다.
+   말풍선 안에 rem·px·인라인 style 로 크기를 주면 설정을 따라오지 않는다 — 채팅 렌더러의 인라인 크기는
+   ChatFontSizeConventionTest 가 막는다.
+   서버 설정(/settings 의 나머지)이 아니라 브라우저에 두는 이유: 그쪽은 전 사용자 공통·관리자 전용이고, no-auth
+   기본 모드는 방문자가 게스트 id 하나를 나눠 써서 사용자별로 저장할 자리도 없다. */
+:root {
+    --chat-font-size: 1rem;       /* 보통 16px — 속성이 없을 때 */
+    --chat-font-floor: 8.5px;     /* 작은 글자 하한 — 실제로 닿는 것은 '최소'의 미세 단계와 팝오버 글자뿐이다 */
+}
+:root[data-chat-font="xs"] { --chat-font-size: 0.75rem; }    /* 최소 12px */
+:root[data-chat-font="sm"] { --chat-font-size: 0.875rem; }   /* 작게 14px */
+:root[data-chat-font="lg"] { --chat-font-size: 1.125rem; }   /* 크게 18px */
+
+.chat-font-scope { font-size: var(--chat-font-size); }
+
+/* 메타 단계(0.75em — Bootstrap .badge 와 같은 비율): 메타데이터 줄, 배지, 출처 수치, 질문 시각, 피드백 버튼,
+   고추론 배지, 건너뛰기 버튼. 예전엔 0.68rem·0.7rem·0.72rem·0.72em·0.75rem 이 렌더러마다 인라인으로 흩어져 같은
+   줄이 새로고침 전후로 크기가 달랐다. 배지·안내 줄을 .bubble-meta 안에 넣지 말 것 — 부모 기준 비율이라 그 안에서는
+   한 번 더 줄어든다. */
+.chat-font-scope .badge,
+.bubble-meta,
+.source-metrics,
+.bubble-user-time,
+.feedback-controls .feedback-btn,
+.badge-upgraded,
+.stream-skip-btn {
+    font-size: max(0.75em, var(--chat-font-floor));
+}
+/* 미세 단계(0.625em): 출처 옆 미사용·변경 배지. .badge 이기도 해서 위 규칙과 특이도가 같다 — 반드시 뒤에 둔다. */
+.chat-font-scope .source-flag {
+    font-size: max(0.625em, var(--chat-font-floor));
+    vertical-align: middle;
+}
+.stream-skip-btn { vertical-align: baseline; }
+
+/* 출처 미리보기 팝오버 — body 에 붙어 .chat-font-scope 밖이라 같은 변수에서 따로 유도한다(데스크톱 0.8배, 좁은
+   화면은 Bootstrap 기본 비율인 0.875배). 이 클래스는 bindSourcePopover(chat.html · chat-stream.js)가 customClass
+   로만 달아서 관리 화면의 팝오버는 그대로다. */
+.popover.source-preview-popover { font-size: calc(var(--chat-font-size) * 0.875); }
+@media (min-width: 768px) {
+    .popover.source-preview-popover { font-size: calc(var(--chat-font-size) * 0.8); }
+}
+/* 미리보기 본문(.md-content.small) — .small 의 0.875em 에 하한을 더한다. 코드 블록·표는 본문보다 더 줄이지 않는다
+   (말풍선의 0.85em·0.9em 을 그대로 곱하면 보통에서도 9~10px 가 된다). */
+.source-preview-popover .md-content { font-size: max(0.875em, var(--chat-font-floor)); }
+.source-preview-popover .md-content pre,
+.source-preview-popover .md-content table { font-size: 1em; }
+.source-preview-popover .md-content :not(pre) > code { font-size: max(0.875em, var(--chat-font-floor)); }
+
+/* 글자 크기 설정을 따르지 않는 채팅 화면 요소 — 입력줄(모바일에서 16px 미만이면 iOS 가 화면을 확대한다)과
+   사이드바. 채팅 렌더러에 인라인 style 을 남기지 않으려고 고정 크기도 클래스로 둔다. */
+.thread-copy-icon     { font-size: 0.75rem; }
+.chat-tag-chip        { font-size: 0.72rem; }
+.suggest-origin-badge { font-size: 0.65rem; }
+
 /* ── Message bubbles ─────────────────────────────────────────────────── */
 .bubble-user {
     background: var(--bg-bubble-user);
@@ -154,15 +212,8 @@
 .bubble-user-time {
     display: block;
     margin-top: 0.35rem;
-    font-size: 0.68rem;
     opacity: 0.85;
 }
-
-/* 답변 말풍선 맨 아래 메타데이터 줄(모델·소요 시간·토큰·글자 수·시각). 렌더러가 넷(chat.html 기록 루프 ·
-   재사용 말풍선 · fragments/message-assistant.html · chat-stream.js)이라 예전엔 각자 인라인 style 로
-   0.68rem/0.72rem 을 달아 같은 줄이 새로고침 전후로 크기가 달랐다. 배지·안내 줄은 이 안에 넣지 않는다 —
-   .badge(0.75em)·.small(0.875em)은 부모 기준이라 이 안에서는 한 번 더 줄어든다. */
-.bubble-meta { font-size: 0.72em; }
 
 /* 질문 앞의 응답 모드 표기 '[S] '. 질문 본문과 같은 줄에 흐르되(inline) 한 눈에 갈라 보이도록
    흐리게 + 고정폭으로 둔다 — 답변 길이가 왜 다른지 대화 기록에서 바로 읽히게 하려는 표시라,
@@ -191,7 +242,6 @@
 /* ── Feedback (like/dislike) buttons ─────────────────────────────────── */
 .feedback-controls .feedback-btn {
     padding: 0.05rem 0.35rem;
-    font-size: 0.7rem;
     line-height: 1.4;
 }
 
@@ -221,7 +271,6 @@
 /* ── PROGRESSIVE upgrade badge ───────────────────────────────────────── */
 .badge-upgraded {
     display: inline-block;
-    font-size: 0.72rem;
     font-weight: 600;
     padding: 2px 8px;
     border-radius: 12px;
@@ -273,10 +322,10 @@
 .dot-unknown { background: #6c757d; }
 
 /* ── Markdown content in assistant bubble ────────────────────────────── */
-/* 글자 크기는 전부 em — 이 블록이 놓인 자리(답변 본문 16px, 출처 미리보기 팝오버 11.2px)의 크기를 기준으로
-   함께 줄고 는다. rem 이던 때는 팝오버 안에서도 제목·표·코드가 루트(16px) 기준으로 커져 팝오버 전용 px 고정
+/* 글자 크기는 전부 em — 이 블록이 놓인 자리(답변 본문 = 채팅 글자 크기, 출처 미리보기 팝오버 = 그 0.7배)의 크기를
+   기준으로 함께 줄고 는다. rem 이던 때는 팝오버 안에서도 제목·표·코드가 루트(16px) 기준으로 커져 팝오버 전용 px 고정
    규칙이 따로 있었고, 그 규칙이 데스크톱 미디어 쿼리 안에만 있어 모바일 팝오버는 제목이 본문보다 컸다.
-   소제목은 본문에 가깝게 — 본문보다 h6 +0 · h5 +1 · h4 +2 · h3 +3 · h2 +4 · h1 +5px(본문 16px 기준), 전부 700.
+   소제목은 본문에 가깝게 — 본문보다 h6 +0 · h5 +1 · h4 +2 · h3 +3 · h2 +4 · h1 +5px(보통 16px 기준), 전부 700.
    예전 주석은 본문을 14px 로 가정해 실제로는 h6 이 본문보다 작았다. 750 같은 중간 굵기는 가변 폰트가 아니면
    없는 굵기라 브라우저가 가까운 굵기로 대체해 OS 마다 두께가 갈린다. */
 .md-content h1 { font-size: 1.3125em; font-weight: 700; margin-top: 0.75rem; }
@@ -314,10 +363,6 @@
 .md-content hr         { margin: 0.75rem 0; border-color: var(--border-default); }
 .md-content a          { color: #0d6efd; }
 .md-content p:last-child { margin-bottom: 0; }
-/* 출처 미리보기 팝오버(renderSourcePreviewHtml → .md-content.small)는 본문이 이미 작아(데스크톱 11.2px)
-   코드 블록·표를 본문보다 더 줄이지 않는다 — 말풍선의 0.85em·0.9em 을 그대로 곱하면 9~10px 가 된다. */
-.popover .md-content pre,
-.popover .md-content table { font-size: 1em; }
 
 /* ── Sidebar layout ──────────────────────────────────────────────────── */
 /* At md+ the offcanvas-md renders as a static flex child (fixed width).

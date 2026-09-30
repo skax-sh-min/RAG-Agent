@@ -184,6 +184,35 @@ class SettingsControllerRenderTest {
     }
 
     @Test
+    @DisplayName("GET /settings — 화면 표시(채팅 글자 크기) 카드는 관리자가 아니어도 맨 위에 렌더된다")
+    void settingsPage_displayCardRendersForNonAdmins() throws Exception {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)))));
+        // 관리자 안내가 실제로 뜨는 유일한 경우 — management-only 모드의 비관리자(GlobalModelAdvice.isAdmin 은 다른
+        // 모드에서 늘 참이다). 요청마다 읽는 값이라 컨텍스트가 뜬 뒤에 스텁해도 된다.
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+
+        String html = mvc.perform(get("/settings").with(user(user)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 네 단계 선택지 + 미리보기 말풍선 + 카드 스크립트(content 조각 안에 있어야 레이아웃에 실린다).
+        assertThat(html).contains("id=\"display-settings\"",
+                "id=\"chat-font-xs\"", "id=\"chat-font-sm\"", "id=\"chat-font-md\"", "id=\"chat-font-lg\"",
+                "id=\"chat-font-preview\" class=\"chat-font-scope\"",
+                "document.getElementById('display-settings')");
+        // 관리자 안내("관리자만 값을 변경할 수 있습니다")는 서버 설정에만 해당한다 — 화면 표시 카드보다 앞에 오면
+        // 누구나 바꿀 수 있는 글자 크기까지 막힌 것처럼 읽힌다.
+        assertThat(html).contains("alert alert-secondary");
+        assertThat(html.indexOf("id=\"display-settings\"")).isLessThan(html.indexOf("alert alert-secondary"));
+    }
+
+    @Test
     @DisplayName("GET /settings — LOCAL_ONLY + 관리자여도 'LLM 라우팅' 안내 배너/휘발성 안내 문구는 더 이상 렌더되지 않는다")
     void settingsPage_doesNotRenderRemovedLlmRoutingHints() throws Exception {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",

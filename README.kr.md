@@ -331,7 +331,7 @@ rag_java/
         ├── messages_ko.properties         # UI 문자열 — 한국어
         ├── static/
         │   ├── css/
-        │   │   ├── app.css                # 커스텀 스타일 (버블·애니메이션·반응형 오프캔버스/dvh/16px/44px)
+        │   │   ├── app.css                # 커스텀 스타일 (채팅 글자 크기 단계·버블·애니메이션·반응형 오프캔버스/dvh/16px/44px)
         │   │   └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
         │   ├── manifest.webmanifest       # PWA 매니페스트 (이름·아이콘·standalone)
         │   ├── sw.js                      # 서비스 워커 (NETWORK-FIRST, 오프라인 fallback 전용)
@@ -383,6 +383,7 @@ rag_java/
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
 - **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시 (`chat-stream.js`, fetch + ReadableStream). response mode가 S이면 critic 단계는 건너뜀. 마지막 이벤트와 함께 붙는 검증 배지는 N이 초록 `검증됨`, C가 파랑 `생성`이며(통과한 검증의 질문 자체가 다르다), 평가가 지목한 발명된 이름이 있으면 노랑 `문서 밖 이름` 경고가 함께 붙는다. 같은 배지가 턴별로 저장돼 새로고침 후에도 그대로 복원된다
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
+- **채팅 글자 크기** — `/settings` 맨 위 "화면 표시"에서 최소·작게·보통·크게(12·14·16·18px) 선택. 서버 설정이 아니라 이 브라우저의 `localStorage` 에만 저장돼 누구나 바꿀 수 있고, 첫 렌더 전에 적용되며 열린 다른 탭에도 새로고침 없이 반영됨. 말풍선 안 제목·코드·표·메타데이터가 같은 비율(em)로 따라가고 작은 글자는 8.5px 아래로 내려가지 않음. 입력창은 iOS 자동 확대 방지를 위해 16px 고정
 - **모바일 & PWA** — 반응형 오프캔버스 대화 드로어, `100dvh` 하단 고정 입력창, `table-responsive` 가로 넘침 처리, iOS 16px 자동 확대 방지; 설치형 PWA(`manifest.webmanifest`, 인증/RAG/SSE 응답을 캐시하지 않는 오프라인 fallback 서비스 워커, iOS "홈 화면에 추가" 힌트); 아이콘 버튼 i18n `aria-label`·44px 터치 영역·`:focus-visible` 표시
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
@@ -421,7 +422,7 @@ rag_java/
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
-- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 600자 미리보기. 새 스트리밍 답변뿐 아니라 재사용 답변(`db-reuse`)과 `/chat/{threadId}` 재진입 시 복원되는 과거 turn에도 동일하게 렌더링됨. 모바일이 아닌 화면에서는 팝오버 폭을 기존 대비 10% 더 넓히고(기본 Bootstrap 대비 약 2.2배) 글자 크기를 살짝 줄여 줄바꿈을 줄임
+- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 600자 미리보기. 새 스트리밍 답변뿐 아니라 재사용 답변(`db-reuse`)과 `/chat/{threadId}` 재진입 시 복원되는 과거 turn에도 동일하게 렌더링됨. 모바일이 아닌 화면에서는 팝오버 폭을 기존 대비 10% 더 넓히고(기본 Bootstrap 대비 약 2.2배) 글자 크기를 살짝 줄여 줄바꿈을 줄임. 글자 크기는 채팅 글자 크기 설정을 함께 따름
 - **청크 편집기 실시간 미리보기** — 넓은 PC 화면에서는 `/admin` 청크 편집 오프캔버스가 마크다운(이미지·표 포함) 실시간 미리보기와 텍스트 편집창으로 나뉘어 표시되며, 입력하는 대로 미리보기가 갱신됨. 좁은 화면은 기존처럼 편집창만 표시
 - **소제목 번호 생성 기본값 자동 조정** — 업로드 시 "소제목 숫자 생성" 체크박스가 PPTX를 선택하면 자동으로 해제됨(PPTX에는 서버에서 애초에 적용되지 않음; PDF는 영향 없이 체크 유지), PPTX와 다른 형식을 함께 선택하면 옵션이 파일별이 아니라 배치 전체에 하나만 적용되는 구조상 나눠서 업로드하라는 경고가 표시됨
 - **문서 내보내기 (MD/TXT/DOCX)** — 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)이 저장된 변환 MD가 아니라 현재 색인된 청크를 기준으로 문서를 재구성함 — `/admin` 청크 편집이 그대로 반영됨. `ChunkReassembler`가 `ChunkSplitter`가 검색을 위해 일부러 벌여 놓은 중복(재주입된 소제목, 부모 챕터 breadcrumb, 잘린 코드펜스 마커, 반복된 표 헤더, 슬라이딩 윈도우 overlap)을 렌더링 전에 걷어내 원문에 가까운 결과를 만듦 — 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%. MD는 이미지가 있으면 ZIP으로 함께 받고(원본 파일이 사라진 이미지는 깨진 링크 대신 `(이미지 없음: …)` 안내), DOCX는 POI로 이미지를 위치에 맞게 임베드함 — 글머리표 뒤·문장 중간 마커는 가운데 정렬된 그림 문단으로 내려가고, 표 셀 안 마커는 그 칸 안에 칸 너비로 삽입됨. 코드 블록은 테두리가 있는 1×1 표 안에 좌측 정렬·고정폭으로 렌더링되며 `//`·`#`·`/* … */` 주석만 초록색으로 표시(문자열 리터럴을 추적하므로 `"http://…"`는 칠하지 않음). 문서별 실제 인덱싱 당시 `CHUNK_OVERLAP` 값이 `doc_registry`에 기록되어(기존 문서는 기동 시 자동 백필) 이후 설정을 바꿔도 예전 문서의 내보내기 결과가 틀어지지 않음. PPTX 내보내기는 아직 미지원
@@ -447,7 +448,7 @@ rag_java/
 | `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 | `GET` | `/admin` | 벡터 스토어 관리 — 청크 브라우저, 큐레이션 Q&A, 제안 검토 (관리자 전용) |
-| `GET` | `/settings` | 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
+| `GET` | `/settings` | 화면 표시(채팅 글자 크기 — 누구나, 브라우저별 저장) + 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
 | `GET` | `/ui/documents/{docId}/export` | 인덱싱된 청크로 문서를 재조립해 내려받기 (MD/TXT/DOCX, 관리자 전용) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | 채팅 답변 썸네일에서 특정 이미지를 현재 대화 기록에서만 제외 |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | 그 턴의 출처 목록에서 청크 하나를 숨김 (표시 전용 — 재사용 검증은 계속 그 청크를 본다) |

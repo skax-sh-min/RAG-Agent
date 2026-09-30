@@ -32,7 +32,7 @@ src/main/resources/
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
-│   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
+│   ├── settings.html                      # 화면 표시(채팅 글자 크기, 브라우저별) + LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
 │       ├── message-user.html              # 사용자 메시지 버블
 │       ├── message-assistant.html         # 어시스턴트 버블 (메타데이터 포함)
@@ -265,9 +265,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
 
+**맨 위의 "화면 표시" 카드는 예외다** — 채팅 글자 크기(최소·작게·보통·크게)를 고르는 카드로, 서버에 아무것도 보내지 않고 이 브라우저에만 저장하므로 누구나 바꿀 수 있다(§9.4). 그래서 "관리자만 값을 변경할 수 있습니다" 안내는 카드 아래 **서버 설정** 제목 밑에 둔다.
+
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/settings` | `settings.html` | LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
+| GET | `/settings` | `settings.html` | 화면 표시(채팅 글자 크기, 브라우저별 — §9.4) + LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
@@ -798,3 +800,20 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 - 아이콘 전용 버튼(햄버거·드로어 닫기·전송·테마·로그아웃·navbar 토글)에 i18n `aria-label`(`th:attr="aria-label=#{...}"`).
 - 모바일 `pointer:coarse`에서 아이콘 버튼 최소 44×44px 터치 영역.
 - `:focus-visible` 키보드 포커스 인디케이터, `prefers-color-scheme` 자동 감지(기존 유지).
+- 채팅 글자 크기를 사용자가 고른다(§9.4).
+
+### 9.4 채팅 글자 크기 (최소·작게·보통·크게)
+
+`/settings` 맨 위 **화면 표시** 카드에서 고른다. 고르는 즉시 적용되고 **이 브라우저의 `localStorage.chatFontSize` 에만** 저장된다(서버 설정이 아니다 — 누구나 바꿀 수 있고, 기기마다 따로다). 카드에는 같은 클래스로 그린 미리보기 말풍선이 있어 설정 화면에서도 차이가 보인다.
+
+| 단계 | 기준 | 메타 단계 (0.75em) | 미세 단계 (0.625em) | 출처 미리보기 팝오버 본문 (데스크톱) |
+|---|---|---|---|---|
+| 최소 | 12px | 9px | 8.5px (하한, 원래 7.5) | 8.5px (하한, 원래 8.4) |
+| 작게 | 14px | 10.5px | 8.75px | 9.8px |
+| **보통** (기본) | 16px | 12px | 10px | 11.2px |
+| 크게 | 18px | 13.5px | 11.25px | 12.6px |
+
+- **적용 범위**: 메시지 목록(질문·답변 말풍선 전부), 출처 미리보기 팝오버, 원문 보기 모달. 말풍선 안은 전부 기준에 대한 em 이라 함께 움직인다 — 본문 1, 제목 1.3125→1, 안내 줄·인라인 코드 0.875, 코드 블록 0.85, 표 0.9, **메타 단계 0.75**(메타데이터 줄·배지·출처 수치·질문 시각·👍👎·고추론 배지·건너뛰기), **미세 단계 0.625**(미사용·변경 배지). 팝오버는 기준의 0.8배(좁은 화면 0.875배)이고 그 안의 코드 블록·표는 본문과 같은 크기다.
+- **작은 글자 하한 8.5px** — 실제로 닿는 것은 최소 단계의 미세 배지와 팝오버 글자뿐이다.
+- **따르지 않는 것**: 입력창(모바일에서 16px 미만이면 iOS 가 화면을 확대하므로 고정 — 최소에서는 입력 글자가 메시지보다 크다), 태그 칩·질문 추천, 질문 내비게이션, 사이드바·상단 바, 관리 화면.
+- **동작**: `base.html` `<head>` 가 테마와 같은 자리에서 `<html data-chat-font>` 를 걸어 첫 렌더부터 적용한다(보통은 속성 없음). 이미 열려 있는 다른 탭도 `storage` 이벤트로 새로고침 없이 따라온다. 크기는 `app.css` '채팅 글자 크기' 섹션 한 곳에만 있다 — 채팅 렌더러에 인라인 `font-size` 를 쓰면 `ChatFontSizeConventionTest` 가 실패한다. 배경과 함정은 [PITFALLS § 채팅 글자 크기](PITFALLS.md#채팅-글자-크기-최소작게보통크게).

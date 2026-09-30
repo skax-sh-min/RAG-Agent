@@ -88,7 +88,7 @@
                             th:title="#{chat.copy}"
                             th:attr="data-thread-id=${meta.threadId}"
                             onclick="copyThreadId(this, this.dataset.threadId)" >
-                        <i class="bi bi-clipboard" style="font-size:0.75rem;"></i>
+                        <i class="bi bi-clipboard thread-copy-icon"></i>
                     </button>
                 </div>
                 <!-- Actions -->
@@ -142,7 +142,7 @@
                  내용과 함께 흘러가 버린다. 바깥 채팅 영역(.position-relative)에 걸면
                  이번엔 상단바/이어가기 배너 위에 얹혀 버린다. -->
             <div class="chat-messages-wrap position-relative d-flex flex-column flex-grow-1 overflow-hidden">
-            <div id="chat-messages" class="flex-grow-1 p-3">
+            <div id="chat-messages" class="flex-grow-1 p-3 chat-font-scope">
                 <!-- Server-rendered previous turns (restored from conversation_turns) -->
                 <th:block th:if="${turns != null}" th:each="turn : ${turns}">
                     <!-- .user-turn + data-question: 질문 내비게이션(현재 질문 풍선 / 전체 질문
@@ -251,12 +251,11 @@
                                                수정은 응답 지분이 있는 출처만). 템플릿에 조건을 풀어
                                                쓰면 스트리밍/HTMX 경로와 규칙이 갈라진다. -->
                                           <span th:if="${src.promptExcluded}"
-                                                class="badge ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
-                                                style="font-size:0.62rem; vertical-align:middle; cursor:help;"
+                                                class="badge source-flag ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
+                                                style="cursor:help;"
                                                 th:title="'컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다. 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.'">미사용</span>
                                           <span th:if="${src.staleBadge != null}"
-                                                class="badge ms-1"
-                                                style="font-size:0.62rem; vertical-align:middle;"
+                                                class="badge source-flag ms-1"
                                                 th:classappend="${src.staleStatus == 'deleted'}
                                                     ? 'bg-danger-subtle text-danger-emphasis border border-danger-subtle'
                                                     : 'bg-warning-subtle text-warning-emphasis border border-warning-subtle'"
@@ -267,7 +266,7 @@
                                           <!-- 저장해 둔 검색 진단 수치(3단계) 복원 — 표시 규칙은
                                                스트리밍/HTMX 경로와 동일: 유사도 우선, 없으면 축 표기.
                                                기본은 숨김이고 아래 스크립트가 토글에 따라 해제한다. -->
-                                          <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
+                                          <span class="source-metrics text-muted d-none"
                                                 th:if="${src.similarity != null or src.axisRanks != null or src.answerShare != null}">
                                               <span th:if="${src.similarity != null}"
                                                     th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
@@ -525,7 +524,7 @@
                     </div>
                 </div>
                 <div class="modal-body">
-                    <div class="md-content" id="chunk-fulltext-modal-body"></div>
+                    <div class="md-content chat-font-scope" id="chunk-fulltext-modal-body"></div>
                 </div>
             </div>
         </div>
@@ -952,11 +951,11 @@
                     chips.innerHTML = '';
                     return;
                 }
-                const allChip = `<button type="button" class="btn btn-sm py-0 px-2"
-                         style="font-size:0.72rem;" data-tag-all="true" title="${escHtml(chatAllTooltip)}">${escHtml(chatAllLabel)}</button>`;
+                const allChip = `<button type="button" class="btn btn-sm py-0 px-2 chat-tag-chip"
+                         data-tag-all="true" title="${escHtml(chatAllTooltip)}">${escHtml(chatAllLabel)}</button>`;
                 chips.innerHTML = allChip + tags.map(t =>
-                    `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                             style="font-size:0.72rem;" data-tag="${escHtml(t)}"
+                    `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 chat-tag-chip"
+                             data-tag="${escHtml(t)}"
                              title="${escHtml(chatTagSingleHint)}">${escHtml(t)}</button>`).join('');
                 chips.querySelector('[data-tag-all]').addEventListener('click', chatSelectAllTags);
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
@@ -1107,6 +1106,8 @@
             html: true,
             sanitize: false,
             trigger: 'manual',
+            // 채팅 글자 크기 설정을 따르게 하는 표식 — app.css '채팅 글자 크기'. 관리 화면 팝오버는 달지 않는다.
+            customClass: 'source-preview-popover',
             content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
         });
         let hideTimer = null;
@@ -1293,7 +1294,7 @@
             return `<button type="button" class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-2"` +
                         ` data-idx="${idx}" data-origin="${escHtml(origin)}"` +
                         ` title="${escHtml(isThread ? SUGGEST_I18N.jumpHint : SUGGEST_I18N.reuseHint)}">` +
-                `<span class="badge ${SUGGEST_BADGE_CLASS[origin]} flex-shrink-0" style="font-size:0.65rem;">` +
+                `<span class="badge suggest-origin-badge ${SUGGEST_BADGE_CLASS[origin]} flex-shrink-0">` +
                     (isThread ? '<i class="bi bi-arrow-up-short"></i>' : '') + escHtml(SUGGEST_I18N[origin]) +
                 `</span>` +
                 `<span class="small fw-semibold text-start flex-grow-1">${escHtml(it.question || '')}</span>` +
