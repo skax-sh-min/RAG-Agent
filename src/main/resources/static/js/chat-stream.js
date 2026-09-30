@@ -162,7 +162,7 @@
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
                     <button type="button" id="stream-skip-images-${bubbleId}"
-                            class="btn btn-sm btn-link p-0 ms-2 d-none" style="font-size:0.75rem; vertical-align:baseline;">건너뛰기</button>
+                            class="btn btn-sm btn-link p-0 ms-2 d-none stream-skip-btn">건너뛰기</button>
                 </div>
                 <div id="stream-badges-${bubbleId}"></div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
@@ -333,7 +333,7 @@
             ? `유사도 ${s.similarity.toFixed(2)}`
             : (s.axis_ranks ? escHtml(s.axis_ranks) : '');
         if (!quality) return '';
-        return `<span class="source-metrics text-muted" style="font-size:0.72rem;">${quality}</span>`;
+        return `<span class="source-metrics text-muted">${quality}</span>`;
     }
 
     /* 출처 표시 순서 비교 — 1순위 응답 참여도, 2순위 유사도, 둘 다 내림차순이며 값이 없는
@@ -408,8 +408,8 @@
             if (!item || item.dataset.hasExcluded === '1') return;   // 재진입 방지(멱등)
             item.dataset.hasExcluded = '1';
             badge.insertAdjacentHTML('afterend',
-                ` <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"`
-                + ` style="font-size:0.62rem; vertical-align:middle; cursor:help;"`
+                ` <span class="badge source-flag bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"`
+                + ` style="cursor:help;"`
                 + ` title="컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다.`
                 + ` 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.">미사용</span>`);
         });
@@ -459,6 +459,8 @@
             html: true,
             sanitize: false,
             trigger: 'manual',
+            // 채팅 글자 크기 설정을 따르게 하는 표식 — app.css '채팅 글자 크기'. 관리 화면 팝오버는 달지 않는다.
+            customClass: 'source-preview-popover',
             content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
         });
         let hideTimer = null;

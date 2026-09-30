@@ -30,6 +30,12 @@
     (function(){
         var t=localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
         document.documentElement.setAttribute('data-theme',t);
+        // 채팅 글자 크기(/settings 의 화면 표시)도 같은 이유로 첫 렌더 전에 건다 — 보통(md)은 속성 없음.
+        // 값의 규칙은 app.css '채팅 글자 크기', 바꾸는 쪽은 아래 setChatFontSize().
+        try{
+            var f=localStorage.getItem('chatFontSize');
+            if(f==='xs'||f==='sm'||f==='lg')document.documentElement.setAttribute('data-chat-font',f);
+        }catch(e){}
     })();
     </script>
 </head>
@@ -268,6 +274,29 @@ const I18N = {
             applyTheme(next);
         });
     })();
+
+    /* 채팅 글자 크기 — /settings 의 "화면 표시"가 고르고 이 브라우저의 localStorage 에만 남는다(서버 설정은 전 사용자
+       공통·관리자 전용이라 사용자별 값을 둘 자리가 아니다). 첫 렌더 전 적용은 <head> 의 테마 스크립트 옆에서 하고,
+       여기서는 바꾸는 쪽과 다른 탭 동기화를 맡는다. 단계별 크기는 app.css '채팅 글자 크기'. */
+    const CHAT_FONT_SIZES = ['xs', 'sm', 'md', 'lg'];
+    function getChatFontSize() {
+        const v = document.documentElement.getAttribute('data-chat-font');
+        return CHAT_FONT_SIZES.includes(v) ? v : 'md';
+    }
+    function applyChatFontSize(v) {
+        // 보통(md)은 속성을 떼어 app.css 의 :root 기본값을 쓴다 — 모르는 값도 보통으로 떨어진다.
+        if (CHAT_FONT_SIZES.includes(v) && v !== 'md') document.documentElement.setAttribute('data-chat-font', v);
+        else document.documentElement.removeAttribute('data-chat-font');
+    }
+    function setChatFontSize(v) {
+        applyChatFontSize(v);
+        try { localStorage.setItem('chatFontSize', getChatFontSize()); }
+        catch (e) { /* 저장할 수 없는 브라우저(사생활 보호 모드 등) — 이 페이지에서만 적용된다 */ }
+    }
+    // 설정 탭에서 바꾸면 이미 열려 있는 채팅 탭에도 바로 반영한다(storage 이벤트는 다른 탭에서만 온다).
+    window.addEventListener('storage', function (e) {
+        if (e.key === 'chatFontSize') applyChatFontSize(e.newValue);
+    });
 
     /* highlight.js theme sync */
     function syncHljsTheme() {
