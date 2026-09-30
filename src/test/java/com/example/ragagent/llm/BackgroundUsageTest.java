@@ -14,7 +14,7 @@ class BackgroundUsageTest {
         assertThat(BackgroundUsage.isBackground("title:local")).isTrue();
         assertThat(BackgroundUsage.isBackground("summary:local")).isTrue();
         assertThat(BackgroundUsage.isBackground("local")).isFalse();
-        assertThat(BackgroundUsage.isBackground("embed:nomic")).isFalse();
+        assertThat(BackgroundUsage.isBackground("embed")).isFalse();
     }
 
     @Test

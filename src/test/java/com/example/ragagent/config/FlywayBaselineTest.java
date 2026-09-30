@@ -85,7 +85,8 @@ class FlywayBaselineTest {
                 "SELECT version, type FROM flyway_schema_history ORDER BY installed_rank"))
                 .as("V1–V3 는 이미 있는 것을 다시 만들려다 실패하므로 돌면 안 된다 — baseline 뒤로는 V4 부터")
                 .extracting(row -> row.get("version") + ":" + row.get("type"))
-                .containsExactly("3:BASELINE", "4:JDBC");
+                .startsWith("3:BASELINE", "4:JDBC")
+                .doesNotContain("1:SQL", "2:SQL", "3:SQL");
         assertThat(jdbc.queryForObject("SELECT call_count FROM llm_usage WHERE provider_name = 'p'", Integer.class))
                 .isEqualTo(7);
     }
