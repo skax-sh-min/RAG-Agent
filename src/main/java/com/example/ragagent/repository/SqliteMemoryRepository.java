@@ -351,6 +351,25 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public void saveClarifiedQuestion(long turnId, String clarifiedQuestion) {
+        if (clarifiedQuestion == null || clarifiedQuestion.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET clarified_question = ? WHERE id = ?",
+                clarifiedQuestion, turnId);
+    }
+
+    @Override
+    public Map<Long, String> findClarifiedQuestionsByTurnIds(List<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        Map<Long, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT id, clarified_question FROM conversation_turns " +
+                   "WHERE clarified_question IS NOT NULL AND id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getLong("id"), rs.getString("clarified_question")); },
+                turnIds.toArray());
+        return out;
+    }
+
+    @Override
     public int countRetrievalMetrics(String userId, String threadId) {
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*) FROM conversation_turns t WHERE t.retrieval_metrics IS NOT NULL");

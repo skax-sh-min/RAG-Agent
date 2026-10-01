@@ -57,6 +57,18 @@ public class QuestionReuseRepository {
             "COALESCE(src.direct_mode, t.direct_mode, 0) AS direct_mode, " +
             "COALESCE(src.selected_tags, t.selected_tags, '') AS selected_tags";
 
+    /**
+     * 답변 뒤에 다듬은 질문(V6, {@code PostAnswerService}). 후보가 스스로 재사용 턴이면 그 행에 없을 수
+     * 있어(이 기능 이전에 만들어진 재사용 턴) 원본의 값으로 떨어진다 — 답변을 {@code src} 에서 가져오는
+     * 것과 같은 이유다. 추천 매칭은 원문과 이 값을 <b>함께</b> 본다: 다듬은 질문은 지시어를 푼 이름을
+     * 담고, 원문은 사용자가 실제로 쓴 표현을 담는다.
+     */
+    private static final String CLARIFIED_COLUMN =
+            "COALESCE(NULLIF(t.clarified_question, ''), NULLIF(src.clarified_question, '')) AS clarified_question";
+
+    private static final String MATCHED_TEXT =
+            "lower(t.question || ' ' || COALESCE(NULLIF(t.clarified_question, ''), src.clarified_question, ''))";
+
     private static final RowMapper<CandidateTurn> CANDIDATE_MAPPER = (rs, n) -> new CandidateTurn(
             rs.getLong("id"),
             rs.getString("user_id"),
@@ -66,7 +78,8 @@ public class QuestionReuseRepository {
             rs.getString("created_at"),
             rs.getString("response_mode"),
             rs.getInt("direct_mode") != 0,
-            rs.getString("selected_tags"));
+            rs.getString("selected_tags"),
+            rs.getString("clarified_question"));
 
     /**
      * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
@@ -225,10 +238,10 @@ public class QuestionReuseRepository {
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String currentThread = threadId == null ? "" : threadId;
         String questionMatch = keywords.stream()
-                .map(k -> "lower(t.question) LIKE lower(?) ESCAPE '\\' ")
+                .map(k -> MATCHED_TEXT + " LIKE lower(?) ESCAPE '\\' ")
                 .collect(Collectors.joining("AND "));
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
-            ANSWER_SHAPE_COLUMNS + " " +
+            ANSWER_SHAPE_COLUMNS + ", " + CLARIFIED_COLUMN + " " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE " + questionMatch +
@@ -264,7 +277,7 @@ public class QuestionReuseRepository {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
-            ANSWER_SHAPE_COLUMNS + " " +
+            ANSWER_SHAPE_COLUMNS + ", " + CLARIFIED_COLUMN + " " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE t.id = ? " +
@@ -602,11 +615,24 @@ public class QuestionReuseRepository {
      */
     public record CandidateTurn(long turnId, String userId, String threadId,
                                 String question, String answer, String createdAt,
-                                String responseMode, boolean directMode, String selectedTags) {
+                                String responseMode, boolean directMode, String selectedTags,
+                                String clarifiedQuestion) {
         /** 답변 모양을 모르는 후보 — 옛 행과 같은 기본값(모드 미상 → N, RAG, 태그 없음). 테스트 편의용. */
         public CandidateTurn(long turnId, String userId, String threadId,
                              String question, String answer, String createdAt) {
-            this(turnId, userId, threadId, question, answer, createdAt, null, false, "");
+            this(turnId, userId, threadId, question, answer, createdAt, null, false, "", null);
+        }
+
+        /** 다듬은 질문이 없는 후보(V6 이전의 행) — 테스트 편의용. */
+        public CandidateTurn(long turnId, String userId, String threadId,
+                             String question, String answer, String createdAt,
+                             String responseMode, boolean directMode, String selectedTags) {
+            this(turnId, userId, threadId, question, answer, createdAt, responseMode, directMode, selectedTags, null);
+        }
+
+        /** 추천 목록에 보이고 재사용 때 새 턴의 질문이 되는 문장 — 다듬은 질문이 있으면 그것, 없으면 원문. */
+        public String displayQuestion() {
+            return clarifiedQuestion != null && !clarifiedQuestion.isBlank() ? clarifiedQuestion : question;
         }
     }
 }

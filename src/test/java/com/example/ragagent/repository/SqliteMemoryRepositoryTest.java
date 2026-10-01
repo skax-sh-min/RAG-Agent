@@ -76,6 +76,23 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("다듬은 질문(V6)은 사후 UPDATE 로 저장되고 값이 있는 턴만 조회된다")
+    void clarifiedQuestionRoundTrips() {
+        long first = repo.addTurn(UID, "t1", "그거 어떻게 설정해?", "A1", null, 0, 0, 0, null, 0, "N", null);
+        long second = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "N", null);
+
+        repo.saveClarifiedQuestion(first, "MCI 연동 타임아웃은 어떻게 설정하나요?");
+        repo.saveClarifiedQuestion(second, "  ");   // 빈 값은 저장하지 않는다 — NULL 이 "아직 안 함"이다
+
+        assertThat(repo.findClarifiedQuestionsByTurnIds(List.of(first, second)))
+                .containsExactly(java.util.Map.entry(first, "MCI 연동 타임아웃은 어떻게 설정하나요?"));
+        assertThat(repo.findClarifiedQuestionsByTurnIds(List.of())).isEmpty();
+        // 원문은 그대로다 — 다듬은 질문은 옆에 둘 뿐 덮어쓰지 않는다.
+        assertThat(repo.getTurn(UID, "t1", first)).get()
+                .extracting(MemoryRepository.Turn::question).isEqualTo("그거 어떻게 설정해?");
+    }
+
+    @Test
     @DisplayName("addTurn 의 response_mode 가 getTurn(s)/getRecentTurns 모두에서 그대로 되돌아온다")
     void responseModeRoundTrips() {
         long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "L", null);
