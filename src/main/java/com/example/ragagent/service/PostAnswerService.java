@@ -7,6 +7,7 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingOffChatModel;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import com.example.ragagent.web.MdcPropagation;
@@ -41,8 +42,10 @@ import java.util.regex.Pattern;
  * 굳는다). 여기서는 목적이 다르다: 이 문장은 검색어가 아니라 재사용 추천에서 남이 고르는 문장이라, 답변이
  * 실제로 다룬 범위를 말해야 맞다. 대신 <b>검색 경로에는 절대 넣지 않는다</b>(독립화 재료·MultiQuery·답변
  * 프롬프트 어디에도) — 그쪽의 오염 경로는 그대로 닫혀 있다. 답변 전문이 아니라 "## 요약" 섹션만 넘기므로
- * 입력이 작다(소형 모델 계층 {@code MICRO_TEXT}). 출력은 한 줄이지만 추론 모델은 그 앞에 수백 토큰을
- * 생각하므로({@link #MAX_OUTPUT_TOKENS}) 로컬 서버에서는 턴마다 수 초~십수 초의 백그라운드 생성이 된다.
+ * 입력이 작다(소형 모델 계층 {@code MICRO_TEXT}). 출력은 한 줄이라 <b>생각을 끄고</b> 부른다
+ * ({@code ThinkingOffChatModel}) — 추론 모델은 한 줄 앞에 수백 토큰을 생각해서, 켠 채로는 로컬 서버에서 턴마다
+ * 10~17초의 백그라운드 생성이었고 끄면 1초 안팎이다. 스위치를 받지 않는 서버를 위해 출력 예약은 넉넉히 둔다
+ * ({@link #MAX_OUTPUT_TOKENS}).
  *
  * <p><b>대상은 재사용 후보가 될 수 있는 턴뿐이다</b>({@link #isReuseCandidate}) — 출처가 있는 RAG 답변이고
  * 응답 모드가 재사용을 허용할 때(지금은 N). S·C·Direct·인사·검색 0건은 재사용 후보가 아니라서 이 호출이
@@ -81,9 +84,11 @@ public class PostAnswerService {
     /**
      * 출력 예약 — 한 줄짜리 응답에 프로바이더의 max-tokens 전체를 예약하지 않는다. 그런데도 한 줄에 비해
      * 넉넉한 이유는 {@code AnswerService.MAX_EVAL_OUTPUT_TOKENS} 와 같다: 추론(thinking) 모델은 답을 내기
-     * 전에 이 예산을 먼저 쓴다. 실측 — llama.cpp 의 gemma-4-E2B 는 이 프롬프트에서 매번 400~700 토큰을
-     * {@code reasoning_content} 로 쓰고 나서야 한 줄을 냈고, 256 에서는 8건 모두 본문이 빈 채
-     * {@code finish_reason=length} 로 끝났다(= 기능이 아무것도 하지 않는다).
+     * 전에 이 예산을 먼저 쓴다. 이 호출은 생각을 끄고 부르지만({@link #options()}) 그 스위치를 받지 않는 서버
+     * (LM Studio 의 OpenAI 호환 경로, 원격 프로바이더)에서는 모델이 여전히 생각한다 — 실측으로 llama.cpp 의
+     * gemma-4-E2B 는 생각을 켠 채 400~700 토큰을 {@code reasoning_content} 로 쓰고 나서야 한 줄을 냈고,
+     * 256 에서는 8건 모두 본문이 빈 채 {@code finish_reason=length} 로 끝났다(= 기능이 아무것도 하지 않는다).
+     * 생각을 끄면 실제로 쓰는 것은 20토큰 안팎이고, 예약은 쓰지 않으면 비용이 없다.
      */
     static final int MAX_OUTPUT_TOKENS = 2_048;
 
@@ -274,10 +279,13 @@ public class PostAnswerService {
         return s.strip().replaceAll("\\s+", " ").replaceAll("[\\s?？.!。]+$", "").toLowerCase(Locale.ROOT);
     }
 
-    /** 제목 생성과 같은 인덱싱/백그라운드 temperature — 다듬기는 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다. */
+    /**
+     * 제목 생성과 같은 인덱싱/백그라운드 temperature — 다듬기는 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다.
+     * 생각은 끈다(클래스 주석) — 실을지는 받는 프로바이더가 정한다.
+     */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()));
         int configured = props.llmSafe().maxTokens();
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
         return builder.build();

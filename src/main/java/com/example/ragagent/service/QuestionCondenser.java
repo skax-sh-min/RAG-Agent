@@ -4,6 +4,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingOffChatModel;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -75,6 +76,11 @@ public class QuestionCondenser {
      * 출력 예약. 한 줄짜리 응답에 프로바이더의 {@code app.llm.max-tokens} 전체를 예약하면, 좁은
      * 창에서 {@code n_ctx} 를 넘기는 것은 프롬프트가 아니라 그 예약이다(§6.26 — {@code
      * AnswerService.MAX_EVAL_OUTPUT_TOKENS} 와 같은 이유).
+     *
+     * <p><b>이 값이 성립하는 것은 생각을 끄고 부르기 때문이다</b>({@link #options()}). 추론 모델은 한 줄 앞에
+     * 수백 토큰을 생각해서, 켠 채로는 이 상한에 생각만 하다 닿아 본문이 빈다 — 실측(llama.cpp + gemma-4-E2B)
+     * 4건 모두 6~8초 뒤 빈 응답이었다(대화형 경로라 그만큼 검색이 늦어지고 얻는 것은 없다). 그렇다고 올리면
+     * 짧은 후속 질문마다 그 생각을 기다린다. 스위치를 받지 않는 서버에서는 지금도 빈 응답 → 원문 검색이다.
      */
     static final int MAX_OUTPUT_TOKENS = 256;
 
@@ -213,10 +219,13 @@ public class QuestionCondenser {
         return line;
     }
 
-    /** 분류기와 같은 일반 temperature — 재작성은 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다. */
+    /**
+     * 분류기와 같은 일반 temperature — 재작성은 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다.
+     * 생각은 끈다({@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는 프로바이더가 정한다({@code ThinkingOffChatModel}).
+     */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature());
+        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature()));
         int configured = props.llmSafe().maxTokens();
         // 0 이하 = "프로바이더 기본값 유지" (AnswerService.evalOptions 와 같은 규약).
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
