@@ -20,6 +20,18 @@
     let stickToBottom = true;
     const NEAR_BOTTOM_PX = 80;
 
+    // ── Live markdown ────────────────────────────────────────────────────────
+    // 답변은 스트리밍 중에도 마크다운으로 렌더된다(renderLive). 그래서 답변 칸의 DOM 은 더 이상 원문을 들고
+    // 있지 않다 — 원문은 여기(bubbleId → { raw, timer, delay })에 쌓이고, 재시도·재분석·완료·중단은 전부
+    // 여기서 원문을 읽는다. 예전처럼 contentEl.textContent 를 읽으면 렌더된 화면의 글자(표 칸·목록 기호가
+    // 사라진 것)가 나온다.
+    // 렌더는 토큰마다가 아니라 묶어서 한다 — 매번 원문 전체를 다시 파싱·배치하므로 토큰마다 돌면 긴 답변(최대
+    // 2만 자)에서 느려진다. 간격은 50ms 에서 시작해 직전 렌더(파싱+레이아웃)에 걸린 시간의 4배로 늘어난다
+    // (렌더가 CPU 의 1/5 를 넘지 않게). 렌더 한 번의 길이는 줄이지 못한다 — 표·코드 블록이 촘촘한 2만 자
+    // 답변이면 한 번에 100ms 를 넘는다(5천 자까지는 30ms 남짓).
+    const LIVE_RENDER_MIN_DELAY_MS = 50;
+    const liveAnswers = new Map();
+
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
@@ -165,7 +177,7 @@
                             class="btn btn-sm btn-link p-0 ms-2 d-none stream-skip-btn">건너뛰기</button>
                 </div>
                 <div id="stream-badges-${bubbleId}"></div>
-                <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
+                <div id="stream-content-${bubbleId}" class="md-content stream-content"><span class="stream-caret"></span></div>
                 <div id="stream-notices-${bubbleId}"></div>
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
@@ -210,10 +222,7 @@
         const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
         if (skipBtn) skipBtn.classList.toggle('d-none', data.id !== 'image_analysis');
         // PROGRESSIVE upgrade: clear accumulated content so premium answer re-fills
-        if (data.id === 'upgrade') {
-            const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-            if (contentEl) contentEl.textContent = '';
-        }
+        if (data.id === 'upgrade') resetLiveText(bubbleId);
         // RETRIEVAL (re)entry: clear the prior search's images/sources first. A retry that
         // finds no images doesn't send an "images" event at all (see onImages), so without
         // this the previous search's now-unrelated thumbnails/badges would linger.
@@ -237,8 +246,7 @@
     function onRetry(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl) return;
-        removeVerifyingIndicator(bubbleId); // strip before reading raw text below
-        const rawText = contentEl.textContent || '';
+        const rawText = liveText(bubbleId);
 
         // Superseded-answers container, kept above the live content.
         let container = document.getElementById(`stream-superseded-${bubbleId}`);
@@ -267,9 +275,7 @@
             (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
         const body = document.createElement('div');
         body.className = 'md-content p-2 pt-0';
-        // textContent → renderMarkdown sanitizes
-        body.textContent = emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText;
-        renderMarkdown(body);
+        renderMarkdown(body, emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText, true);
         details.appendChild(summary);
         details.appendChild(body);
         container.appendChild(details);
@@ -294,8 +300,8 @@
             // (ca68b6a에서 무관한 리팩토링에 휩쓸려 이 줄이 사라졌던 회귀를 복구)
             (data.detail ? `<div class="ms-4">사유: ${escHtml(data.detail)}</div>` : '');
 
-        // Clear the live area for the fresh attempt.
-        contentEl.textContent = '';
+        // Clear the live area for the fresh attempt (this also drops the "verifying" indicator).
+        resetLiveText(bubbleId);
         scrollToBottom();
     }
 
@@ -480,48 +486,142 @@
         });
     }
 
-    function renderMarkdown(el) {
+    /**
+     * 원문 마크다운을 el 에 렌더한다 — marked·DOMPurify 가 둘 다 있을 때만. 하나라도 없으면 평문으로 떨어진다
+     * (renderSourcePreviewHtml() 과 같은 게이트 — 살균기 없이 렌더하느니 렌더하지 않는다). 평문에는 원문
+     * 줄바꿈을 살리는 md-plain 을 단다.
+     * highlight=false 는 스트리밍 중의 중간 렌더다: 코드 하이라이트는 블록 전체를 다시 칠해 비싸고, 다음 렌더가
+     * 그 블록을 어차피 새로 만든다. 완료·중단·접힌 이전 답변처럼 마지막 렌더에서만 칠한다.
+     */
+    function renderMarkdown(el, raw, highlight) {
         if (!el) return;
-        const raw = el.textContent || '';
-        // 살균기가 없으면 렌더하지 않는다(el 의 textContent 가 그대로 남는다) —
-        // renderSourcePreviewHtml() 의 게이트와 같은 규칙.
-        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-            el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
-            if (typeof hljs !== 'undefined') {
-                el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
-            }
+        const text = raw || '';
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            el.textContent = text;
+            el.classList.add('md-plain');
+            return;
+        }
+        el.classList.remove('md-plain');
+        el.innerHTML = DOMPurify.sanitize(marked.parse(text));
+        if (highlight && typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }
     }
 
-    function onToken(bubbleId, text) {
+    function newCaret() {
+        const caret = document.createElement('span');
+        caret.className = 'stream-caret';
+        return caret;
+    }
+
+    /**
+     * 깜빡이는 커서(▋)를 본문 마지막 글자 바로 뒤에 둔다 — 그 글자가 든 요소 안에(코드 블록이면 코드 안,
+     * 표면 마지막 칸 안). 답변 칸 자체의 ::after 로 두면 렌더된 본문에서는 마지막 문단·목록 같은 블록
+     * '뒤'에 붙어 늘 다음 줄로 떨어진다.
+     */
+    function placeCaret(el) {
+        el.querySelectorAll('.stream-caret').forEach(c => c.remove());
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+            acceptNode: n => (n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+        });
+        let last = null;
+        while (walker.nextNode()) last = walker.currentNode;
+        if (last) last.parentNode.insertBefore(newCaret(), last.nextSibling);
+        else el.appendChild(newCaret());
+    }
+
+    function liveState(bubbleId) {
+        let s = liveAnswers.get(bubbleId);
+        if (!s) {
+            s = { raw: '', timer: null, delay: LIVE_RENDER_MIN_DELAY_MS };
+            liveAnswers.set(bubbleId, s);
+        }
+        return s;
+    }
+
+    /** 지금까지 스트리밍된 원문 — 렌더된 화면이 아니라. */
+    function liveText(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        return s ? s.raw : '';
+    }
+
+    function renderLive(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
         const el = document.getElementById(`stream-content-${bubbleId}`);
-        if (el) el.textContent += text;
+        if (!s || !el) return;
+        const started = performance.now();
+        renderMarkdown(el, s.raw, false);
+        placeCaret(el);
+        // 레이아웃을 여기서 끝내 간격 계산에 넣는다. 긴 답변에서는 파싱보다 레이아웃이 비싼데, 이 줄이 없으면
+        // 레이아웃은 바닥에 붙어 있을 때만(scrollToBottom 이 scrollHeight 를 읽을 때) 재는 구간에 들어와서,
+        // 사용자가 위로 올려 읽는 동안에는 간격이 실제 비용보다 짧게 잡혔다. 어차피 다음 프레임에 할 일이라
+        // 앞당길 뿐 더하지 않는다.
+        void el.offsetHeight;
+        s.delay = Math.max(LIVE_RENDER_MIN_DELAY_MS, (performance.now() - started) * 4);
         scrollToBottom();
+    }
+
+    /** 걸려 있는 렌더를 지금 한다 — 이 뒤에 덧붙이는 것(검증 중 표시)을 늦게 돈 렌더가 지우지 않도록. */
+    function flushLiveRender(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        if (!s) return;
+        if (s.timer != null) {
+            clearTimeout(s.timer);
+            s.timer = null;
+        }
+        renderLive(bubbleId);
+    }
+
+    /** 새 시도(검증 실패 재시도·고추론 재분석)를 위해 비운다 — 커서만 남는다. */
+    function resetLiveText(bubbleId) {
+        liveState(bubbleId).raw = '';
+        flushLiveRender(bubbleId);
+    }
+
+    /**
+     * 스트리밍이 끝났다(완료·중단·오류) — 원문을 돌려주고 상태를 지운다. 걸려 있던 중간 렌더도 취소한다:
+     * 최종 렌더 뒤에 돌면 하이라이트 없는 본문과 커서를 되살린다.
+     */
+    function endLive(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        liveAnswers.delete(bubbleId);
+        if (!s) return '';
+        if (s.timer != null) clearTimeout(s.timer);
+        return s.raw;
+    }
+
+    function onToken(bubbleId, text) {
+        if (!text) return;
+        const s = liveState(bubbleId);
+        s.raw += text;
+        if (s.timer == null) {
+            s.timer = setTimeout(() => {
+                s.timer = null;
+                renderLive(bubbleId);
+            }, s.delay);
+        }
     }
 
     /**
      * Streaming has finished but the turn isn't done — a blocking sufficiency+grounded LLM
      * check (several seconds to tens of seconds) runs before the next event. Append a small
-     * indicator as the last child of the content element so the existing .stream-cursor
-     * ::after pseudo-element (still on the parent) keeps blinking right after it, same as
-     * during token streaming. The indicator is a real DOM node (not raw text appended to
-     * contentEl directly) precisely so removeVerifyingIndicator() can strip it cleanly before
-     * onRetry()/onDone()/onAborted() read/render the raw answer text.
+     * indicator after the answer and move the blinking caret behind it, same as during token
+     * streaming. The indicator lives only in the DOM, never in the raw answer text, so the
+     * next render of that text — onRetry()/onStage('upgrade') resetting it, onDone()/onAborted()
+     * rendering it for good — drops it without any cleanup.
      */
     function onVerifying(bubbleId) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl || document.getElementById(`stream-verifying-${bubbleId}`)) return;
+        flushLiveRender(bubbleId);
+        contentEl.querySelectorAll('.stream-caret').forEach(c => c.remove());
         const indicator = document.createElement('span');
         indicator.id = `stream-verifying-${bubbleId}`;
         indicator.className = 'text-muted small ms-1';
         indicator.textContent = '(응답결과 검증 중)';
         contentEl.appendChild(indicator);
+        contentEl.appendChild(newCaret());
         scrollToBottom();
-    }
-
-    /** Strips the "verifying" indicator span before anything reads contentEl's raw text. */
-    function removeVerifyingIndicator(bubbleId) {
-        document.getElementById(`stream-verifying-${bubbleId}`)?.remove();
     }
 
     function onDone(bubbleId, data) {
@@ -529,26 +629,23 @@
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
 
-        // 1. Remove streaming cursor + the "verifying" indicator (if the turn ended right after
-        //    a verification pass, before markdown rendering picks up contentEl's raw text below).
-        if (contentEl) contentEl.classList.remove('stream-cursor');
-        removeVerifyingIndicator(bubbleId);
+        // 1. End the live stream — cancels a pending intermediate render and hands back the raw
+        //    text. The final render below replaces the caret and the "verifying" indicator too.
+        const streamed = endLive(bubbleId);
 
         // 1-bis. 서버가 스트리밍 이후 답변을 손봤으면(요약 전용 가드, 20,000자 절단, PROGRESSIVE
         //    재생성) 그 최종본으로 교체한다. 이 신호가 없던 시절엔 화면엔 스트리밍된 원본이 남고
         //    DB엔 손본 답변이 저장돼, 새로고침해야 비로소 달라진 것이 드러났다 — 그 사이 사용자는
         //    화면의 답변을 보고 좋아요를 눌렀고 저장된 건 다른 텍스트였다.
-        //    같으면 서버가 키 자체를 안 보내므로 여기서 아무 일도 일어나지 않는다.
-        if (contentEl && typeof data.finalAnswer === 'string') {
-            contentEl.textContent = data.finalAnswer;   // 아래 renderMarkdown 이 이 원문을 렌더한다
-        }
+        //    같으면 서버가 키 자체를 안 보내므로 스트리밍된 원문을 그대로 쓴다.
+        const answer = typeof data.finalAnswer === 'string' ? data.finalAnswer : streamed;
 
-        // Capture raw (pre-render) answer length for the char-count metadata below —
-        // must happen before markdown rendering replaces textContent with rendered HTML.
-        const answerLen = (contentEl?.textContent || '').length;
+        // Raw answer length for the char-count metadata below (not the rendered text, which
+        // has lost the markdown syntax).
+        const answerLen = answer.length;
 
-        // 2. Render markdown
-        renderMarkdown(contentEl);
+        // 2. Final render — the live render's pipeline plus code highlighting.
+        renderMarkdown(contentEl, answer, true);
 
         // 3. Hide stage spinner + drop any superseded (unverified) retry answers — a final
         //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
@@ -699,6 +796,7 @@
     }
 
     function onError(bubbleId, message) {
+        endLive(bubbleId);
         const bubble = document.getElementById(`bubble-${bubbleId}`);
         if (bubble) {
             bubble.outerHTML =
@@ -712,16 +810,17 @@
 
     /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
     function onAborted(bubbleId) {
-        clearRetryArtifacts(bubbleId);
-        removeVerifyingIndicator(bubbleId);
+        // The stage line lives exactly as long as the stream: onDone() removes it and onError()
+        // replaces the bubble. Gone means the turn already ended — the server completes the
+        // emitter right after "done", and a stop pressed in those last milliseconds used to
+        // re-render the answer from the already-emptied live text (a blank bubble) and swap the
+        // feedback buttons for "사용자가 중단함".
         const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
-        if (stageEl) stageEl.remove();
+        if (!stageEl) return;
+        clearRetryArtifacts(bubbleId);
+        stageEl.remove();
 
-        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-        if (contentEl) {
-            contentEl.classList.remove('stream-cursor');
-            renderMarkdown(contentEl);
-        }
+        renderMarkdown(document.getElementById(`stream-content-${bubbleId}`), endLive(bubbleId), true);
 
         const metaEl = document.getElementById(`stream-meta-${bubbleId}`);
         if (metaEl) {
