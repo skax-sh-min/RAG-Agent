@@ -306,6 +306,11 @@ public class MemoryService {
         return repository.getRecentTurns(userId, threadId);
     }
 
+    /** 이 턴 앞의 질문들(최근 {@code limit} 개, 오래된 것부터) — {@link MemoryRepository#findQuestionsBefore} 참고. */
+    public List<String> getQuestionsBefore(String userId, String threadId, long turnId, int limit) {
+        return repository.findQuestionsBefore(userId, threadId, turnId, limit);
+    }
+
     /** Single turn lookup — used by {@code CuratedSubmissionService} to prefill a 지식 제안 from a
      *  좋아요한 답변, and by {@code ChunkReportService} to snapshot the question a report was filed on. */
     public Optional<MemoryRepository.Turn> getTurn(String userId, String threadId, long turnId) {

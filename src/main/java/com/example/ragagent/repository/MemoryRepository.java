@@ -95,6 +95,14 @@ public interface MemoryRepository {
      */
     List<Turn> getRecentTurns(String userId, String threadId);
 
+    /**
+     * 이 턴 <b>앞의</b> 질문들 — 같은 대화에서 {@code turnId} 보다 먼저 저장된 것 가운데 최근 {@code limit} 개,
+     * 오래된 것부터. 답변 뒤 질문 다듬기의 재료다: 방금 끝난 턴이면 "직전 질문들"이고, 과거 턴을 다듬는 백필에서는
+     * 그 턴 시점의 이전 질문이다 — {@link #getRecentTurns} 로는 대화의 <em>마지막</em> 턴들이 나와, 대화 중간의
+     * 턴을 다듬을 때 그 뒤에 나온 질문을 재료로 쓰게 된다.
+     */
+    List<String> findQuestionsBefore(String userId, String threadId, long turnId, int limit);
+
     /** Current feedback value for ownership check + audit "from". Empty = turn not found / not owned. */
     Optional<FeedbackRow> getFeedback(String userId, String threadId, long turnId);
 

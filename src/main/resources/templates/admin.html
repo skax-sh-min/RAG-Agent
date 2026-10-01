@@ -316,6 +316,44 @@
         </div>
     </details>
 
+    <!-- ── 과거 질문 다듬기 (재사용 추천용 일괄 처리) ──────────────────────────────── -->
+    <!-- 대화 목록 바로 아래: 같은 대화 기록을 다루고, 한 번 돌리고 나면 다시 열 일이 드문 운영 도구다.
+         상태는 JSON 으로 받아 아래 스크립트가 그린다(진행 중에는 2초마다 다시 묻는다). -->
+    <details class="card mt-4" id="clarify-backfill-card">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-magic me-2"></i>
+            <span class="fw-semibold small">과거 질문 다듬기</span>
+            <span id="clarify-backfill-pill" class="badge bg-primary ms-2 d-none">진행 중</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                재사용 추천용 — 이 기능 이전 대화의 질문을 턴마다 LLM 1회로 다듬음
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div>남은 턴 <strong id="cb-remaining">-</strong></div>
+                <div>이번 실행 <strong id="cb-processed">0</strong>건
+                    <span class="text-muted">(다듬음 <span id="cb-clarified">0</span> · 원문 유지 <span id="cb-kept">0</span>
+                    · 실패 <span id="cb-failed">0</span>)</span></div>
+                <div id="cb-state" class="text-muted"></div>
+                <div class="ms-auto d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" id="cb-start">시작</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="cb-stop">멈춤</button>
+                </div>
+            </div>
+            <div class="progress mt-2" style="height: 6px;" role="progressbar" aria-label="과거 질문 다듬기 진행률">
+                <div class="progress-bar" id="cb-bar" style="width: 0%;"></div>
+            </div>
+            <div id="cb-message" class="text-warning mt-2 d-none"></div>
+            <div class="text-muted mt-2">
+                재사용 추천에 뜰 수 있는 과거 턴(표준(N)·문서 검색·출처 있음) 중 아직 다듬지 않은 것을 최근 대화부터 한 턴씩
+                다듬습니다. 채팅 답변이 생성되는 동안에는 기다렸다가 이어 가고, 언제든 멈출 수 있으며 다시 시작하면 남은
+                것부터 이어 갑니다(실패한 턴은 다음 실행에서 다시 시도). 질문 다듬기 설정(<code>llm.clarified-question-enabled</code>)이
+                꺼지면 멈추고, LLM 호출이 연달아 실패해도 멈춥니다.
+            </div>
+        </div>
+    </details>
+
     <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
          확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
     <details class="card mt-4" id="retrieval-metrics-card"
@@ -2040,6 +2078,63 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
 } else if (OPEN_CHUNK_MISSING) {
     showToast(OPEN_CHUNK_NOTFOUND_MSG, 'warning');
 }
+
+/* ── 과거 질문 다듬기 (ClarifiedQuestionBackfill) ─────────────────────────────────
+   서버가 상태를 통째로 돌려주므로(남은 턴 · 이번 실행 수치 · 상태) 여기서는 그리기만 한다. 진행 중이면 2초마다 다시
+   묻고, 끝나면 멈춘다. 페이지를 열 때 한 번 물어 진행 중이면 카드 머리에 표시를 단다 — 다른 관리자가 시작했거나
+   이 탭을 새로 연 경우에도 진행 중임이 보이게. */
+(function () {
+    const STATE_LABELS = {
+        IDLE: '시작 전', RUNNING: '진행 중', WAITING_FOR_CHAT: '채팅 답변 중 — 끝나기를 기다리는 중',
+        STOPPING: '멈추는 중(지금 한 건은 끝까지 갑니다)', STOPPED: '멈춤', DONE: '완료 — 남은 턴 없음',
+        DISABLED: '질문 다듬기 설정이 꺼져 있어 돌지 않습니다', FAILED: '중단됨'
+    };
+    const card = document.getElementById('clarify-backfill-card');
+    if (!card) return;
+    const el = id => document.getElementById(id);
+    let pollTimer = null;
+
+    function render(s) {
+        el('cb-remaining').textContent = s.remaining >= 0 ? s.remaining : '?';
+        el('cb-processed').textContent = s.processed;
+        el('cb-clarified').textContent = s.clarified;
+        el('cb-kept').textContent = s.keptOriginal;
+        el('cb-failed').textContent = s.failed;
+        el('cb-state').textContent = STATE_LABELS[s.state] || s.state;
+        const total = s.processed + Math.max(0, s.remaining);
+        el('cb-bar').style.width = (total > 0 ? Math.round(100 * s.processed / total) : 0) + '%';
+        el('cb-bar').classList.toggle('progress-bar-striped', s.running);
+        el('cb-bar').classList.toggle('progress-bar-animated', s.running);
+        el('cb-start').classList.toggle('d-none', s.running);
+        el('cb-start').disabled = s.remaining === 0;
+        el('cb-stop').classList.toggle('d-none', !s.running);
+        el('cb-stop').disabled = s.state === 'STOPPING';
+        el('cb-message').textContent = s.message || '';
+        el('cb-message').classList.toggle('d-none', !s.message);
+        el('clarify-backfill-pill').classList.toggle('d-none', !s.running);
+        clearTimeout(pollTimer);
+        if (s.running) pollTimer = setTimeout(refresh, 2000);
+    }
+
+    function refresh() {
+        return fetch('/admin/clarify-backfill')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('cb-state').textContent = '상태를 불러오지 못했습니다'; });
+    }
+
+    function post(path) {
+        return fetch(path, { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(status => showToast('요청이 실패했습니다 (' + status + ')', 'danger'));
+    }
+
+    el('cb-start').addEventListener('click', () => post('/admin/clarify-backfill/start'));
+    el('cb-stop').addEventListener('click', () => post('/admin/clarify-backfill/stop'));
+    card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
 </script>
 </th:block>
 
