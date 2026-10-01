@@ -176,4 +176,22 @@ class AnswerNoDocumentsTest {
                 .isInstanceOf(IllegalStateException.class);
         assertThat(calls.get()).as("문서가 있으면 답변 호출이 실제로 나간다").isPositive();
     }
+
+    /**
+     * 위 테스트들은 정형 문구를 목으로 넣으므로 번들 값이 깨져도 통과한다 — 실제로 줄 끝 {@code \n\} 하나가 빠져
+     * 이 답변이 "## 요약" 제목 한 줄로만 나가던 동안에도 그랬다. 여기서는 실제 번들을 읽는다.
+     */
+    @Test
+    @DisplayName("실제 번들의 정형 문구는 한/영 모두 '## 요약' 머리와 본문 한 줄을 함께 담는다")
+    void realCannedAnswerCarriesItsBodyInBothBundles() {
+        var messages = new org.springframework.context.support.ResourceBundleMessageSource();
+        messages.setBasename("messages");
+        messages.setDefaultEncoding("UTF-8");
+        messages.setFallbackToSystemLocale(false);
+
+        assertThat(messages.getMessage("chat.answer.no-documents", null, Locale.KOREAN)).isEqualTo(CANNED);
+        assertThat(messages.getMessage("chat.answer.no-documents", null, Locale.ENGLISH))
+                .startsWith("## 요약\n")          // CuratedTextUtils 는 한국어 머리만 알아본다(번들 주석)
+                .contains("No relevant information");
+    }
 }

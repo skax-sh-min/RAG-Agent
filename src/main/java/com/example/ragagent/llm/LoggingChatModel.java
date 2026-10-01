@@ -65,6 +65,11 @@ public class LoggingChatModel implements ChatModel {
             if (prompt.getOptions() instanceof OpenAiChatOptions opts) {
                 if (opts.getTemperature() != null) body.put("temperature", opts.getTemperature());
                 if (opts.getMaxTokens()     != null) body.put("max_tokens",  opts.getMaxTokens());
+                // 표준 밖 필드(chat_template_kwargs 등)도 본문 최상위에 그대로 나간다 — 빠뜨리면 이 curl 로
+                // 재현한 요청만 생각을 켠 채 돌아 실제 호출과 다른 결과가 나온다.
+                if (opts.getExtraBody() != null) {
+                    opts.getExtraBody().forEach((key, value) -> body.set(key, MAPPER.valueToTree(value)));
+                }
             }
 
             String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);

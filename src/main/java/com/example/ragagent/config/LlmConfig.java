@@ -147,11 +147,16 @@ public class LlmConfig {
                     // 상한으로 눌러 준다(MaxTokensCappingChatModel 클래스 주석 참고).
                     // 계측 데코레이터는 프롬프트와 usage 를 동시에 보는 유일한 자리다 — 라우터는
                     // 호출을 불투명한 클로저로 받고, 호출부는 서버가 센 토큰 수를 못 본다.
-                    ChatModel model = new LoggingChatModel(
-                            tokenCalibration.wrap(
-                                    new MaxTokensCappingChatModel(rawModel, cfg.name(),
-                                            () -> liveMaxTokens(cfg, props, contextWindows))),
-                            cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel);
+                    // 가장 바깥은 "생각 끄기" 표시를 이 프로바이더가 받을 수 있을 때만 싣는 자리다(LOCAL 만 —
+                    // 원격은 모르는 필드를 400 으로 거부하고 라우터가 그걸 차단으로 받는다). 바깥에 둬야 curl
+                    // 로그가 실제로 나간 본문을 찍는다(ThinkingOffChatModel 클래스 주석 참고).
+                    ChatModel model = new ThinkingOffChatModel(
+                            new LoggingChatModel(
+                                    tokenCalibration.wrap(
+                                            new MaxTokensCappingChatModel(rawModel, cfg.name(),
+                                                    () -> liveMaxTokens(cfg, props, contextWindows))),
+                                    cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel),
+                            cfg.name(), cfg.isLocal());
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),

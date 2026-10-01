@@ -5,6 +5,7 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingOffChatModel;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -13,7 +14,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
+import org.springframework.context.support.ResourceBundleMessageSource;
 
 import java.util.List;
 import java.util.Locale;
@@ -123,6 +126,28 @@ class CuratedQuestionSuggesterTest {
 
         assertThat(prompt.getValue().getContents().length())
                 .isLessThan(body.length());
+        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getExtraBody())
+                .as("생각을 끄고 부른다 — 켠 채로는 256 토큰 상한을 생각에 다 써서 빈 응답이 된다")
+                .containsKey(ThinkingOffChatModel.TEMPLATE_KWARGS);
+    }
+
+    /**
+     * 실제 번들의 프롬프트가 통째로 읽히는가 — 위 테스트들은 {@code MessageSource} 를 목으로 바꿔 의도한 문장을
+     * 넣으므로, 번들 값의 줄 끝 {@code \n\} 가 빠져 첫 문장만 남았던 동안에도 통과했다. 그동안 "본문으로 구체화"는
+     * 현재 질문도 본문도 없이 "당신은 … 전문가입니다" 한 줄과 "질문을 다시 써 주세요." 만 보냈다.
+     */
+    @Test
+    @DisplayName("실제 번들의 프롬프트는 한/영 모두 자리표시자 둘을 담고 끝까지 읽힌다")
+    void realPromptLoadsWholeInBothBundles() {
+        ResourceBundleMessageSource messages = new ResourceBundleMessageSource();
+        messages.setBasename("messages");
+        messages.setDefaultEncoding("UTF-8");
+        messages.setFallbackToSystemLocale(false);
+        for (Locale locale : new Locale[]{Locale.KOREAN, Locale.ENGLISH}) {
+            String prompt = messages.getMessage("prompt.curated.question", null, locale);
+            assertThat(prompt).as("%s", locale).contains("{question}", "{answer}");
+            assertThat(prompt.lines().count()).as("%s 줄 수", locale).isGreaterThan(10);
+        }
     }
 
     @Test
