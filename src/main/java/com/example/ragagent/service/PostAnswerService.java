@@ -145,6 +145,9 @@ public class PostAnswerService {
     /** 추가 질문 앞에 모델이 붙이는 목록 기호(1. / 1) / - / • / ·). */
     private static final Pattern LIST_MARKER = Pattern.compile("^(?:[-*•·]|\\d{1,2}[.)])\\s*");
 
+    /** 백필이 프롬프트 언어를 고르는 기준 — 질문에 한글 음절이 하나라도 있는가. */
+    private static final Pattern HANGUL = Pattern.compile("[가-힣]");
+
     /**
      * 화면에 보낼 결과 — {@code clarifiedQuestion} 은 원문과 다를 때만(버블에 둘째 줄을 붙일 때만) 있고,
      * {@code followUps} 는 비어 있을 수 있다.
@@ -265,7 +268,29 @@ public class PostAnswerService {
 
     /** 추가 질문이 꺼져 있을 때의 길 — 다듬은 질문 한 줄만 받는다. 화면에는 다듬은 질문이 원문과 다를 때만 실린다. */
     Extras clarify(long turnId, String userId, String threadId, String question, String answer, Locale locale) {
-        if (question == null || question.isBlank()) return Extras.NONE;
+        Clarified result = clarifyOnce(turnId, userId, threadId, question, answer, locale);
+        return result.outcome() == Outcome.CLARIFIED ? new Extras(result.question(), List.of()) : Extras.NONE;
+    }
+
+    /**
+     * 과거 턴 하나를 다듬는다 — {@code /admin} 백필({@link ClarifiedQuestionBackfill})의 한 건. 라이브 경로의 한 줄
+     * 다듬기와 같은 호출·판정·저장이고, 재료(이전 질문)는 그 턴 <b>시점</b>의 것이다. 턴에는 로케일이 저장돼 있지
+     * 않아 질문에 한글이 있으면 한국어 프롬프트, 없으면 영어 프롬프트를 쓴다 — 프롬프트 언어를 질문과 맞추지
+     * 않으면 소형 모델은 프롬프트의 언어로 답한다(실측: 한국어 프롬프트에 영어 질문 → 한국어 문장).
+     */
+    Outcome backfill(long turnId, String userId, String threadId, String question, String answer) {
+        Locale locale = question != null && HANGUL.matcher(question).find() ? Locale.KOREAN : Locale.ENGLISH;
+        return clarifyOnce(turnId, userId, threadId, question, answer, locale).outcome();
+    }
+
+    /** 한 줄 다듬기 한 번의 결과 — 저장은 이미 끝났다(실패면 아무것도 저장하지 않았다). */
+    enum Outcome { CLARIFIED, KEPT_ORIGINAL, FAILED }
+
+    private record Clarified(Outcome outcome, String question) {}
+
+    private Clarified clarifyOnce(long turnId, String userId, String threadId, String question, String answer,
+                                  Locale locale) {
+        if (question == null || question.isBlank()) return new Clarified(Outcome.FAILED, null);
         List<String> earlier = earlierQuestions(userId, threadId, turnId);
         String history = historyBlock(earlier);
         String summary = summaryOf(answer);
@@ -281,19 +306,19 @@ public class PostAnswerService {
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(question)), options())));
         } catch (Exception e) {
-            // 호출이 실패했다 — NULL 로 남겨 두면 나중의 백필이 다시 시도할 수 있다.
+            // 호출이 실패했다 — NULL 로 남겨 두면 백필이 다시 시도할 수 있다.
             log.warn("[CLARIFY] 질문 다듬기 호출 실패 turnId={}: {}", turnId, e.getMessage());
-            return Extras.NONE;
+            return new Clarified(Outcome.FAILED, null);
         }
         if (raw == null || raw.isBlank()) {
             // 본문 없는 응답 — 대개 추론 모델이 출력 예산을 생각에 다 쓴 경우다. 원문을 "시도함"으로 적지
             // 않고 NULL 로 남긴다(호출 실패와 같은 취급).
             log.warn("[CLARIFY] 질문 다듬기 응답이 비었다 turnId={} — 출력 예산({} 토큰)을 추론에 다 썼을 수 있다",
                     turnId, MAX_OUTPUT_TOKENS);
-            return Extras.NONE;
+            return new Clarified(Outcome.FAILED, null);
         }
         String clarified = saveClarified(turnId, question, parse(raw), history + "\n" + summary, raw);
-        return clarified == null ? Extras.NONE : new Extras(clarified, List.of());
+        return clarified == null ? new Clarified(Outcome.KEPT_ORIGINAL, null) : new Clarified(Outcome.CLARIFIED, clarified);
     }
 
     /**
@@ -358,23 +383,23 @@ public class PostAnswerService {
         return clarified;
     }
 
-    /** 이 턴 <b>앞의</b> 최근 {@value #MATERIAL_TURNS} 질문, 오래된 것부터(지금 턴은 이미 저장돼 있어 뺀다). */
+    /**
+     * 이 턴 <b>앞의</b> 최근 {@value #MATERIAL_TURNS} 질문, 오래된 것부터 — 그 턴 시점의 것이다(방금 끝난 턴이면
+     * 직전 질문들, 백필이면 대화 중간 그 자리의 이전 질문들. {@link MemoryRepository#findQuestionsBefore}).
+     */
     private List<String> earlierQuestions(String userId, String threadId, long turnId) {
-        List<MemoryRepository.Turn> turns;
+        List<String> questions;
         try {
-            turns = memoryService.getRecentTurns(userId, threadId);
+            questions = memoryService.getQuestionsBefore(userId, threadId, turnId, MATERIAL_TURNS);
         } catch (Exception e) {
             log.debug("[CLARIFY] 이전 질문 조회 실패 thread={}: {}", threadId, e.getMessage());
             return List.of();
         }
-        if (turns == null || turns.isEmpty()) return List.of();
-        List<String> earlier = turns.stream()
-                .filter(t -> t.id() != turnId)
-                .map(MemoryRepository.Turn::question)
+        if (questions == null) return List.of();
+        return questions.stream()
                 .filter(q -> q != null && !q.isBlank())
                 .map(q -> q.strip().replaceAll("\\s+", " "))
                 .toList();
-        return earlier.subList(Math.max(0, earlier.size() - MATERIAL_TURNS), earlier.size());
     }
 
     private static String historyBlock(List<String> earlier) {

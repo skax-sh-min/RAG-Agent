@@ -251,6 +251,15 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public List<String> findQuestionsBefore(String userId, String threadId, long turnId, int limit) {
+        List<String> newestFirst = jdbc.queryForList(
+                "SELECT question FROM conversation_turns " +
+                "WHERE user_id = ? AND thread_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+                String.class, userId, threadId, turnId, Math.max(0, limit));
+        return newestFirst.reversed();
+    }
+
+    @Override
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +

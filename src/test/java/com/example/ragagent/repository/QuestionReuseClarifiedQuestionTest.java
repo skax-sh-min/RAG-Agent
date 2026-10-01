@@ -90,4 +90,39 @@ class QuestionReuseClarifiedQuestionTest {
 
         assertThat(repo.findTurnForReuse(1L, false, "u1").displayQuestion()).isEqualTo("sqlite 연결 설정 방법");
     }
+
+    // ── 과거 질문 다듬기(백필) 대상 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("백필 대상 — 재사용 후보가 될 수 있는데 아직 다듬지 않은 턴만, 최신순, 커서 아래로")
+    void backfillTargetsAreUnclarifiedReuseCandidatesNewestFirst() {
+        turn(1L, "오래된 질문", null, null);
+        turn(2L, "이미 다듬은 질문", "다듬은 문장", null);
+        turn(3L, "그거 어떻게 설정해?", null, null);
+        turn(4L, "원본을 복사한 재사용 턴", null, 3L);              // 원본을 다듬으면 그 값으로 떨어진다
+        turn(5L, "싫어요 받은 질문", null, null);
+        jdbc.update("UPDATE conversation_turns SET feedback = 'DISLIKE' WHERE id = 5");
+        turn(6L, "S 로 답한 질문", null, null);
+        jdbc.update("UPDATE conversation_turns SET response_mode = 'S' WHERE id = 6");
+        turn(7L, "Direct 로 답한 질문", null, null);
+        jdbc.update("UPDATE conversation_turns SET direct_mode = 1 WHERE id = 7");
+        turn(8L, "출처가 지워진 질문", null, null);
+        jdbc.update("UPDATE turn_source_ref SET status = 'deleted' WHERE turn_id = 8");
+        turn(9L, "가장 최근 질문", null, null);
+
+        assertThat(repo.findClarifyBackfillTargets(Long.MAX_VALUE, 10))
+                .extracting(QuestionReuseRepository.BackfillTarget::turnId).containsExactly(9L, 3L, 1L);
+        assertThat(repo.findClarifyBackfillTargets(Long.MAX_VALUE, 2))
+                .extracting(QuestionReuseRepository.BackfillTarget::turnId).containsExactly(9L, 3L);
+        assertThat(repo.findClarifyBackfillTargets(3L, 10))
+                .as("커서 아래로 — 실패해 NULL 로 남은 턴을 같은 실행이 다시 집지 않는다")
+                .extracting(QuestionReuseRepository.BackfillTarget::turnId).containsExactly(1L);
+        assertThat(repo.countClarifyBackfillTargets()).isEqualTo(3);
+
+        QuestionReuseRepository.BackfillTarget latest = repo.findClarifyBackfillTargets(Long.MAX_VALUE, 1).get(0);
+        assertThat(latest.question()).isEqualTo("가장 최근 질문");
+        assertThat(latest.answer()).isEqualTo("답변 본문");
+        assertThat(latest.userId()).isEqualTo("u1");
+        assertThat(latest.threadId()).isEqualTo("t1");
+    }
 }

@@ -92,6 +92,27 @@ class SqliteMemoryRepositoryTest {
                 .extracting(MemoryRepository.Turn::question).isEqualTo("그거 어떻게 설정해?");
     }
 
+    /**
+     * 다듬기의 재료는 그 턴 <b>시점</b>의 이전 질문이다 — 대화 중간의 턴을 다듬는 백필에서 {@code getRecentTurns} 를
+     * 쓰면 그 턴 뒤에 나온 질문이 재료로 들어간다.
+     */
+    @Test
+    @DisplayName("findQuestionsBefore — 같은 대화에서 그 턴 앞의 질문만, 최근 N개를 오래된 것부터")
+    void questionsBeforeATurn() {
+        long q1 = repo.addTurn(UID, "t1", "Q1", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q2 = repo.addTurn(UID, "t1", "Q2", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.addTurn(UID, "t2", "다른 대화", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q3 = repo.addTurn(UID, "t1", "Q3", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q4 = repo.addTurn(UID, "t1", "Q4", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.addTurn(UID, "t1", "Q5 — 뒤에 나온 질문", "A", null, 0, 0, 0, null, 0, "N", null);
+
+        assertThat(repo.findQuestionsBefore(UID, "t1", q4, 2)).containsExactly("Q2", "Q3");
+        assertThat(repo.findQuestionsBefore(UID, "t1", q4, 10)).containsExactly("Q1", "Q2", "Q3");
+        assertThat(repo.findQuestionsBefore(UID, "t1", q1, 3)).isEmpty();
+        assertThat(repo.findQuestionsBefore("someone-else", "t1", q3, 3)).isEmpty();
+        assertThat(q2).isLessThan(q3);
+    }
+
     @Test
     @DisplayName("addTurn 의 response_mode 가 getTurn(s)/getRecentTurns 모두에서 그대로 되돌아온다")
     void responseModeRoundTrips() {

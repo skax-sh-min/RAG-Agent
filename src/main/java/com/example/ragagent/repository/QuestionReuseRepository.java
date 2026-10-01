@@ -149,6 +149,21 @@ public class QuestionReuseRepository {
     private static final String HAS_ACTIVE_SOURCE_PREDICATE =
             "AND EXISTS (SELECT 1 FROM turn_source_ref r WHERE r.turn_id = t.id AND r.status = 'active') ";
 
+    /**
+     * 다듬은 질문 백필의 대상 — 재사용 후보가 될 수 있는데 아직 다듬지 않은 턴. 후보 판정은 추천 SQL 의 재사용
+     * 술어와 같다(싫어요 아님 · 재사용 허용 모드 · Direct 아님 · 활성 출처 있음): 추천에 뜰 수 없는 턴을 다듬는 것은
+     * 호출만 쓴다. <b>재사용 턴은 뺀다</b> — 원본을 다듬으면 {@link #CLARIFIED_COLUMN} 이 그 값으로 떨어진다. 이 술어는
+     * 재사용 조인 없이 {@code t} 만 본다(재사용 턴을 뺐으니 답변을 만든 행이 곧 {@code t} 다).
+     */
+    private static final String CLARIFY_BACKFILL_WHERE =
+            "WHERE t.clarified_question IS NULL " +
+            "AND t.reused_from_turn_id IS NULL " +
+            "AND t.question IS NOT NULL AND TRIM(t.question) <> '' " +
+            "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "AND " + REUSABLE_MODE_PREDICATE + " " +
+            "AND COALESCE(t.direct_mode, 0) = 0 " +
+            HAS_ACTIVE_SOURCE_PREDICATE;
+
     private static String buildReusableModePredicate() {
         String excluded = java.util.Arrays.stream(ResponseMode.values())
                 .filter(m -> !m.allowsReuse())
@@ -266,6 +281,27 @@ public class QuestionReuseRepository {
         args.add(userId);
         args.add(Math.max(1, limit));
         return jdbc.query(sql, CANDIDATE_MAPPER, args.toArray());
+    }
+
+    /**
+     * 다듬은 질문 백필 대상({@link #CLARIFY_BACKFILL_WHERE}) 가운데 {@code beforeId} 보다 작은 id 를 최신순으로
+     * {@code limit} 개. 호출부는 마지막으로 본 id 를 다음 {@code beforeId} 로 넘긴다 — 호출이 실패한 턴은 NULL 로
+     * 남으므로, "아직 NULL 인 것 중 최신"을 다시 묻는 방식이면 같은 턴을 끝없이 다시 집는다.
+     */
+    public List<BackfillTarget> findClarifyBackfillTargets(long beforeId, int limit) {
+        return jdbc.query(
+                "SELECT t.id, t.user_id, t.thread_id, t.question, t.answer FROM conversation_turns t " +
+                CLARIFY_BACKFILL_WHERE + "AND t.id < ? ORDER BY t.id DESC LIMIT ?",
+                (rs, n) -> new BackfillTarget(rs.getLong("id"), rs.getString("user_id"), rs.getString("thread_id"),
+                        rs.getString("question"), rs.getString("answer")),
+                beforeId, Math.max(1, limit));
+    }
+
+    /** 다듬은 질문 백필이 아직 남은 턴 수 — {@code /admin} 이 "남은 것"으로 보여 준다. */
+    public int countClarifyBackfillTargets() {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM conversation_turns t " + CLARIFY_BACKFILL_WHERE,
+                Integer.class);
+        return n == null ? 0 : n;
     }
 
     /** {@code LIKE ... ESCAPE '\'} 용 — 백슬래시·{@code %}·{@code _} 를 문자 그대로. */
@@ -635,4 +671,7 @@ public class QuestionReuseRepository {
             return clarifiedQuestion != null && !clarifiedQuestion.isBlank() ? clarifiedQuestion : question;
         }
     }
+
+    /** 다듬은 질문 백필 대상 한 건 — 다듬기에 필요한 것만(이전 질문은 다듬는 쪽이 그 턴 시점으로 다시 읽는다). */
+    public record BackfillTarget(long turnId, String userId, String threadId, String question, String answer) {}
 }
