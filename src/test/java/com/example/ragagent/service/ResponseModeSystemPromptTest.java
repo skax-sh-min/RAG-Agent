@@ -227,6 +227,31 @@ class ResponseModeSystemPromptTest {
                 .doesNotContain("출력 전체를 \"## 요약\" 헤더 한 줄로 시작합니다");
     }
 
+    /**
+     * 답변이 화살표를 {@code $\rightarrow$} 처럼 LaTeX 로 쓰면 marked 가 수식을 몰라 글자 그대로 보였다.
+     * 렌더 쪽(static/js/markdown-tex-symbols.js)이 안전망이고 이 규칙은 발생 자체를 줄인다 — 규칙이 빠지면
+     * 아무 코드도 눈치채지 못하므로 여기서 고정한다. 코드 안은 예외로 둔다(규칙을 그대로 따르면 Java 코드에
+     * {@code <=} 대신 {@code ≤} 를 쓴다). 그리고 LaTeX 문법을 예로 들지 않는다 — 금지하려고 보여 준 것을
+     * 작은 로컬 모델은 따라 쓴다(S 프롬프트가 5섹션 헤더를 언급조차 하지 않는 것과 같은 이유).
+     */
+    @Test
+    @DisplayName("답변 프롬프트는 전부 LaTeX 수식 표기를 금지하되 코드는 예외로 두고, LaTeX 문법 자체는 예로 들지 않는다")
+    void answerPromptsForbidLatexNotationWithoutShowingIt() {
+        for (ResponseMode mode : ResponseMode.values()) {
+            java.util.List<String> keys = new java.util.ArrayList<>(java.util.List.of(mode.answerSystemPromptKey()));
+            if (mode.allowsDirect()) keys.add(mode.directSystemPromptKey());
+            for (String key : keys) {
+                String ko = prompt(key, Locale.KOREAN);
+                String en = prompt(key, Locale.ENGLISH);
+                assertThat(ko).as("%s/ko", key).contains("LaTeX 수식 표기는 쓰지 마세요", "코드 안은 그 언어의 문법대로");
+                assertThat(en).as("%s/en", key)
+                        .contains("not in LaTeX math notation", "inside code, follow that language's syntax");
+                assertThat(ko + en).as("%s 가 LaTeX 문법을 예로 들면 작은 모델이 따라 쓴다", key)
+                        .doesNotContain("\\rightarrow", "$\\");
+            }
+        }
+    }
+
     @Test
     @DisplayName("스타일 지시문 층은 완전히 사라졌다 (§6.24 Step 0-c)")
     void styleInstructionLayerIsGone() {

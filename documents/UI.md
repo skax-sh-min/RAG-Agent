@@ -13,6 +13,7 @@
 | 아이콘 | Bootstrap Icons (WebJars 1.13.1) | |
 | 동적 갱신 | HTMX 2.0.10 (WebJars) | JS 없이 서버 fragment 교체 |
 | 마크다운 | marked.js 9.1.4 + DOMPurify 3.4.7 (WebJars) | XSS sanitize 후 렌더 — **둘 다 있을 때만** 렌더하고 아니면 평문(CLAUDE.md 규약) |
+| LaTeX 기호 | `static/js/markdown-tex-symbols.js` (marked 인라인 확장) | 모델이 쓴 `$\rightarrow$`·`$\le$` 같은 기호 표기를 →·≤ 문자로 그린다. 수식 렌더러(KaTeX 등)는 없다 — 구간 안의 명령이 **전부** 알려진 기호일 때만 바꾸고, 분수·중괄호 같은 구조가 있으면 원문 그대로. 코드 안은 건드리지 않는다. `base.html` 이 marked 바로 뒤에 실어 모든 렌더 지점에 걸리며, 저장된 원문은 바꾸지 않는다 |
 | 코드 하이라이트 | highlight.js 11.11.1 | 스크립트는 `static/js/vendor/highlight.min.js` 로컬 번들, CSS 테마만 WebJar — `sanitize → hljs.highlightElement()` |
 | 차트 | Chart.js 4.5.1 (WebJars) | LLM 사용량 일별 히스토리 stacked bar |
 
