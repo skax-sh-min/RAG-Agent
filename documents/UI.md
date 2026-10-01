@@ -621,8 +621,9 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               → ReadableStream으로 SSE 이벤트 파싱
               → stage 이벤트: 단계 배지 교체 (classifier/retrieval/answer/critic/upgrade)
               → sources 이벤트: Bootstrap Popover 출처 배지 삽입
-              → token 이벤트: 텍스트 실시간 누적
-              → done 이벤트: marked.js 마크다운 렌더 + 메타데이터 footer 표시
+              → token 이벤트: 원문 누적 + 마크다운 실시간 렌더(묶어서 — 간격은 50ms 와 직전 렌더
+                             (파싱+레이아웃) 시간의 4배 중 큰 값. 원문은 DOM 이 아니라 liveAnswers 에 있다)
+              → done 이벤트: 최종 렌더(finalAnswer 반영 + 코드 하이라이트) + 메타데이터 footer 표시
                              + htmx.trigger(body, "refreshThreadList")
               → error 이벤트: 오류 버블 교체
               hx-post="/ui/chat" 속성은 JS 비활성 시 fallback으로 유지
@@ -728,8 +729,8 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 |-------|------|------|
 | `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
-| `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
-| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 완료 시 마크다운 렌더 |
+| `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 — 원문 버퍼(`liveAnswers`)에 쌓이고 묶어서 마크다운으로 렌더된다(코드 하이라이트 제외) |
+| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 최종 렌더(`finalAnswer` 가 있으면 그것으로 교체 + 코드 하이라이트) |
 | `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내. **`reason`이 다음에 무슨 일이 일어나는지를 가른다** — `answer`(근거 부족)는 재검색까지 하므로 `sources`가 다시 오지만, `critic`(근거 이탈)은 검색을 건너뛰고 답변만 다시 쓰므로 출처가 재발행되지 않는다(클라이언트는 이미 갖고 있다) |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
