@@ -1,7 +1,14 @@
 # RAG Agent — Spring AI / Java 21
 
-A document-based knowledge Q&A agent built on Spring AI + Spring Boot 3.5 + Java 21.  
-Provides both a REST API and a Web UI powered by Thymeleaf + HTMX.
+A self-hosted Q&A assistant that answers from your own documents. Upload manuals, specs and slide decks (PDF, PPTX, DOCX, TXT, Markdown) and ask questions in chat: each answer is written from the retrieved passages, shows its sources, and is checked against them for grounding. It can run entirely on local LLMs inside a closed network.
+
+- **Grounded answers** — a classify → retrieve → answer → verify agent pipeline that re-searches when the evidence falls short and rewrites an answer that strays from it; answers it still can't verify are flagged as such.
+- **Hybrid search** — vector similarity, BM25 keyword search and a shared curated-knowledge axis, fused with RRF.
+- **Images included** — pictures inside documents are extracted and described by a Vision model so their content is searchable; scanned PDFs can be OCR'd.
+- **Local first** — any OpenAI-compatible server (LM Studio, llama.cpp) or cloud providers, with routing, failover and concurrency limits; a fully offline setup needs no Docker (SQLite + sqlite-vec).
+- **Knowledge that grows** — users report wrong passages and propose new knowledge; admins review them into the search corpus.
+
+Built on Spring Boot 3.5 + Spring AI and Java 21, with a Thymeleaf + HTMX web UI (Korean/English) and a REST API.
 
 ## Getting Started
 
