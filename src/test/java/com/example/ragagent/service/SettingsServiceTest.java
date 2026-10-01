@@ -151,6 +151,20 @@ class SettingsServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** 답변 아래 추가 질문 — 질문 다듬기와 따로 끄고 켠다(둘 다 켜져 있으면 호출은 하나다). */
+    @Test
+    @DisplayName("llm.follow-up-questions-enabled — 기본 켬, 질문 다듬기와 따로 update/reset 된다")
+    void followUpQuestionsToggle_defaultsOnAndIsIndependent() {
+        assertThat(service.followUpQuestionsEnabled()).isTrue();
+
+        assertThat(service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED, "false")).isEqualTo("false");
+        assertThat(service.followUpQuestionsEnabled()).isFalse();
+        assertThat(service.clarifiedQuestionEnabled()).as("다른 스위치는 그대로").isTrue();
+
+        service.reset(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED);
+        assertThat(service.followUpQuestionsEnabled()).isTrue();
+    }
+
     @Test
     @DisplayName("reset — 오버라이드 삭제 시 프로퍼티 기본값으로 정확히 복귀")
     void reset_revertsToPropertyDefault() {

@@ -22,8 +22,11 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.support.ResourceBundleMessageSource;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -264,6 +267,166 @@ class PostAnswerServiceTest {
             assertThat(prompt).as("%s", locale)
                     .contains("{history}", "{summary}", "{query}", "[PREVIOUS_QUESTIONS]", "[ANSWER_SUMMARY]");
             assertThat(prompt.lines().count()).as("%s 줄 수", locale).isGreaterThan(10);
+
+            String extras = realMessageSource().getMessage("prompt.postanswer.extras", null, locale);
+            assertThat(extras).as("%s extras", locale)
+                    .contains("{history}", "{sources}", "{summary}", "{query}", "[SOURCES]", "clarifiedQuestion", "followUps");
+            assertThat(extras.lines().count()).as("%s extras 줄 수", locale).isGreaterThan(15);
         }
+    }
+
+    // ── 추가 질문(합친 호출) ────────────────────────────────────────────────
+
+    /** 모델 응답 — 목록 기호·따옴표·지금 질문과 같은 것·중복이 섞여 있다(정리 규칙은 cleanFollowUps 가 본다). */
+    private static final String EXTRAS_JSON = """
+            {"clarifiedQuestion": "MCI 연동 타임아웃은 어떻게 설정하나요?",
+             "followUps": ["1. 타임아웃 기본값은 얼마인가요?", "\\"재처리는 어떻게 하나요?\\"", "그거 어떻게 설정해?",
+                           "타임아웃 기본값은 얼마인가요?", "MCI 연동 오류 코드는 무엇이 있나요?"]}
+            """;
+
+    @Test
+    @DisplayName("추가 질문이 켜져 있으면 한 번의 호출로 둘 다 받는다 — 다듬은 질문은 저장하고 추가 질문은 정리해 화면에만 넘긴다")
+    @SuppressWarnings("unchecked")
+    void followUpsComeFromTheSameCall() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(memoryService.getRecentTurns("u1", "t1"))
+                .thenReturn(List.of(turn(10L, "MCI 연동 구조 알려줘"), turn(11L, QUESTION)));
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> call = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.COST_FIRST),
+                eq(BackgroundUsage.POSTANSWER_PREFIX), call.capture())).thenReturn(EXTRAS_JSON);
+
+        service.afterTurn(11L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+        PostAnswerService.Extras extras = service.awaitExtras(11L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow();
+
+        assertThat(extras.clarifiedQuestion()).isEqualTo(CLARIFIED);
+        assertThat(extras.followUps()).containsExactly(
+                "타임아웃 기본값은 얼마인가요?", "재처리는 어떻게 하나요?", "MCI 연동 오류 코드는 무엇이 있나요?");
+        verify(memoryService).saveClarifiedQuestion(11L, CLARIFIED);
+        verify(llmRouter).executeWithTracking(any(), any(), any(), any());   // 둘을 한 번에
+
+        ChatModel model = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        when(model.call(prompt.capture())).thenReturn(chatResponse(EXTRAS_JSON));
+        call.getValue().apply(model);
+        assertThat(prompt.getValue().getInstructions().get(0).getText())
+                .contains("[SOURCES]", "- 연동 가이드.pdf: 미리보기", "- MCI 연동 구조 알려줘", "응답 대기 시간에서 바꿉니다")
+                .doesNotContain("{sources}", "{history}", "{summary}", "{query}");
+        assertThat(prompt.getValue().getInstructions().get(1).getText())
+                .as("응답 형식(JSON 스키마)은 사용자 메시지로 붙는다").contains("clarifiedQuestion", "followUps");
+    }
+
+    @Test
+    @DisplayName("추가 질문이 켜져 있으면 S·Direct 턴도 부르고 다듬은 질문을 저장한다 — 재사용 후보가 아니라 화면 표시용이다")
+    void followUpsAlsoServeTurnsThatCannotBeReused() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(EXTRAS_JSON);
+
+        service.afterTurn(21L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.S, true, false));
+        service.afterTurn(22L, "u1", "t1", QUESTION, true, Locale.KOREAN, answered(ResponseMode.N, false, true));
+
+        assertThat(service.awaitExtras(21L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow().followUps()).hasSize(3);
+        assertThat(service.awaitExtras(22L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow().followUps()).hasSize(3);
+        verify(memoryService).saveClarifiedQuestion(21L, CLARIFIED);
+        verify(memoryService).saveClarifiedQuestion(22L, CLARIFIED);
+    }
+
+    @Test
+    @DisplayName("RAG 인데 출처가 없는 턴(검색 0건 정형 답변·인사)은 추가 질문도 부르지 않는다")
+    void noFollowUpsWithoutGrounding() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+
+        service.afterTurn(31L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.S, false, false));
+
+        assertThat(service.awaitExtras(31L, "u1", "t1", Duration.ZERO)).isEmpty();
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("질문 다듬기만 꺼져 있으면 추가 질문만 쓴다 — 다듬은 질문은 저장하지도 보여 주지도 않는다")
+    void followUpsWithoutClarifying() {
+        when(settings.clarifiedQuestionEnabled()).thenReturn(false);
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(EXTRAS_JSON);
+
+        service.afterTurn(41L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+
+        PostAnswerService.Extras extras = service.awaitExtras(41L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow();
+        assertThat(extras.clarifiedQuestion()).isNull();
+        assertThat(extras.followUps()).hasSize(3);
+        verify(memoryService, never()).saveClarifiedQuestion(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("응답을 JSON 으로 읽지 못하면 아무것도 저장하지 않는다(NULL — 다시 시도할 수 있다) · 화면에는 빈 결과")
+    void unreadableExtrasStoreNothing() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("추가 질문을 만들 수 없습니다.");
+
+        service.afterTurn(51L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+
+        assertThat(service.awaitExtras(51L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow().isEmpty()).isTrue();
+        verify(memoryService, never()).saveClarifiedQuestion(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("결과는 그 턴을 만든 사용자·대화에만 · 기다림은 턴 저장 때 먼저 등록돼 호출이 끝나기 전에 물어도 받는다")
+    void extrasAreOwnedAndAwaitable() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        CountDownLatch release = new CountDownLatch(1);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenAnswer(inv -> {
+            release.await(5, TimeUnit.SECONDS);
+            return EXTRAS_JSON;
+        });
+
+        service.afterTurn(61L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+
+        assertThat(service.awaitExtras(61L, "u1", "t1", Duration.ZERO)).as("진행 중 — 기다리지 않으면 없다").isEmpty();
+        assertThat(service.awaitExtras(61L, "u2", "t1", Duration.ofMillis(50))).as("남의 턴").isEmpty();
+        assertThat(service.awaitExtras(61L, "u1", "t9", Duration.ofMillis(50))).as("다른 대화").isEmpty();
+        release.countDown();
+        assertThat(service.awaitExtras(61L, "u1", "t1", Duration.ofSeconds(5))).isPresent();
+        assertThat(service.awaitExtras(61L, "u2", "t1", Duration.ofSeconds(5))).as("끝난 뒤에도 남의 턴").isEmpty();
+        assertThat(service.awaitExtras(62L, "u1", "t1", Duration.ofMillis(50))).as("등록된 적 없는 턴").isEmpty();
+    }
+
+    @Test
+    @DisplayName("추가 질문이 꺼져 있으면 다듬은 질문 한 줄만 받는다 — 원문과 다르면 화면에도 실린다")
+    void clarifyOnlyPathPublishesTheClarifiedQuestion() {
+        when(memoryService.getRecentTurns("u1", "t1")).thenReturn(List.of(turn(10L, "MCI 연동 구조 알려줘")));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(CLARIFIED);
+
+        service.afterTurn(71L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+
+        PostAnswerService.Extras extras = service.awaitExtras(71L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow();
+        assertThat(extras.clarifiedQuestion()).isEqualTo(CLARIFIED);
+        assertThat(extras.followUps()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("cleanFollowUps — 목록 기호·따옴표를 벗기고, 지금·이전 질문과 같은 것·겹치는 것·너무 긴 것을 버린 뒤 셋까지")
+    void cleanFollowUps() {
+        assertThat(PostAnswerService.cleanFollowUps(List.of(
+                        "1) 재처리는 어떻게 하나요?", "- 재처리는 어떻게 하나요", "“기본값은?”", "그거 어떻게 설정해",
+                        "MCI 연동 구조 알려줘", "가".repeat(101), "", "오류 코드는?", "네 번째"),
+                QUESTION, List.of("MCI 연동 구조 알려줘")))
+                .containsExactly("재처리는 어떻게 하나요?", "기본값은?", "오류 코드는?");
+        assertThat(PostAnswerService.cleanFollowUps(null, QUESTION, List.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("sourcesOf — 위치 표시와 짧은 발췌(마크다운 장식 제거), 넷까지, 같은 줄은 한 번")
+    void sourcesOf() {
+        SourceRef first = new SourceRef("가이드.pdf | p.1", "**타임아웃**은\n여기서 바꾼다", "c1", "d1", 1);
+        SourceRef same = new SourceRef("가이드.pdf | p.1", "**타임아웃**은\n여기서 바꾼다", "c2", "d1", 1);
+        SourceRef longOne = new SourceRef("매뉴얼.docx", "나".repeat(400), "c3", "d2", 2);
+        String out = PostAnswerService.sourcesOf(List.of(first, same, longOne,
+                new SourceRef("c.md", "c", "c4", "d3", 1), new SourceRef("d.md", "d", "c5", "d4", 1),
+                new SourceRef("e.md", "e", "c6", "d5", 1)));
+
+        assertThat(out.lines().toList()).hasSize(PostAnswerService.MAX_SOURCES);
+        assertThat(out).startsWith("- 가이드.pdf | p.1: 타임아웃은 여기서 바꾼다")
+                .contains("- 매뉴얼.docx: " + "나".repeat(PostAnswerService.MAX_SOURCE_PREVIEW_CHARS) + "…")
+                .doesNotContain("e.md");
+        assertThat(PostAnswerService.sourcesOf(List.of())).isEmpty();
     }
 }

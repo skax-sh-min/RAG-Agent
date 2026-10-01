@@ -63,7 +63,7 @@ public class AgentService {
                         questionReuseService, postAnswerService);
         }
 
-        // Test/backward-compatible constructors — 답변 뒤 질문 다듬기 없이(그 단계만 빠진다).
+        // Test/backward-compatible constructors — 답변 뒤 보강 없이(그 단계만 빠진다).
         public AgentService(AgentGraph agentGraph, MemoryService memoryService,
                                                 ClassifierService classifierService,
                                                 ConversationSummarizerService summarizerService,

@@ -9,7 +9,7 @@ import java.util.Locale;
 
 /**
  * 한 턴이 끝났을 때 저장되는 것 전부 — 대화 기록, 이미지 참조, 검색 진단, 검증 스냅샷,
- * 재사용 출처, 요약 선계산, 답변 뒤 질문 다듬기({@link PostAnswerService}, 비동기). <b>일곱 가지가
+ * 재사용 출처, 요약 선계산, 답변 뒤 보강 — 다듬은 질문·추가 질문({@link PostAnswerService}, 비동기). <b>일곱 가지가
  * 이 순서로</b> 일어난다.
  *
  * <p><b>왜 클래스로 뺐는가.</b> 채팅에는 진입점이 둘이고({@link AgentService} 블로킹,
@@ -43,7 +43,7 @@ final class TurnPersistence {
     private final ConversationSummarizerService summarizerService;
     /** 없을 수 있다 — 질문 재사용을 배선하지 않은 구성/테스트에서는 그 단계만 빠진다. */
     private final QuestionReuseService questionReuseService;
-    /** 없을 수 있다 — 답변 뒤 질문 다듬기를 배선하지 않은 구성/테스트에서는 그 단계만 빠진다. */
+    /** 없을 수 있다 — 답변 뒤 보강을 배선하지 않은 구성/테스트에서는 그 단계만 빠진다. */
     private final PostAnswerService postAnswerService;
 
     TurnPersistence(MemoryService memoryService,
@@ -89,7 +89,8 @@ final class TurnPersistence {
         }
         summarizerService.precomputeAfterTurn(turn.userId(), turn.threadId(), turnId, turn.locale());
         if (postAnswerService != null) {
-            // 재사용할 수 있게 다듬은 질문 — 가상 스레드에서 돌아 이 저장을 기다리게 하지 않는다.
+            // 다듬은 질문·추가 질문 — 가상 스레드에서 돌아 이 저장을 기다리게 하지 않는다. 화면이 done 직후
+            // 결과를 물으므로 기다림은 이 호출 안에서(= done 보다 먼저) 등록된다.
             postAnswerService.afterTurn(turnId, turn.userId(), turn.threadId(), turn.question(),
                     turn.directMode(), turn.locale(), result);
         }

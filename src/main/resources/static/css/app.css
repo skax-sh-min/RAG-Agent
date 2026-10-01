@@ -250,6 +250,23 @@
     opacity: 0.85;
 }
 
+/* 답변 아래 "이어서 물어보기" 칩(PostAnswerService) — 가장 최근 답변 아래에만 붙고(chat-stream.js) 누르면 입력창에
+   들어갈 뿐 보내지 않는다. 크기는 채팅 글자 크기의 비율이다(인라인 크기 금지 — ChatFontSizeConventionTest).
+   칩 안의 질문은 한 문장이 길 수 있어 줄바꿈을 허용하고 왼쪽 정렬한다. */
+.follow-up-questions { padding-left: 0.25rem; }
+.follow-up-questions .follow-up-label {
+    font-size: max(0.75em, var(--chat-font-floor));
+    margin-bottom: 0.35rem;
+}
+.follow-up-chip {
+    font-size: 0.875em;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.35;
+    border-radius: 1rem;
+    max-width: 100%;
+}
+
 /* ── Superseded (unverified) retry answers ───────────────────────────────
    Transient, dimmed, collapsed blocks shown while a verification-failure retry
    is in progress; removed once a final answer arrives (chat-stream.js). */

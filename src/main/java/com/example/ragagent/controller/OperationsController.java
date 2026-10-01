@@ -16,6 +16,7 @@ import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.PostAnswerService;
 import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -59,6 +61,8 @@ public class OperationsController {
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
     /** ObjectProvider로 받는다 — ChatController와 같은 이유(이 빈이 없는 슬라이스 테스트 컨텍스트). */
     private final QuestionReuseService questionReuseService;
+    /** 같은 이유로 ObjectProvider — 없으면 추가 질문 엔드포인트는 늘 204 다. */
+    private final PostAnswerService postAnswerService;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -70,7 +74,8 @@ public class OperationsController {
                                 LlmRouter llmRouter,
                                 EmbeddingConcurrencyTracker embeddingConcurrencyTracker,
                                 BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
-                                ObjectProvider<QuestionReuseService> questionReuseService) {
+                                ObjectProvider<QuestionReuseService> questionReuseService,
+                                ObjectProvider<PostAnswerService> postAnswerService) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -82,6 +87,7 @@ public class OperationsController {
         this.embeddingConcurrencyTracker = embeddingConcurrencyTracker;
         this.backgroundConcurrencyTracker = backgroundConcurrencyTracker;
         this.questionReuseService = questionReuseService.getIfAvailable();
+        this.postAnswerService = postAnswerService.getIfAvailable();
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -254,6 +260,27 @@ public class OperationsController {
         }
         auditLogger.log("turn.source.exclude", threadId, Map.of("turnId", turnId, "chunkId", chunkId));
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 답변 뒤에 만든 것 — 다듬은 질문(원문과 다를 때만)과 이어서 물어볼 만한 질문 — 을 기다렸다 돌려준다
+     * ({@code PostAnswerService.awaitExtras}). 채팅 화면이 답변 직후 한 번 부르고, 대화를 다시 열 때는
+     * {@code waitMs=0} 으로 지금 있는 것만 묻는다.
+     *
+     * <p><b>204 가 정상 응답의 대부분이다</b> — 대상이 아니던 턴, 설정이 꺼진 경우, 결과를 아직 못 받았거나 메모리에서
+     * 지난 경우, 남의 턴. 셋을 가르지 않는 이유는 화면이 하는 일이 같고(아무것도 붙이지 않는다), 남의 턴인지
+     * 알려 주면 턴 id 를 훑어볼 이유가 생기기 때문이다. 추가 질문은 저장하지 않으므로 DB 를 보지 않는다.
+     */
+    @GetMapping("/ui/threads/{threadId}/turns/{turnId}/extras")
+    @ResponseBody
+    public ResponseEntity<PostAnswerService.Extras> turnExtras(ThreadContext ctx, @PathVariable String threadId,
+                                                               @PathVariable long turnId,
+                                                               @RequestParam(defaultValue = "20000") long waitMs) {
+        if (postAnswerService == null) return ResponseEntity.noContent().build();
+        return postAnswerService.awaitExtras(turnId, ctx.userId(), threadId, Duration.ofMillis(Math.max(0, waitMs)))
+                .filter(extras -> !extras.isEmpty())
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
     // ── LLM usage ─────────────────────────────────────────────────────
