@@ -154,14 +154,20 @@
                          질문 텍스트를 그대로 쓰는 소비자에게 대괄호가 함께 딸려간다.
                          data-turn-id: 질문 추천 목록의 "현재 대화" 항목이 이 버블로 이동할 때 찾는
                          키(jumpToThreadQuestion). 스트리밍 경로는 chat-stream.js 가 done 이벤트에서,
-                         재사용 경로는 appendReusedTurn() 이 같은 값을 심는다. -->
+                         재사용 경로는 appendReusedTurn() 이 같은 값을 심는다.
+                         data-clarified-question: 답변 뒤에 다듬은 질문(PostAnswerService) — 원문과 다를 때만
+                         컨트롤러가 담는다(값이 없으면 속성 자체가 없다). 버블은 원문 아래 괄호 줄로, 질문 내비게이션은
+                         같은 속성을 읽어 같은 모양으로 보여준다. data-question(원본)에는 섞지 않는다. -->
                     <div class="d-flex justify-content-end mb-3 align-items-end user-turn"
-                         th:attr="data-question=${turn.question},data-response-mode=${turn.responseModeLabel},data-turn-id=${turn.id}">
+                         th:with="cq=${clarifiedQuestionByTurnId != null ? clarifiedQuestionByTurnId[turn.id] : null}"
+                         th:attr="data-question=${turn.question},data-response-mode=${turn.responseModeLabel},data-turn-id=${turn.id},data-clarified-question=${cq}">
                         <div class="me-1">
                             <div class="bubble-user p-3">
                                 <div><span class="bubble-user-mode"
                                            th:text="'[' + ${turn.responseModeLabel} + '] '">[RN] </span><span
                                         th:text="${turn.question}"></span></div>
+                                <div class="bubble-user-clarified" th:if="${cq != null}"
+                                     th:text="'(' + ${cq} + ')'">(다듬은 질문)</div>
                                 <small class="text-white bubble-user-time msg-time"
                                        th:if="${turn.askedAt != null}"
                                        th:attr="data-utc-time=${turn.askedAt}">🕐</small>
@@ -1726,6 +1732,12 @@
         return body ? body.textContent.trim() : '';
     }
 
+    /* 답변 뒤에 다듬은 질문 — 원문과 다를 때만 서버가 data-clarified-question 을 심는다(판정은 서버 한 곳,
+       PostAnswerService.differs). 목록·풍선은 원문 아래 "(다듬은 질문)" 줄로 보여준다. */
+    function qnavClarifiedOf(el) {
+        return el.dataset.clarifiedQuestion || '';
+    }
+
     /* 목록·풍선에 붙는 '[RN] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
        만드는 이유는 qnavTextOf() 가 data-question(원본)을 우선하기 때문이다 — 원본에는 표기가
        없으므로 여기서 붙이지 않으면 버블에는 보이고 목록에는 안 보이는 상태가 된다.
@@ -1775,7 +1787,10 @@
             else break;
         }
         qnavCurrent = found;
-        const text = found ? (qnavModePrefix(found) + qnavTextOf(found)) : '';
+        const clarified = found ? qnavClarifiedOf(found) : '';
+        const text = found
+            ? (qnavModePrefix(found) + qnavTextOf(found) + (clarified ? '\n(' + clarified + ')' : ''))
+            : '';
         // bottom > cTop → 질문 버블이 아직 (일부라도) 보인다.
         const stillVisible = found && found.getBoundingClientRect().bottom > cTop + 4;
         if (!text || stillVisible) { qnavFloat.classList.add('d-none'); return; }
@@ -1800,9 +1815,13 @@
             item.className = 'list-group-item list-group-item-action question-nav-item d-flex gap-2';
             if (turn === qnavCurrent) item.classList.add('active');
             const time = qnavTimeOf(turn);
+            const clarified = qnavClarifiedOf(turn);
             item.innerHTML =
                 '<span class="text-muted flex-shrink-0">' + (idx + 1) + '.</span>' +
-                '<span class="qn-text flex-grow-1">' + escHtml(qnavModePrefix(turn) + qnavTextOf(turn)) + '</span>' +
+                '<span class="qn-text flex-grow-1">' +
+                    '<span class="qn-q">' + escHtml(qnavModePrefix(turn) + qnavTextOf(turn)) + '</span>' +
+                    (clarified ? '<span class="qn-clarified">(' + escHtml(clarified) + ')</span>' : '') +
+                '</span>' +
                 (time ? '<span class="text-muted flex-shrink-0 small">' + escHtml(time) + '</span>' : '');
             item.addEventListener('click', function () {
                 qnavJumpTo(turn);

@@ -170,6 +170,18 @@ public interface MemoryRepository {
     Map<Long, String> findVerificationsByTurnIds(List<Long> turnIds);
 
     /**
+     * 답변 뒤에 다듬은 질문({@code clarified_question}, V6)을 저장한다 — {@code saveVerification} 과 같은
+     * 사후 UPDATE 다. 생성은 턴 저장 뒤 비동기로 끝나므로 {@code addTurn} 에 실을 수 없다.
+     */
+    void saveClarifiedQuestion(long turnId, String clarifiedQuestion);
+
+    /**
+     * 대화 기록 화면이 질문 아래 줄을 되살리는 데 쓰는 조회 — 값이 있는 턴만 담긴다
+     * ({@code findVerificationsByTurnIds} 와 같은 형태, 같은 이유로 {@code Turn} 레코드에 싣지 않는다).
+     */
+    Map<Long, String> findClarifiedQuestionsByTurnIds(List<Long> turnIds);
+
+    /**
      * One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service.
      *
      * <p>{@code userId}/{@code threadId}/{@code threadTitle} (§6.25) are what let a diagnostics row

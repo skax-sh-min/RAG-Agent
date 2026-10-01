@@ -102,10 +102,11 @@ public class StreamingAgentService {
                                  AppProperties props,
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
                                  QuestionReuseService questionReuseService,
-                                 QuestionCondenser questionCondenser) {
+                                 QuestionCondenser questionCondenser,
+                                 PostAnswerService postAnswerService) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
                 messageSource, summarizerService, props, imageSkipRegistry, questionReuseService,
-                questionCondenser, System::nanoTime);
+                questionCondenser, postAnswerService, System::nanoTime);
     }
 
     // Backward-compatible constructor for tests that care about neither question reuse nor
@@ -121,7 +122,7 @@ public class StreamingAgentService {
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
                                  LongSupplier nanoTimeSource) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, imageSkipRegistry, null, null, nanoTimeSource);
+                messageSource, summarizerService, props, imageSkipRegistry, null, null, null, nanoTimeSource);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -136,6 +137,7 @@ public class StreamingAgentService {
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
                           QuestionReuseService questionReuseService,
                           QuestionCondenser questionCondenser,
+                          PostAnswerService postAnswerService,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -147,9 +149,10 @@ public class StreamingAgentService {
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService;
-        // 블로킹 경로(AgentService)와 공유하는 턴 저장 절차. 이미 가진 셋 위의 절차라
+        // 블로킹 경로(AgentService)와 공유하는 턴 저장 절차. 이미 가진 협력자들 위의 절차라
         // 빈으로 만들지 않는다 — 그러면 이 클래스의 하위호환 생성자 전부가 함께 흔들린다.
-        this.turnPersistence = new TurnPersistence(memoryService, summarizerService, questionReuseService);
+        this.turnPersistence = new TurnPersistence(memoryService, summarizerService,
+                questionReuseService, postAnswerService);
         this.questionCondenser = questionCondenser;
         this.nanoTimeSource = nanoTimeSource;
     }

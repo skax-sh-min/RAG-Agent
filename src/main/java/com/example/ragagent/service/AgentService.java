@@ -49,19 +49,30 @@ public class AgentService {
                                                 ClassifierService classifierService,
                                                 ConversationSummarizerService summarizerService,
                                                 QuestionReuseService questionReuseService,
-                                                QuestionCondenser questionCondenser) {
+                                                QuestionCondenser questionCondenser,
+                                                PostAnswerService postAnswerService) {
                 this.agentGraph = agentGraph;
                 this.memoryService = memoryService;
                 this.classifierService = classifierService;
                 this.summarizerService = summarizerService;
                 this.questionReuseService = questionReuseService;
                 this.questionCondenser = questionCondenser;
-                // 스트리밍 경로와 공유하는 턴 저장 절차. 새 협력자를 들이는 것이 아니라 이미
-                // 가진 셋 위의 절차라 빈으로 만들지 않는다(TurnPersistence 클래스 주석 참고).
-                this.turnPersistence = new TurnPersistence(memoryService, summarizerService, questionReuseService);
+                // 스트리밍 경로와 공유하는 턴 저장 절차. 이미 가진 협력자들 위의 절차라 빈으로
+                // 만들지 않는다(TurnPersistence 클래스 주석 참고).
+                this.turnPersistence = new TurnPersistence(memoryService, summarizerService,
+                        questionReuseService, postAnswerService);
         }
 
-        // Test/backward-compatible constructors.
+        // Test/backward-compatible constructors — 답변 뒤 질문 다듬기 없이(그 단계만 빠진다).
+        public AgentService(AgentGraph agentGraph, MemoryService memoryService,
+                                                ClassifierService classifierService,
+                                                ConversationSummarizerService summarizerService,
+                                                QuestionReuseService questionReuseService,
+                                                QuestionCondenser questionCondenser) {
+                this(agentGraph, memoryService, classifierService, summarizerService,
+                        questionReuseService, questionCondenser, null);
+        }
+
         public AgentService(AgentGraph agentGraph, MemoryService memoryService,
                                                 ClassifierService classifierService,
                                                 ConversationSummarizerService summarizerService,

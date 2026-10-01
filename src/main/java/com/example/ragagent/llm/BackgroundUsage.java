@@ -28,10 +28,13 @@ public final class BackgroundUsage {
     // 큐레이션 Q&A 의 질문 구체화 제안(/admin 편집 화면의 버튼). 관리자가 눌러야만 도는 호출이라
     // 빈도가 낮지만, 채팅 프로바이더 행에 섞이면 "답변 모델이 왜 이만큼 불렸지"가 설명되지 않는다.
     public static final String QUESTION_PREFIX  = "question:";
+    // 답변 뒤의 한 번의 호출(PostAnswerService) — 재사용할 수 있게 다듬은 질문. 턴마다 돌아 채팅
+    // 프로바이더 카드에 섞이면 "답변 모델이 왜 턴마다 한 번 더 불렸지"가 설명되지 않는다.
+    public static final String POSTANSWER_PREFIX = "postanswer:";
 
     private static final Set<String> PREFIXES = Set.of(
             SUMMARY_PREFIX, KEYWORD_PREFIX, MDCORRECT_PREFIX, TXT2MD_PREFIX, TITLE_PREFIX, IMAGE_PREFIX,
-            CONTEXT_PREFIX, QUESTION_PREFIX);
+            CONTEXT_PREFIX, QUESTION_PREFIX, POSTANSWER_PREFIX);
 
     /** True when {@code providerName} was recorded by one of the background call sites above. */
     public static boolean isBackground(String providerName) {

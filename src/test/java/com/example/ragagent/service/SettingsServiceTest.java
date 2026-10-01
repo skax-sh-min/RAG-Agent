@@ -136,6 +136,21 @@ class SettingsServiceTest {
         verify(audit).log(eq("settings.update"), eq(SettingsKeys.SEARCH_RRF_K), anyMap());
     }
 
+    /** 답변 뒤 질문 다듬기 — 기본 켬, 관리자가 끄면 다음 턴부터 꺼지고, 오버라이드를 지우면 다시 켜진다. */
+    @Test
+    @DisplayName("llm.clarified-question-enabled — 기본 켬, update 로 끄고 reset 으로 되돌린다")
+    void clarifiedQuestionToggle_defaultsOnAndIsHotEditable() {
+        assertThat(service.clarifiedQuestionEnabled()).isTrue();
+
+        assertThat(service.update(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, "false")).isEqualTo("false");
+        assertThat(service.clarifiedQuestionEnabled()).isFalse();
+
+        service.reset(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED);
+        assertThat(service.clarifiedQuestionEnabled()).isTrue();
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, "maybe"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     @DisplayName("reset — 오버라이드 삭제 시 프로퍼티 기본값으로 정확히 복귀")
     void reset_revertsToPropertyDefault() {
