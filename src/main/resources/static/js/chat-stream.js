@@ -25,10 +25,12 @@
     // 있지 않다 — 원문은 여기(bubbleId → { raw, timer, delay })에 쌓이고, 재시도·재분석·완료·중단은 전부
     // 여기서 원문을 읽는다. 예전처럼 contentEl.textContent 를 읽으면 렌더된 화면의 글자(표 칸·목록 기호가
     // 사라진 것)가 나온다.
-    // 렌더는 토큰마다가 아니라 묶어서 한다 — 매번 원문 전체를 다시 파싱·배치하므로 토큰마다 돌면 긴 답변(최대
-    // 2만 자)에서 느려진다. 간격은 50ms 에서 시작해 직전 렌더(파싱+레이아웃)에 걸린 시간의 4배로 늘어난다
-    // (렌더가 CPU 의 1/5 를 넘지 않게). 렌더 한 번의 길이는 줄이지 못한다 — 표·코드 블록이 촘촘한 2만 자
-    // 답변이면 한 번에 100ms 를 넘는다(5천 자까지는 30ms 남짓).
+    // 다시 그리는 것은 새로 들어온 블록뿐이다(renderNewBlocks) — 이미 끝난 문단·표·코드 블록은 한 번 그린 DOM
+    // 을 그대로 둔다. 매번 전체를 다시 그리던 때는 표·코드 블록이 촘촘한 2만 자 답변에서 렌더 한 번이 100ms 를
+    // 넘었다(살균과 레이아웃이 답변 전체에 걸렸다). 남는 비용은 브라우저의 레이아웃이다 — 끝에 블록 하나만
+    // 붙여도 답변 전체를 다시 배치해서 표·코드 블록이 촘촘한 2만 자면 30~40ms 가 든다(contain: layout 으로
+    // 감싸도, 컨테이너 쿼리·flex 를 빼도 줄지 않았다). 렌더는 토큰마다가 아니라 묶어서 하고, 간격은 50ms 와 직전
+    // 렌더(어휘 분석+레이아웃) 시간의 4배 중 큰 값이다(렌더가 CPU 의 1/5 를 넘지 않게).
     const LIVE_RENDER_MIN_DELAY_MS = 50;
     const liveAnswers = new Map();
 
@@ -521,22 +523,95 @@
      */
     function placeCaret(el) {
         el.querySelectorAll('.stream-caret').forEach(c => c.remove());
+        // 마지막 글자는 뒤에서부터 찾는다 — 앞에서부터 훑으면 렌더마다 답변 전체를 지나간다(2만 자면 텍스트
+        // 노드 7천 개, 렌더 한 번에 6ms).
         const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
             acceptNode: n => (n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
         });
-        let last = null;
-        while (walker.nextNode()) last = walker.currentNode;
+        let end = el;
+        while (end.lastChild) end = end.lastChild;
+        walker.currentNode = end;
+        const last = end.nodeType === Node.TEXT_NODE && end.nodeValue.trim() ? end : walker.previousNode();
         if (last) last.parentNode.insertBefore(newCaret(), last.nextSibling);
         else el.appendChild(newCaret());
     }
 
+    /**
+     * blocks: 이미 그려서 고정한 블록들의 원문(앞에서부터), blockNodes: 그 블록들이 답변 칸 맨 앞에서 차지하는
+     * 자식 노드 수 — 그 뒤의 노드(쓰이는 중인 마지막 블록·커서·검증 중 표시)는 렌더마다 걷어내고 다시 만든다.
+     */
     function liveState(bubbleId) {
         let s = liveAnswers.get(bubbleId);
         if (!s) {
-            s = { raw: '', timer: null, delay: LIVE_RENDER_MIN_DELAY_MS };
+            s = { raw: '', timer: null, delay: LIVE_RENDER_MIN_DELAY_MS, blocks: [], blockNodes: 0 };
             liveAnswers.set(bubbleId, s);
         }
         return s;
+    }
+
+    /** 블록 단위로 그릴 수 있는가 — 렌더 게이트(marked·DOMPurify)에 더해 어휘 분석기·파서를 따로 쓴다. */
+    function canRenderBlocks() {
+        return typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
+            && typeof marked.lexer === 'function' && typeof marked.parser === 'function';
+    }
+
+    // 닫는 태그가 없는 요소 — 열린 채로 남아 뒤 블록을 감쌀 수 없다(LLM 이 표 칸에 흔히 쓰는 <br> 등).
+    const VOID_HTML_TAG = /^<\/?(br|hr|img|wbr)\b[^>]*>$/i;
+
+    /**
+     * 블록에 열린 채로 남을 수 있는 날 HTML(블록·인라인 어느 쪽이든)이 있는가. 그런 블록은 따로 그리면 브라우저가
+     * 그 자리에서 요소를 닫아 버려서(<details> 를 홀로 넣으면 바로 </details>), 뒤 블록이 그 안에 들어가는
+     * 전체 렌더와 달라진다. 코드 블록·인라인 코드 안의 <...> 는 HTML 토큰이 아니라서 걸리지 않는다.
+     */
+    function hasOpenableHtml(node) {
+        if (Array.isArray(node)) return node.some(hasOpenableHtml);
+        if (!node || typeof node !== 'object') return false;
+        if (node.type === 'html' && !VOID_HTML_TAG.test(String(node.raw || '').trim())) return true;
+        return Object.keys(node).some(k => typeof node[k] === 'object' && hasOpenableHtml(node[k]));
+    }
+
+    /** 블록 토큰들을 그려 el 끝에 붙이고, 붙은 자식 노드 수를 돌려준다. 붙이는 HTML 은 전부 DOMPurify 를 지난다. */
+    function appendBlocks(el, tokens) {
+        const before = el.childNodes.length;
+        el.insertAdjacentHTML('beforeend', DOMPurify.sanitize(marked.parser(tokens)));
+        return el.childNodes.length - before;
+    }
+
+    /**
+     * 새로 들어온 블록만 그린다. 원문 전체를 매번 어휘 분석하되(답변 전체를 다시 그리는 것보다 훨씬 싸다 —
+     * 2만 자에 수 ms), 마지막 블록 앞의 것들은 다음 블록이 시작됐으니 끝난 것으로 보고 한 번만 그려 고정한다.
+     * 마지막 블록은 아직 쓰이는 중이라 매번 다시 그린다 — 빈 줄로 끝났어도 그렇다(목록은 빈 줄 뒤에도 항목이
+     * 이어 붙는다). 고정한 블록의 원문이 이번 분석 결과의 앞부분과 다르면(뒤에 온 글자가 앞 블록의 해석을
+     * 바꿨다) 처음부터 다시 그린다 — 그래서 화면이 원문 전체를 한 번에 렌더한 결과와 어긋나지 않는다(예외
+     * 하나: 참조식 링크 [글][1] 의 정의가 나중에 오면 앞 블록은 원문이 같아 그대로라, 완료 렌더에서야 링크가 된다).
+     * 완료 시점의 최종 렌더는 이와 별개로 전체를 한 번에 다시 그린다(renderMarkdown).
+     */
+    function renderNewBlocks(el, s) {
+        // 커서는 마지막 블록에 글자가 없으면(구분선 등) 고정 블록 안에 들어가 있다 — 노드를 세기 전에 뺀다.
+        el.querySelectorAll('.stream-caret').forEach(c => c.remove());
+        const tokens = marked.lexer(s.raw);
+        let last = tokens.length;
+        while (last > 0 && tokens[last - 1].type === 'space') last--;
+        last = Math.max(0, last - 1);   // 쓰이는 중인 마지막 블록 — 그 앞까지가 끝난 블록이다
+
+        let sameStart = s.blocks.length <= last;
+        for (let i = 0; sameStart && i < s.blocks.length; i++) sameStart = s.blocks[i] === tokens[i].raw;
+        if (!sameStart) {
+            el.textContent = '';
+            s.blocks = [];
+            s.blockNodes = 0;
+        }
+        el.classList.remove('md-plain');
+        while (el.childNodes.length > s.blockNodes) el.lastChild.remove();
+
+        // 고정은 열린 채로 남을 수 있는 HTML 이 든 첫 블록 앞에서 멈춘다 — 그 블록부터 끝까지는 매번 한 번에
+        // 그려야 브라우저가 전체 렌더와 같은 맥락에서 해석한다.
+        let i = s.blocks.length;
+        for (; i < last && !hasOpenableHtml(tokens[i]); i++) {
+            s.blockNodes += appendBlocks(el, [tokens[i]]);
+            s.blocks.push(tokens[i].raw);
+        }
+        appendBlocks(el, tokens.slice(i));
     }
 
     /** 지금까지 스트리밍된 원문 — 렌더된 화면이 아니라. */
@@ -550,7 +625,8 @@
         const el = document.getElementById(`stream-content-${bubbleId}`);
         if (!s || !el) return;
         const started = performance.now();
-        renderMarkdown(el, s.raw, false);
+        if (canRenderBlocks()) renderNewBlocks(el, s);
+        else renderMarkdown(el, s.raw, false);   // 게이트에 막히면 평문 — 블록으로 나눌 것이 없다
         placeCaret(el);
         // 레이아웃을 여기서 끝내 간격 계산에 넣는다. 긴 답변에서는 파싱보다 레이아웃이 비싼데, 이 줄이 없으면
         // 레이아웃은 바닥에 붙어 있을 때만(scrollToBottom 이 scrollHeight 를 읽을 때) 재는 구간에 들어와서,
