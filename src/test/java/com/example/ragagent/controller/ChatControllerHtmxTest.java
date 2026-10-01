@@ -679,6 +679,31 @@ class ChatControllerHtmxTest {
     }
 
     /**
+     * LaTeX 기호 확장(static/js/markdown-tex-symbols.js)은 전역 marked 에 자신을 등록하므로 marked 보다 뒤에
+     * 실려야 한다 — 앞에 오면 marked 가 없어 조용히 아무 일도 하지 않고, 답변에는 다시 $\rightarrow$ 가
+     * 글자 그대로 나온다. 그 확장은 base.html 에서만 실리므로 base.html 을 decorate 하는 채팅 페이지로 본다.
+     */
+    @Test
+    @DisplayName("채팅 페이지는 LaTeX 기호 확장을 marked 보다 뒤에 싣는다")
+    void chatPageLoadsTexSymbolExtensionAfterMarked() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of());
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        java.util.regex.Matcher marked = java.util.regex.Pattern.compile("<script[^>]+marked\\.min\\.js").matcher(html);
+        java.util.regex.Matcher tex = java.util.regex.Pattern.compile("<script[^>]+markdown-tex-symbols").matcher(html);
+        assertThat(marked.find()).as("marked 를 싣는 script 태그").isTrue();
+        assertThat(tex.find()).as("LaTeX 기호 확장을 싣는 script 태그").isTrue();
+        assertThat(tex.start()).as("확장은 marked 보다 뒤에 실려야 한다").isGreaterThan(marked.start());
+    }
+
+    /**
      * 재사용 턴이 새 대화의 첫 메시지일 때의 회귀. 예전에는 thread_meta 행 없이 턴만 저장해서 —
      * HTMX/SSE 경로와 달리 getOrCreate 를 부르지 않았다 — 사이드바에 안 뜨고 새로고침하면
      * 대화가 비어 보였다(일반 메시지를 한 번 보내야 나타났다).
