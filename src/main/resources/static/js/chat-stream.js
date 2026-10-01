@@ -34,6 +34,14 @@
     const LIVE_RENDER_MIN_DELAY_MS = 50;
     const liveAnswers = new Map();
 
+    // ── 답변 뒤 보강(다듬은 질문 · 추가 질문) ────────────────────────────────
+    // 답변이 끝나면 서버가 백그라운드에서 LLM 을 한 번 더 불러 질문을 다듬고 이어서 물어볼 질문을 만든다
+    // (PostAnswerService). 추가 질문은 저장하지 않는 일회성 제안이라 답변 직후 기다렸다 받아 가장 최근 답변
+    // 아래에만 붙이고, 다음 질문을 보내면 지운다. 결과가 없으면 엔드포인트는 204 다(대상이 아니었거나 꺼져 있다).
+    // 대기 상한은 서버의 PostAnswerService.MAX_EXTRAS_WAIT(25초) 안쪽이다.
+    const EXTRAS_WAIT_MS = 20000;
+    let extrasAbort = null;
+
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
@@ -868,8 +876,112 @@
                어느 턴의 출처인지 알아야 하고, 그 값은 지금(턴 저장 후)에야 존재한다. */
             document.querySelectorAll(`#stream-sources-${bubbleId} .source-item`)
                 .forEach(el => { el.dataset.turnId = String(data.turnId); });
+
+            // 답변 뒤 보강 — 서버는 이 턴을 저장하면서 이미 기다림을 등록해 두었다(PostAnswerService).
+            loadTurnExtras(data.turnId, userTurn, document.getElementById(`bubble-${bubbleId}`), EXTRAS_WAIT_MS);
         }
     }
+
+    // ── 답변 뒤 보강 ─────────────────────────────────────────────────────────
+
+    /** 추가 질문 칩을 지우고 기다리던 요청을 끊는다 — 칩은 가장 최근 답변 아래에만 있어야 한다. */
+    function clearFollowUps() {
+        if (extrasAbort) {
+            extrasAbort.abort();
+            extrasAbort = null;
+        }
+        document.querySelectorAll('#chat-messages .follow-up-questions').forEach(el => el.remove());
+    }
+
+    /**
+     * 이 턴의 답변 뒤 결과를 기다렸다 붙인다. userTurnEl 이 있으면 다듬은 질문을 질문 버블에(원문과 다를 때만
+     * 서버가 보낸다), assistantEl 이 있으면 추가 질문 칩을 그 답변 바로 아래에. waitMs=0 은 기다리지 않고 지금 있는
+     * 것만 묻는다(대화를 다시 열 때).
+     */
+    async function loadTurnExtras(turnId, userTurnEl, assistantEl, waitMs) {
+        const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
+        const threadId = threadIdInput ? threadIdInput.value : '';
+        if (!threadId || !turnId) return;
+        clearFollowUps();
+        const controller = new AbortController();
+        extrasAbort = controller;
+        try {
+            const url = `/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`
+                      + `/extras?waitMs=${waitMs}`;
+            const res = await fetch(url, { signal: controller.signal });
+            if (res.status !== 200) return;
+            const data = await res.json();
+            if (controller.signal.aborted) return;
+            if (data.clarifiedQuestion && userTurnEl) applyClarifiedQuestion(userTurnEl, data.clarifiedQuestion);
+            if (Array.isArray(data.followUps) && data.followUps.length && assistantEl) {
+                renderFollowUps(assistantEl, data.followUps);
+            }
+        } catch (e) {
+            // 끊겼거나(다음 질문을 보냈다) 네트워크 오류 — 없어도 되는 제안이라 조용히 넘긴다.
+        } finally {
+            if (extrasAbort === controller) extrasAbort = null;
+        }
+    }
+
+    /** 서버 렌더(chat.html 의 기록 루프)와 같은 자리·같은 표식 — 질문 내비게이션이 data-clarified-question 을 읽는다. */
+    function applyClarifiedQuestion(userTurnEl, clarified) {
+        userTurnEl.dataset.clarifiedQuestion = clarified;
+        const bubble = userTurnEl.querySelector('.bubble-user');
+        if (!bubble) return;
+        let line = bubble.querySelector('.bubble-user-clarified');
+        if (!line) {
+            line = document.createElement('div');
+            line.className = 'bubble-user-clarified';
+            bubble.insertBefore(line, bubble.querySelector('.bubble-user-time'));
+        }
+        line.textContent = `(${clarified})`;
+    }
+
+    function renderFollowUps(assistantEl, followUps) {
+        const box = document.createElement('div');
+        box.className = 'follow-up-questions mb-3';
+        box.setAttribute('role', 'group');
+        box.setAttribute('aria-label', '이어서 물어볼 만한 질문');
+        const label = document.createElement('div');
+        label.className = 'follow-up-label text-muted';
+        label.innerHTML = '<i class="bi bi-chat-dots me-1"></i>이어서 물어보기';
+        box.appendChild(label);
+        const list = document.createElement('div');
+        list.className = 'd-flex flex-wrap gap-2';
+        followUps.forEach(question => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'btn btn-sm btn-outline-primary follow-up-chip';
+            chip.textContent = question;
+            chip.title = '입력창에 넣기 — 고쳐서 보낼 수 있습니다';
+            chip.addEventListener('click', () => fillQuestionInput(question));
+            list.appendChild(chip);
+        });
+        box.appendChild(list);
+        assistantEl.insertAdjacentElement('afterend', box);
+        scrollToBottom();
+    }
+
+    /**
+     * 칩을 누르면 보내지 않고 입력창에 넣는다 — 비었으면 그 질문으로, 쓰던 글이 있으면 다음 줄에 덧붙인다(같은
+     * 질문이 이미 한 줄로 있으면 다시 넣지 않는다). 사용자가 고쳐서 직접 보낸다.
+     */
+    function fillQuestionInput(question) {
+        const input = document.getElementById('question-input');
+        if (!input) return;
+        const current = input.value.replace(/\s+$/, '');
+        const lines = current ? current.split('\n').map(l => l.trim()) : [];
+        if (!lines.includes(question.trim())) {
+            input.value = current ? `${current}\n${question}` : question;
+        }
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        // 높이 맞춤·질문 추천처럼 입력에 반응하는 것들이 사람이 친 것과 똑같이 돌게 한다.
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // chat.html 의 재사용 경로가 새 답변을 붙일 때 부른다 — 칩은 그 답변이 넘겨받는다.
+    window.clearChatFollowUps = clearFollowUps;
 
     function onError(bubbleId, message) {
         endLive(bubbleId);
@@ -1013,6 +1125,17 @@
             scrollBtn.addEventListener('click', function () { scrollToBottom(true); });
         }
 
+        // 대화를 다시 열었을 때 — 가장 최근 턴의 추가 질문이 아직 서버 메모리에 있으면(10분) 다시 붙인다. 다듬은
+        // 질문은 서버 렌더가 이미 그렸으므로 칩만 본다. 기록 루프는 질문 버블 바로 뒤에 답변을 둔다.
+        if (chatMessages) {
+            const turns = chatMessages.querySelectorAll('.user-turn[data-turn-id]');
+            const lastTurn = turns.length ? turns[turns.length - 1] : null;
+            const answerEl = lastTurn ? lastTurn.nextElementSibling : null;
+            if (answerEl && answerEl.querySelector('.bubble-assistant')) {
+                loadTurnExtras(lastTurn.dataset.turnId, null, answerEl, 0);
+            }
+        }
+
         const form = document.getElementById('chat-form');
         if (!form) return;
 
@@ -1046,6 +1169,8 @@
                 delete questionEl.dataset.summaryPrecomputed; // §6.10: allow next question to trigger precompute again
             }
 
+            // 추가 질문 칩은 가장 최근 답변 아래에만 — 새 질문을 보내는 순간 지난 답변의 것은 치운다.
+            clearFollowUps();
             submitStream(formData, question);
         }, true); // capture phase — fires before HTMX listener
     });

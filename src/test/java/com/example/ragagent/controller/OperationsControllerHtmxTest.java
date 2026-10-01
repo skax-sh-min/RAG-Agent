@@ -14,6 +14,7 @@ import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.PostAnswerService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,8 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -39,6 +42,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -68,6 +72,39 @@ class OperationsControllerHtmxTest {
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
     @MockitoBean BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
+    @MockitoBean PostAnswerService postAnswerService;
+
+    // ── 답변 뒤 보강(다듬은 질문 · 추가 질문) ─────────────────────────────────
+
+    @Test
+    @DisplayName("GET .../turns/{id}/extras — 결과가 있으면 200 + 다듬은 질문·추가 질문, 기본 대기 20초")
+    void turnExtras_returnsWhatTheServiceProduced() throws Exception {
+        when(postAnswerService.awaitExtras(eq(42L), any(), eq("t1"), eq(Duration.ofMillis(20_000))))
+                .thenReturn(Optional.of(new PostAnswerService.Extras(
+                        "MCI 연동 타임아웃 오류는 왜 발생하나요?", List.of("재처리는 어떻게 하나요?", "기본값은 얼마인가요?"))));
+
+        mvc.perform(get("/ui/threads/t1/turns/42/extras"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clarifiedQuestion").value("MCI 연동 타임아웃 오류는 왜 발생하나요?"))
+                .andExpect(jsonPath("$.followUps[0]").value("재처리는 어떻게 하나요?"))
+                .andExpect(jsonPath("$.followUps.length()").value(2))
+                .andExpect(jsonPath("$.empty").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET .../turns/{id}/extras — 없거나 빈 결과는 204, waitMs=0 은 기다리지 않는다")
+    void turnExtras_emptyOrMissingIs204() throws Exception {
+        when(postAnswerService.awaitExtras(eq(42L), any(), eq("t1"), eq(Duration.ZERO)))
+                .thenReturn(Optional.empty());
+        when(postAnswerService.awaitExtras(eq(43L), any(), eq("t1"), any()))
+                .thenReturn(Optional.of(new PostAnswerService.Extras(null, List.of())));
+
+        mvc.perform(get("/ui/threads/t1/turns/42/extras").param("waitMs", "0"))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/ui/threads/t1/turns/43/extras"))
+                .andExpect(status().isNoContent());
+        verify(postAnswerService).awaitExtras(eq(42L), any(), eq("t1"), eq(Duration.ZERO));
+    }
 
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")
