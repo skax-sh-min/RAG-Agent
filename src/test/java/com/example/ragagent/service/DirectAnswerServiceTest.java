@@ -312,7 +312,8 @@ class DirectAnswerServiceTest {
             windows.record("local", windowTokens,
                     com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
         }
-        return new DirectAnswerService(llmRouter, messageSource, props, windows);
+        return new DirectAnswerService(llmRouter, messageSource, props, windows,
+                AnswerStreamer.withoutThinkingControl());
     }
 
     private static AgentState stateWithHistory(String history) {

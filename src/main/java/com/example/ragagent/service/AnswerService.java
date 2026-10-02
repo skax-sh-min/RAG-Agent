@@ -7,7 +7,6 @@ import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.exception.LlmContextOverflowException;
-import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.PromptBudget;
@@ -28,7 +27,6 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
@@ -171,13 +169,24 @@ public class AnswerService {
     private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
             new BeanOutputConverter<>(CreativeEvalOutput.class);
 
+    /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — 생각 수준·생각 델타·거부 재시도·관측(§6.29 3단계). */
+    private final AnswerStreamer answerStreamer;
+
+    @org.springframework.beans.factory.annotation.Autowired
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource,
-                         ProviderContextWindows contextWindows) {
+                         ProviderContextWindows contextWindows, AnswerStreamer answerStreamer) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = appProperties;
         this.maxRetryCount = appProperties.maxRetryCount();
         this.contextWindows = contextWindows;
+        this.answerStreamer = answerStreamer;
+    }
+
+    /** 생각 제어 없이 스트리밍하는 축약 — 사이트·수준을 보지 않는 테스트용(스트리밍 요청에 아무 필드도 싣지 않는다). */
+    public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource,
+                         ProviderContextWindows contextWindows) {
+        this(llmRouter, appProperties, messageSource, contextWindows, AnswerStreamer.withoutThinkingControl());
     }
 
     /**
@@ -380,7 +389,7 @@ public class AnswerService {
                 answerSite(state).routingMode(state.routingMode()));
         Shrunk<Streamed> attempt;
         try (var permit = llmRouter.acquirePermit(provider)) {
-            attempt = streamAnswer(provider, state, systemPrompt, listener::onToken);
+            attempt = streamAnswer(provider, state, systemPrompt, listener);
         }
         state = withBudgetNote(state, attempt.level());
         String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
@@ -430,7 +439,7 @@ public class AnswerService {
         if (listener != null) {
             Shrunk<Streamed> attempt;
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
-                attempt = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+                attempt = streamAnswer(premiumProvider, state, systemPrompt, listener);
             }
             premiumAnswer = attempt.value().answer();
             shrinkLevel = attempt.level();
@@ -534,7 +543,9 @@ public class AnswerService {
 
     /**
      * 블로킹 경로는 라우터가 {@link LlmContextOverflowException} 으로 바꿔 던지고, 스트리밍 경로는
-     * {@code OpenAiApi} 를 직접 호출해 <b>날것</b>이 올라온다 — 둘 다 알아봐야 한다.
+     * {@code OpenAiApi} 를 직접 호출해 <b>날것</b>이 올라온다 — 둘 다 알아봐야 한다. 날것은 WebClient 오류라 서버의
+     * 문장이 메시지가 아니라 응답 본문에만 있다 — {@code LlmRouter.isContextOverflow} 가 그 본문까지 읽는다
+     * ({@code LlmErrorText}).
      */
     private static boolean isContextOverflow(Throwable t) {
         return t instanceof LlmContextOverflowException || LlmRouter.isContextOverflow(t);
@@ -614,7 +625,7 @@ public class AnswerService {
      * 있어 되감을 것이 없다.
      */
     private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
-                                          String systemPrompt, Consumer<String> tokenSink) {
+                                          String systemPrompt, GraphListener listener) {
         StringBuilder full = new StringBuilder();
         boolean[] emitted = {false};
         String[] sent = {""};
@@ -623,8 +634,9 @@ public class AnswerService {
             // 그것이 실제로 나간 값이다. 호출 전에 담아 두므로 호출이 실패해도 값이 비지 않는다.
             String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
             sent[0] = userPrompt;
+            // 생각 델타는 "나간 토큰"이 아니다 — 화면에 아무것도 찍히지 않았으므로 축소 재시도를 막지 않는다.
             callOrStream(provider, state, systemPrompt, userPrompt,
-                    t -> { emitted[0] = true; tokenSink.accept(t); full.append(t); });
+                    t -> { emitted[0] = true; listener.onToken(t); full.append(t); }, listener::onThinking);
             return null;
         });
         return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());
@@ -635,14 +647,20 @@ public class AnswerService {
      *                   여기서 다시 만들지 않는 이유는 그 조립이 <b>보낸 값</b>이어야 하기 때문이다
      *                   ({@link Streamed} 참고). {@code provider.stream()} 갈래에 따라 예산 계산의
      *                   {@code streaming} 플래그가 갈리므로, 호출부도 같은 조건으로 조립한다.
+     * @param onThinking 생각 델타마다 — {@code stream=true} 갈래만 부른다(다른 갈래는 응답을 한 덩어리로 받아 생각
+     *                   델타를 볼 수 없다)
      */
     private void callOrStream(LlmProvider provider, AgentState state, String systemPrompt,
-                              String userPrompt, Consumer<String> tokenSink) {
+                              String userPrompt, Consumer<String> tokenSink, Runnable onThinking) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
-            // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt, userPrompt, tokenSink,
-                    state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
+            // before emitting, defeating real-time token delivery to the browser. 체인을 지나지 않으므로
+            // 생각 수준·거부 재시도·관측·curl 로그는 AnswerStreamer 가 같은 규칙으로 한다(§6.29 3단계).
+            // §6.18/§6.24 — 온도는 응답 모드가 고른다(일반/RAG 또는 창의). 채팅 화면이 실제로 쓰는 경로가 여기라,
+            // 모드별 온도가 이 갈래를 빠뜨리면 그것이 중요한 모든 곳에서 보이지 않는다.
+            answerStreamer.stream(provider, answerSite(state), systemPrompt, userPrompt,
+                    answerTemperature(state.responseMode()), tokenSink, onThinking,
+                    new AnswerStreamer.Trace(log, "[Answer]", state.threadId(), state.routingMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
@@ -660,55 +678,6 @@ public class AnswerService {
                     .doOnNext(buf::append)
                     .blockLast();
             if (!buf.isEmpty()) tokenSink.accept(buf.toString());
-        }
-    }
-
-    private void streamDirect(LlmProvider provider, String systemPrompt, String userPrompt,
-                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode,
-                               double temperature) {
-        List<OpenAiApi.ChatCompletionMessage> messages = List.of(
-                new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
-                new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
-        );
-        // §6.18 — general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), was hardcoded 0.0.
-        // §6.24 — the caller now picks between that and creative-temperature by response mode; this
-        // path is the one the chat UI actually uses, so a mode-aware temperature that skipped it
-        // would be invisible everywhere it matters.
-        OpenAiApi.ChatCompletionRequest request =
-                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
-        logDirectRequest(provider, request);
-        // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
-        // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
-        CancellableTokenStream.consume(
-                provider.openAiApi().chatCompletionStream(request)
-                        .mapNotNull(chunk -> {
-                            if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                            return chunk.choices().get(0).delta().content();
-                        })
-                        .filter(t -> !t.isEmpty())
-                        .doOnCancel(() -> log.warn("[Answer] Stream cancelled provider={} thread={} route={}",
-                                provider.name(), threadId, routingMode))
-                        .doOnError(e -> log.error("[Answer] Stream error provider={}", provider.name(), e))
-                        .doFinally(signal -> log.debug("[Answer] Stream finished signal={} provider={} thread={}",
-                                signal, provider.name(), threadId)),
-                tokenSink);
-    }
-
-    /**
-     * streamDirect() calls {@link OpenAiApi} directly, bypassing {@code ChatModel} (and therefore
-     * {@link com.example.ragagent.llm.LoggingChatModel}) entirely — see the class javadoc for why.
-     * Without this, the actual RAG answer request (the one carrying the retrieved-document
-     * context) never showed up in logs at any level. Mirrors LoggingChatModel's TRACE(full
-     * curl)/DEBUG(endpoint+body) split via the shared {@link LlmCurlLogger}.
-     */
-    private void logDirectRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request) {
-        if (!log.isDebugEnabled()) return;
-        try {
-            String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
-            String json = LlmCurlLogger.toCurlBodyJson(request);
-            LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
-        } catch (Exception e) {
-            log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }
     }
 
@@ -1228,8 +1197,8 @@ public class AnswerService {
      * 쓰는데, 바로 그 0.3 상한 때문에 일반 온도로는 창의 생성이 원천 봉쇄되기 때문이다.
      *
      * <p>둘 다 hot이라 매 호출 새로 읽는다. 그리고 이 메서드는 <b>블로킹과 스트리밍 양쪽</b>에서
-     * 불려야 한다 — 채팅 UI의 유일한 전송 경로가 스트리밍이므로, {@code streamDirect()}를 빠뜨리면
-     * 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
+     * 불려야 한다 — 채팅 UI의 유일한 전송 경로가 스트리밍이므로, 스트리밍 갈래({@link AnswerStreamer} 로 넘기는
+     * 온도)를 빠뜨리면 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
      */
     private double answerTemperature(ResponseMode mode) {
         AppProperties.LlmConfig llm = props.llmSafe();

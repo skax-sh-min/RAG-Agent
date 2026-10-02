@@ -61,7 +61,7 @@
 │                                                                      │
 │  ※ 생각(thinking) 수준은 호출 지점별 app.llm.thinking.* (§6.29)        │
 │    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
-│    2단계까지: 블로킹 호출 전부 · 채팅 답변 스트리밍은 3단계            │
+│    채팅 답변 스트리밍(체인 우회)은 AnswerStreamer 가 같은 규칙으로 싣는다 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

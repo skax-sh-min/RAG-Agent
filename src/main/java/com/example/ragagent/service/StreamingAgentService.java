@@ -182,8 +182,9 @@ public class StreamingAgentService {
                 new SseHeartbeat(() -> emitter.send(SseEmitter.event().comment("heartbeat"))),
                 15, 15, TimeUnit.SECONDS);
         // Idle watchdog: aborts only when the graph makes NO forward progress (no node
-        // transition, token, or sources-ready event) for sseIdleTimeoutMs — a slow-but-actively-
-        // generating local LLM response is never cut off. SseEmitter's own timeout
+        // transition, token, thinking delta, or sources-ready event) for sseIdleTimeoutMs — a slow-but-actively-
+        // generating local LLM response is never cut off, including one that is still thinking before its first
+        // token (§6.29 — onThinking). SseEmitter's own timeout
         // (props.sseTimeoutMs(), see ChatController) stays as a generous absolute backstop.
         // Check interval scales with the configured idle timeout (~6 checks per window) so a
         // shorter-than-default idle timeout is still detected promptly.
@@ -320,12 +321,25 @@ public class StreamingAgentService {
 
     // ── SseGraphListener ─────────────────────────────────────────────────────
 
+    /**
+     * "생각 중" 표시를 다시 보내는 간격. 생각 델타는 토큰마다 오므로 그대로 보내면 생각 토큰 수만큼 SSE 이벤트가
+     * 나간다 — 경과 초를 보여 주는 데는 초당 한 번이면 된다.
+     */
+    private static final long THINKING_STAGE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
+
     private class SseGraphListener implements GraphListener {
 
         private final SseEmitter emitter;
         private final AtomicLong lastActivityNanos;
         private final StringBuilder accumulated = new StringBuilder();
         private boolean waitingFirstAnswerToken;
+        /**
+         * 지금 생각 중인가 — 답 토큰·단계 전환이 끝낸다. 시각에 음수 같은 표지값을 쓰지 않는 이유는
+         * {@code System.nanoTime()} 이 음수일 수 있어서다(원점이 임의다).
+         */
+        private boolean thinking;
+        private long thinkingSinceNanos;
+        private long thinkingStageSentNanos;
 
         SseGraphListener(SseEmitter emitter, AtomicLong lastActivityNanos) {
             this.emitter = emitter;
@@ -337,6 +351,7 @@ public class StreamingAgentService {
         @Override
         public void onNodeEnter(String nodeName) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            thinking = false;
             waitingFirstAnswerToken = "answer".equals(nodeName);
             Map<String, String> payload = Map.of("id", nodeName, "text", stageText(nodeName));
             sendEvent(emitter, "stage", payload);
@@ -345,6 +360,7 @@ public class StreamingAgentService {
         @Override
         public void onToken(String text) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            thinking = false;
             if (waitingFirstAnswerToken) {
                 waitingFirstAnswerToken = false;
                 sendEvent(emitter, "stage", Map.of("id", "answer", "text", "답변 생성 중..."));
@@ -353,6 +369,28 @@ public class StreamingAgentService {
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
             sendEvent(emitter, "token", payload);
+        }
+
+        /**
+         * §6.29 ⑤ — 생각 델타는 진행이다. 워치독 시계는 델타마다 되돌리고, 화면의 단계 표시는 처음 한 번과 그 뒤
+         * {@link #THINKING_STAGE_INTERVAL_NANOS} 마다 경과 초로 갱신한다. 생각이 끝나고 첫 답 토큰이 오면 "답변 생성
+         * 중..." 으로 되돌린다 — Direct 답변은 answer 노드가 없어 그 전환을 여기서 걸어 둔다.
+         */
+        @Override
+        public void onThinking() {
+            long now = nanoTimeSource.getAsLong();
+            lastActivityNanos.set(now);
+            if (!thinking) {
+                thinking = true;
+                thinkingSinceNanos = now;
+            } else if (now - thinkingStageSentNanos < THINKING_STAGE_INTERVAL_NANOS) {
+                return;
+            }
+            thinkingStageSentNanos = now;
+            waitingFirstAnswerToken = true;
+            long seconds = TimeUnit.NANOSECONDS.toSeconds(now - thinkingSinceNanos);
+            sendEvent(emitter, "stage", Map.of("id", "thinking",
+                    "text", seconds == 0 ? "모델이 생각하는 중..." : "모델이 생각하는 중... (" + seconds + "초)"));
         }
 
         @Override
@@ -384,6 +422,7 @@ public class StreamingAgentService {
         @Override
         public void onUpgrade(String provider) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            thinking = false;
             Map<String, String> payload = Map.of(
                     "id", "upgrade",
                     "text", "고추론 재분석 중: " + provider);
@@ -393,12 +432,14 @@ public class StreamingAgentService {
         @Override
         public void onVerifying() {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            thinking = false;
             sendEvent(emitter, "verifying", Map.of());
         }
 
         @Override
         public void onRetry(String reason, int retryCount, String detail) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            thinking = false;
             Map<String, Object> payload = new HashMap<>();
             payload.put("reason", reason);
             payload.put("retryCount", retryCount);

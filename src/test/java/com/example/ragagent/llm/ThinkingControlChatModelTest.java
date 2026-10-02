@@ -299,4 +299,75 @@ class ThinkingControlChatModelTest {
                 .containsEntry(KWARGS, Map.of("enable_thinking", false))
                 .doesNotContainKey(ThinkingControl.SITE_MARKER);
     }
+
+    // ── 스트림(stream=false 프로바이더의 채팅 답변) — 거부 재시도와 관측 ───────────────────
+
+    private static boolean carriesSwitch(Prompt p) {
+        return optionsOf(p).getExtraBody() != null && optionsOf(p).getExtraBody().containsKey(KWARGS);
+    }
+
+    @Test
+    @DisplayName("스트림 — 응답이 오기 전의 거부는 빼고 한 번 다시 보내고 기억한다(블로킹과 같은 규칙)")
+    void streamRetriesARejectionBeforeAnyResponse() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.stream(any(Prompt.class))).thenAnswer(inv -> carriesSwitch(inv.getArgument(0))
+                ? Flux.error(new NonTransientAiException("HTTP 400 - Unrecognized request argument: chat_template_kwargs"))
+                : Flux.just(ok()));
+        ProviderThinkingDialects dialects = dialects("local", ThinkingDialect.AUTO, true);
+
+        List<ChatResponse> received = model(delegate, "local", dialects, s -> ThinkingLevel.LOW)
+                .stream(marked(ThinkingSite.ANSWER_RAG_N)).collectList().block();
+
+        assertThat(received).hasSize(1);
+        ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+        verify(delegate, times(2)).stream(captor.capture());
+        assertThat(captor.getAllValues()).extracting(ThinkingControlChatModelTest::carriesSwitch)
+                .containsExactly(true, false);
+        assertThat(dialects.rejectedFields("local")).containsExactly(KWARGS);
+    }
+
+    @Test
+    @DisplayName("스트림 — 응답이 하나라도 흘러 나간 뒤의 실패는 다시 보내지 않는다(앞부분이 두 번 간다)")
+    void streamDoesNotRetryAfterAResponseWentOut() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.stream(any(Prompt.class))).thenReturn(Flux.concat(Flux.just(ok()),
+                Flux.error(new NonTransientAiException("HTTP 400 - chat_template_kwargs"))));
+        ProviderThinkingDialects dialects = dialects("local", ThinkingDialect.AUTO, true);
+
+        assertThatThrownBy(() -> model(delegate, "local", dialects, s -> ThinkingLevel.LOW)
+                .stream(marked(ThinkingSite.ANSWER_RAG_N)).blockLast())
+                .hasMessageContaining("chat_template_kwargs");
+
+        verify(delegate, times(1)).stream(any(Prompt.class));
+        assertThat(dialects.rejectedFields("local")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("스트림 — 정상 완료는 응답을 모아 관측한다. 오류로 끝난 스트림은 남기지 않는다")
+    void streamCompletionIsObserved() {
+        ChatModel delegate = mock(ChatModel.class);
+        ChatResponse first = new ChatResponse(List.of(new Generation(new AssistantMessage("39"))));
+        ChatResponse last = new ChatResponse(
+                List.of(new Generation(new AssistantMessage("1"), ChatGenerationMetadata.builder().finishReason("LENGTH").build())),
+                ChatResponseMetadata.builder()
+                        .usage(new DefaultUsage(31, 227, 258, new OpenAiApi.Usage(227, 31, 258))).build());
+        when(delegate.stream(any(Prompt.class)))
+                .thenReturn(Flux.just(first, last))
+                .thenReturn(Flux.error(new IllegalStateException("connection reset")));
+        ThinkingObservations observations = new ThinkingObservations();
+        ThinkingControlChatModel model = new ThinkingControlChatModel(delegate, "local",
+                dialects("local", ThinkingDialect.AUTO, true), s -> ThinkingLevel.HIGH, observations);
+
+        model.stream(marked(ThinkingSite.ANSWER_DIRECT_N)).blockLast();
+        assertThatThrownBy(() -> model.stream(marked(ThinkingSite.ANSWER_DIRECT_N)).blockLast())
+                .hasMessageContaining("connection reset");
+
+        assertThat(observations.samples(ThinkingSite.ANSWER_DIRECT_N, "local", ThinkingLevel.HIGH)).singleElement()
+                .satisfies(s -> {
+                    assertThat(s.sent()).isEqualTo(ThinkingWire.Sent.ON);
+                    assertThat(s.outputTokens()).isEqualTo(227);
+                    assertThat(s.thinkingObserved()).as("답 '391' 에 출력 227 — 블로킹과 같은 초과 규칙").isTrue();
+                    assertThat(s.truncated()).isTrue();
+                });
+    }
 }

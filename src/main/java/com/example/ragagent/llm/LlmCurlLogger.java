@@ -11,8 +11,9 @@ import org.springframework.ai.openai.api.OpenAiApi;
  * {@link LoggingChatModel}/{@link LoggingEmbeddingModel} use for every {@code ChatModel}-routed
  * call. This one is for call sites that talk to {@link org.springframework.ai.openai.api.OpenAiApi}
  * directly instead, bypassing {@code ChatModel} (and therefore {@code LoggingChatModel}) entirely
- * — namely {@code AnswerService}/{@code DirectAnswerService}'s raw streaming path, which exists
- * specifically to avoid {@code OpenAiChatModel}'s internal stream buffering. Without this, those
+ * — namely the chat answers' raw streaming path ({@code AnswerStreamer}, shared by
+ * {@code AnswerService}/{@code DirectAnswerService}), which exists specifically to avoid
+ * {@code OpenAiChatModel}'s internal stream buffering. Without this, those
  * calls (the actual RAG/direct answer request — the one with the retrieved-document context) never
  * showed up in the logs at any level, regardless of prompt size.
  */
@@ -55,6 +56,12 @@ public final class LlmCurlLogger {
 
         if (request.temperature() != null) body.put("temperature", request.temperature());
         if (request.maxTokens()   != null) body.put("max_tokens",  request.maxTokens());
+        // 생각 수준(§6.29) — LoggingChatModel 과 같은 규칙. 채팅 답변 스트리밍(AnswerStreamer)이 요청에 직접 싣는 필드라,
+        // 빠뜨리면 이 curl 로 재현한 요청만 다른 생각 수준으로 돌아 실제 호출과 다른 결과가 나온다.
+        if (request.reasoningEffort() != null) body.put("reasoning_effort", request.reasoningEffort());
+        if (request.extraBody() != null) {
+            request.extraBody().forEach((key, value) -> body.set(key, MAPPER.valueToTree(value)));
+        }
 
         return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);
     }

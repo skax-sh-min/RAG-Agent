@@ -55,16 +55,18 @@ public class ThinkingObservations {
     /**
      * 호출 한 번.
      *
-     * @param outputTokens      서버가 센 출력 토큰(생각 포함). 보고가 없으면 {@code null}
+     * @param outputTokens      출력 토큰(생각 포함). 서버가 센 값이 있으면 그것, 없으면 스트리밍은 델타 수로 센 추정,
+     *                          블로킹은 {@code null}
+     * @param outputEstimated   {@code outputTokens} 가 추정인가(서버 보고가 없는 스트리밍 — 델타 수)
      * @param thinkingTokens    생각에 쓴 토큰. 서버가 {@code reasoning_tokens} 를 보고하면 그 값, 아니면 추정
      *                          (llama.cpp 는 보고하지 않는다 — 2026-10-02 확인). 생각한 흔적이 없으면 {@code null}
      * @param thinkingEstimated {@code thinkingTokens} 가 추정인가
-     * @param thinkingObserved  생각한 흔적이 있었는가 — 서버가 생각 토큰을 보고했거나, 생각 본문이 따로 왔거나, 출력
-     *                          토큰이 답변 추정을 크게 넘었을 때({@link #MIN_EXCESS_TOKENS})만 {@code true}. 근거가
-     *                          약하면 {@code false} 다 — 긴 답변 앞의 짧은 생각은 놓친다
+     * @param thinkingObserved  생각한 흔적이 있었는가 — 서버가 생각 토큰을 보고했거나, 생각 본문(스트리밍의 생각 델타)이
+     *                          따로 왔거나, 출력 토큰이 답변 추정을 크게 넘었을 때({@link #MIN_EXCESS_TOKENS})만
+     *                          {@code true}. 근거가 약하면 {@code false} 다 — 블로킹에서는 긴 답변 앞의 짧은 생각을 놓친다
      * @param truncated         {@code finish_reason=length} — 출력 상한에 걸려 잘렸다
      */
-    public record Sample(ThinkingWire.Sent sent, Integer outputTokens, Integer thinkingTokens,
+    public record Sample(ThinkingWire.Sent sent, Integer outputTokens, boolean outputEstimated, Integer thinkingTokens,
                          boolean thinkingEstimated, boolean thinkingObserved, boolean truncated, long latencyMs) {}
 
     private final Map<Key, Deque<Sample>> samples = new ConcurrentHashMap<>();
@@ -110,24 +112,22 @@ public class ThinkingObservations {
      * </ol>
      */
     static Sample sampleOf(ThinkingWire.Sent sent, ChatResponse response, long latencyMs) {
-        Integer output = null;
-        Integer reported = null;
-        Usage usage = response == null || response.getMetadata() == null ? null : response.getMetadata().getUsage();
-        if (usage != null && usage.getNativeUsage() instanceof OpenAiApi.Usage nativeUsage) {
-            output = nativeUsage.completionTokens();
-            if (nativeUsage.completionTokenDetails() != null) {
-                reported = nativeUsage.completionTokenDetails().reasoningTokens();
-            }
-        }
-
         Generation generation = response == null ? null : response.getResult();
-        AssistantMessage message = generation == null ? null : generation.getOutput();
-        String content = message == null ? null : message.getText();
-        String reasoning = message != null && message.getMetadata() != null
-                && message.getMetadata().get(REASONING_CONTENT_KEY) instanceof String s ? s : null;
-        String finish = generation == null || generation.getMetadata() == null
-                ? null : generation.getMetadata().getFinishReason();
-        boolean truncated = "length".equalsIgnoreCase(finish);
+        return sampleOf(sent, nativeUsageOf(response), textOf(generation), reasoningOf(generation),
+                finishReasonOf(generation), latencyMs);
+    }
+
+    /**
+     * 위 규칙의 몸통 — 응답에서 꺼낸 값으로 센다. 체인을 지나는 스트림({@code ThinkingControlChatModel.stream})은 응답
+     * 여러 개를 모아 여기로 온다.
+     *
+     * @param usage 서버가 보고한 사용량. 없으면 {@code null}
+     */
+    static Sample sampleOf(ThinkingWire.Sent sent, OpenAiApi.Usage usage, String content, String reasoning,
+                           String finish, long latencyMs) {
+        Integer output = usage == null ? null : usage.completionTokens();
+        Integer reported = reportedThinking(usage);
+        boolean truncated = isTruncation(finish);
 
         Integer thinking = null;
         boolean estimated = false;
@@ -152,6 +152,70 @@ public class ThinkingObservations {
                 thinking = (int) excess;
             }
         }
-        return new Sample(sent, output, thinking, estimated, observed, truncated, latencyMs);
+        return new Sample(sent, output, false, thinking, estimated, observed, truncated, latencyMs);
+    }
+
+    /**
+     * 체인을 지나지 않는 스트리밍(채팅 답변 — {@code AnswerStreamer}) 한 번. 블로킹과 근거가 다르다 — 여기서는 생각이
+     * <b>직접 보인다</b>: 그 경로는 청크를 그대로 읽으므로 서버의 {@code reasoning_content} 델타가 버려지지 않는다. 생각
+     * 델타가 하나라도 왔으면 생각한 것이다 — 이 판정은 추정이 아니다(서버가 생각 본문을 보냈다). 추정인 것은 토큰 수다.
+     *
+     * <p><b>토큰 수는 델타 수다.</b> llama.cpp 는 토큰마다 델타 하나를 보낸다 — 2026-10-02 실측(b10236 + gemma-4-E2B):
+     * 생각 델타 111 + 답 델타 1 에 서버의 {@code predicted_n} 117. 차이는 생각의 시작·끝 표지처럼 델타로 나오지 않는 특수
+     * 토큰이라 하한 추정이고, 여러 토큰을 한 델타로 묶어 보내는 서버에서는 더 모자란다. 서버가 {@code usage} 를 함께
+     * 보냈으면 출력은 그 값을 쓴다(이 앱은 {@code stream_options} 를 요청하지 않으므로 대개 없다).
+     *
+     * @param finish 마지막으로 본 {@code finish_reason} 의 이름(대소문자 무관). 없으면 {@code null}
+     * @param usage  서버가 보고한 사용량. 없으면 {@code null}
+     */
+    public static Sample streamSampleOf(ThinkingWire.Sent sent, int contentDeltas, int reasoningDeltas,
+                                        String finish, OpenAiApi.Usage usage, long latencyMs) {
+        Integer reportedOutput = usage == null ? null : usage.completionTokens();
+        Integer reported = reportedThinking(usage);
+        Integer thinking = null;
+        boolean estimated = false;
+        boolean observed = false;
+        if (reported != null && reported > 0) {
+            thinking = reported;
+            observed = true;
+        } else if (reasoningDeltas > 0) {
+            thinking = reasoningDeltas;
+            estimated = true;
+            observed = true;
+        }
+        return new Sample(sent,
+                reportedOutput != null ? reportedOutput : Integer.valueOf(contentDeltas + reasoningDeltas),
+                reportedOutput == null, thinking, estimated, observed, isTruncation(finish), latencyMs);
+    }
+
+    /** 잘림 — {@code finish_reason=length}. 대소문자는 가리지 않는다(Spring AI 는 블로킹에서 {@code LENGTH} 로 준다). */
+    private static boolean isTruncation(String finish) {
+        return "length".equalsIgnoreCase(finish);
+    }
+
+    private static Integer reportedThinking(OpenAiApi.Usage usage) {
+        return usage == null || usage.completionTokenDetails() == null
+                ? null : usage.completionTokenDetails().reasoningTokens();
+    }
+
+    /** 응답 메타데이터의 서버 사용량. Spring AI 가 원본({@code OpenAiApi.Usage})을 실어 두지 않았으면 {@code null}. */
+    static OpenAiApi.Usage nativeUsageOf(ChatResponse response) {
+        Usage usage = response == null || response.getMetadata() == null ? null : response.getMetadata().getUsage();
+        return usage != null && usage.getNativeUsage() instanceof OpenAiApi.Usage nativeUsage ? nativeUsage : null;
+    }
+
+    static String textOf(Generation generation) {
+        AssistantMessage message = generation == null ? null : generation.getOutput();
+        return message == null ? null : message.getText();
+    }
+
+    static String reasoningOf(Generation generation) {
+        AssistantMessage message = generation == null ? null : generation.getOutput();
+        return message != null && message.getMetadata() != null
+                && message.getMetadata().get(REASONING_CONTENT_KEY) instanceof String s ? s : null;
+    }
+
+    static String finishReasonOf(Generation generation) {
+        return generation == null || generation.getMetadata() == null ? null : generation.getMetadata().getFinishReason();
     }
 }

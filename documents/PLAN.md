@@ -48,7 +48,7 @@
 | ~~1~~ | ~~**§10.12 짧은 후속 질문의 독립화**~~ | ✅ 2026-09-03 완료 (재작성 → 검색 축 셋 + 분류기, 진단 한 줄, 열린 항목 (b) 해소) |
 | ~~2~~ | ~~**§10.13 Direct 턴의 이력 확대**~~ | ✅ 2026-09-03 완료 (1단계 프롬프트 + 예산/렌더 규칙 + Direct 안전망) |
 | ~~3~~ | ~~**§10.14 청크 오류 신고 (사용자 → 관리자)**~~ | ✅ 2026-09-04 완료 (0~5단계 전부 — 렌더러 통일 · 대기열 · 청크 단위 관리자 처리 · 배지) |
-| 3 | **§6.29 호출 지점별 생각(추론) 수준 제어** — 사이트 × 수준(끔/낮게/중간/높게 — 사이트마다 기본값) × 프로바이더 dialect, `/settings` 관리자 전용 핫 편집 + 수준별 예산 미리보기(출력 예약·입력 예산·문서 수·생각 자리·최악 소요·관측) | 🟡 2단계 완료 2026-10-02 (골격·출하값·관측 + 블로킹 호출 전부 표시 · 라우팅 단일 출처) — 다음은 3단계(채팅 답변 스트리밍 두 경로) |
+| 3 | **§6.29 호출 지점별 생각(추론) 수준 제어** — 사이트 × 수준(끔/낮게/중간/높게 — 사이트마다 기본값) × 프로바이더 dialect, `/settings` 관리자 전용 핫 편집 + 수준별 예산 미리보기(출력 예약·입력 예산·문서 수·생각 자리·최악 소요·관측) | 🟡 3단계 완료 2026-10-02 (골격·출하값·관측 + 블로킹 호출 전부 표시 · 라우팅 단일 출처 + 채팅 답변 스트리밍 — `AnswerStreamer`, 생각 델타 = 워치독 활동) — 다음은 4단계(출력 예약 `ThinkingBudget`) |
 | 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 5 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. **§6.26 이후 전제가 바뀌었다** — 검증 발췌 상한이 이제 창에서 파생되므로(`evalExcerptTokenBudget`), 부스트를 올리기 전에 확인할 것은 `MAX_EVAL_EXCERPT_CHARS` 상수가 아니라 **대상 프로바이더의 실제 창**이다 |
 | 6 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -526,7 +526,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 **실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어로 §10.7.5 하네스 실행 시 색인된 골든셋 6건 전부 recall@10=1.0 — 소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인. 전체 baseline(0.962) 정식 대조는 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 재현 가능.
 
-### 6.29 호출 지점별 생각(추론) 수준 제어 🟡 2단계 완료 2026-10-02 — 설계 2026-10-02
+### 6.29 호출 지점별 생각(추론) 수준 제어 🟡 3단계 완료 2026-10-02 — 설계 2026-10-02
 
 **목표**: LLM 요청마다 모델의 생각(reasoning)을 **끔/낮게/중간/높게** 중 하나로 정하고, 그 값을 **호출 지점(케이스)별로** `/settings` 에서 핫 편집한다. 호출 지점마다 기본값이 있고, 다른 설정처럼 [기본값]·[저장] 으로 다룬다. 대상은 채팅 답변(RAG S/N/C · Direct S/N · 메타), 응답 검증, 분류·독립화·확장·리랭크, 답변 뒤 보강, 인덱싱(키워드+맥락 · MD 교정 · TXT→MD · 이미지), 관리자 도구 전부다.
 
@@ -573,7 +573,7 @@ Spring AI 1.1.8 은 `OpenAiChatOptions.reasoningEffort` 와 `extraBody` 를 둘 
 
 | 그룹 | 사이트 | 호출부 | 경로 | 기본값(출하) | 권장(가설) |
 |---|---|---|---|---|---|
-| 채팅 · 답변 | `ANSWER_RAG_S` · `ANSWER_RAG_N` · `ANSWER_RAG_C` | `AnswerService` (블로킹 + `streamDirect()`) | 블로킹·**스트리밍** | 낮게 | S=끔 · N=낮게 · C=높게 |
+| 채팅 · 답변 | `ANSWER_RAG_S` · `ANSWER_RAG_N` · `ANSWER_RAG_C` | `AnswerService` (블로킹 + 스트리밍 `AnswerStreamer`) | 블로킹·**스트리밍** | 낮게 | S=끔 · N=낮게 · C=높게 |
 | | `ANSWER_DIRECT_S` · `ANSWER_DIRECT_N` | `DirectAnswerService` (directMode) | 블로킹·**스트리밍** | 낮게 | S=끔 · N=낮게 |
 | | `ANSWER_META` | `DirectAnswerService` (분류 = meta) | 블로킹·스트리밍 | 낮게 | 끔 |
 | 채팅 · 검증 | `EVAL` · `EVAL_CREATIVE` | `AnswerService.evaluate()`/`evaluateCreative()` | 블로킹 | 낮게 | 낮게 (출력 예약 주의 — ④) |
@@ -638,7 +638,7 @@ Spring AI 1.1.8 은 `OpenAiChatOptions.reasoningEffort` 와 `extraBody` 를 둘 
 - 반대 방향(끔이 확정된 사이트의 예약을 줄이는 것)은 하지 않는다. 서버가 스위치를 무시하면 여전히 생각하기 때문이다(`PostAnswerService` 가 2,048 을 두는 이유와 같다).
 - **예약을 믿는 자리도 같은 함수를 읽는다.** 지금 검증 예약 2,048 은 네 곳(`evalOptions()` · `evalExcerptTokenBudget()` · `evalPromptSize()` · `RetrievalService.hasContextHeadroomFor()`)이, 채팅 답변 예약은 세 곳(`AnswerService` · `DirectAnswerService` · `MemoryService` 의 이력 예산)이 각자 읽는다. 하나라도 옛 상수를 읽으면 예산 계산이 실제 요청과 갈라진다. 그래서 `MAX_EVAL_OUTPUT_TOKENS`·`outputReservation(` 를 그 함수 밖에서 직접 참조하면 빌드가 실패하게 컨벤션 테스트로 막는다(`ResponseModeBranchConventionTest` 방식).
 
-**⑤ 스트리밍 — 데코레이터를 지나지 않는 두 경로**
+**⑤ 스트리밍 — 데코레이터를 지나지 않는 두 경로** *(3단계에서 `AnswerStreamer` 로 구현 — 설계에서 바뀐 것은 작업 단계 3 의 기록)*
 
 `AnswerService.streamDirect()` 와 `DirectAnswerService` 의 스트리밍은 `provider.openAiApi().chatCompletionStream(new ChatCompletionRequest(...))` 를 직접 부른다. 그래서 `ChatModel` 데코레이터 체인을 **통째로 우회**한다. 채팅 답변의 주 경로가 여기라 이걸 빼면 기능의 절반이 비어 있게 된다.
 
@@ -823,13 +823,14 @@ LLM 프로바이더 카드 바로 아래에 카드 하나를 둔다. 구성은 �
 2. **블로킹 호출부 전부 배선**: 위 표의 사이트를 다 표시하고, 호출부의 (TaskType, RoutingMode) 를 `ThinkingSite` 에서 읽게 바꾼다(⑦-바 — 라우팅의 단일 출처). `MultiQueryExpander` 래퍼, `KeywordExtractor` 사이트 인자도 이 단계다. **전송이 처음 바뀌는 단계다** — 출하 기본값 낮게가 `enable_thinking=true` 를 싣기 시작한다. 참조 배포에서는 같은 동작이지만, **업그레이드 안내**(OPERATOR_MANUAL·릴리스 노트)를 함께 낸다: 서버에서 생각을 꺼 두고 운영하던 배포는 업그레이드 전에 해당 사이트를 끔으로 바꿔 둘 것.
    - ✅ **2026-10-02 완료** — 전체 테스트 2,453건 통과, 실제 기동 확인. 표시: 체인을 지나는 블로킹 호출 전부 + stream=false 프로바이더의 `ChatClient` 답변 경로(RAG·Direct). 답변·검증 사이트는 `ResponseMode` 의 성질로 고른다(`ragThinkingSite()`·`directThinkingSite()`·`evalThinkingSite()` — `== ResponseMode.X` 분기 금지 규약과 같은 방식), meta 답변은 `answer-meta`. 라우팅: 호출부가 `TaskType` 리터럴 대신 사이트를 읽는다(고정 모드는 `fixedRoutingMode()`, 채팅 답변·검증은 `routingMode(대화 모드)`; PROGRESSIVE 의 2차만 `QUALITY_FIRST` 를 직접 쓴다). `ThinkingSiteConventionTest` 가 두 규칙(옵션 빌더마다 `ThinkingControl.mark(`, 라우터 호출에 `TaskType` 리터럴 금지)을 빌드로 막는다. `MultiQueryExpander` 는 `ThinkingSiteChatModel` 래퍼 — 그 `ChatClient` 는 모델의 기본 옵션(이 앱의 체인에서는 일반 `ChatOptions`)을 복사해 쓰므로 래퍼가 `OpenAiChatOptions` 로 옮겨 담아 표시한다(실제 확장기로 테스트). 설계에서 바뀐 것: `KeywordExtractor` 의 사이트 인자는 만들지 않았다 — 지식 제안 `enrich()` 를 따로 떼는 것(열린 항목 (b))이 정해지기 전까지 쓰는 곳이 없는 인자다.
 3. **스트리밍 두 경로**: `applyTo(ChatCompletionRequest)`, `reasoningContent` 를 활동으로 세기, 첫 토큰 전 거부 재시도, 스트리밍 관측(델타 수 · `finishReason`).
+   - ✅ **2026-10-02 완료** — 전체 테스트 2,489건 통과(+36), 실제 기동 + llama.cpp(b10236 · gemma-4-E2B)로 확인. 두 경로가 `service/AnswerStreamer` 하나를 지난다(요청 조립 · 수준 싣기 · 생각 델타 → `GraphListener.onThinking()` · 거부 재시도 · 관측 · curl 로그). 실측: 본문 최상위에 `chat_template_kwargs.enable_thinking=true` 가 나가고(curl 로그로 확인), 첫 답 토큰 전 10~12초 동안 화면에 "모델이 생각하는 중... (N초)" 가 1초마다 갱신되며, **유휴 한도를 5초로 낮춰도 Direct·RAG 답변이 끊기지 않았다**(예전 코드는 그동안 활동이 없어 끊기는 모양). 기본 설정의 RAG 턴은 생각 → 답 → 검증 `grounded=true` 로 끝났다. 설계에서 바뀐 것 넷: ① `applyTo` 는 `(request, wire)` 를 받는 순수 함수다 — 프로바이더·사이트에서 wire 를 푸는 것은 블로킹과 같은 `ProviderThinkingDialects.wireFor()` 이고 그 자리가 `AnswerStreamer` 다. ② **거부 판정이 메시지만으로는 이 경로에서 늘 거짓이었다** — WebClient 오류는 메시지에 서버의 문장이 없다(Spring AI 1.1.8 이 오류 처리기를 RestClient 에만 건다). 응답 본문까지 읽는 `LlmErrorText` 를 두고 거부·컨텍스트 초과 판정을 그 위로 옮겼다. 같은 원인으로 **채팅 답변 스트리밍의 축소 재시도(§6.26-9)가 실제 서버에서 한 번도 발동하지 않았다**는 것이 드러나 함께 고쳤다(옛 판정으로 되돌리면 새 회귀 테스트 셋이 실패하는 것을 확인). ③ curl 로그(`LlmCurlLogger`)가 스트리밍 본문의 `extraBody`·`reasoning_effort` 를 빠뜨리고 있어 `LoggingChatModel` 과 같은 규칙으로 맞췄다. ④ 체인을 지나는 스트림(`stream=false` 프로바이더의 답변)에도 같은 재시도·관측을 넣었다 — 1단계가 "관측도 3단계"로 남겨 둔 자리다. `ThinkingSiteConventionTest` 에 세 번째 규칙(`provider.openAiApi()` 는 `AnswerStreamer` 에서만)을 더했다.
 4. **출력 예약**: `ThinkingBudget.reservation()` 하나로 모은다(④ — 기본 예약은 깎지 않는다). 예약을 믿는 일곱 자리(검증 넷 · 답변 셋)를 옮기고, 재작성 사이트는 조각 크기 규칙을 쓴다. 상수 직접 참조를 막는 컨벤션 테스트도 이 단계다. **예산이 처음 바뀌는 단계다** — 낮게 기본값이 생각 여유 +512 를 받는다(16k 창의 검증: 입력 −4%, 발췌 수 그대로).
 5. **`/settings` 미리보기 (관리자 전용)**: ⑦ 의 (가)~(자) 전부 — `ThinkingPreviewService`(런타임 함수 재사용), `GET /admin/settings/thinking`, 프로바이더 카드의 "생각 제어" 열, 그룹 표 · 펼침 4블록 · 배지, 편집 컨트롤은 `settings-item` 과 같은 `값 → [기본값] → [저장]` + "(기본값)" 표시, 수준 전환은 서버가 렌더한 칸을 보이기만, `Kind.CHOICE`, 재탐지 연동(`HX-Trigger`), 모바일 카드 배치, 권한·기본값·미리보기=런타임·골든 테스트. 한/영 번들(`MessageBundleConventionTest`).
 6. **실측 → 권장값 확정**: 로컬 구성(llama.cpp + gemma-4)에서 사이트별로 끔/켬의 지연·출력 토큰·검증 판정률(`grounded`·판정 없음 비율)을 잰다. ⑧ 의 관측이 대부분을 모아 준다. 검색 품질은 §10.7.5 하네스(`QUERY_EXPANSION`·`RERANK`·`CONDENSE`)로 확인한다. 기본값 변경과 `expectedOutputTokens`·headroom 상수 갱신은 그 결과로 결정한다.
 
 **문서 갱신**: CLAUDE.md(`ThinkingOffChatModel` 행 · Key Constraints 의 "생각 끄기" 규칙 → `ThinkingControl.mark(site)`), PITFALLS.md(③의 접힘 · ④ 출력 예약 — 기본 예약을 깎지 않는다 · 예약을 믿는 자리는 한 함수 · ⑤ 우회 경로와 워치독 · ⑦ 미리보기는 런타임 함수만 부른다), LLM_ROUTING.md(`thinking-dialect`), OPERATOR_MANUAL(권장 프로파일).
 
-**열린 항목**: (a) llama.cpp 의 요청 단위 `reasoning_budget_tokens` 지원 여부 — 운영 중인 서버 버전에서 직접 확인 · (b) `SUBMISSION_ENRICH` 분리 여부 · (c) 응답 모드별 기본 수준을 사용자가 메시지마다 고르게 할지(지금은 운영자 설정만) — 하지 않는 쪽이 기본. S/N/C 가 이미 "답변의 성격" 축이라 축을 하나 더 늘리면 버블 표기와 재사용 모양 복사까지 번진다. · (d) **설계 중 발견 — 출력 상한을 정하지 않는 호출부**: 분류·리랭크·제목·요약·이미지 설명·이미지 유형 분류는 옵션에 `maxTokens` 를 싣지 않는다. 그래서 프로바이더 빈에 **기동 시점에** 구워진 max-tokens 전체(기본 10,000)를 예약한다(Spring AI 1.1.8 문서상 요청 옵션이 기본 옵션을 덮고, 요청에 없는 필드는 기본값이 쓰인다 — 1단계에서 서버가 받은 `max_tokens` 로 실제 값을 확인한다) — 16k 창에서 입력 예산 4,746, 그리고 `/settings` 의 max-tokens 핫 편집도 따라가지 않는다(`defaultOptions` 는 재시작 대상). 이 절은 그 값을 미리보기의 "기본 예약"으로 **드러내기만** 하고, 사이트별 상한을 정하는 것은 별도 항목으로 둔다(입력이 작은 호출이라 지금 장애는 없지만, 생각을 켜면 "최악 소요"가 10,000 토큰 분량이 된다).
+**열린 항목**: (a) llama.cpp 의 요청 단위 `reasoning_budget_tokens` 지원 여부 — 운영 중인 서버 버전에서 직접 확인 · (b) `SUBMISSION_ENRICH` 분리 여부 · (c) 응답 모드별 기본 수준을 사용자가 메시지마다 고르게 할지(지금은 운영자 설정만) — 하지 않는 쪽이 기본. S/N/C 가 이미 "답변의 성격" 축이라 축을 하나 더 늘리면 버블 표기와 재사용 모양 복사까지 번진다. · (d) **설계 중 발견 — 출력 상한을 정하지 않는 호출부**: 분류·리랭크·제목·요약·이미지 설명·이미지 유형 분류는 옵션에 `maxTokens` 를 싣지 않는다. 그래서 프로바이더 빈에 **기동 시점에** 구워진 max-tokens 전체(기본 10,000)를 예약한다(Spring AI 1.1.8 문서상 요청 옵션이 기본 옵션을 덮고, 요청에 없는 필드는 기본값이 쓰인다 — 1단계에서 서버가 받은 `max_tokens` 로 실제 값을 확인한다) — 16k 창에서 입력 예산 4,746, 그리고 `/settings` 의 max-tokens 핫 편집도 따라가지 않는다(`defaultOptions` 는 재시작 대상). 이 절은 그 값을 미리보기의 "기본 예약"으로 **드러내기만** 하고, 사이트별 상한을 정하는 것은 별도 항목으로 둔다(입력이 작은 호출이라 지금 장애는 없지만, 생각을 켜면 "최악 소요"가 10,000 토큰 분량이 된다). · (e) **3단계 실측 중 발견 — 유휴 워치독은 블로킹 호출을 보지 못한다**: 워치독은 리스너 이벤트(노드 전환·토큰·생각 델타·검증 시작)만 활동으로 센다. 분류·확장·검증은 이벤트 없이 도는 블로킹 호출이라, 생각을 켜 길어진 만큼 `app.sse-idle-timeout-seconds` 를 낮춘 배포에서 끊긴다 — 5초로 낮추자 확장이 끊겨 원문 검색으로 떨어지고, 검증이 끊겨 "판정 없음"이 되며, 라우터가 그 인터럽트를 프로바이더 실패로 받아 5초 차단했다(뒤이은 답변 뒤 보강·제목 생성도 그 차단에 걸렸다). 기본 300초에서는 문제가 없다. 고치는 방향은 둘 — 블로킹 LLM 호출이 진행 중인 동안을 활동으로 보거나(라우터의 in-flight 를 워커 단위로), 인터럽트로 끊긴 블로킹 호출을 라우터가 차단 대상에서 빼는 것(클라이언트가 끊은 실패 — `isTimeoutLike` 와 같은 갈래). 4단계 이후 별도 항목으로 판단한다.
 
 ---
 

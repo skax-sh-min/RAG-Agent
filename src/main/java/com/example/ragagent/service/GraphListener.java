@@ -16,6 +16,16 @@ public interface GraphListener {
 
     default void onToken(String text) {}
 
+    /**
+     * PLAN §6.29 ⑤ — 모델이 답변 전에 생각하는 동안, 스트리밍의 생각 델타({@code reasoning_content})마다 불린다
+     * ({@code AnswerStreamer}). 생각 본문은 넘기지 않는다 — 답변이 아니고, 검색 문서 원문이 섞여 있다.
+     *
+     * <p>쓰임은 둘이다. 유휴 워치독이 이것을 활동으로 센다 — 생각이 켜진 답변은 첫 토큰 전까지 수십 초 동안
+     * {@link #onToken} 이 한 번도 오지 않으므로, 이것이 없으면 {@code app.sse-idle-timeout-seconds} 가 정상 답변을 끊는다.
+     * 그리고 스트리밍 클라이언트가 "생각 중" 표시를 띄운다. 델타마다 오므로 구현은 싸야 한다(이벤트 전송은 솎는다).
+     */
+    default void onThinking() {}
+
     default void onSourcesReady(List<SourceRef> sources) {}
 
     /** Fired alongside onSourcesReady when the retrieved documents reference extracted images. */
