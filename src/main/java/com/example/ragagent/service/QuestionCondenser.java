@@ -2,8 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.repository.MemoryRepository;
@@ -145,7 +143,7 @@ public class QuestionCondenser {
                     .replace("{history}", material)
                     .replace("{query}", PromptInjectionGuard.wrap(question));
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST,
+                    ThinkingSite.CONDENSE.taskType(), ThinkingSite.CONDENSE.fixedRoutingMode(),
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(question)),
                             options())));

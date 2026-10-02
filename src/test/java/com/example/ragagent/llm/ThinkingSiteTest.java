@@ -3,11 +3,14 @@ package com.example.ragagent.llm;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.example.ragagent.model.ResponseMode;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -15,6 +18,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 호출 지점 목록과 출하 기본값(PLAN §6.29 ②). 출하값은 {@code ThinkingSite} 와 {@code application.properties} 두 곳에
@@ -76,5 +80,43 @@ class ThinkingSiteTest {
         assertThat(ThinkingLevel.parse("")).isEmpty();
         assertThat(ThinkingLevel.parse(null)).isEmpty();
         assertThat(ThinkingLevel.HIGH.value()).isEqualTo("high");
+    }
+
+    @Test
+    @DisplayName("라우팅 — 채팅 답변·검증은 대화의 모드를 따르고, 나머지는 고정 모드를 갖는다")
+    void routing() {
+        for (ThinkingSite site : List.of(ThinkingSite.ANSWER_RAG_S, ThinkingSite.ANSWER_RAG_N, ThinkingSite.ANSWER_RAG_C,
+                ThinkingSite.ANSWER_DIRECT_S, ThinkingSite.ANSWER_DIRECT_N, ThinkingSite.ANSWER_META,
+                ThinkingSite.EVAL, ThinkingSite.EVAL_CREATIVE)) {
+            assertThat(site.followsConversationRouting()).as(site.name()).isTrue();
+            assertThat(site.taskType()).isEqualTo(TaskType.TEXT);
+            assertThat(site.routingMode(RoutingMode.QUALITY_FIRST)).isEqualTo(RoutingMode.QUALITY_FIRST);
+            assertThatThrownBy(site::fixedRoutingMode).isInstanceOf(IllegalStateException.class);
+        }
+        assertThat(ThinkingSite.SUMMARY.fixedRoutingMode()).isEqualTo(RoutingMode.LOCAL_ONLY);
+        assertThat(ThinkingSite.SUMMARY.routingMode(RoutingMode.QUALITY_FIRST)).as("고정 모드가 이긴다")
+                .isEqualTo(RoutingMode.LOCAL_ONLY);
+        assertThat(ThinkingSite.MD_CORRECT_VISION.taskType()).isEqualTo(TaskType.VISION);
+        assertThat(ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode()).isEqualTo(RoutingMode.LOCAL_ONLY);
+        assertThat(ThinkingSite.QUERY_EXPANSION.taskTypes())
+                .as("작은 모델부터 내려간다(§6.21)")
+                .containsExactly(TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT);
+        assertThat(ThinkingSite.QUERY_EXPANSION.taskType()).isEqualTo(TaskType.MICRO_TEXT);
+    }
+
+    @Test
+    @DisplayName("응답 모드가 답변·검증 사이트를 정한다 — C 는 Direct 가 없고, C 의 검증은 전용 사이트다")
+    void responseModeSites() {
+        assertThat(ResponseMode.S.ragThinkingSite()).isEqualTo(ThinkingSite.ANSWER_RAG_S);
+        assertThat(ResponseMode.N.ragThinkingSite()).isEqualTo(ThinkingSite.ANSWER_RAG_N);
+        assertThat(ResponseMode.C.ragThinkingSite()).isEqualTo(ThinkingSite.ANSWER_RAG_C);
+        assertThat(ResponseMode.S.directThinkingSite()).isEqualTo(ThinkingSite.ANSWER_DIRECT_S);
+        assertThat(ResponseMode.N.directThinkingSite()).isEqualTo(ThinkingSite.ANSWER_DIRECT_N);
+        assertThat(ResponseMode.C.directThinkingSite()).as("Direct 를 쓸 수 없는 모드").isNull();
+        for (ResponseMode mode : ResponseMode.values()) {
+            assertThat(mode.directThinkingSite() != null).as(mode.name()).isEqualTo(mode.allowsDirect());
+            assertThat(mode.evalThinkingSite())
+                    .isEqualTo(mode.usesCreativeEval() ? ThinkingSite.EVAL_CREATIVE : ThinkingSite.EVAL);
+        }
     }
 }

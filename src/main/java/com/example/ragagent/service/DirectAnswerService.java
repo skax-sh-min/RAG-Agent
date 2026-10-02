@@ -7,7 +7,8 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.ProviderContextWindows;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -62,8 +63,9 @@ public class DirectAnswerService {
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
         int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
-        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
+        ThinkingSite site = site(state);
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(state.routingMode()),
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens, site)));
         String rawAnswer = result.text();
         String normalized = rawAnswer == null ? null : enforceSummaryOnly(rawAnswer, state.responseMode());
         String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
@@ -80,7 +82,7 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
 
         double directTemp = props.llmSafe().directTemperature();
-        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
+        LlmProvider provider = llmRouter.routeProvider(site(state).taskType(), site(state).routingMode(state.routingMode()));
 
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
@@ -112,12 +114,23 @@ public class DirectAnswerService {
         return messageSource.getMessage(key, null, state.locale());
     }
 
+    /**
+     * 이 턴의 호출 지점(§6.29) — Direct 답변은 응답 모드의 Direct 사이트, 분류가 meta(인사/잡담)로 판정해 여기로 온
+     * 답변은 {@code answer-meta}. 프롬프트를 고르는 {@link #resolveSystemPrompt} 와 같은 갈림이다. Direct 를 쓸 수
+     * 없는 모드(C)는 요청 단계에서 N 으로 정규화되지만({@code ChatRequest}), 여기까지 왔다면 N 의 사이트를 쓴다.
+     */
+    private static ThinkingSite site(AgentState state) {
+        if (!state.directMode()) return ThinkingSite.ANSWER_META;
+        ThinkingSite site = state.responseMode().directThinkingSite();
+        return site != null ? site : ThinkingSite.ANSWER_DIRECT_N;
+    }
+
     private static Prompt buildPrompt(String systemPrompt, String userPrompt,
-                                      double temperature, int maxTokens) {
+                                      double temperature, int maxTokens, ThinkingSite site) {
         // Attach temperature + the response mode's token budget as runtime options —
         // OpenAiChatModel merges them over the provider's defaultOptions field-by-field, so only
         // these two are overridden (model etc. stay). maxTokens<=0 leaves the provider default.
-        OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().temperature(temperature);
+        OpenAiChatOptions.Builder opts = ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site);
         if (maxTokens > 0) opts.maxTokens(maxTokens);
         return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
                 opts.build());
@@ -164,7 +177,7 @@ public class DirectAnswerService {
         String history = state.conversationHistory();
         if (contextWindows == null || history == null || history.isBlank()) return state;
         int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+                llmRouter.findProviderName(site(state).taskType(), site(state).routingMode(state.routingMode())));
         if (window <= 0) return state;
         int budget = HistoryPolicy.budgetChars(window,
                 AnswerService.outputReservation(state.responseMode(), true, props.llmSafe().maxTokens()),
@@ -222,7 +235,8 @@ public class DirectAnswerService {
             StringBuilder buf = new StringBuilder();
             ChatClient.builder(provider.chatModel()).build()
                     .prompt()
-                    .options(OpenAiChatOptions.builder().temperature(temperature).build())
+                    // stream=false 프로바이더 — 체인(ThinkingControlChatModel)을 지나므로 사이트 표시가 그대로 먹는다.
+                    .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site(state)).build())
                     .system(systemPrompt)
                     .user(buildUserPrompt(state))
                     .stream()

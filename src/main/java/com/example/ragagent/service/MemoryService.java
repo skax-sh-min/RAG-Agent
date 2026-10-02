@@ -3,10 +3,10 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.llm.TokenEstimator;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.repository.MemoryRepository;
@@ -113,7 +113,10 @@ public class MemoryService {
                                     RoutingMode routingMode, boolean streaming, String question) {
         int fallback = maxConversationChars();
         if (!askingDirect || llmRouter == null || contextWindows == null) return fallback;
-        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, routingMode));
+        // Direct 답변을 받을 프로바이더 — 그 모드의 Direct 사이트(없는 모드는 요청 단계에서 N 으로 정규화된다).
+        ThinkingSite site = mode.directThinkingSite() != null ? mode.directThinkingSite() : ThinkingSite.ANSWER_DIRECT_N;
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(site.taskType(), site.routingMode(routingMode)));
         return HistoryPolicy.budgetChars(window,
                 AnswerService.outputReservation(mode, streaming, props.llmSafe().maxTokens()),
                 0,   // Direct — 검색이 돌지 않으므로 문서가 가져갈 자리가 없다

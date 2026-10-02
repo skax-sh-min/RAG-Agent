@@ -7,6 +7,8 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadMetaRepository;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -158,6 +160,7 @@ class ThreadMetaServiceTest {
 
         assertThat(promptCaptor.getValue().getContents())
                 .contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — 제목 사이트").isEqualTo(ThinkingSite.TITLE);
     }
 
     @Test

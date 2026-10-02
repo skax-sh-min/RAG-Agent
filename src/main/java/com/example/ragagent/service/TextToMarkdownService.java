@@ -5,14 +5,14 @@ import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
@@ -76,8 +76,8 @@ public class TextToMarkdownService {
      * 달라지고, 그건 초과를 막으러 온 변경이 할 일이 아니다.
      */
     private int blockCharBudget() {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(
+                ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode()));
         if (window <= 0) return MAX_BLOCK_CHARS;
         int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS);
         return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
@@ -88,8 +88,8 @@ public class TextToMarkdownService {
      * + 출력 상한. 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}).
      */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.TXT_TO_MD);   // §6.29
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
@@ -202,7 +202,8 @@ public class TextToMarkdownService {
                 [/DOCUMENT]""".formatted(safeBlock);
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.TXT2MD_PREFIX,
+                    ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode(),
+                    BackgroundUsage.TXT2MD_PREFIX,
                     model -> model.call(new Prompt(prompt, indexingOptions(
                             // 구조화도 재작성이라 출력이 이 블록 크기에 묶인다.
                             IndexingOutputCap.forRewrite(safeBlock, props.llmSafe().maxTokens())))));

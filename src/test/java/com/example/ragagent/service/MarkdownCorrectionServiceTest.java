@@ -13,6 +13,8 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -478,6 +480,8 @@ class MarkdownCorrectionServiceTest {
         callCaptor.getValue().apply(mockModel);
 
         String sentPrompt = promptCaptor.getValue().getContents();
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — 교정 본문은 md-correct(비전 패스와 다른 사이트)")
+                .isEqualTo(ThinkingSite.MD_CORRECT);
         assertThat(sentPrompt).doesNotContain("포트: 8080");
         assertThat(sentPrompt).doesNotContain("| 항목 | 설명 |");
         assertThat(sentPrompt).contains("[TABLE_PLACEHOLDER_0]");

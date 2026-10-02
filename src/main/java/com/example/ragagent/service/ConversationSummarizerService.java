@@ -5,8 +5,8 @@ import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.repository.MemoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -222,9 +222,10 @@ public class ConversationSummarizerService {
         }
 
         String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()).build();
-        return llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY,
+        ThinkingSite site = ThinkingSite.SUMMARY;   // §6.29 — 생각 수준과 라우팅(LOCAL_ONLY)이 여기서 나온다
+        OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), site).build();
+        return llmRouter.executeWithTracking(site.taskType(), site.fixedRoutingMode(),
                 BackgroundUsage.SUMMARY_PREFIX,
                 model -> model.call(new Prompt(List.of(
                         new SystemMessage(systemPrompt),

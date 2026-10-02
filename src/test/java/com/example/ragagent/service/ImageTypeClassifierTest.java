@@ -4,6 +4,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -114,5 +116,7 @@ class ImageTypeClassifierTest {
         callCaptor.getValue().apply(chatModel);
 
         assertThat(promptCaptor.getValue().getUserMessage().getMedia()).hasSize(1);
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — 이미지 유형 사이트")
+                .isEqualTo(ThinkingSite.IMAGE_TYPE);
     }
 }

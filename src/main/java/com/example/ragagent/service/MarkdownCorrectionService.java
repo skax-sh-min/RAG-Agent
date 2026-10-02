@@ -8,8 +8,8 @@ import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -215,8 +215,8 @@ public class MarkdownCorrectionService {
      * <p>창을 모르면 {@link #maxSectionChars()} 그대로다(예전 동작).
      */
     private int sectionCharBudget() {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(
+                ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode()));
         int configured = maxSectionChars();
         if (window <= 0) return configured;
         int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS);
@@ -233,9 +233,10 @@ public class MarkdownCorrectionService {
      * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
      * 같은 프로퍼티가 {@link #maxSectionChars()} 까지 정하므로 입력과 예약이 함께 커진다.
      */
-    private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+    private OpenAiChatOptions indexingOptions(ThinkingSite site, int maxTokens) {
+        // §6.29 — 교정 본문(md-correct)과 비전 패스(md-correct-vision)가 이 옵션을 함께 쓰므로 사이트를 받는다.
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), site);
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
@@ -804,8 +805,9 @@ public class MarkdownCorrectionService {
                 [/DOCUMENT]""").formatted(defaultCodeLanguage, boundaryNote, tableExtraction.protectedText());
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions(
+                    ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode(),
+                    BackgroundUsage.MDCORRECT_PREFIX,
+                    model -> model.call(new Prompt(prompt, indexingOptions(ThinkingSite.MD_CORRECT,
                             // 재작성이라 출력은 이 섹션 크기에 묶인다 — 지시문은 입력일 뿐 출력이 아니다.
                             IndexingOutputCap.forRewrite(tableExtraction.protectedText(),
                                     props.llmSafe().maxTokens())))));
@@ -990,7 +992,8 @@ public class MarkdownCorrectionService {
         if (md == null || md.isBlank()) return md;
         // Gate: skip entirely when no LOCAL vision provider is registered (don't scan/spawn tasks).
         try {
-            llmRouter.routeProvider(TaskType.VISION, RoutingMode.LOCAL_ONLY);
+            llmRouter.routeProvider(ThinkingSite.MD_CORRECT_VISION.taskType(),
+                    ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode());
         } catch (Exception e) {
             return md;
         }
@@ -1193,8 +1196,9 @@ public class MarkdownCorrectionService {
                     .media(media).build();
             // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
             int cap = IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, props.llmSafe().maxTokens());
-            String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions(cap))));
+            String response = llmRouter.executeWithTracking(ThinkingSite.MD_CORRECT_VISION.taskType(),
+                    ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode(), BackgroundUsage.IMAGE_PREFIX,
+                    model -> model.call(new Prompt(userMessage, indexingOptions(ThinkingSite.MD_CORRECT_VISION, cap))));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)

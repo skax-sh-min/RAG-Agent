@@ -1,5 +1,7 @@
 package com.example.ragagent.model;
 
+import com.example.ragagent.llm.ThinkingSite;
+
 /**
  * 답변의 성격을 정하는 per-message 모드 — 채팅 입력창에서 고른다 (기본 {@link #N}).
  *
@@ -49,7 +51,8 @@ public enum ResponseMode {
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, false, true, false, false, false, false, false),
+      0, false, true, false, false, false, false, false,
+      ThinkingSite.ANSWER_RAG_S, ThinkingSite.ANSWER_DIRECT_S),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -61,7 +64,8 @@ public enum ResponseMode {
      */
     N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true, false, false, false, true, false, false),
+      0, true, false, false, false, true, false, false,
+      ThinkingSite.ANSWER_RAG_N, ThinkingSite.ANSWER_DIRECT_N),
 
     /**
      * 응용형 — 검색된 문서를 <b>재료로</b> 예제 코드·설정 등을 생성한다 (PLAN §6.24 Phase 2).
@@ -96,7 +100,8 @@ public enum ResponseMode {
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, true, false, true, true, false, true, true);
+      0, true, false, true, true, false, true, true,
+      ThinkingSite.ANSWER_RAG_C, null);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -114,12 +119,15 @@ public enum ResponseMode {
     private final boolean reusable;
     private final boolean generative;
     private final boolean operatorToggleable;
+    private final ThinkingSite ragThinkingSite;
+    private final ThinkingSite directThinkingSite;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
                  int retrievalBoost, boolean proposable, boolean summaryOnly,
                  boolean creativeTemperature, boolean creativeEval, boolean reusable,
-                 boolean generative, boolean operatorToggleable) {
+                 boolean generative, boolean operatorToggleable,
+                 ThinkingSite ragThinkingSite, ThinkingSite directThinkingSite) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -133,6 +141,8 @@ public enum ResponseMode {
         this.reusable = reusable;
         this.generative = generative;
         this.operatorToggleable = operatorToggleable;
+        this.ragThinkingSite = ragThinkingSite;
+        this.directThinkingSite = directThinkingSite;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -247,6 +257,23 @@ public enum ResponseMode {
 
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */
     public boolean allowsDirect() { return directSystemPromptKey != null; }
+
+    /**
+     * 이 모드의 RAG 답변이 생각 수준을 정하는 호출 지점(PLAN §6.29) — {@code app.llm.thinking.answer-rag-<모드>}.
+     * 모드가 답변의 성격을 정하므로(S 는 축약, C 는 응용) 생각할 몫도 모드마다 따로 정할 수 있게 했다.
+     */
+    public ThinkingSite ragThinkingSite() { return ragThinkingSite; }
+
+    /**
+     * 이 모드의 Direct 답변 호출 지점. Direct 를 쓸 수 없는 모드({@link #allowsDirect()} 가 거짓 — C)는
+     * {@code null} 이다 — {@link #directSystemPromptKey()} 와 같은 규약.
+     */
+    public ThinkingSite directThinkingSite() { return directThinkingSite; }
+
+    /** 이 모드의 검증 호출 지점 — 검증기가 둘이라(일반·C 전용) 사이트도 둘이다. */
+    public ThinkingSite evalThinkingSite() {
+        return creativeEval ? ThinkingSite.EVAL_CREATIVE : ThinkingSite.EVAL;
+    }
 
     /**
      * 운영자가 {@code /settings} 에서 이 모드를 <b>통째로 끌 수 있는가</b>

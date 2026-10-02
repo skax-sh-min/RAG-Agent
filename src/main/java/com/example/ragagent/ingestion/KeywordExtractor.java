@@ -5,8 +5,6 @@ import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
@@ -14,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import com.example.ragagent.llm.IndexingOutputCap;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 
@@ -69,8 +69,9 @@ public class KeywordExtractor {
      * ({@link IndexingOutputCap}).
      */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        // §6.29 — 인덱싱과 지식 제안의 "빈 칸 자동 생성"(enrich)이 같은 사이트를 쓴다(app.llm.thinking.keyword-context).
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.KEYWORD_CONTEXT);
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
@@ -174,7 +175,8 @@ public class KeywordExtractor {
             // §10.1 — one call now yields keywords + context together; tracked under context:
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
             String response = llmRouter.executeWithTracking(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    ThinkingSite.KEYWORD_CONTEXT.taskType(), ThinkingSite.KEYWORD_CONTEXT.fixedRoutingMode(),
+                    BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt, indexingOptions(
                             IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK,
                                     props.llmSafe().maxTokens())))));
@@ -229,7 +231,8 @@ public class KeywordExtractor {
         }, timeoutSec, TimeUnit.SECONDS);
         try {
             String response = llmRouter.executeWithTracking(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    ThinkingSite.KEYWORD_CONTEXT.taskType(), ThinkingSite.KEYWORD_CONTEXT.fixedRoutingMode(),
+                    BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt.toString(), indexingOptions(
                             // 배치는 청크 수만큼 결과가 늘어난다 — 몫도 그만큼 곱한다.
                             IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK * n,
