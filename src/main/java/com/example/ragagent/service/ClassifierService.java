@@ -3,8 +3,8 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.security.PromptInjectionGuard;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
@@ -51,7 +51,7 @@ public class ClassifierService {
     public String classifyOnly(String question, Locale locale) {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, locale);
         String userPrompt = PromptInjectionGuard.wrap(question) + "\n\n" + converter.getFormat();
-        String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
+        String response = llmRouter.executeGated(SITE.taskType(), SITE.fixedRoutingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return parseType(response);
     }
@@ -69,7 +69,7 @@ public class ClassifierService {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
         String userPrompt = PromptInjectionGuard.wrap(state.effectiveSearchQuestion())
                 + "\n\n" + converter.getFormat();
-        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, RoutingMode.COST_FIRST,
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(SITE.taskType(), SITE.fixedRoutingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return state.toBuilder()
                     .accumulateTokens(result.inputTokens(), result.outputTokens())
@@ -77,11 +77,14 @@ public class ClassifierService {
                     .build();
     }
 
+    /** §6.29 — 이 호출 지점. 생각 수준(app.llm.thinking.classify)과 라우팅이 여기서 나온다. */
+    private static final ThinkingSite SITE = ThinkingSite.CLASSIFY;
+
     /** §6.18 — general/RAG temperature, hot (read fresh per call so a /settings change applies
      *  without a restart). */
     private Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature())
+        OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature()), SITE)
                 .build();
         return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)), options);
     }

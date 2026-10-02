@@ -3,8 +3,8 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.KeywordExtractor;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,11 +63,12 @@ public class RerankerService {
             String userContent = "[질문]\n%s\n\n[문서 목록]\n%s"
                     .formatted(question, formatDocList(candidates));
 
-            // §6.18 — general/RAG temperature, hot (read fresh per call).
-            OpenAiChatOptions options = OpenAiChatOptions.builder()
-                    .temperature(props.llmSafe().temperature())
+            // §6.18 — general/RAG temperature, hot (read fresh per call). §6.29 — rerank 사이트로 표시한다.
+            ThinkingSite site = ThinkingSite.RERANK;
+            OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().temperature()), site)
                     .build();
-            String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
+            String response = llmRouter.executeGated(site.taskType(), site.fixedRoutingMode(),
                     model -> model.call(new Prompt(List.of(
                             new SystemMessage(systemPrompt), new UserMessage(userContent)), options)));
 

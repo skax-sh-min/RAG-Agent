@@ -14,6 +14,8 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -840,6 +842,9 @@ class AnswerServiceTest {
         // 전체가 예약된다 — 좁은 컨텍스트에서 n_ctx 를 넘기는 것은 근거가 아니라 이 예약이다.
         Integer evalMax = promptCaptor.getAllValues().get(1).getOptions().getMaxTokens();
         assertThat(evalMax).as("검증 호출 출력 상한").isEqualTo(2_048);
+        // §6.29 — 답변은 그 모드의 RAG 사이트, 검증은 검증 사이트로 표시한다(생각 수준을 따로 정한다).
+        assertThat(ThinkingControl.siteOf(promptCaptor.getAllValues().get(0))).isEqualTo(ThinkingSite.ANSWER_RAG_N);
+        assertThat(ThinkingControl.siteOf(promptCaptor.getAllValues().get(1))).isEqualTo(ThinkingSite.EVAL);
         // 답변 호출은 모드 예산(N = max-tokens의 70% 또는 5,000자 바닥) 그대로여야 한다.
         Integer answerMax = promptCaptor.getAllValues().get(0).getOptions().getMaxTokens();
         assertThat(answerMax).as("답변 호출은 영향 없음")

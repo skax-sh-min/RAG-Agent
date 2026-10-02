@@ -15,7 +15,8 @@ import com.example.ragagent.llm.PromptSizeLog;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -221,9 +222,22 @@ public class AnswerService {
         return streaming ? Math.min(blocking, mode.minChars()) : blocking;
     }
 
-    /** 아직 프로바이더가 정해지지 않은 자리에서 쓰는 추정 — 라우터에게 "지금이라면 누구" 를 묻는다. */
+    /** 아직 프로바이더가 정해지지 않은 자리에서 쓰는 추정 — 라우터에게 "지금이라면 누구" 를 묻는다(답변 호출). */
     private String likelyProvider(AgentState state) {
-        return llmRouter.findProviderName(TaskType.TEXT, state.routingMode());
+        return likelyProvider(state, answerSite(state));
+    }
+
+    /** 같은 추정을 그 사이트의 라우팅으로 — 검증 호출의 예산은 검증 사이트가 받을 프로바이더 기준이어야 한다. */
+    private String likelyProvider(AgentState state, ThinkingSite site) {
+        return llmRouter.findProviderName(site.taskType(), site.routingMode(state.routingMode()));
+    }
+
+    /**
+     * 이 턴의 답변 호출 지점(§6.29) — 응답 모드가 정한다. 생각 수준과 라우팅(작업 유형·모드)이 함께 여기서 나온다
+     * ({@code ThinkingSite} 가 라우팅의 단일 출처).
+     */
+    private static ThinkingSite answerSite(AgentState state) {
+        return state.responseMode().ragThinkingSite();
     }
 
     public AgentState execute(AgentState state) {
@@ -344,14 +358,15 @@ public class AnswerService {
         Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(requested, "ANSWER", level -> {
             // 블로킹 — answerOptions() 가 maxTokens 를 실어 보내므로 그만큼 실제로 예약된다.
             String userPrompt = buildAnswerPrompt(requested, likelyProvider(requested), false, level);
-            return llmRouter.executeGatedWithUsage(TaskType.TEXT, requested.routingMode(),
+            ThinkingSite site = answerSite(requested);
+            return llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(requested.routingMode()),
                     model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
         });
         LlmRouter.LlmResult result = attempt.value();
         String answer = truncate(enforceSummaryOnly(result.text() == null ? "" : result.text(), state.responseMode()));
         state = withBudgetNote(state, attempt.level()).toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
-                     .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
+                     .usedProvider(likelyProvider(state))
                      .answer(answer)
                      .build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, null);
@@ -361,7 +376,8 @@ public class AnswerService {
 
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
+        LlmProvider provider = llmRouter.routeProvider(answerSite(state).taskType(),
+                answerSite(state).routingMode(state.routingMode()));
         Shrunk<Streamed> attempt;
         try (var permit = llmRouter.acquirePermit(provider)) {
             attempt = streamAnswer(provider, state, systemPrompt, listener::onToken);
@@ -405,7 +421,8 @@ public class AnswerService {
 
     private AgentState progressiveUpgrade(AgentState state, AgentState resultState, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
+        // PROGRESSIVE 의 2차 — 대화의 모드가 아니라 품질 우선으로 간다(그래서 사이트의 모드를 쓰지 않는다).
+        LlmProvider premiumProvider = llmRouter.routeProvider(answerSite(state).taskType(), RoutingMode.QUALITY_FIRST);
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
         int inputTokens, outputTokens;
@@ -425,7 +442,7 @@ public class AnswerService {
             Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(state, "ANSWER-PREMIUM", level -> {
                 String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false, level);
                 return llmRouter.executeGatedWithUsage(
-                        TaskType.TEXT, RoutingMode.QUALITY_FIRST,
+                        answerSite(state).taskType(), RoutingMode.QUALITY_FIRST,
                         model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state))));
             });
             premiumAnswer = attempt.value().text();
@@ -740,8 +757,9 @@ public class AnswerService {
                     logPromptSize(evalPromptSize(state, "검증", systemPrompt, answer, excerpts,
                             evalConverter.getFormat(), level));
                 }
-                return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+                ThinkingSite site = state.responseMode().evalThinkingSite();
+                return llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(state.routingMode()),
+                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions(site))));
             }).value();
             spent[0] = result;
             EvalExcerpts excerpts = used[0];
@@ -855,8 +873,9 @@ public class AnswerService {
                     logPromptSize(evalPromptSize(state, "검증(C)", systemPrompt, answer, excerpts,
                             creativeEvalConverter.getFormat(), level));
                 }
-                return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+                ThinkingSite site = state.responseMode().evalThinkingSite();
+                return llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(state.routingMode()),
+                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions(site))));
             }).value();
             spent[0] = result;
             EvalExcerpts excerpts = used[0];
@@ -1051,7 +1070,7 @@ public class AnswerService {
      * 프로바이더의 일반 예약이 아니라 실제로 예약되는 값을 빼야 맞다.
      */
     private long evalExcerptTokenBudget(AgentState state, String systemPrompt, String answer, String schema) {
-        int window = contextWindows.tokensOrZero(likelyProvider(state));
+        int window = contextWindows.tokensOrZero(likelyProvider(state, state.responseMode().evalThinkingSite()));
         if (window <= 0) return 0;   // 창 모름 → 글자 상한만 적용(예전 동작 그대로)
         long fixed = TokenEstimator.estimate(systemPrompt)
                 + TokenEstimator.estimate(answer)
@@ -1191,8 +1210,10 @@ public class AnswerService {
      * 1,000-character ceiling there, N deliberately names no number at all (§6.24).
      */
     private ChatOptions answerOptions(AgentState state) {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(answerTemperature(state.responseMode()));
+        // §6.29 — 이 턴의 답변 사이트를 표시한다. 생각 수준(app.llm.thinking.answer-rag-<모드>)은 받는 프로바이더가
+        // 정해진 뒤 ThinkingControlChatModel 이 싣는다. stream=false 프로바이더의 ChatClient 경로도 이 옵션을 그대로 쓴다.
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(answerTemperature(state.responseMode())), answerSite(state));
         int configured = props.llmSafe().maxTokens();
         int max = state.responseMode().maxTokens(configured);
         if (max > 0) builder.maxTokens(max);
@@ -1220,9 +1241,9 @@ public class AnswerService {
      *  fields cannot reserve the operator's whole completion budget — see that constant.
      *  Deliberately NOT the creative temperature even for C: judging whether an identifier appears
      *  in an excerpt is a lookup, not a creative task. Hot — read fresh per call. */
-    private ChatOptions evalOptions() {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature());
+    private ChatOptions evalOptions(ThinkingSite site) {
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature()), site);
         int configured = props.llmSafe().maxTokens();
         // 0 이하 = "프로바이더 기본값 유지" (answerOptions 와 같은 규약).
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_EVAL_OUTPUT_TOKENS));
@@ -1336,7 +1357,7 @@ public class AnswerService {
      */
     private String evalPromptSize(AgentState state, String kind, String systemPrompt, String answer,
                                   EvalExcerpts excerpts, String schema, int level) {
-        String provider = likelyProvider(state);
+        String provider = likelyProvider(state, state.responseMode().evalThinkingSite());
         int window = contextWindows.tokensOrZero(provider);
         long inputBudget = window <= 0 ? 0 : new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget();
         PromptSizeLog size = PromptSizeLog.of(kind)

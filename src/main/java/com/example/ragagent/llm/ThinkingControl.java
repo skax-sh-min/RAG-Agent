@@ -1,6 +1,8 @@
 package com.example.ragagent.llm;
 
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.HashMap;
@@ -35,6 +37,26 @@ public final class ThinkingControl {
         Map<String, Object> body = new HashMap<>();
         body.put(SITE_MARKER, site.name());
         return builder.extraBody(body);
+    }
+
+    /**
+     * 이미 만들어진 프롬프트에 표시한 사본 — 옵션을 직접 넘길 수 없는 프레임워크 호출부({@link ThinkingSiteChatModel})를
+     * 위한 것이다. 이미 표시가 있으면 그대로 둔다(호출부가 정한 사이트가 이긴다). 원본은 건드리지 않는다.
+     *
+     * <p>옵션이 {@code OpenAiChatOptions} 가 아니면(Spring AI {@code ChatClient} 는 모델의 기본 옵션을 복사하는데, 이
+     * 앱의 체인은 일반 {@code ChatOptions} 를 돌려준다) {@code OpenAiChatModel} 이 내부에서 하는 것과 같은 변환으로
+     * 옮긴다 — 그 뒤 과정에서 일어날 일을 앞당길 뿐이라 잃는 값이 없다.
+     */
+    public static Prompt mark(Prompt prompt, ThinkingSite site) {
+        if (siteOf(prompt) != null) return prompt;
+        ChatOptions source = prompt.getOptions();
+        OpenAiChatOptions options = source instanceof OpenAiChatOptions openAi ? openAi.copy()
+                : source == null ? OpenAiChatOptions.builder().build()
+                : ModelOptionsUtils.copyToTarget(source, ChatOptions.class, OpenAiChatOptions.class);
+        Map<String, Object> body = options.getExtraBody() == null ? new HashMap<>() : new HashMap<>(options.getExtraBody());
+        body.put(SITE_MARKER, site.name());
+        options.setExtraBody(body);
+        return new Prompt(prompt.getInstructions(), options);
     }
 
     /** 표시된 사이트. 표시가 없거나 알아볼 수 없으면 {@code null} — 그 요청은 아무것도 바꾸지 않고 통과한다. */

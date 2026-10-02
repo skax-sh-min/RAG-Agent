@@ -48,7 +48,7 @@
 | ~~1~~ | ~~**§10.12 짧은 후속 질문의 독립화**~~ | ✅ 2026-09-03 완료 (재작성 → 검색 축 셋 + 분류기, 진단 한 줄, 열린 항목 (b) 해소) |
 | ~~2~~ | ~~**§10.13 Direct 턴의 이력 확대**~~ | ✅ 2026-09-03 완료 (1단계 프롬프트 + 예산/렌더 규칙 + Direct 안전망) |
 | ~~3~~ | ~~**§10.14 청크 오류 신고 (사용자 → 관리자)**~~ | ✅ 2026-09-04 완료 (0~5단계 전부 — 렌더러 통일 · 대기열 · 청크 단위 관리자 처리 · 배지) |
-| 3 | **§6.29 호출 지점별 생각(추론) 수준 제어** — 사이트 × 수준(끔/낮게/중간/높게 — 사이트마다 기본값) × 프로바이더 dialect, `/settings` 관리자 전용 핫 편집 + 수준별 예산 미리보기(출력 예약·입력 예산·문서 수·생각 자리·최악 소요·관측) | 🟡 1단계 완료 2026-10-02 (골격 · 세 호출부 이관 · 출하값 · 블로킹 관측) — 다음은 2단계(블로킹 호출부 전부 배선) |
+| 3 | **§6.29 호출 지점별 생각(추론) 수준 제어** — 사이트 × 수준(끔/낮게/중간/높게 — 사이트마다 기본값) × 프로바이더 dialect, `/settings` 관리자 전용 핫 편집 + 수준별 예산 미리보기(출력 예약·입력 예산·문서 수·생각 자리·최악 소요·관측) | 🟡 2단계 완료 2026-10-02 (골격·출하값·관측 + 블로킹 호출 전부 표시 · 라우팅 단일 출처) — 다음은 3단계(채팅 답변 스트리밍 두 경로) |
 | 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 5 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. **§6.26 이후 전제가 바뀌었다** — 검증 발췌 상한이 이제 창에서 파생되므로(`evalExcerptTokenBudget`), 부스트를 올리기 전에 확인할 것은 `MAX_EVAL_EXCERPT_CHARS` 상수가 아니라 **대상 프로바이더의 실제 창**이다 |
 | 6 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -526,7 +526,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 **실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어로 §10.7.5 하네스 실행 시 색인된 골든셋 6건 전부 recall@10=1.0 — 소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인. 전체 baseline(0.962) 정식 대조는 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 재현 가능.
 
-### 6.29 호출 지점별 생각(추론) 수준 제어 🟡 1단계 완료 2026-10-02 — 설계 2026-10-02
+### 6.29 호출 지점별 생각(추론) 수준 제어 🟡 2단계 완료 2026-10-02 — 설계 2026-10-02
 
 **목표**: LLM 요청마다 모델의 생각(reasoning)을 **끔/낮게/중간/높게** 중 하나로 정하고, 그 값을 **호출 지점(케이스)별로** `/settings` 에서 핫 편집한다. 호출 지점마다 기본값이 있고, 다른 설정처럼 [기본값]·[저장] 으로 다룬다. 대상은 채팅 답변(RAG S/N/C · Direct S/N · 메타), 응답 검증, 분류·독립화·확장·리랭크, 답변 뒤 보강, 인덱싱(키워드+맥락 · MD 교정 · TXT→MD · 이미지), 관리자 도구 전부다.
 
@@ -821,6 +821,7 @@ LLM 프로바이더 카드 바로 아래에 카드 하나를 둔다. 구성은 �
 1. **골격 + 기본값**: `ThinkingSite`/`ThinkingLevel`(넷)/`ThinkingDialect`/`ProviderThinkingDialects`/`ThinkingControlChatModel` 을 만들고, 현행 세 호출부를 `mark(site)` 로 옮긴다. 출하 기본값(②)을 `application.properties` 에 사이트마다 한 줄로 넣는다. `ThinkingObservations` 와 블로킹 기록도 이 단계다 — 2단계부터 바로 숫자가 쌓이게 하기 위해서다. 테스트: dialect 변환표 전수, 표시 키 비유출, (프로바이더, 필드) 거부 → 재시도·기억, `AUTO` = 현행 규칙, 출하 파일 = 열거형 출하값. 확인: llama.cpp 가 `reasoning_tokens` 를 보고하는가.
    - ✅ **2026-10-02 완료** — 전체 테스트 2,442건 통과, 실제 기동으로 바인딩 확인(`[THINKING] 호출 지점별 생각 수준 — … 설정 파일 22곳` · `thinking=template-kwargs`). 설계에서 바뀐 것 셋: ① 기동 리포트(`ThinkingStartupReport` — ⑦-아의 INFO 한 줄 + 잘못된 값·모르는 키 WARN)를 1단계로 앞당겼다 — 출하값을 넣는 단계에 "틀린 값이 조용히 출하값으로 떨어진다"가 같이 들어오기 때문. ② 블로킹 관측의 생각 판정을 출력 토큰 초과로 바꿨다(위 ⑧ — Spring AI 가 생각 본문을 버린다). ③ curl 로그가 표준 필드 `reasoning_effort` 도 찍는다(`openai-effort` 를 재현할 수 있게). `LlmConfig`·`ProviderConfig` 에 생성자가 둘이 되어 정식 생성자에 `@ConstructorBinding` 을 달았다(`ThinkingConfigBindingTest`).
 2. **블로킹 호출부 전부 배선**: 위 표의 사이트를 다 표시하고, 호출부의 (TaskType, RoutingMode) 를 `ThinkingSite` 에서 읽게 바꾼다(⑦-바 — 라우팅의 단일 출처). `MultiQueryExpander` 래퍼, `KeywordExtractor` 사이트 인자도 이 단계다. **전송이 처음 바뀌는 단계다** — 출하 기본값 낮게가 `enable_thinking=true` 를 싣기 시작한다. 참조 배포에서는 같은 동작이지만, **업그레이드 안내**(OPERATOR_MANUAL·릴리스 노트)를 함께 낸다: 서버에서 생각을 꺼 두고 운영하던 배포는 업그레이드 전에 해당 사이트를 끔으로 바꿔 둘 것.
+   - ✅ **2026-10-02 완료** — 전체 테스트 2,453건 통과, 실제 기동 확인. 표시: 체인을 지나는 블로킹 호출 전부 + stream=false 프로바이더의 `ChatClient` 답변 경로(RAG·Direct). 답변·검증 사이트는 `ResponseMode` 의 성질로 고른다(`ragThinkingSite()`·`directThinkingSite()`·`evalThinkingSite()` — `== ResponseMode.X` 분기 금지 규약과 같은 방식), meta 답변은 `answer-meta`. 라우팅: 호출부가 `TaskType` 리터럴 대신 사이트를 읽는다(고정 모드는 `fixedRoutingMode()`, 채팅 답변·검증은 `routingMode(대화 모드)`; PROGRESSIVE 의 2차만 `QUALITY_FIRST` 를 직접 쓴다). `ThinkingSiteConventionTest` 가 두 규칙(옵션 빌더마다 `ThinkingControl.mark(`, 라우터 호출에 `TaskType` 리터럴 금지)을 빌드로 막는다. `MultiQueryExpander` 는 `ThinkingSiteChatModel` 래퍼 — 그 `ChatClient` 는 모델의 기본 옵션(이 앱의 체인에서는 일반 `ChatOptions`)을 복사해 쓰므로 래퍼가 `OpenAiChatOptions` 로 옮겨 담아 표시한다(실제 확장기로 테스트). 설계에서 바뀐 것: `KeywordExtractor` 의 사이트 인자는 만들지 않았다 — 지식 제안 `enrich()` 를 따로 떼는 것(열린 항목 (b))이 정해지기 전까지 쓰는 곳이 없는 인자다.
 3. **스트리밍 두 경로**: `applyTo(ChatCompletionRequest)`, `reasoningContent` 를 활동으로 세기, 첫 토큰 전 거부 재시도, 스트리밍 관측(델타 수 · `finishReason`).
 4. **출력 예약**: `ThinkingBudget.reservation()` 하나로 모은다(④ — 기본 예약은 깎지 않는다). 예약을 믿는 일곱 자리(검증 넷 · 답변 셋)를 옮기고, 재작성 사이트는 조각 크기 규칙을 쓴다. 상수 직접 참조를 막는 컨벤션 테스트도 이 단계다. **예산이 처음 바뀌는 단계다** — 낮게 기본값이 생각 여유 +512 를 받는다(16k 창의 검증: 입력 −4%, 발췌 수 그대로).
 5. **`/settings` 미리보기 (관리자 전용)**: ⑦ 의 (가)~(자) 전부 — `ThinkingPreviewService`(런타임 함수 재사용), `GET /admin/settings/thinking`, 프로바이더 카드의 "생각 제어" 열, 그룹 표 · 펼침 4블록 · 배지, 편집 컨트롤은 `settings-item` 과 같은 `값 → [기본값] → [저장]` + "(기본값)" 표시, 수준 전환은 서버가 렌더한 칸을 보이기만, `Kind.CHOICE`, 재탐지 연동(`HX-Trigger`), 모바일 카드 배치, 권한·기본값·미리보기=런타임·골든 테스트. 한/영 번들(`MessageBundleConventionTest`).

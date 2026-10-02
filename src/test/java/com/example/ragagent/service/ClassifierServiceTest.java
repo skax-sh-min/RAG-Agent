@@ -5,6 +5,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -183,5 +185,7 @@ class ClassifierServiceTest {
 
         assertThat(promptCaptor.getAllValues()).hasSize(2).allSatisfy(prompt ->
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
+        assertThat(promptCaptor.getAllValues()).as("§6.29 — 분류 사이트로 표시한다")
+                .allSatisfy(prompt -> assertThat(ThinkingControl.siteOf(prompt)).isEqualTo(ThinkingSite.CLASSIFY));
     }
 }

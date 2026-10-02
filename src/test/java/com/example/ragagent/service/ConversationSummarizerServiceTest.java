@@ -7,6 +7,8 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -283,6 +285,7 @@ class ConversationSummarizerServiceTest {
         callCaptor.getValue().apply(chatModel);
 
         String llmInput = promptCaptor.getValue().getUserMessage().getText();
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — 요약 사이트").isEqualTo(ThinkingSite.SUMMARY);
         assertThat(llmInput)
                 .contains("첫 답변 한 줄 요약")            // 이미 요약된 답변은 요약본으로 대체
                 .doesNotContain("첫 답변 장황한 본문")

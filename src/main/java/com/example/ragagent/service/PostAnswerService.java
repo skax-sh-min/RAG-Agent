@@ -6,8 +6,6 @@ import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SourceRef;
@@ -302,7 +300,7 @@ public class PostAnswerService {
                     .replace("{history}", history.isBlank() ? none : history)
                     .replace("{summary}", summary.isBlank() ? none : summary)
                     .replace("{query}", PromptInjectionGuard.wrap(question));
-            raw = llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.COST_FIRST,
+            raw = llmRouter.executeWithTracking(ThinkingSite.POST_ANSWER.taskType(), ThinkingSite.POST_ANSWER.fixedRoutingMode(),
                     BackgroundUsage.POSTANSWER_PREFIX,
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(question)), options())));
@@ -342,7 +340,7 @@ public class PostAnswerService {
                     .replace("{sources}", sources.isBlank() ? none : sources)
                     .replace("{summary}", summary.isBlank() ? none : summary)
                     .replace("{query}", PromptInjectionGuard.wrap(question));
-            raw = llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.COST_FIRST,
+            raw = llmRouter.executeWithTracking(ThinkingSite.POST_ANSWER.taskType(), ThinkingSite.POST_ANSWER.fixedRoutingMode(),
                     BackgroundUsage.POSTANSWER_PREFIX,
                     model -> model.call(new Prompt(List.of(new SystemMessage(systemPrompt),
                             new UserMessage(extrasConverter.getFormat())), options())));

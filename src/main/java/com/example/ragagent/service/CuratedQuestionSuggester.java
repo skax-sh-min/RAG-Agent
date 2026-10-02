@@ -3,8 +3,6 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.security.PromptInjectionGuard;
@@ -90,7 +88,8 @@ public class CuratedQuestionSuggester {
                             currentQuestion == null ? "" : currentQuestion))
                     .replace("{answer}", body);
             String response = llmRouter.executeWithTracking(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.QUESTION_PREFIX,
+                    ThinkingSite.CURATED_SUGGEST.taskType(), ThinkingSite.CURATED_SUGGEST.fixedRoutingMode(),
+                    BackgroundUsage.QUESTION_PREFIX,
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage("질문을 다시 써 주세요.")),
                             options())));
