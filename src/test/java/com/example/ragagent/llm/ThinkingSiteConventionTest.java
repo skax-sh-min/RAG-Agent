@@ -94,9 +94,76 @@ class ThinkingSiteConventionTest {
                 .isEmpty();
     }
 
+    /**
+     * PLAN §6.29 ④ — 예약을 믿는 자리(입력 예산·이력 예산)는 생각 여유까지 더한 예약을 써야 한다. 옛 상수로 예산을
+     * 재는 자리가 하나라도 있으면 그 계산이 실제 요청(여유가 더해진 {@code max_tokens})과 조용히 갈라진다.
+     */
+    private static final List<String> BUDGET_CALLS = List.of("new PromptBudget(", "HistoryPolicy.budgetChars(");
+    /** 이 둘은 받은 예약을 그대로 쓰는 자리(예산 계산 자체)라 예외다. */
+    private static final Set<String> BUDGET_EXEMPT = Set.of("PromptBudget.java", "HistoryPolicy.java");
+
+    @Test
+    @DisplayName("§6.29 ④ — 예산에 넘기는 출력 예약은 ThinkingBudget 을 지난 값(Reservation.tokens())이다")
+    void budgetsTakeTheThinkingAwareReservation() {
+        List<String> violations = new ArrayList<>();
+        forEachSource((file, text) -> {
+            if (BUDGET_EXEMPT.stream().anyMatch(file::endsWith)) return;
+            String code = withoutComments(text);
+            for (String call : BUDGET_CALLS) {
+                for (int at = code.indexOf(call); at >= 0; at = code.indexOf(call, at + 1)) {
+                    String args = argumentsAt(code, at + call.length());
+                    if (!args.contains(".tokens()")) {
+                        violations.add(file + ":" + lineOf(code, at) + " — " + call + args + ")");
+                    }
+                }
+            }
+        });
+        assertThat(violations)
+                .as("AnswerService.answerReservation(…)/evalReservation(…).tokens() 로 넘긴다 — 기본 예약을 그대로 빼면 "
+                        + "생각을 켠 호출의 예산이 실제 요청보다 크게 잡힌다")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("§6.29 ④ — 기본 예약의 원천(MAX_EVAL_OUTPUT_TOKENS·outputReservation)은 그 함수 안에서만 읽는다")
+    void baseReservationsAreReadOnlyThroughTheirFunction() {
+        List<String> violations = new ArrayList<>();
+        forEachSource((file, text) -> {
+            String code = withoutComments(text);
+            long evalConstant = Pattern.compile("\\bMAX_EVAL_OUTPUT_TOKENS\\b").matcher(code).results().count();
+            // 맨 이름이나 AnswerService. 로 부르는 것만 — budget.outputReservation() 은 PromptBudget 레코드의 접근자다
+            long answerBase = Pattern.compile("(?:\\bAnswerService\\.|(?<![.\\w]))outputReservation\\(")
+                    .matcher(code).results().count();
+            boolean owner = file.endsWith("service/AnswerService.java");
+            // 선언 1 + 그 값을 읽는 함수 1(evalBaseReservation / answerReservation)
+            if (evalConstant > (owner ? 2 : 0)) {
+                violations.add(file + " — MAX_EVAL_OUTPUT_TOKENS " + evalConstant + "곳 (evalReservation 을 쓸 것)");
+            }
+            if (answerBase > (owner ? 2 : 0)) {
+                violations.add(file + " — outputReservation( " + answerBase + "곳 (answerReservation 을 쓸 것)");
+            }
+        });
+        assertThat(violations).isEmpty();
+    }
+
+    /** {@code code} 의 {@code from} 위치(여는 괄호 다음)부터 짝이 맞는 닫는 괄호 앞까지. */
+    private static String argumentsAt(String code, int from) {
+        int depth = 1;
+        for (int i = from; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) return code.substring(from, i);
+        }
+        return code.substring(from);
+    }
+
     @Test
     @DisplayName("이 검사가 실제로 잡는다 — 위반 모양을 넣으면 걸린다")
     void patternsCatchViolations() {
+        assertThat(argumentsAt("new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget()", 17))
+                .isEqualTo("window, MAX_EVAL_OUTPUT_TOKENS").doesNotContain(".tokens()");
+        assertThat(argumentsAt("new PromptBudget(window, evalReservation(state, p).tokens()).inputBudget()", 17))
+                .contains(".tokens()");
         assertThat(LITERAL_ROUTING.matcher("llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,").find()).isTrue();
         assertThat(LITERAL_ROUTING.matcher("routeProviderWithFallback(\n    List.of(TaskType.MICRO_TEXT, TaskType.TEXT)").find()).isTrue();
         assertThat(LITERAL_ROUTING.matcher("executeWithTracking(\n                    TaskType.VISION,").find()).isTrue();

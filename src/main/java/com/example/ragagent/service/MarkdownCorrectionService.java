@@ -8,6 +8,7 @@ import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingControl;
 import org.slf4j.Logger;
@@ -175,6 +176,8 @@ public class MarkdownCorrectionService {
     private final LlmRouter llmRouter;
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
+    /** 재작성의 생각 여유 — 섹션 크기에서 미리 비워 둔다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
     private final String defaultCodeLanguage;
 
     /**
@@ -192,10 +195,11 @@ public class MarkdownCorrectionService {
     // Section sizing derives from the single "LLM max tokens" source (app.llm.max-tokens /
     // LLM_MAX_TOKENS, default 10000) — see maxSectionChars()/sectionCharBudget() below.
     public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
-                                     ProviderContextWindows contextWindows) {
+                                     ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
@@ -213,13 +217,19 @@ public class MarkdownCorrectionService {
      * 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다.
      *
      * <p>창을 모르면 {@link #maxSectionChars()} 그대로다(예전 동작).
+     *
+     * <p><b>생각이 켜지면 섹션이 작아진다</b>(§6.29 ④) — 재작성은 출력이 입력의 1.5배라 생각 여유를 예약 상한으로 깎을
+     * 수 없으므로, 그 여유만큼 본문 자리를 비워 둔다. 요청에는 {@code ThinkingControlChatModel} 이 같은 여유를 더한다.
+     * 대가는 문서당 교정 호출 수가 느는 것이다.
      */
     private int sectionCharBudget() {
-        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(
-                ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode()));
+        String provider = llmRouter.findProviderName(
+                ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode());
+        int window = contextWindows.tokensOrZero(provider);
         int configured = maxSectionChars();
         if (window <= 0) return configured;
-        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS);
+        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS,
+                thinkingBudget.rewriteHeadroom(ThinkingSite.MD_CORRECT, provider));
         if (fromWindow <= 0) return configured;   // 창이 지시 프롬프트도 못 담는다 — 판단 불가
         return Math.min(configured, Math.max(MIN_SECTION_CHARS, fromWindow));
     }

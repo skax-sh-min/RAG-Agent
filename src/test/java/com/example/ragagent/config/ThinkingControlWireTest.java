@@ -155,6 +155,18 @@ class ThinkingControlWireTest {
     }
 
     @Test
+    @DisplayName("§6.29 ④ — 켬으로 나가면 실제 본문의 max_tokens 에 생각 여유가 더해진다(256 + 낮게 512 = 768)")
+    void thinkingHeadroomReachesTheWire() throws IOException {
+        // 창 8,192 · 전역 max-tokens 6,000 → 프로바이더 상한 4,096, 창 25% 상한 2,048 — 256 에서 512 를 더할 자리가 있다
+        AppProperties props = props(provider("LOCAL", startServer(false), null), Map.of("condense", "low"));
+        LlmRouter router = router(props, new CircuitBreaker(2), new ThinkingObservations());
+
+        callAt(router, ThinkingSite.CONDENSE, 256);
+
+        assertThat(requests.get(0).path("max_tokens").asInt()).isEqualTo(768);
+    }
+
+    @Test
     @DisplayName("원격(NORMAL, auto) — 템플릿 인자도 표시 키도 본문에 없다(모르는 필드를 400 으로 거부하는 서버들)")
     void remoteProviderNeverSeesTheSwitch() throws IOException {
         LlmRouter router = router(provider("NORMAL", startServer(false), null), new CircuitBreaker(2));

@@ -54,7 +54,8 @@ class RetrievalServiceTagFilterTest {
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
-        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     private static Document doc(String id, String tagsCsv) {

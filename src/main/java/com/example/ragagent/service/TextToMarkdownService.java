@@ -11,6 +11,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingControl;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -59,12 +60,15 @@ public class TextToMarkdownService {
     private final AppProperties props;
 
     private final ProviderContextWindows contextWindows;
+    /** 재작성의 생각 여유 — 블록 크기에서 미리 비워 둔다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     public TextToMarkdownService(LlmRouter llmRouter, AppProperties props,
-                                 ProviderContextWindows contextWindows) {
+                                 ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
     }
 
     /**
@@ -74,12 +78,16 @@ public class TextToMarkdownService {
      *
      * <p>MD 교정과 같은 이유로 <b>줄이기만 한다</b> — 창이 넉넉하다고 블록을 키우면 구조화 결과가
      * 달라지고, 그건 초과를 막으러 온 변경이 할 일이 아니다.
+     *
+     * <p>생각이 켜지면 그 여유만큼 블록이 작아진다 — MD 교정과 같은 재작성 규칙이다(§6.29 ④).
      */
     private int blockCharBudget() {
-        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(
-                ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode()));
+        String provider = llmRouter.findProviderName(
+                ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode());
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return MAX_BLOCK_CHARS;
-        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS);
+        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS,
+                thinkingBudget.rewriteHeadroom(ThinkingSite.TXT_TO_MD, provider));
         return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
     }
 

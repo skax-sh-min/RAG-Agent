@@ -63,7 +63,8 @@ class MemoryServiceTest {
             windows.record(provider, windowTokens,
                     com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
         }
-        return new MemoryService(repository, propsWithMaxTokens(maxTokens), router, windows);
+        return new MemoryService(repository, propsWithMaxTokens(maxTokens), router, windows,
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     @Test
@@ -108,5 +109,29 @@ class MemoryServiceTest {
 
         assertThat(service.maxConversationChars(true, n, mode, true, "질문"))
                 .isGreaterThan(service.maxConversationChars(true, n, mode, false, "질문"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock("global-state")   // 수준을 정적 오버라이드 계층을 거쳐 읽는다
+    @DisplayName("§6.29 ④ — Direct 답변 프로바이더에서 생각이 켜지면 그 여유만큼 이력 자리가 준다(N 스트리밍 5,000 + 512)")
+    void thinkingHeadroomComesOutOfTheHistoryBudget() {
+        MemoryService plain = withWindow(repository, 10_000, "local", 40_960);
+        var dialects = new com.example.ragagent.llm.ProviderThinkingDialects();
+        dialects.record("local", com.example.ragagent.llm.ThinkingDialect.AUTO, true);
+        com.example.ragagent.llm.LlmRouter router = mock(com.example.ragagent.llm.LlmRouter.class);
+        when(router.findProviderName(eq(com.example.ragagent.llm.TaskType.TEXT),
+                org.mockito.ArgumentMatchers.any())).thenReturn("local");
+        var windows = new com.example.ragagent.llm.ProviderContextWindows();
+        windows.record("local", 40_960, com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
+        AppProperties props = propsWithMaxTokens(10_000);
+        MemoryService thinking = new MemoryService(repository, props, router, windows,
+                new com.example.ragagent.llm.ThinkingBudget(props, dialects, windows));
+        var n = com.example.ragagent.model.ResponseMode.N;
+        var mode = com.example.ragagent.llm.RoutingMode.COST_FIRST;
+
+        // answer-direct-n 출하값 낮게 → 40,960 창의 상한(min(10,000, 10,240))까지 자리가 있어 512 를 그대로 받는다
+        assertThat(plain.maxConversationChars(true, n, mode, true, "질문")
+                - thinking.maxConversationChars(true, n, mode, true, "질문"))
+                .isEqualTo(512);
     }
 }

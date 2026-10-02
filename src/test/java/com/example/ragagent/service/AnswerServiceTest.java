@@ -280,6 +280,63 @@ class AnswerServiceTest {
         assertThat(evalPrompt).as("좁은 창에서는 하위 순위 발췌가 빠진다").doesNotContain("두번째");
     }
 
+    /** 검증 프롬프트의 발췌 수 — 발췌마다 {@code [Dn]} 번호가 붙는다. */
+    private static long excerptCount(String evalPrompt) {
+        return java.util.regex.Pattern.compile("\\[D\\d+]").matcher(evalPrompt).results().count();
+    }
+
+    /** {@code budget} 으로 한 턴을 돌려 검증 프롬프트(두 번째 호출)를 돌려준다. */
+    private String evalPromptWith(com.example.ragagent.llm.ThinkingBudget budget, List<Document> docs) {
+        AppProperties props = new AppProperties(
+                "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        AnswerService svc = new AnswerService(llmRouter, props, messageSource, contextWindows,
+                AnswerStreamer.withoutThinkingControl(), budget);
+        var prompts = new java.util.ArrayList<String>();
+        // doAnswer — 같은 테스트에서 두 번 스텁한다. when(...) 은 앞 스텁의 답을 null 인자로 한 번 불러 버린다.
+        org.mockito.Mockito.doAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe = mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        }).when(llmRouter).executeGatedWithUsage(any(), any(), any());
+        svc.execute(newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+        return prompts.get(1);
+    }
+
+    @Test
+    @DisplayName("§6.29 ④ — 검증 프로바이더에서 생각이 켜지면 예약이 늘어난 만큼 발췌 예산이 준다(같은 함수가 요청에도 더한다)")
+    void thinkingHeadroomShrinksTheEvalExcerpts() {
+        // 창 12,000 · max-tokens 10,000 → 프로바이더 상한 10,000, 창 25% 3,000 → 검증 2,048 + 낮게 512 = 2,560
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        com.example.ragagent.llm.ProviderThinkingDialects dialects = new com.example.ragagent.llm.ProviderThinkingDialects();
+        dialects.record("lm", com.example.ragagent.llm.ThinkingDialect.AUTO, true);   // LOCAL — 낮게(출하값)가 켬으로 나간다
+        com.example.ragagent.llm.ThinkingBudget thinking = new com.example.ragagent.llm.ThinkingBudget(
+                new AppProperties("./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                dialects, contextWindows);
+        List<Document> docs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) docs.add(new Document("문서" + i + "번" + "가".repeat(300)));   // 발췌 하나 ~305 토큰
+
+        long withoutThinking = excerptCount(evalPromptWith(com.example.ragagent.llm.ThinkingBudget.none(), docs));
+        long withThinking = excerptCount(evalPromptWith(thinking, docs));
+
+        assertThat(withoutThinking).as("전제 — 예산에 묶여 일부만 실린다").isBetween(2L, 29L);
+        assertThat(withThinking).as("512 토큰이면 ~305 토큰짜리 발췌가 하나 이상 빠진다").isLessThan(withoutThinking);
+    }
+
     @Test
     @DisplayName("턴 경계가 없는 이력(요약 경로)도 통째로 버리지 않고 줄 단위로 줄인다")
     void historyWithoutTurnBoundariesIsTrimmedByLine() {

@@ -181,6 +181,7 @@ class CondensedQuestionRoutingTest {
 
         return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
                 Optional.empty(), Optional.empty(), messageSource,
-                new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 }

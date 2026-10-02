@@ -62,6 +62,7 @@
 │  ※ 생각(thinking) 수준은 호출 지점별 app.llm.thinking.* (§6.29)        │
 │    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
 │    채팅 답변 스트리밍(체인 우회)은 AnswerStreamer 가 같은 규칙으로 싣는다 │
+│    켬으로 나가면 max_tokens 에 생각 여유 — ThinkingBudget(창 25% 상한)  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

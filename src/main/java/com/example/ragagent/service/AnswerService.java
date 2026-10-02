@@ -15,6 +15,7 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -96,10 +97,12 @@ public class AnswerService {
      * {@link #withoutVerdict} — trading a verdict for tokens is the wrong side of that bargain.
      * Clamped by the configured ceiling so it can never exceed what the operator allows.
      *
-     * <p>package-private 인 이유: {@code RetrievalService} 의 컨텍스트 여유 판단이 같은 값을 써야
-     * 한다 — 두 곳이 다른 예약을 믿으면 여유 계산이 틀린다.
+     * <p>이 값은 <b>기본 예약</b>이다 — 생각이 켬으로 나가면 여유가 더해진다(§6.29 ④, {@code ThinkingBudget}).
+     * 그래서 이 상수를 직접 읽는 자리는 {@link #evalBaseReservation} 하나뿐이고, 예약을 믿는 다른 자리(이 클래스의
+     * 발췌 예산·크기 로그, {@code RetrievalService} 의 컨텍스트 여유 판단)는 {@link #evalReservation} 을 지난다 —
+     * 한 곳이라도 이 숫자를 직접 빼면 예산이 실제 요청과 갈라진다({@code ThinkingSiteConventionTest}).
      */
-    static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
+    private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
      * 답변 프롬프트의 <b>섹션 머리말과 구분선</b>({@code [이전 대화]}·{@code [검색된 문서]}·
@@ -171,22 +174,30 @@ public class AnswerService {
 
     /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — 생각 수준·생각 델타·거부 재시도·관측(§6.29 3단계). */
     private final AnswerStreamer answerStreamer;
+    /** 출력 예약의 생각 여유(§6.29 ④) — 답변·검증 예산이 이것을 지난다. */
+    private final ThinkingBudget thinkingBudget;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource,
-                         ProviderContextWindows contextWindows, AnswerStreamer answerStreamer) {
+                         ProviderContextWindows contextWindows, AnswerStreamer answerStreamer,
+                         ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = appProperties;
         this.maxRetryCount = appProperties.maxRetryCount();
         this.contextWindows = contextWindows;
         this.answerStreamer = answerStreamer;
+        this.thinkingBudget = thinkingBudget;
     }
 
-    /** 생각 제어 없이 스트리밍하는 축약 — 사이트·수준을 보지 않는 테스트용(스트리밍 요청에 아무 필드도 싣지 않는다). */
+    /**
+     * 생각 제어 없는 축약 — 사이트·수준을 보지 않는 테스트용(스트리밍 요청에 아무 필드도 싣지 않고, 예산에 생각 여유를
+     * 더하지 않는다).
+     */
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource,
                          ProviderContextWindows contextWindows) {
-        this(llmRouter, appProperties, messageSource, contextWindows, AnswerStreamer.withoutThinkingControl());
+        this(llmRouter, appProperties, messageSource, contextWindows, AnswerStreamer.withoutThinkingControl(),
+                ThinkingBudget.none());
     }
 
     /**
@@ -205,12 +216,56 @@ public class AnswerService {
     private PromptBudget budgetFor(AgentState state, String providerName, boolean streaming) {
         int window = contextWindows.tokensOrZero(providerName);
         if (window <= 0) return null;   // 창을 모른다 — 추측으로 근거를 버리지 않는다
-        return new PromptBudget(window,
-                outputReservation(state.responseMode(), streaming, props.llmSafe().maxTokens()));
+        return new PromptBudget(window, answerReservation(state, providerName, streaming).tokens());
+    }
+
+    /** 이 턴의 답변 호출이 출력에 잡아 둘 자리 — 기본 예약({@link #outputReservation}) + 생각 여유. */
+    private ThinkingBudget.Reservation answerReservation(AgentState state, String providerName, boolean streaming) {
+        return answerReservation(thinkingBudget, answerSite(state), providerName, state.responseMode(), streaming,
+                props.llmSafe().maxTokens());
     }
 
     /**
-     * 이 호출이 출력에 잡아 둬야 할 자리.
+     * 답변 호출의 출력 예약 — 모드의 기본 예약({@link #outputReservation})에 생각 여유를 더한 것(§6.29 ④). 답변 예약을
+     * 믿는 세 자리(이 클래스의 입력 예산, {@code DirectAnswerService} 의 이력 안전망, {@code MemoryService} 의 Direct
+     * 이력 예산)가 이 함수 하나를 지난다 — 기본 예약을 직접 빼는 자리가 있으면 예산이 실제 요청과 갈라진다.
+     *
+     * @param site     이 답변의 호출 지점(RAG·Direct 사이트) — 생각 수준을 정한다
+     * @param provider 받을 것으로 라우터가 답한 프로바이더
+     */
+    static ThinkingBudget.Reservation answerReservation(ThinkingBudget budget, ThinkingSite site, String provider,
+                                                        ResponseMode mode, boolean streaming, int configuredMaxTokens) {
+        return budget.reservation(site, provider, outputReservation(mode, streaming, configuredMaxTokens));
+    }
+
+    /**
+     * 검증 호출의 기본 예약 — {@link #MAX_EVAL_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 요청 옵션({@link #evalOptions})이
+     * 이 값을 싣고, 생각 여유는 받는 프로바이더가 정해진 뒤 {@code ThinkingControlChatModel} 이 더한다. 설정이 0 이하
+     * (프로바이더 기본값)면 요청에는 싣지 않지만 예산은 이 상수를 기준으로 잡는다(예전 동작 그대로).
+     */
+    private static int evalBaseReservation(int configuredMaxTokens) {
+        int cap = MAX_EVAL_OUTPUT_TOKENS;
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, cap) : cap;
+    }
+
+    /**
+     * 검증 호출의 출력 예약 — 기본 예약 + 생각 여유(§6.29 ④). 검증 예약을 믿는 자리(발췌 예산 · 크기 로그 ·
+     * {@code RetrievalService} 의 재시도 컨텍스트 여유)가 이 함수 하나를 지난다.
+     */
+    static ThinkingBudget.Reservation evalReservation(ThinkingBudget budget, ThinkingSite evalSite, String provider,
+                                                      int configuredMaxTokens) {
+        return budget.reservation(evalSite, provider, evalBaseReservation(configuredMaxTokens));
+    }
+
+    private ThinkingBudget.Reservation evalReservation(AgentState state, String provider) {
+        return evalReservation(thinkingBudget, state.responseMode().evalThinkingSite(), provider,
+                props.llmSafe().maxTokens());
+    }
+
+    /**
+     * 이 호출이 출력에 잡아 둬야 할 <b>기본</b> 자리 — 생각 여유는 따로 더한다. 예산은 이 값을 직접 쓰지 말고
+     * {@link #answerReservation(ThinkingBudget, ThinkingSite, String, ResponseMode, boolean, int)} 을 지날 것(§6.29 ④).
+     * package-private 인 이유는 기본 예약의 식을 테스트가 따로 고정하기 때문이다.
      *
      * <p><b>블로킹은 우리가 보내는 값 그대로다.</b> {@code answerOptions()} 가
      * {@code maxTokens = ResponseMode.maxTokens(설정값)} 을 실어 보내고 서버는 그만큼을 실제로
@@ -1035,17 +1090,18 @@ public class AnswerService {
      * 들어갔다는 사실이 검증 프롬프트도 들어간다는 보장이 되지 못하는 이유이고, 실제로 이 앱에서
      * 가장 큰 단일 요청은 답변이 아니라 이쪽이다.
      *
-     * <p>출력 예약은 {@link #MAX_EVAL_OUTPUT_TOKENS} 다 — 이 호출은 스스로 그 값으로 조이므로
-     * 프로바이더의 일반 예약이 아니라 실제로 예약되는 값을 빼야 맞다.
+     * <p>출력 예약은 {@link #evalReservation} 이다 — 이 호출은 스스로 {@link #MAX_EVAL_OUTPUT_TOKENS} 로 조이고 생각이
+     * 켜지면 여유가 더해지므로, 프로바이더의 일반 예약이 아니라 실제로 예약되는 값을 빼야 맞다.
      */
     private long evalExcerptTokenBudget(AgentState state, String systemPrompt, String answer, String schema) {
-        int window = contextWindows.tokensOrZero(likelyProvider(state, state.responseMode().evalThinkingSite()));
+        String provider = likelyProvider(state, state.responseMode().evalThinkingSite());
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return 0;   // 창 모름 → 글자 상한만 적용(예전 동작 그대로)
         long fixed = TokenEstimator.estimate(systemPrompt)
                 + TokenEstimator.estimate(answer)
                 + TokenEstimator.estimate(state.question())
                 + TokenEstimator.estimate(schema);
-        return Math.max(0, new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget() - fixed);
+        return Math.max(0, new PromptBudget(window, evalReservation(state, provider).tokens()).inputBudget() - fixed);
     }
 
     /**
@@ -1214,8 +1270,9 @@ public class AnswerService {
         OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().temperature()), site);
         int configured = props.llmSafe().maxTokens();
-        // 0 이하 = "프로바이더 기본값 유지" (answerOptions 와 같은 규약).
-        if (configured > 0) builder.maxTokens(Math.min(configured, MAX_EVAL_OUTPUT_TOKENS));
+        // 0 이하 = "프로바이더 기본값 유지" (answerOptions 와 같은 규약). 싣는 값은 기본 예약이다 — 생각 여유는 받는
+        // 프로바이더가 정해진 뒤 ThinkingControlChatModel 이 더한다(§6.29 ④).
+        if (configured > 0) builder.maxTokens(evalBaseReservation(configured));
         return builder.build();
     }
 
@@ -1305,7 +1362,9 @@ public class AnswerService {
                 .add("질문", question);
         String tail = size.budgetTail(providerName,
                 budget == null ? 0 : budget.contextWindow(),
-                budget == null ? 0 : budget.inputBudget());
+                budget == null ? 0 : budget.inputBudget(),
+                answerReservation(state, providerName, streaming).describe()
+                        + (streaming ? " (스트리밍 — 예산에만, 요청에는 싣지 않음)" : ""));
         return size.render("%s | thread=%s mode=%s%s%s".formatted(tail, state.threadId(),
                 state.responseMode().name() + (state.directMode() ? "(Direct)" : ""),
                 state.retryCount() > 0 ? " retry=" + state.retryCount() : "",
@@ -1328,7 +1387,8 @@ public class AnswerService {
                                   EvalExcerpts excerpts, String schema, int level) {
         String provider = likelyProvider(state, state.responseMode().evalThinkingSite());
         int window = contextWindows.tokensOrZero(provider);
-        long inputBudget = window <= 0 ? 0 : new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        ThinkingBudget.Reservation reservation = evalReservation(state, provider);
+        long inputBudget = window <= 0 ? 0 : new PromptBudget(window, reservation.tokens()).inputBudget();
         PromptSizeLog size = PromptSizeLog.of(kind)
                 .add("시스템", systemPrompt)
                 .add("질문", PromptInjectionGuard.wrap(state.question()))
@@ -1336,7 +1396,7 @@ public class AnswerService {
                 .add("발췌", excerpts.included() + "/" + excerpts.total() + "청크", excerpts.text())
                 .add("스키마", schema);
         return size.render("%s | thread=%s mode=%s%s%s".formatted(
-                size.budgetTail(provider, window, inputBudget), state.threadId(),
+                size.budgetTail(provider, window, inputBudget, reservation.describe()), state.threadId(),
                 state.responseMode().name(),
                 level > 0 ? " 축소단계=" + level : "",
                 excerpts.trimmed() ? " [발췌 축소 — grounded=false 를 판정으로 쓰지 않음]" : ""));

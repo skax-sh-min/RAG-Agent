@@ -131,7 +131,8 @@ class RetrievalServiceImageDescriptionTest {
             when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
             svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props,
-                    Optional.of(lazyVision), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                    Optional.of(lazyVision), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
         }
 
         private static Document docWithImage(String id, String imagePath, boolean withEmbeddedDesc) {

@@ -81,6 +81,17 @@ public final class PromptSizeLog {
      * @param inputBudget 이 호출이 입력에 쓸 수 있는 토큰. {@code <= 0} 이면 생략
      */
     public String budgetTail(String providerName, int window, long inputBudget) {
+        return budgetTail(providerName, window, inputBudget, null);
+    }
+
+    /**
+     * 출력 예약까지 — {@code 창 16,384 tok, 출력 예약 2,560 (기본 2,048 + 생각 512), 입력 예산 …}. 생각 여유가 상한에
+     * 걸려 깎였으면 그 사실이 예약 표기에 그대로 실린다({@code ThinkingBudget.Reservation.describe()} — §6.29 ④ "여유가
+     * 깎인 것을 숨기지 않는다").
+     *
+     * @param outputReservation 예약 표기. {@code null}/빈 값이면 생략
+     */
+    public String budgetTail(String providerName, int window, long inputBudget, String outputReservation) {
         StringBuilder sb = new StringBuilder();
         sb.append("프로바이더 ").append(providerName == null || providerName.isBlank() ? "?" : providerName);
         if (window <= 0) {
@@ -88,6 +99,9 @@ public final class PromptSizeLog {
             return sb.toString();
         }
         sb.append(", 창 %,d tok".formatted(window));
+        if (outputReservation != null && !outputReservation.isBlank()) {
+            sb.append(", 출력 예약 ").append(outputReservation);
+        }
         if (inputBudget > 0) {
             sb.append(", 입력 예산 %,d tok (%d%% 사용)".formatted(
                     inputBudget, Math.round(totalTokens * 100.0 / inputBudget)));

@@ -88,7 +88,19 @@ PLAN §6.19.3 — the single place deciding "this request's client IP" for `Rate
 
 ### `llm/PromptBudget.java`
 
-입력 토큰 예산 = `창 − 출력 예약 − 여유(창의 10%, 최소 256)`. **`max_tokens` 가 상한이 아니라 예약**이라 창 크기만으로는 부족하다 — 서버가 `프롬프트 + max_tokens ≤ n_ctx` 를 검사한다. 여유를 두는 이유는 `TokenEstimator` 가 추정이고 한글 1토큰/글자는 실제 범위(1~2)의 아래쪽이라 **과소평가할 수 있기** 때문 — 예산에서 과소평가는 곧 초과다. `fitByPrefix()` 는 뒤에서부터 덜어낸다(검색 결과가 RRF 내림차순이라 뒤가 최저 관련도) **단 첫 항목은 예산을 넘어도 남긴다** — 문서를 다 버리면 프롬프트가 "문서를 찾을 수 없습니다" 가 되어 검색이 성공했는데도 모른다고 답한다. **창을 모르는 경우는 이 클래스가 다루지 않는다** — 호출부가 먼저 판단해 아무것도 자르지 않아야 한다(추측으로 근거를 버리는 것이 초과보다 나쁘다). `rewriteInputChars(창, 지시토큰)` 는 **재작성 작업**(MD 교정·txt→md 구조화)용 별도 식이다 — 그쪽은 출력 예약이 입력에 비례해(`IndexingOutputCap.forRewrite()` = 입력×1.5) 예산을 "예약을 먼저 빼고 남은 것"으로 잡으면 순환이 된다. `지시 + S + 1.5S + 여유 ≤ 창` 을 풀어 `S ≤ (창 − 지시 − 여유) / 2.5` 로 계산하며, 1.5 는 `IndexingOutputCap.REWRITE_HEADROOM_PERCENT` 를 그대로 읽는다(두 값이 갈라지면 예약과 입력이 서로 다른 비율을 믿는다)
+입력 토큰 예산 = `창 − 출력 예약 − 여유(창의 10%, 최소 256)`. **`max_tokens` 가 상한이 아니라 예약**이라 창 크기만으로는 부족하다 — 서버가 `프롬프트 + max_tokens ≤ n_ctx` 를 검사한다. 여유를 두는 이유는 `TokenEstimator` 가 추정이고 한글 1토큰/글자는 실제 범위(1~2)의 아래쪽이라 **과소평가할 수 있기** 때문 — 예산에서 과소평가는 곧 초과다. `fitByPrefix()` 는 뒤에서부터 덜어낸다(검색 결과가 RRF 내림차순이라 뒤가 최저 관련도) **단 첫 항목은 예산을 넘어도 남긴다** — 문서를 다 버리면 프롬프트가 "문서를 찾을 수 없습니다" 가 되어 검색이 성공했는데도 모른다고 답한다. **창을 모르는 경우는 이 클래스가 다루지 않는다** — 호출부가 먼저 판단해 아무것도 자르지 않아야 한다(추측으로 근거를 버리는 것이 초과보다 나쁘다). `rewriteInputChars(창, 지시토큰)` 는 **재작성 작업**(MD 교정·txt→md 구조화)용 별도 식이다 — 그쪽은 출력 예약이 입력에 비례해(`IndexingOutputCap.forRewrite()` = 입력×1.5) 예산을 "예약을 먼저 빼고 남은 것"으로 잡으면 순환이 된다. `지시 + S + 1.5S + 여유 ≤ 창` 을 풀어 `S ≤ (창 − 지시 − 여유) / 2.5` 로 계산하며, 1.5 는 `IndexingOutputCap.REWRITE_HEADROOM_PERCENT` 를 그대로 읽는다(두 값이 갈라지면 예약과 입력이 서로 다른 비율을 믿는다). §6.29 4단계부터 세 번째 인자로 **생각 여유** `h` 를 받아 `(창 − 지시 − 여유 − h) / 2.5` 다 — 생략할 수 없게 2인자 형태를 없앴다(잊은 자리는 조각을 예전 크기로 잘라 생각할 자리 없이 창을 채운다, [ThinkingBudget](#llmthinkingbudgetjava))
+
+### `llm/ThinkingBudget.java`
+
+§6.29 ④ — 생각을 켠 호출의 **출력 예약**. 생각 토큰도 `max_tokens` 를 먹으므로 상한이 작은 호출(검증 2,048 · 독립화 256 · 인덱싱의 좁힌 상한)은 생각을 켜는 순간 빈 응답이 된다(2026-10-01 실측: 독립화가 매번 그랬다). 그렇다고 "넉넉히" 올리면 `max_tokens` 가 예약이라 그만큼 입력(검색 문서·이력·검증 발췌)이 잘린다. 그래서 숫자로 정한다: `h' = clamp(C − 기본 예약, 0, h)`, `C = min(프로바이더 max-tokens, 창 × 25%)`, 예약 = 기본 + h'.
+
+- **켬으로 나갈 때만 더한다.** 판정은 `ProviderThinkingDialects.wireFor(프로바이더, 수준).sent() == ON` — 끔·생각 제어 안 함(원격 `auto`)·거부됨이면 0 이다. 반대로 끔이 확정된 호출의 예약을 **줄이지도 않는다** — 스위치를 무시하는 서버(LM Studio 등)에서는 여전히 생각한다.
+- **기본 예약은 깎지 않는다.** 앞선 초안의 `min(기본 + h, C)` 는 기본 예약이 C 를 넘는 호출(채팅 답변 5,000·7,000)에서 예약까지 깎았다 — 16k 창에서 생각을 켜는 순간 답변 예약이 5,000 → 4,096. 지금은 h' = 0 이고 생각이 기존 예약 안에서 답변과 자리를 나눠 쓴다(`ThinkingBudgetTest.neverCutsTheBaseReservation`).
+- **"프로바이더 max-tokens" 는 `MaxTokensCappingChatModel` 이 거는 그 값이다** — 자기 값, 없으면 전역값, 창 **이상일 때만** 창의 절반(`cappedMaxTokens`). 그래서 16k 창 · 10,000 에서 상한을 정하는 것은 창 25%(4,096)다. 규칙은 `ProviderConfig.requestedMaxTokens()` 로 `LlmConfig` 와 공유한다(따로 고르면 예산이 실제 상한과 갈라진다).
+- **요청의 여유는 `ThinkingControlChatModel` 이 더한다**(실제로 받는 프로바이더가 정해진 자리가 거기뿐 — 원격으로 넘어간 호출에는 붙지 않는다). 호출부의 `maxTokens` 는 기본 예약이고, **호출부가 미리 더하면 두 번 붙는다.** 입력 예산을 미리 재는 자리는 빈의 `reservation(site, 예상 프로바이더, 기본 예약)` — 같은 순수 함수 `compute()` 다. 예약을 믿는 일곱 자리 중 답변 셋은 `AnswerService.answerReservation()`, 검증 셋은 `evalReservation()` 을 지나고(요청 옵션 `evalOptions` 는 기본 예약만), `ThinkingSiteConventionTest` 가 `new PromptBudget(`·`HistoryPolicy.budgetChars(` 의 예약 인자에 `.tokens()` 가 있는지 본다. `MAX_EVAL_OUTPUT_TOKENS` 는 private 이다.
+- **재작성 사이트는 창 25% 로 깎지 않는다** — 기본 예약(입력 × 1.5)이 거의 언제나 C 를 넘어서다. 대신 `rewriteHeadroom()` 만큼 조각을 줄여 자리를 만들고(16k 창 MD 교정 섹션이 낮게에서 ~204자 작아진다 — 문서당 호출 수가 는다), 요청에는 h 를 프로바이더 max-tokens 까지 더한다.
+- **상한을 하나도 모르면 늘리지 않는다**(창도 프로바이더 상한도 모름 — 테스트용 축약 생성자). 상한을 싣지 않는 호출(기본 예약 0 = 프로바이더 기본값, PLAN 열린 항목 (d))도 손대지 않는다.
+- **깎인 것을 숨기지 않는다.** `[PROMPT]` 줄의 `출력 예약 5,000 (기본 5,000 + 생각 0/512, 상한 4,096)`, 데코레이터의 `[THINKING] … 예약=…` DEBUG 줄. 미리보기(5단계)의 "여유 깎임" 배지가 같은 `Reservation.clipped()` 를 읽는다.
 
 ### `llm/TokenEstimateCalibration.java`
 
@@ -152,7 +164,7 @@ LLM keyword **+ context** extraction per chunk in one call (§10.1 Contextual Re
 
 ### `service/MarkdownCorrectionService.java` / `service/TextToMarkdownService.java` (입력 크기)
 
-LLM 에 넘기는 한 조각의 크기는 **두 값 중 작은 쪽**이다 — `app.llm.max-tokens` 파생 상한(교정 `(max-tokens-500)/2`, 구조화 상수 6,000자)과 **프로바이더 창에서 나온 값**(`PromptBudget.rewriteInputChars()`). 어느 한쪽만으로는 부족하다: 앞의 것은 "출력이 이만큼이면 입력은 이 정도"라는 어림이고 뒤의 것은 "이 서버에 실제로 들어가는 양"이다 — 창 20,480 · `max-tokens=10000` 배포에서 MD 교정이 컨텍스트 초과로 죽은 것은 앞의 값만 보고 있었기 때문이고, 같은 프로퍼티가 섹션 크기까지 정하는 탓에 **입력과 예약이 함께 커졌다**. **줄이기만 한다** — 창이 넉넉해도 조각을 키우지 않는다(경계가 이동해 교정·구조화 결과 자체가 달라진다. 초과를 막으러 온 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다). 창을 모르면 예전 상수 그대로다. 프로바이더는 `llmRouter.findProviderName(LIGHT_TEXT, COST_FIRST)` 로 매 호출 물어본다
+LLM 에 넘기는 한 조각의 크기는 **두 값 중 작은 쪽**이다 — `app.llm.max-tokens` 파생 상한(교정 `(max-tokens-500)/2`, 구조화 상수 6,000자)과 **프로바이더 창에서 나온 값**(`PromptBudget.rewriteInputChars()`). 어느 한쪽만으로는 부족하다: 앞의 것은 "출력이 이만큼이면 입력은 이 정도"라는 어림이고 뒤의 것은 "이 서버에 실제로 들어가는 양"이다 — 창 20,480 · `max-tokens=10000` 배포에서 MD 교정이 컨텍스트 초과로 죽은 것은 앞의 값만 보고 있었기 때문이고, 같은 프로퍼티가 섹션 크기까지 정하는 탓에 **입력과 예약이 함께 커졌다**. **줄이기만 한다** — 창이 넉넉해도 조각을 키우지 않는다(경계가 이동해 교정·구조화 결과 자체가 달라진다. 초과를 막으러 온 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다). 창을 모르면 예전 상수 그대로다. 프로바이더는 `llmRouter.findProviderName(LIGHT_TEXT, COST_FIRST)` 로 매 호출 물어본다. §6.29 4단계부터 그 프로바이더에서 생각이 켬으로 나가면 창 쪽 값이 생각 여유만큼 작아진다(`ThinkingBudget.rewriteHeadroom()` → `rewriteInputChars` 의 세 번째 인자) — 재작성은 여유를 예약 상한으로 깎을 수 없어 조각에서 비운다
 
 ### `ingestion/KeywordSearchRepository.java`
 
