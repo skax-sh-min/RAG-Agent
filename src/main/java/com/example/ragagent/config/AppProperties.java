@@ -169,6 +169,15 @@ public record AppProperties(
         }
 
         /**
+         * 이 프로바이더가 요청할 출력 상한 — 자기 값이 있으면 그것, 없으면 전역값({@code concurrency} 와 같은 폴백 규약).
+         * 프로바이더 빈의 상한({@code LlmConfig})과 생각 여유의 상한({@code ThinkingBudget})이 같은 규칙을 써야 해서
+         * 설정 레코드 위에 둔다 — 양쪽이 따로 고르면 예산이 실제 상한과 갈라진다.
+         */
+        public int requestedMaxTokens(int globalMaxTokens) {
+            return (maxTokens != null && maxTokens > 0) ? maxTokens : globalMaxTokens;
+        }
+
+        /**
          * {@code OpenAiApi.builder()} 와 {@code ContextWindowProbe} 에 넘길 루트 URL — 선언된
          * base-url 에서 뒤쪽 {@code /v1} 을 걷어낸 것이다(빌더가 내부에서 다시 붙이므로 두면
          * {@code /v1/v1} 이 된다). {@code baseUrl()} 자체는 {@code LlmProvider.baseUrl()} 과 curl

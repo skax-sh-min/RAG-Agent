@@ -98,7 +98,8 @@ class RetrievalServiceExpansionPromptTest {
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
 
         assertThatCode(() -> new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class),
-                props, Optional.empty(), Optional.empty(), realMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows()))
+                props, Optional.empty(), Optional.empty(), realMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none()))
                 .doesNotThrowAnyException();
     }
 }

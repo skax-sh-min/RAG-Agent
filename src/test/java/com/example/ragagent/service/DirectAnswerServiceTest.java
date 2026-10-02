@@ -313,7 +313,7 @@ class DirectAnswerServiceTest {
                     com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
         }
         return new DirectAnswerService(llmRouter, messageSource, props, windows,
-                AnswerStreamer.withoutThinkingControl());
+                AnswerStreamer.withoutThinkingControl(), com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     private static AgentState stateWithHistory(String history) {

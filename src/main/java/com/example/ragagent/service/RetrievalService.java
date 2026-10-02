@@ -10,6 +10,7 @@ import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.TrackingChatModel;
+import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingSiteChatModel;
 import com.example.ragagent.ingestion.CuratedTextUtils;
@@ -61,14 +62,17 @@ public class RetrievalService {
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    /** 재시도 컨텍스트 여유 판단의 검증 예약에 생각 여유를 더한다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt, MessageSource messageSource,
                             ChatImageAnalysisSkipRegistry imageSkipRegistry,
-                            ProviderContextWindows contextWindows) {
+                            ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
@@ -409,8 +413,8 @@ public class RetrievalService {
     private boolean hasContextHeadroomFor(AgentState state, int extraDocs) {
         // 검증 호출의 예산 — 그 검증을 받을 프로바이더(검증 사이트의 라우팅) 기준이다.
         ThinkingSite evalSite = state.responseMode().evalThinkingSite();
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(evalSite.taskType(), evalSite.routingMode(state.routingMode())));
+        String provider = llmRouter.findProviderName(evalSite.taskType(), evalSite.routingMode(state.routingMode()));
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return true;
 
         long docsCost = state.retrievedDocs().stream()
@@ -422,7 +426,9 @@ public class RetrievalService {
         long fixed = TokenEstimator.estimate(state.answer())
                 + TokenEstimator.estimate(state.question())
                 + EVAL_OVERHEAD_TOKENS;
-        long budget = new PromptBudget(window, AnswerService.MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        // 검증 호출이 실제로 잡을 예약 — 기본 예약 + 생각 여유(§6.29 ④). AnswerService 의 발췌 예산과 같은 함수다.
+        long budget = new PromptBudget(window, AnswerService.evalReservation(thinkingBudget, evalSite, provider,
+                props.llmSafe().maxTokens()).tokens()).inputBudget();
         return budget - fixed - docsCost - perDoc * extraDocs > 0;
     }
 

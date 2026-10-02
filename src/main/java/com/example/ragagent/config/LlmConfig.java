@@ -162,7 +162,10 @@ public class LlmConfig {
                                     cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel),
                             cfg.name(), thinkingDialects,
                             site -> props.llmSafe().thinkingLevel(site),
-                            thinkingObservations);
+                            thinkingObservations,
+                            // 생각 여유의 상한(§6.29 ④) — 안쪽 MaxTokensCappingChatModel 이 거는 것과 같은 값, 같은 창.
+                            () -> liveMaxTokens(cfg, props, contextWindows),
+                            () -> contextWindows.tokensOrZero(cfg.name()));
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
@@ -254,7 +257,7 @@ public class LlmConfig {
      * ({@code concurrency} 와 같은 폴백 규약).
      */
     private static int requestedMaxTokens(AppProperties.ProviderConfig cfg, int globalMaxTokens) {
-        return (cfg.maxTokens() != null && cfg.maxTokens() > 0) ? cfg.maxTokens() : globalMaxTokens;
+        return cfg.requestedMaxTokens(globalMaxTokens);
     }
 
     /**

@@ -300,6 +300,106 @@ class ThinkingControlChatModelTest {
                 .doesNotContainKey(ThinkingControl.SITE_MARKER);
     }
 
+    // ── 출력 예약의 생각 여유(§6.29 ④) — 실제로 받는 프로바이더가 정해진 이 자리에서 더한다 ───────────
+
+    /** 16k 창 · 프로바이더 상한 8,192 의 LOCAL 프로바이더 — 창 25% 상한 4,096. */
+    private static ThinkingControlChatModel budgeted(ChatModel delegate, ThinkingDialect dialect, boolean local,
+                                                     ThinkingLevel level) {
+        return new ThinkingControlChatModel(delegate, "p", dialects("p", dialect, local), s -> level,
+                new ThinkingObservations(), () -> 8_192, () -> 16_384);
+    }
+
+    private static Prompt marked(ThinkingSite site, Integer maxTokens) {
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder(), site);
+        if (maxTokens != null) b.maxTokens(maxTokens);
+        return new Prompt(List.of(new UserMessage("질문")), b.build());
+    }
+
+    @Test
+    @DisplayName("켬으로 나가면 호출부의 maxTokens(기본 예약)에 수준의 여유를 더한다 — 검증 2,048 + 낮게 = 2,560")
+    void headroomIsAddedWhenThinkingGoesOutOn() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.call(any(Prompt.class))).thenReturn(ok());
+        Prompt prompt = marked(ThinkingSite.EVAL, 2_048);
+
+        budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.LOW).call(prompt);
+
+        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(2_560);
+        assertThat(optionsOf(prompt).getMaxTokens()).as("원본은 건드리지 않는다").isEqualTo(2_048);
+    }
+
+    @Test
+    @DisplayName("끔·원격(생각 제어 안 함)·상한 없는 호출은 기본 예약 그대로 — 끔이 확정된 호출의 예약을 줄이지도 않는다")
+    void noHeadroomOtherwise() {
+        assertThat(sentMaxTokens(ThinkingDialect.AUTO, true, ThinkingLevel.OFF, marked(ThinkingSite.EVAL, 2_048)))
+                .as("끔").isEqualTo(2_048);
+        assertThat(sentMaxTokens(ThinkingDialect.AUTO, false, ThinkingLevel.HIGH, marked(ThinkingSite.EVAL, 2_048)))
+                .as("원격(auto) — 생각 제어 안 함").isEqualTo(2_048);
+        assertThat(sentMaxTokens(ThinkingDialect.AUTO, true, ThinkingLevel.HIGH, marked(ThinkingSite.CLASSIFY, null)))
+                .as("상한을 싣지 않는 호출 — 열린 항목 (d)").isNull();
+    }
+
+    private static Integer sentMaxTokens(ThinkingDialect dialect, boolean local, ThinkingLevel level, Prompt prompt) {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.call(any(Prompt.class))).thenReturn(ok());
+        budgeted(delegate, dialect, local, level).call(prompt);
+        return optionsOf(sent(delegate)).getMaxTokens();
+    }
+
+    @Test
+    @DisplayName("상한(창 25%)까지만 — 기본 예약이 이미 그 위면 여유 0, 기본 예약은 깎지 않는다(답변 7,000 → 7,000)")
+    void headroomIsBoundedAndNeverCuts() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.call(any(Prompt.class))).thenReturn(ok());
+
+        budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.HIGH).call(marked(ThinkingSite.ANSWER_RAG_N, 7_000));
+
+        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(7_000);
+    }
+
+    @Test
+    @DisplayName("재작성 사이트 — 창 25% 로 깎지 않는다(조각이 이미 자리를 비웠다): MD 교정 6,000 + 중간 = 7,024")
+    void rewriteSitesGetTheFullHeadroom() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.call(any(Prompt.class))).thenReturn(ok());
+
+        budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.MEDIUM).call(marked(ThinkingSite.MD_CORRECT, 6_000));
+
+        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(7_024);
+    }
+
+    @Test
+    @DisplayName("거부 뒤 재시도는 아무것도 싣지 않으므로 여유도 없다 — 기본 예약으로 다시 보낸다")
+    void aRetryAfterRejectionCarriesTheBaseOnly() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.call(any(Prompt.class))).thenAnswer(inv -> {
+            Prompt p = inv.getArgument(0);
+            if (optionsOf(p).getExtraBody() != null && optionsOf(p).getExtraBody().containsKey(KWARGS)) {
+                throw new NonTransientAiException("HTTP 400 - Unrecognized request argument: chat_template_kwargs");
+            }
+            return ok();
+        });
+
+        budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.LOW).call(marked(ThinkingSite.EVAL, 2_048));
+
+        ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+        verify(delegate, times(2)).call(captor.capture());
+        assertThat(captor.getAllValues()).extracting(p -> optionsOf(p).getMaxTokens()).containsExactly(2_560, 2_048);
+    }
+
+    @Test
+    @DisplayName("스트림도 같은 예약을 싣는다(stream=false 프로바이더의 답변)")
+    void streamCarriesTheReservationToo() {
+        ChatModel delegate = mock(ChatModel.class);
+        when(delegate.stream(any(Prompt.class))).thenReturn(Flux.just(ok()));
+
+        budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.LOW).stream(marked(ThinkingSite.EVAL, 2_048)).blockLast();
+
+        ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
+        verify(delegate).stream(captor.capture());
+        assertThat(optionsOf(captor.getValue()).getMaxTokens()).isEqualTo(2_560);
+    }
+
     // ── 스트림(stream=false 프로바이더의 채팅 답변) — 거부 재시도와 관측 ───────────────────
 
     private static boolean carriesSwitch(Prompt p) {

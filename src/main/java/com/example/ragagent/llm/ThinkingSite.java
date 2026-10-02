@@ -44,8 +44,8 @@ public enum ThinkingSite {
     TITLE("title", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
     SUMMARY("summary", ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.MICRO_TEXT)),
     KEYWORD_CONTEXT("keyword-context", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
-    MD_CORRECT("md-correct", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT)),
-    TXT_TO_MD("txt-to-md", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT)),
+    MD_CORRECT("md-correct", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), true),
+    TXT_TO_MD("txt-to-md", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), true),
     IMAGE_DESCRIBE("image-describe", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.VISION)),
     IMAGE_TYPE("image-type", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_BOTH)),
     MD_CORRECT_VISION("md-correct-vision", ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.VISION)),
@@ -71,11 +71,25 @@ public enum ThinkingSite {
     private final String id;
     private final ThinkingLevel shippedDefault;
     private final Route route;
+    private final boolean rewritesInput;
 
     ThinkingSite(String id, ThinkingLevel shippedDefault, Route route) {
+        this(id, shippedDefault, route, false);
+    }
+
+    ThinkingSite(String id, ThinkingLevel shippedDefault, Route route, boolean rewritesInput) {
         this.id = id;
         this.shippedDefault = shippedDefault;
         this.route = route;
+        this.rewritesInput = rewritesInput;
+    }
+
+    /**
+     * 출력이 입력에 묶인 <b>재작성</b>인가(MD 교정·TXT→MD — 입력의 1.5배를 예약한다). 생각 여유의 규칙이 다르다:
+     * 창 25% 상한으로 깎지 않고 조각 크기를 줄여 자리를 만든다({@link ThinkingBudget}).
+     */
+    public boolean rewritesInput() {
+        return rewritesInput;
     }
 
     /** 설정 키의 마지막 마디 — {@code app.llm.thinking.<id>}. */

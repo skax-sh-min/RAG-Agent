@@ -46,10 +46,15 @@ public record PromptBudget(int contextWindow, int outputReservation) {
      * 나오므로 {@code IndexingOutputCap.forRewrite()} 가 입력 추정의 1.5배를 예약한다. 그래서 본문 S 는
      * 자기 자신과 자기 예약을 동시에 창에 넣어야 한다:
      *
-     * <pre>{@code   지시 프롬프트 + S + 1.5S + 여유 ≤ 창   →   S ≤ (창 − 지시 − 여유) / 2.5}</pre>
+     * <pre>{@code   지시 프롬프트 + S + (1.5S + h) + 여유 ≤ 창   →   S ≤ (창 − 지시 − 여유 − h) / 2.5}</pre>
      *
      * <p>답변 예산처럼 "예약을 먼저 빼고 남은 것"으로 계산하면 순환이 된다(예약이 S 에 달려 있다).
      * 그 순환을 푼 것이 위 2.5 다.
+     *
+     * <p>{@code h} 는 생각 여유다(PLAN §6.29 ④, {@code ThinkingBudget.rewriteHeadroom}). 재작성은 기본 예약이 입력에
+     * 묶여 거의 언제나 창 25% 상한을 넘으므로, 다른 호출처럼 여유를 상한으로 깎는 대신 <b>조각을 줄여 자리를 만든다</b>
+     * — 대가는 문서당 호출 수가 늘어나는 것이다. 생각이 켬으로 나가지 않으면 0 이고 예전 식 그대로다. 인자를 생략할
+     * 수 없게 둔 것은, 여유를 잊은 자리가 조각을 예전 크기로 잘라 생각에 쓸 자리 없이 창을 채우기 때문이다.
      *
      * <p>토큰을 글자로 바꿀 때는 <b>1글자 = 1토큰</b>으로 본다({@link TokenEstimator} 의 한글 가정).
      * 영어 문서라면 실제로는 4배 더 들어가지만, 여기서 넉넉하게 잡으면 좁은 창에서 초과가 나므로
@@ -57,10 +62,11 @@ public record PromptBudget(int contextWindow, int outputReservation) {
      *
      * @param contextWindow          이 호출을 받을 프로바이더의 창(토큰)
      * @param promptOverheadTokens   본문을 뺀 지시 프롬프트의 토큰 수
+     * @param thinkingHeadroom       생각 여유(토큰). 생각이 켬으로 나가지 않으면 0
      * @return 본문에 쓸 수 있는 글자 수. 창이 지시 프롬프트도 못 담으면 0
      */
-    public static int rewriteInputChars(int contextWindow, long promptOverheadTokens) {
-        long usable = contextWindow - promptOverheadTokens - marginFor(contextWindow);
+    public static int rewriteInputChars(int contextWindow, long promptOverheadTokens, int thinkingHeadroom) {
+        long usable = contextWindow - promptOverheadTokens - marginFor(contextWindow) - Math.max(0, thinkingHeadroom);
         if (usable <= 0) return 0;
         return (int) (usable * 100 / (100 + IndexingOutputCap.REWRITE_HEADROOM_PERCENT));
     }

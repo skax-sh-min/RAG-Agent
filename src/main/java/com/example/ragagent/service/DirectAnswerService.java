@@ -6,6 +6,7 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.ResponseMode;
@@ -37,15 +38,19 @@ public class DirectAnswerService {
     private final ProviderContextWindows contextWindows;
     /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — {@code AnswerService} 와 공유한다(§6.29 3단계). */
     private final AnswerStreamer answerStreamer;
+    /** 이력 안전망의 출력 예약에 생각 여유를 더한다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     @org.springframework.beans.factory.annotation.Autowired
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props,
-                               ProviderContextWindows contextWindows, AnswerStreamer answerStreamer) {
+                               ProviderContextWindows contextWindows, AnswerStreamer answerStreamer,
+                               ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = props;
         this.contextWindows = contextWindows;
         this.answerStreamer = answerStreamer;
+        this.thinkingBudget = thinkingBudget;
     }
 
     /**
@@ -53,11 +58,12 @@ public class DirectAnswerService {
      * 싣지 않는다). 테스트용.
      */
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
-        this(llmRouter, messageSource, props, null, AnswerStreamer.withoutThinkingControl());
+        this(llmRouter, messageSource, props, null, AnswerStreamer.withoutThinkingControl(), ThinkingBudget.none());
     }
 
     public AgentState execute(AgentState state) {
-        state = withFittedHistory(state);
+        // 블로킹 — 모드의 maxTokens 를 실어 보내므로 그만큼이 실제로 예약된다.
+        state = withFittedHistory(state, false);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -80,7 +86,8 @@ public class DirectAnswerService {
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        state = withFittedHistory(state);
+        // 스트리밍 — 두 갈래(직행·stream=false 의 ChatClient) 모두 maxTokens 를 싣지 않는다.
+        state = withFittedHistory(state, true);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -176,15 +183,22 @@ public class DirectAnswerService {
      * <p>프로바이더는 {@code findProviderName()} 으로 <b>먼저 묻는다</b> — 실제 호출 사이에 답이
      * 달라질 수 있지만 {@code AnswerService.buildAnswerPrompt()} 가 같은 근사를 쓰고 같은 이유로
      * 받아들인다(대체되는 것은 대개 창이 더 큰 다른 역할이라 "덜 잘랐어야 했는데 더 잘랐다" 쪽이다).
+     *
+     * <p>출력 예약은 {@code AnswerService.answerReservation} — 모드의 기본 예약 + 생각 여유(§6.29 ④). 예전에는 블로킹
+     * 경로({@link #execute})에서도 스트리밍 예약(N 5,000)을 빼서, 실제로 실어 보내는 7,000 과 2,000 토큰이 어긋났다.
+     *
+     * @param streaming 이 호출이 {@code maxTokens} 를 싣지 않는가 — 출력 예약이 달라진다
      */
-    private AgentState withFittedHistory(AgentState state) {
+    private AgentState withFittedHistory(AgentState state, boolean streaming) {
         String history = state.conversationHistory();
         if (contextWindows == null || history == null || history.isBlank()) return state;
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(site(state).taskType(), site(state).routingMode(state.routingMode())));
+        ThinkingSite site = site(state);
+        String provider = llmRouter.findProviderName(site.taskType(), site.routingMode(state.routingMode()));
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return state;
         int budget = HistoryPolicy.budgetChars(window,
-                AnswerService.outputReservation(state.responseMode(), true, props.llmSafe().maxTokens()),
+                AnswerService.answerReservation(thinkingBudget, site, provider, state.responseMode(), streaming,
+                        props.llmSafe().maxTokens()).tokens(),
                 0, TokenEstimator.estimate(state.question()), Integer.MAX_VALUE);
         String fitted = HistoryPolicy.trimToBudget(history, budget);
         if (fitted.length() >= history.length()) return state;

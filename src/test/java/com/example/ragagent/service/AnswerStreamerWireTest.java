@@ -224,7 +224,8 @@ class AnswerStreamerWireTest {
         MessageSource messages = mock(MessageSource.class);
         when(messages.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         AnswerService service = new AnswerService(router, props, messages, new ProviderContextWindows(),
-                new AnswerStreamer(localDialect(), new ThinkingObservations(), site -> ThinkingLevel.LOW));
+                new AnswerStreamer(localDialect(), new ThinkingObservations(), site -> ThinkingLevel.LOW),
+                com.example.ragagent.llm.ThinkingBudget.none());
         List<Document> docs = new ArrayList<>();
         for (int n = 1; n <= 8; n++) docs.add(new Document("문서" + n + "-" + "가".repeat(200)));
         // S — 검증을 건너뛰는 모드라 답변 경로만 본다

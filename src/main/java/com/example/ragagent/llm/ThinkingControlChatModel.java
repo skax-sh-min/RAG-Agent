@@ -14,6 +14,7 @@ import reactor.core.publisher.Flux;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.IntSupplier;
 
 /**
  * 호출부가 표시한 사이트({@link ThinkingControl#mark})의 생각 수준을, 받는 프로바이더가 알아듣는 필드로 바꿔 싣는다
@@ -33,6 +34,11 @@ import java.util.function.Function;
  * <p><b>표시가 없는 요청은 손대지 않는다</b> — 아직 사이트를 표시하지 않은 호출부는 지금처럼 아무것도 싣지 않고
  * 나간다(서버 기본값). 표시가 있으면 수준이 무엇이든 표시 키는 걷어낸다.
  *
+ * <p><b>출력 예약의 생각 여유도 여기서 더한다</b>(§6.29 ④, {@link ThinkingBudget#compute}). 호출부의 {@code maxTokens}
+ * 는 기본 예약이고, 생각이 이 프로바이더에서 켬으로 나갈 때만 수준의 여유를 상한(이 프로바이더의 max-tokens·창 25%)
+ * 까지 더한다 — 실제로 받는 프로바이더가 정해진 자리가 여기뿐이라, 원격으로 넘어간 호출에는 더하지 않는다. 입력
+ * 예산을 미리 재는 자리는 같은 함수를 받을 것으로 예상한 프로바이더로 부른다({@link ThinkingBudget#reservation}).
+ *
  * <p><b>서버가 필드를 거부하면</b>(서버가 한 말에 필드 이름이 나온다 — {@link ThinkingControl#rejectedField}, 채팅
  * 답변 스트리밍과 같은 판정) 그 프로바이더는 그 필드를 받지 않는다고 기억하고
  * <b>그 필드 없이 한 번 다시 보낸다</b>. 실패가 라우터까지 올라가지 않으므로 차단도 연속 실패 계수도 없다. 판정이
@@ -50,18 +56,32 @@ public class ThinkingControlChatModel implements ChatModel {
     private final ProviderThinkingDialects dialects;
     private final Function<ThinkingSite, ThinkingLevel> levels;
     private final ThinkingObservations observations;
+    private final IntSupplier providerMaxTokens;
+    private final IntSupplier contextWindow;
 
     /**
-     * @param levels 사이트의 지금 수준 — 호출마다 부른다. 값이 아니라 함수인 이유는 수준이 핫 편집 대상이기 때문이다
-     *               (5단계 {@code /settings}). 생성자에서 한 번 읽어 두면 재기동 전까지 반영되지 않는다.
+     * @param levels            사이트의 지금 수준 — 호출마다 부른다. 값이 아니라 함수인 이유는 수준이 핫 편집 대상이기
+     *                          때문이다(5단계 {@code /settings}). 생성자에서 한 번 읽어 두면 재기동 전까지 반영되지 않는다.
+     * @param providerMaxTokens 이 프로바이더의 지금 유효한 출력 상한({@code MaxTokensCappingChatModel} 이 거는 값) — 생각
+     *                          여유의 상한(§6.29 ④). 같은 이유로 함수다(전역 max-tokens 도 창도 바뀐다)
+     * @param contextWindow     이 프로바이더의 창(토큰, 0 = 모름) — 생각 여유의 창 25% 상한
      */
     public ThinkingControlChatModel(ChatModel delegate, String providerName, ProviderThinkingDialects dialects,
-                                    Function<ThinkingSite, ThinkingLevel> levels, ThinkingObservations observations) {
+                                    Function<ThinkingSite, ThinkingLevel> levels, ThinkingObservations observations,
+                                    IntSupplier providerMaxTokens, IntSupplier contextWindow) {
         this.delegate = delegate;
         this.providerName = providerName;
         this.dialects = dialects;
         this.levels = levels;
         this.observations = observations;
+        this.providerMaxTokens = providerMaxTokens;
+        this.contextWindow = contextWindow;
+    }
+
+    /** 출력 상한도 창도 모르는 축약 — 생각 여유를 더하지 않는다(테스트용). */
+    public ThinkingControlChatModel(ChatModel delegate, String providerName, ProviderThinkingDialects dialects,
+                                    Function<ThinkingSite, ThinkingLevel> levels, ThinkingObservations observations) {
+        this(delegate, providerName, dialects, levels, observations, () -> 0, () -> 0);
     }
 
     @Override
@@ -88,10 +108,11 @@ public class ThinkingControlChatModel implements ChatModel {
     }
 
     private ChatResponse callAndObserve(Prompt prompt, ThinkingSite site, ThinkingLevel level, ThinkingWire wire) {
-        log.debug("[THINKING] site={} level={} provider={} sent={}",
-                site.id(), level.value(), providerName, wire.describe());
+        ThinkingBudget.Reservation reservation = reserve(prompt, site, level, wire);
+        log.debug("[THINKING] site={} level={} provider={} sent={} 예약={}",
+                site.id(), level.value(), providerName, wire.describe(), reservation.describe());
         long started = System.nanoTime();
-        ChatResponse response = delegate.call(apply(prompt, wire));
+        ChatResponse response = delegate.call(apply(prompt, wire, reservation));
         long elapsedMs = (System.nanoTime() - started) / 1_000_000;
         observations.record(site, providerName, level, ThinkingObservations.sampleOf(wire.sent(), response, elapsedMs));
         return response;
@@ -119,10 +140,11 @@ public class ThinkingControlChatModel implements ChatModel {
 
     private Flux<ChatResponse> streamAndObserve(Prompt prompt, ThinkingSite site, ThinkingLevel level,
                                                 ThinkingWire wire, boolean mayRetry) {
-        log.debug("[THINKING] site={} level={} provider={} sent={} (stream)",
-                site.id(), level.value(), providerName, wire.describe());
+        ThinkingBudget.Reservation reservation = reserve(prompt, site, level, wire);
+        log.debug("[THINKING] site={} level={} provider={} sent={} 예약={} (stream)",
+                site.id(), level.value(), providerName, wire.describe(), reservation.describe());
         StreamedResponses seen = new StreamedResponses();
-        return delegate.stream(apply(prompt, wire))
+        return delegate.stream(apply(prompt, wire, reservation))
                 .doOnSubscribe(s -> seen.started = System.nanoTime())
                 .doOnNext(seen::accept)
                 .doOnComplete(() -> observations.record(site, providerName, level, seen.sample(wire.sent())))
@@ -168,6 +190,26 @@ public class ThinkingControlChatModel implements ChatModel {
     @Override
     public ChatOptions getDefaultOptions() {
         return delegate.getDefaultOptions();
+    }
+
+    /**
+     * 이 요청의 출력 예약 — 호출부가 정한 {@code maxTokens} 가 기본 예약이고, 생각이 켬으로 나가면 여유를 더한다
+     * ({@link ThinkingBudget#compute}). 여유를 <b>여기서</b> 더하는 이유는 실제로 받는 프로바이더가 정해진 자리가 여기뿐이기
+     * 때문이다 — 원격으로 넘어간 호출(생각 제어 안 함)에는 더하지 않는다. 입력 예산을 미리 재는 자리는 같은 함수를
+     * 받을 것으로 예상한 프로바이더로 부른다({@code ThinkingBudget.reservation}). {@code maxTokens} 를 싣지 않은 호출은
+     * 손대지 않는다(프로바이더 기본값 — PLAN §6.29 열린 항목 (d)).
+     */
+    private ThinkingBudget.Reservation reserve(Prompt prompt, ThinkingSite site, ThinkingLevel level, ThinkingWire wire) {
+        Integer requested = ((OpenAiChatOptions) prompt.getOptions()).getMaxTokens();
+        return ThinkingBudget.compute(requested == null ? 0 : requested, level, wire.sent() == ThinkingWire.Sent.ON,
+                site.rewritesInput(), providerMaxTokens.getAsInt(), contextWindow.getAsInt());
+    }
+
+    /** {@link #apply(Prompt, ThinkingWire)} 에 생각 여유를 더한 출력 예약까지 실은 사본. */
+    static Prompt apply(Prompt prompt, ThinkingWire wire, ThinkingBudget.Reservation reservation) {
+        Prompt applied = apply(prompt, wire);
+        if (reservation.granted() > 0) ((OpenAiChatOptions) applied.getOptions()).setMaxTokens(reservation.tokens());
+        return applied;
     }
 
     /**
