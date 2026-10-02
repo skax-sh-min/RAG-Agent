@@ -6,7 +6,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.example.ragagent.llm.ThinkingLevel;
+import com.example.ragagent.llm.ThinkingSite;
+
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -286,5 +290,27 @@ class AppPropertiesOverrideTest {
         assertThat(p.searchRrfKSafe()).isEqualTo(60);
         assertThat(p.searchRrfKeywordWeightSafe()).isEqualTo(1.0);
         assertThat(p.searchRetryEscalateSafe()).isTrue();
+    }
+
+    @Test
+    @DisplayName("§6.29 생각 수준 — 오버라이드 → app.llm.thinking.<id> → 출하값 순서, 틀린 값은 다음으로 떨어진다")
+    void thinkingLevel_overrideThenFileThenShipped() {
+        AppProperties p = withLlm(new AppProperties.LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
+                0.0, 0.1, 0.0, 0.7, true, 6000, 1, false, Map.of("eval", "high", "title", "bogus")));
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.HIGH);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.TITLE)).as("틀린 값 → 출하값").isEqualTo(ThinkingLevel.LOW);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("줄 없음 → 출하값").isEqualTo(ThinkingLevel.OFF);
+
+        bind();
+        overrides.put(ThinkingSite.EVAL.settingsKey(), "off");
+        overrides.put(ThinkingSite.TITLE.settingsKey(), "medium");
+        overrides.put(ThinkingSite.CONDENSE.settingsKey(), "nonsense");
+
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.OFF);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.TITLE)).isEqualTo(ThinkingLevel.MEDIUM);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("틀린 오버라이드 → 그 아래(출하값)")
+                .isEqualTo(ThinkingLevel.OFF);
+        assertThat(base().llmSafe().thinkingLevel(ThinkingSite.EVAL)).as("app.llm 자체가 없어도 오버라이드가 먹는다")
+                .isEqualTo(ThinkingLevel.OFF);
     }
 }

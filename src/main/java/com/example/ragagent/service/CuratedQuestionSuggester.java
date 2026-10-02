@@ -5,7 +5,8 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.llm.ThinkingOffChatModel;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -127,11 +128,12 @@ public class CuratedQuestionSuggester {
 
     /**
      * 인덱싱/백그라운드 온도 — 추출 성격의 작업이라 결정적으로 유지한다. 핫이라 매 호출 다시 읽는다.
-     * 생각은 끈다({@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는 프로바이더가 정한다({@code ThinkingOffChatModel}).
+     * 생각 수준은 {@code app.llm.thinking.curated-suggest}(출하값 끔, {@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는
+     * 프로바이더가 정한다({@code ThinkingControlChatModel}).
      */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()));
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.CURATED_SUGGEST);
         int configured = props.llmSafe().maxTokens();
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
         return builder.build();

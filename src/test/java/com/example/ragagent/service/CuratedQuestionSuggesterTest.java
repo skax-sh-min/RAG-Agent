@@ -5,7 +5,8 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.llm.ThinkingOffChatModel;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -14,7 +15,6 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 import org.springframework.context.support.ResourceBundleMessageSource;
 
@@ -126,9 +126,9 @@ class CuratedQuestionSuggesterTest {
 
         assertThat(prompt.getValue().getContents().length())
                 .isLessThan(body.length());
-        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getExtraBody())
-                .as("생각을 끄고 부른다 — 켠 채로는 256 토큰 상한을 생각에 다 써서 빈 응답이 된다")
-                .containsKey(ThinkingOffChatModel.TEMPLATE_KWARGS);
+        assertThat(ThinkingControl.siteOf(prompt.getValue()))
+                .as("큐레이션 질문 제안 사이트로 표시한다 — 출하값이 끔이다(켠 채로는 256 토큰 상한을 생각에 다 써서 빈 응답이 된다)")
+                .isEqualTo(ThinkingSite.CURATED_SUGGEST);
     }
 
     /**

@@ -6,7 +6,8 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.llm.ThinkingOffChatModel;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.MemoryRepository;
@@ -154,11 +155,11 @@ class PostAnswerServiceTest {
                 .contains("[USER_QUESTION]\n" + QUESTION + "\n[/USER_QUESTION]")
                 .doesNotContain("{history}").doesNotContain("{summary}").doesNotContain("{query}");
         // 설정값(6000)이 아니라 이 호출의 상한으로 조인다 — 그래도 추론 모델이 생각을 마칠 만큼은 남긴다.
-        // 그리고 생각은 끄라고 표시한다(실을지는 받는 프로바이더가 정한다 — ThinkingOffChatModel).
-        assertThat(prompt.getValue().getOptions()).isInstanceOfSatisfying(OpenAiChatOptions.class, o -> {
-            assertThat(o.getMaxTokens()).isEqualTo(PostAnswerService.MAX_OUTPUT_TOKENS);
-            assertThat(o.getExtraBody()).containsKey(ThinkingOffChatModel.TEMPLATE_KWARGS);
-        });
+        // 그리고 답변 뒤 다듬기 사이트로 표시한다 — 출하값이 끔이고, 실을지는 받는 프로바이더가 정한다
+        // (ThinkingControlChatModel).
+        assertThat(prompt.getValue().getOptions()).isInstanceOfSatisfying(OpenAiChatOptions.class, o ->
+                assertThat(o.getMaxTokens()).isEqualTo(PostAnswerService.MAX_OUTPUT_TOKENS));
+        assertThat(ThinkingControl.siteOf(prompt.getValue())).isEqualTo(ThinkingSite.POST_ANSWER);
         assertThat(PostAnswerService.MAX_OUTPUT_TOKENS)
                 .as("추론 모델은 한 줄을 내기 전에 400~700 토큰을 생각한다 — 256 이면 본문이 비어 기능이 조용히 꺼진다")
                 .isGreaterThanOrEqualTo(1_024);

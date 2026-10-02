@@ -7,6 +7,8 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ProviderThinkingDialects;
+import com.example.ragagent.llm.ThinkingObservations;
 import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.sun.net.httpserver.HttpServer;
@@ -77,7 +79,8 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"gemma-4-e4b\"},{\"id\":\"other-model\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.hasLocalProvider()).isTrue();
     }
@@ -90,7 +93,8 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"google/gemma-4-e4b\"},{\"id\":\"qwen3-8b\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         // The streaming paths put provider.model() straight into the request body, so this is the
         // value that must be the server's — not the shorthand from the env var.
@@ -105,7 +109,8 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"google/gemma-4-e4b\"},{\"id\":\"google/gemma-4-e2b\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4"), true);
 
-        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration()))
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("ambiguous")
                 .hasMessageContaining("google/gemma-4-e4b")
@@ -119,7 +124,8 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"gemma-4-e4b-it\"},{\"id\":\"gemma-4-e4b\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.routeProvider(TaskType.TEXT, RoutingMode.COST_FIRST).model()).isEqualTo("gemma-4-e4b");
     }
@@ -131,7 +137,8 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"other-model\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration()))
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("gemma-4-e4b")
                 .hasMessageContaining("not found");
@@ -142,7 +149,8 @@ class LlmConfigVerificationTest {
     void serverUnreachable_failsStartup() {
         AppProperties props = propsWith(localProvider("http://127.0.0.1:1/v1", "gemma-4-e4b"), true);
 
-        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration()))
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("unreachable");
     }
@@ -152,7 +160,8 @@ class LlmConfigVerificationTest {
     void verificationDisabled_skipsCheckEvenOnUnreachableServer() {
         AppProperties props = propsWith(localProvider("http://127.0.0.1:1/v1", "gemma-4-e4b"), false);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.hasLocalProvider()).isTrue();
     }
