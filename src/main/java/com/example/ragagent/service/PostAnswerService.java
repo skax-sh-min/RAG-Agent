@@ -8,7 +8,8 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.llm.ThinkingOffChatModel;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
@@ -57,7 +58,7 @@ import java.util.regex.Pattern;
  * 실제로 다룬 범위를 말해야 맞다. 대신 <b>검색 경로에는 절대 넣지 않는다</b>(독립화 재료·MultiQuery·답변
  * 프롬프트 어디에도) — 그쪽의 오염 경로는 그대로 닫혀 있다. 답변 전문이 아니라 "## 요약" 섹션만 넘기므로
  * 입력이 작다(소형 모델 계층 {@code MICRO_TEXT}). 출력이 짧아 <b>생각을 끄고</b> 부른다
- * ({@code ThinkingOffChatModel}) — 추론 모델은 한 줄 앞에 수백 토큰을 생각해서, 켠 채로는 로컬 서버에서 턴마다
+ * ({@code app.llm.thinking.post-answer}, 출하값 끔 — {@code ThinkingControlChatModel}) — 추론 모델은 한 줄 앞에 수백 토큰을 생각해서, 켠 채로는 로컬 서버에서 턴마다
  * 10~17초의 백그라운드 생성이었고 끄면 1초 안팎(추가 질문까지 받으면 3초 안팎)이다. 스위치를 받지 않는 서버를
  * 위해 출력 예약은 넉넉히 둔다({@link #MAX_OUTPUT_TOKENS}).
  *
@@ -547,8 +548,8 @@ public class PostAnswerService {
      * 생각은 끈다(클래스 주석) — 실을지는 받는 프로바이더가 정한다.
      */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()));
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.POST_ANSWER);
         int configured = props.llmSafe().maxTokens();
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
         return builder.build();

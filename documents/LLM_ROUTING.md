@@ -59,8 +59,9 @@
 │    PostAnswerService        → MICRO_TEXT  (답변 뒤 질문 다듬기·추가 질문, 턴마다 배경 호출) │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 │                                                                      │
-│  ※ 독립화·질문 다듬기·"본문으로 구체화"는 생각(thinking)을 끄고 부른다 │
-│    (ThinkingOffChatModel — LOCAL 프로바이더에만 chat_template_kwargs)  │
+│  ※ 생각(thinking) 수준은 호출 지점별 app.llm.thinking.* (§6.29)        │
+│    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
+│    1단계 적용: 독립화·질문 다듬기·"본문으로 구체화"(출하값 끔)         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

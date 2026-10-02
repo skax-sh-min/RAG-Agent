@@ -35,7 +35,9 @@ public class LlmConfig {
                                 CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
                                 BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
                                 ProviderContextWindows contextWindows,
-                                TokenEstimateCalibration tokenCalibration) {
+                                TokenEstimateCalibration tokenCalibration,
+                                ProviderThinkingDialects thinkingDialects,
+                                ThinkingObservations thinkingObservations) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -147,16 +149,20 @@ public class LlmConfig {
                     // 상한으로 눌러 준다(MaxTokensCappingChatModel 클래스 주석 참고).
                     // 계측 데코레이터는 프롬프트와 usage 를 동시에 보는 유일한 자리다 — 라우터는
                     // 호출을 불투명한 클로저로 받고, 호출부는 서버가 센 토큰 수를 못 본다.
-                    // 가장 바깥은 "생각 끄기" 표시를 이 프로바이더가 받을 수 있을 때만 싣는 자리다(LOCAL 만 —
-                    // 원격은 모르는 필드를 400 으로 거부하고 라우터가 그걸 차단으로 받는다). 바깥에 둬야 curl
-                    // 로그가 실제로 나간 본문을 찍는다(ThinkingOffChatModel 클래스 주석 참고).
-                    ChatModel model = new ThinkingOffChatModel(
+                    // 가장 바깥은 호출부가 표시한 사이트의 생각 수준을 이 프로바이더가 알아듣는 필드로 바꿔 싣는
+                    // 자리다(§6.29 — AUTO 면 LOCAL 만 chat_template_kwargs, 원격은 모르는 필드를 400 으로 거부하고
+                    // 라우터가 그걸 차단으로 받는다). 바깥에 둬야 curl 로그가 실제로 나간 본문을 찍고, 표시 키가
+                    // 서버로 새지 않는다(ThinkingControlChatModel 클래스 주석 참고). 수준은 함수로 넘긴다 — 핫이다.
+                    thinkingDialects.record(cfg.name(), configuredThinkingDialect(cfg), cfg.isLocal());
+                    ChatModel model = new ThinkingControlChatModel(
                             new LoggingChatModel(
                                     tokenCalibration.wrap(
                                             new MaxTokensCappingChatModel(rawModel, cfg.name(),
                                                     () -> liveMaxTokens(cfg, props, contextWindows))),
                                     cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel),
-                            cfg.name(), cfg.isLocal());
+                            cfg.name(), thinkingDialects,
+                            site -> props.llmSafe().thinkingLevel(site),
+                            thinkingObservations);
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
@@ -192,11 +198,12 @@ public class LlmConfig {
         }
 
         log.info("LLM providers registered: {}", providers.stream()
-                .map(p -> "%s(%s/%s/p%d/stream=%b/concurrency=%d/ctx=%s) → %s [%s]".formatted(p.name(), p.role(), p.type(),
+                .map(p -> "%s(%s/%s/p%d/stream=%b/concurrency=%d/ctx=%s/thinking=%s) → %s [%s]".formatted(p.name(), p.role(), p.type(),
                         p.priority(), p.stream(), providerConcurrency.getOrDefault(p.name(), llmCfg.defaultProviderConcurrency()),
                         contextWindows.find(p.name())
                                 .map(w -> w.tokens() + "/" + w.source().name().toLowerCase())
                                 .orElse("?"),   // "?" = 선언도 탐지도 없음 → 입력 예산을 짤 근거가 없다
+                        thinkingDialects.dialectOf(p.name()).value(),
                         p.baseUrl(), p.model()))
                 .toList());
         log.info("LLM HTTP timeouts: connect={}s read={}s, permit-wait={}s", connectTimeoutSeconds, readTimeoutSeconds,
@@ -227,6 +234,19 @@ public class LlmConfig {
         }
         throw new IllegalStateException(
                 "No LLM provider available. Configure a LOCAL provider (LOCAL_LLM_URL) or set OPENAI_API_KEY / GEMINI_API_KEY.");
+    }
+
+    /**
+     * 설정된 생각 제어 방식 — 모르는 값이면 경고하고 {@code AUTO}(현행 규칙)로 동작한다. 오타가 원격에 표준 밖
+     * 필드를 싣는 쪽으로 번지면 그 프로바이더가 400 → 차단되므로, 모를 때는 가장 보수적인 기존 규칙으로 떨어뜨린다.
+     */
+    private static ThinkingDialect configuredThinkingDialect(AppProperties.ProviderConfig cfg) {
+        String raw = cfg.thinkingDialect();
+        if (raw != null && !raw.isBlank() && ThinkingDialect.parse(raw).isEmpty()) {
+            log.warn("[THINKING] provider=[{}] thinking-dialect={} 를 모른다 — auto 로 동작한다 "
+                    + "(auto|none|template-kwargs|template-kwargs-effort|openai-effort)", cfg.name(), raw);
+        }
+        return cfg.thinkingDialectOrAuto();
     }
 
     /**

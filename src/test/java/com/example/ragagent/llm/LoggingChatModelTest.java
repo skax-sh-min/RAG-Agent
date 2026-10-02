@@ -19,6 +19,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -130,8 +131,8 @@ class LoggingChatModelTest {
     void logsExtraBodyFieldsAtTopLevel() {
         when(delegate.call(any(Prompt.class))).thenReturn(response());
         var model = new LoggingChatModel(delegate, "local", "http://localhost:1234/v1", "key", "llama");
-        Prompt prompt = new Prompt(List.of(new UserMessage("질문")),
-                ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder().maxTokens(256)).build());
+        Prompt prompt = new Prompt(List.of(new UserMessage("질문")), OpenAiChatOptions.builder().maxTokens(256)
+                .extraBody(Map.of("chat_template_kwargs", Map.of("enable_thinking", false))).build());
 
         model.call(prompt);
 
@@ -139,6 +140,20 @@ class LoggingChatModelTest {
                 .contains("\"max_tokens\" : 256")
                 .contains("\"chat_template_kwargs\" : {")
                 .contains("\"enable_thinking\" : false"));
+    }
+
+    @Test
+    @DisplayName("표준 필드 reasoning_effort 도 찍힌다 — openai-effort dialect 의 생각 수준이 이 필드로 나간다(§6.29)")
+    void logsReasoningEffort() {
+        when(delegate.call(any(Prompt.class))).thenReturn(response());
+        var model = new LoggingChatModel(delegate, "openai", "https://api.openai.com/v1", "key", "gpt");
+        Prompt prompt = new Prompt(List.of(new UserMessage("질문")),
+                OpenAiChatOptions.builder().maxTokens(256).reasoningEffort("low").build());
+
+        model.call(prompt);
+
+        assertThat(logAppender.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("\"reasoning_effort\" : \"low\""));
     }
 
     @Test

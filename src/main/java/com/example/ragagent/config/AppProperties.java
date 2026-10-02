@@ -1,11 +1,16 @@
 package com.example.ragagent.config;
 
+import com.example.ragagent.llm.ThinkingDialect;
+import com.example.ragagent.llm.ThinkingLevel;
+import com.example.ragagent.llm.ThinkingSite;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.util.unit.DataSize;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
@@ -68,8 +73,46 @@ public record AppProperties(
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 10000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
             Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
-            Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
-    ) {}
+            Boolean verifyLocalModelsOnStartup, // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
+            Map<String, String> thinking     // PLAN §6.29 — 호출 지점별 생각 수준 (app.llm.thinking.<site-id> = off|low|medium|high). 키는 ThinkingSite.id(). 읽기는 thinkingLevel(site) 로만 — 줄이 없거나 값이 틀리면 그 사이트의 출하 기본값이다. 환경변수는 두지 않는다(사이트 수만큼 늘어나고, /settings 핫 편집이 같은 일을 한다)
+    ) {
+        /**
+         * MANDATORY once this record has more than one constructor — see {@link AuthConfig}: without it Spring Boot
+         * cannot tell which one to bind with, and the convenience form below would leave {@code thinking} empty no
+         * matter what {@code app.llm.thinking.*} says.
+         */
+        @ConstructorBinding
+        public LlmConfig {
+        }
+
+        /** Back-compat form without {@code thinking} (every site at its shipped default). Test convenience; never used
+         *  for property binding (see {@code @ConstructorBinding} above). */
+        public LlmConfig(List<ProviderConfig> providers, int circuitBreakerMinutes, int connectTimeoutSeconds,
+                         int readTimeoutSeconds, String defaultRoutingMode, int defaultProviderConcurrency,
+                         int permitWaitTimeoutSeconds, Double temperature, Double directTemperature,
+                         Double indexingTemperature, Double creativeTemperature, Boolean creativeModeEnabled,
+                         Integer maxTokens, Integer shrinkStep, Boolean verifyLocalModelsOnStartup) {
+            this(providers, circuitBreakerMinutes, connectTimeoutSeconds, readTimeoutSeconds, defaultRoutingMode,
+                    defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
+                    indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens, shrinkStep,
+                    verifyLocalModelsOnStartup, Map.of());
+        }
+
+        /**
+         * 이 호출 지점의 생각 수준 — 매 호출 다시 읽는다(핫). 출처 순서는 다른 핫 값과 같다: {@code /settings} 오버라이드
+         * ({@link ThinkingSite#settingsKey()}, 5단계부터 쓰인다) → {@code app.llm.thinking.<id>} → 출하 기본값.
+         *
+         * <p>값이 넷 중 하나가 아니면 <b>출하 기본값으로 조용히 떨어진다</b> — 오타가 엉뚱한 동작이 아니라 출하 동작이
+         * 되게 하는 것이다({@code app.auth.guest-identity} 선례). 경고는 기동 시 {@code ThinkingStartupReport} 가 한 번
+         * 남긴다; 여기서 남기면 LLM 호출마다 찍힌다.
+         */
+        public ThinkingLevel thinkingLevel(ThinkingSite site) {
+            Optional<ThinkingLevel> override = ThinkingLevel.parse(rawOverride(site.settingsKey()));
+            if (override.isPresent()) return override.get();
+            String configured = thinking == null ? null : thinking.get(site.id());
+            return ThinkingLevel.parse(configured).orElse(site.shippedDefault());
+        }
+    }
 
     public record ProviderConfig(
             String name,
@@ -82,8 +125,28 @@ public record AppProperties(
             Boolean stream,
             Integer concurrency, // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
             Integer contextSize, // this provider's total context window in tokens (input + output). Unset = probed from the server at startup (ContextWindowProbe), and left unknown if that fails — never guessed. Operator-declared always wins, because a probe reads the server as it is *right now* and a model reloaded at a different size makes it stale
-            Integer maxTokens    // this provider's own blocking-call output cap; null/<=0 falls back to LlmConfig.maxTokens. Exists because context windows differ per model — a 8k local model and a 128k cloud model cannot share one ceiling. Enforced by MaxTokensCappingChatModel (baking it into the provider bean's defaultOptions is not enough: every blocking call site attaches its own maxTokens, which would override it)
+            Integer maxTokens,   // this provider's own blocking-call output cap; null/<=0 falls back to LlmConfig.maxTokens. Exists because context windows differ per model — a 8k local model and a 128k cloud model cannot share one ceiling. Enforced by MaxTokensCappingChatModel (baking it into the provider bean's defaultOptions is not enough: every blocking call site attaches its own maxTokens, which would override it)
+            String thinkingDialect // PLAN §6.29 — 생각 수준을 이 서버에 어떤 필드로 말하는가 (auto|none|template-kwargs|template-kwargs-effort|openai-effort). 비었거나 모르는 값 = auto = 현행 규칙(LOCAL 이면 chat_template_kwargs, 아니면 아무것도 싣지 않음). 재기동 대상
     ) {
+        /** MANDATORY once this record has more than one constructor — see {@link AuthConfig}. */
+        @ConstructorBinding
+        public ProviderConfig {
+        }
+
+        /** Back-compat form without {@code thinkingDialect} (= auto). Test convenience; never used for binding. */
+        public ProviderConfig(String name, String baseUrl, String apiKey, String model, String type, String role,
+                              int priority, Boolean stream, Integer concurrency, Integer contextSize, Integer maxTokens) {
+            this(name, baseUrl, apiKey, model, type, role, priority, stream, concurrency, contextSize, maxTokens, null);
+        }
+
+        /**
+         * 설정된 생각 제어 방식. 비었거나 모르는 값이면 {@code AUTO} — 모르는 값의 경고는 {@code LlmConfig} 가 기동 시
+         * 프로바이더를 등록하면서 한 번 남긴다.
+         */
+        public ThinkingDialect thinkingDialectOrAuto() {
+            return ThinkingDialect.parse(thinkingDialect).orElse(ThinkingDialect.AUTO);
+        }
+
         /**
          * True when this provider will actually be registered as a live {@code LlmProvider} by
          * {@code LlmConfig.llmRouter()} (its G1+G2 gates) — a LOCAL-role provider is exempt from
@@ -816,7 +879,7 @@ public record AppProperties(
             int mt = clampInt(maxTokensOverride != null ? maxTokensOverride : DEFAULT_MAX_TOKENS,
                     MIN_MAX_TOKENS, MAX_MAX_TOKENS);
             return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
-                    mt, ss, true);
+                    mt, ss, true, Map.of());
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -851,10 +914,13 @@ public record AppProperties(
                 : (llm.shrinkStep() != null ? llm.shrinkStep() : DEFAULT_SHRINK_STEP);
         int shrinkStep = clampInt(shrinkStepBase, 1, 10);
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
+        // §6.29 — 원본 맵을 그대로 넘긴다. 값 검증·기본값은 thinkingLevel(site) 이 읽을 때 한다(오버라이드가 그
+        // 위에 얹히므로 여기서 미리 풀어 두면 /settings 변경이 반영되지 않는다).
+        Map<String, String> thinking = llm.thinking() != null ? llm.thinking() : Map.of();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
                         indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
-                        shrinkStep, verifyLocalModels);
+                        shrinkStep, verifyLocalModels, thinking);
     }
 
     /**
