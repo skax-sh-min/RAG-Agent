@@ -161,7 +161,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 
 "문서를 조합해 새로 만들었다"는 통과, "문서에 없는 함수를 발명했다"는 실패. 응답 형식이 다르므로 파서도 둘이다(`EvalOutput` / `CreativeEvalOutput`) — 한 레코드에 `inventedSymbols`를 얹으면 N의 응답 스키마에도 그 필드가 실려 표준 검증이 흔들린다.
 
-**온도도 다른 것을 쓴다.** 일반/RAG 온도(`app.llm.temperature`)는 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄돼 있어, C만 `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], `/settings`에서 핫 수정)를 쓴다. 이 분기는 **블로킹과 스트리밍 양쪽**에 걸려야 한다 — 채팅 화면의 유일한 전송 경로가 스트리밍이라, `streamDirect()`를 빠뜨리면 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
+**온도도 다른 것을 쓴다.** 일반/RAG 온도(`app.llm.temperature`)는 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄돼 있어, C만 `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], `/settings`에서 핫 수정)를 쓴다. 이 분기는 **블로킹과 스트리밍 양쪽**에 걸려야 한다 — 채팅 화면의 유일한 전송 경로가 스트리밍이라, 스트리밍 갈래(`AnswerStreamer` 로 넘기는 온도)를 빠뜨리면 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
 
 #### 검증 배지는 무엇을 검증했는지를 말한다
 
@@ -236,7 +236,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 
 **`max_tokens`(completion 상한) ≠ 컨텍스트 윈도우(n_ctx, 입력+출력 합계).** `LLM_MAX_TOKENS`가 `OpenAiChatOptions.maxTokens()`로 들어가는 값은 LLM이 한 번에 생성할 수 있는 **출력** 토큰 상한일 뿐, 로컬 LLM 서버(예: llama-server)의 컨텍스트 크기(`--ctx-size`, 흔히 기본 8192)와는 별개다. 입력(system prompt + RAG 검색 결과 + 대화 히스토리 + 질문)이 이미 컨텍스트의 상당 부분을 차지하므로, `max_tokens`를 크게 잡아도 실제로 생성 가능한 토큰 수는 `n_ctx - 입력토큰수`로 물리적으로 제한된다 — 서버 구현에 따라 조용히 잘리거나, 입력이 이미 크면 "context length exceeded" 류의 에러가 난다. **컨텍스트 윈도우 자체는 로컬 서버 설정(`--ctx-size`)으로 조절 가능**하므로, 완성 상한을 늘리고 싶다면 `LLM_MAX_TOKENS`만 올리기보다 로컬 서버의 컨텍스트 크기를 함께(또는 우선) 늘리는 것이 근본적인 해법이다.
 
-**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)`, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑦ 및 인덱싱 계열(분류·쿼리확장·충분도/근거 통합평가·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
+**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `AnswerStreamer`를 거쳐 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)` — 생각 수준 필드만 `ThinkingControl.applyTo()`로 더한다 —, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑦ 및 인덱싱 계열(분류·쿼리확장·충분도/근거 통합평가·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
 
 **§6.18 이후, 이 값 하나가 서로 다른 3곳에 결합돼 있다**(그 위에 §6.26 이후로는 검증·인덱싱 호출의 출력 예약까지 여기서 파생된다 — 아래 예외 참고) — `AppProperties.llmSafe().maxTokens()`를 공유하므로 하나를 올리면 셋이 함께 커진다:
 

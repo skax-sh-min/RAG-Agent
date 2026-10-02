@@ -22,8 +22,8 @@ import java.util.Optional;
  * 갈라질 수 있어 {@code ThinkingSiteConventionTest} 가 막는다. 채팅 답변·검증처럼 대화가 고른 라우팅 모드를 따르는
  * 사이트는 모드를 갖지 않는다({@link #routingMode(RoutingMode)}).
  *
- * <p>2단계(2026-10-02)까지 표시가 붙은 곳: 체인을 지나는 블로킹 호출 전부. 채팅 화면의 답변 스트리밍(3단계)은
- * 아직 아무것도 싣지 않는다.
+ * <p>3단계(2026-10-02)까지 싣는 곳: 체인을 지나는 호출 전부(사이트 표시) + 체인을 우회하는 채팅 답변 스트리밍
+ * ({@code AnswerStreamer} 가 사이트를 받아 요청에 직접 싣는다). 생각 수준이 먹지 않는 LLM 호출은 남아 있지 않다.
  */
 public enum ThinkingSite {
     ANSWER_RAG_S("answer-rag-s", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),

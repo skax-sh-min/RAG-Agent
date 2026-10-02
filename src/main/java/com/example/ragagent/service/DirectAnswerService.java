@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TokenEstimator;
@@ -18,7 +17,6 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
@@ -37,19 +35,25 @@ public class DirectAnswerService {
     private final MessageSource messageSource;
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
+    /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — {@code AnswerService} 와 공유한다(§6.29 3단계). */
+    private final AnswerStreamer answerStreamer;
 
     @org.springframework.beans.factory.annotation.Autowired
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props,
-                               ProviderContextWindows contextWindows) {
+                               ProviderContextWindows contextWindows, AnswerStreamer answerStreamer) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.answerStreamer = answerStreamer;
     }
 
-    /** 창을 모르는 것과 같게 동작하는 축약 — 이력 절단이 no-op 이 된다. */
+    /**
+     * 창을 모르는 것과 같게 동작하는 축약 — 이력 절단이 no-op 이 되고, 스트리밍은 생각 제어 없이 나간다(아무 필드도
+     * 싣지 않는다). 테스트용.
+     */
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
-        this(llmRouter, messageSource, props, null);
+        this(llmRouter, messageSource, props, null, AnswerStreamer.withoutThinkingControl());
     }
 
     public AgentState execute(AgentState state) {
@@ -87,7 +91,7 @@ public class DirectAnswerService {
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
             callOrStream(provider, state, systemPrompt, directTemp,
-                    t -> { listener.onToken(t); full.append(t); });
+                    t -> { listener.onToken(t); full.append(t); }, listener::onThinking);
         }
 
         String answer = full.toString();
@@ -198,38 +202,22 @@ public class DirectAnswerService {
 
     /**
      * Unified streaming handler for both provider.stream()=true/false.
-     * When stream=true, calls OpenAiApi.chatCompletionStream() directly to bypass
-     * OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens until LLM finishes.
+     * When stream=true, streams through {@link AnswerStreamer} — {@code OpenAiApi.chatCompletionStream()}
+     * directly, to bypass OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens
+     * until LLM finishes. That also bypasses the ChatModel decorator chain, so the streamer applies the
+     * site's thinking level itself (§6.29 3단계).
+     *
+     * @param onThinking 생각 델타마다 — {@code stream=true} 갈래만 부른다
      */
     private void callOrStream(LlmProvider provider, AgentState state,
                               String systemPrompt, double temperature,
-                              java.util.function.Consumer<String> tokenSink) {
+                              java.util.function.Consumer<String> tokenSink, Runnable onThinking) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            String userPrompt = buildUserPrompt(state);
-            List<OpenAiApi.ChatCompletionMessage> messages = List.of(
-                    new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
-                    new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
-            );
-            OpenAiApi.ChatCompletionRequest request =
-                    new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
-            logDirectRequest(provider, request);
-            // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
-            // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
-            CancellableTokenStream.consume(
-                    provider.openAiApi().chatCompletionStream(request)
-                            .mapNotNull(chunk -> {
-                                if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                                return chunk.choices().get(0).delta().content();
-                            })
-                            .filter(t -> !t.isEmpty())
-                            .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
-                                    provider.name(), state.threadId(), state.routingMode()))
-                            .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
-                            .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
-                                    signal, provider.name(), state.threadId())),
-                    tokenSink);
+            answerStreamer.stream(provider, site(state), systemPrompt, buildUserPrompt(state), temperature,
+                    tokenSink, onThinking,
+                    new AnswerStreamer.Trace(log, "[DirectAnswer]", state.threadId(), state.routingMode()));
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();
@@ -249,24 +237,6 @@ public class DirectAnswerService {
                     .doOnNext(buf::append)
                     .blockLast();
             if (!buf.isEmpty()) tokenSink.accept(buf.toString());
-        }
-    }
-
-    /**
-     * The provider.stream()=true branch above calls {@link OpenAiApi} directly, bypassing
-     * {@code ChatModel} (and therefore {@code LoggingChatModel}) entirely to avoid
-     * {@code OpenAiChatModel.internalStream()}'s buffering — so it never showed up in logs at any
-     * level. Mirrors LoggingChatModel's TRACE(full curl)/DEBUG(endpoint+body) split via the shared
-     * {@link LlmCurlLogger}.
-     */
-    private void logDirectRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request) {
-        if (!log.isDebugEnabled()) return;
-        try {
-            String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
-            String json = LlmCurlLogger.toCurlBodyJson(request);
-            LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
-        } catch (Exception e) {
-            log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }
     }
 

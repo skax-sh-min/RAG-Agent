@@ -62,6 +62,26 @@ class LlmFailureClassificationTest {
                     .isTrue();
         }
 
+        /**
+         * 채팅 답변 스트리밍(WebClient)의 모양 — 메시지는 {@code "400 Bad Request from POST …"} 뿐이고 서버의 문장은
+         * 응답 본문에만 있다. 본문은 2026-10-02 llama.cpp(b10236)가 스트리밍 요청의 초과에 실제로 돌려준 그대로다.
+         * 메시지만 보던 동안 이 모양이 거짓이었고, 그래서 스트리밍 경로의 축소 재시도가 한 번도 발동하지 않았다.
+         */
+        @Test
+        @DisplayName("WebClient 오류는 메시지에 본문이 없다 — 응답 본문까지 읽어야 알아본다(스트리밍 경로의 실제 모양)")
+        void webClientErrorBodyIsRead() {
+            var e = org.springframework.web.reactive.function.client.WebClientResponseException.create(
+                    400, "Bad Request", new org.springframework.http.HttpHeaders(),
+                    ("{\"error\":{\"code\":400,\"message\":\"request (40016 tokens) exceeds the available context size"
+                            + " (32768 tokens), try increasing it\",\"type\":\"exceed_context_size_error\","
+                            + "\"n_prompt_tokens\":40016,\"n_ctx\":32768}}").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
+            assertThat(e.getMessage()).as("전제 — 메시지에는 마커가 없다").doesNotContain("context");
+            assertThat(LlmRouter.isContextOverflow(e)).isTrue();
+            assertThat(LlmRouter.isContextOverflow(new RuntimeException("wrapped", e))).isTrue();
+        }
+
         @Test
         @DisplayName("평범한 장애는 컨텍스트 초과가 아니다 — 이쪽은 차단해야 한다")
         void ordinaryFailuresAreNot() {

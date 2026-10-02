@@ -315,7 +315,7 @@ public class LlmRouter {
         //
         // ── 결정: 스트리밍은 건강의 증인이지 판정자가 아니다 (2026-09-28) ──────────────────
         // 여기서 성공만 보고하고 실패는 보고하지 않는 것은 비대칭이고, 의도한 것이다.
-        // 스트리밍 경로(AnswerService.streamDirect / DirectAnswerService.callOrStream)는
+        // 스트리밍 경로(AnswerService / DirectAnswerService → AnswerStreamer)는
         // OpenAiApi.chatCompletionStream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
         // try/catch 를 통째로 우회하므로, 실패를 브레이커에 넣으려면 분류를 그쪽에 다시 구현해야
         // 한다. 그러지 않기로 했다:
@@ -795,7 +795,7 @@ public class LlmRouter {
      * 작업을 건너뛰지만, 컨텍스트 초과는 <b>이 요청 하나의 크기</b> 문제라 기억할 것이 없다. 다음
      * 짧은 질문은 같은 프로바이더에서 그대로 처리돼야 한다.
      *
-     * <p><b>공개인 이유</b>: 채팅 스트리밍 경로({@code AnswerService.streamDirect()})는 이 라우터를
+     * <p><b>공개인 이유</b>: 채팅 스트리밍 경로({@code AnswerService} → {@code AnswerStreamer})는 이 라우터를
      * 거치지 않고 {@link org.springframework.ai.openai.api.OpenAiApi} 를 직접 호출하므로, 거기서
      * 올라오는 예외는 {@code LlmContextOverflowException} 으로 바뀌지 않은 <b>날것</b>이다. 축소
      * 재시도(§6.26-9)가 그 경로에서도 초과를 알아보려면 같은 판정이 필요한데, 마커 목록을 복사하면
@@ -809,18 +809,15 @@ public class LlmRouter {
      * <p><b>{@code "too many tokens"} 류는 일부러 넣지 않았다</b> — 레이트리밋 응답
      * ("Too many tokens per minute")과 문구가 겹쳐, 진짜 429 를 컨텍스트 초과로 잘못 읽으면
      * {@code blockForOverload()} 의 Retry-After 처리를 건너뛰게 된다.
+     *
+     * <p><b>메시지가 아니라 서버가 한 말({@link LlmErrorText})을 본다.</b> 스트리밍 경로의 WebClient 오류는 메시지가
+     * {@code "400 Bad Request from POST …"} 뿐이고 마커는 응답 본문에만 있다 — 메시지만 보던 동안 위 "공개인 이유"의
+     * 축소 재시도는 실제 서버에서 한 번도 발동하지 않았다(2026-10-02, {@code LlmErrorText} 참고).
      */
     public static boolean isContextOverflow(Throwable t) {
-        Throwable cur = t;
-        while (cur != null) {
-            String msg = cur.getMessage();
-            if (msg != null) {
-                String lowered = msg.toLowerCase();
-                for (String marker : CONTEXT_OVERFLOW_MARKERS) {
-                    if (lowered.contains(marker)) return true;
-                }
-            }
-            cur = cur.getCause();
+        String text = LlmErrorText.of(t).toLowerCase(java.util.Locale.ROOT);
+        for (String marker : CONTEXT_OVERFLOW_MARKERS) {
+            if (text.contains(marker)) return true;
         }
         return false;
     }

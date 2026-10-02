@@ -4,9 +4,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
@@ -31,7 +33,8 @@ import java.util.function.Function;
  * <p><b>표시가 없는 요청은 손대지 않는다</b> — 아직 사이트를 표시하지 않은 호출부는 지금처럼 아무것도 싣지 않고
  * 나간다(서버 기본값). 표시가 있으면 수준이 무엇이든 표시 키는 걷어낸다.
  *
- * <p><b>서버가 필드를 거부하면</b>(오류 문구에 필드 이름이 나온다) 그 프로바이더는 그 필드를 받지 않는다고 기억하고
+ * <p><b>서버가 필드를 거부하면</b>(서버가 한 말에 필드 이름이 나온다 — {@link ThinkingControl#rejectedField}, 채팅
+ * 답변 스트리밍과 같은 판정) 그 프로바이더는 그 필드를 받지 않는다고 기억하고
  * <b>그 필드 없이 한 번 다시 보낸다</b>. 실패가 라우터까지 올라가지 않으므로 차단도 연속 실패 계수도 없다. 판정이
  * 문구의 부분 문자열이라, 다른 오류가 우연히 요청 본문을 되읊으며 그 이름을 담으면 그 프로바이더에서 생각 제어가
  * 꺼질 뿐이다(그 경우에도 요청은 다시 나간다). LM Studio 의 OpenAI 호환 경로처럼 모르는 필드를 오류 없이 넘기는
@@ -70,13 +73,17 @@ public class ThinkingControlChatModel implements ChatModel {
         try {
             return callAndObserve(prompt, site, level, wire);
         } catch (RuntimeException e) {
-            String field = rejectedField(e, wire);
+            String field = ThinkingControl.rejectedField(e, wire);
             if (field == null) throw e;
-            if (dialects.markRejected(providerName, field)) {
-                log.warn("[THINKING] provider=[{}] 가 {} 를 거부했다 — 이 프로세스 동안은 싣지 않는다"
-                        + "(이 서버에서는 생각 수준을 정하지 못한다): {}", providerName, field, e.getMessage());
-            }
+            remember(field, e);
             return callAndObserve(prompt, site, level, dialects.wireFor(providerName, level));
+        }
+    }
+
+    private void remember(String field, Throwable e) {
+        if (dialects.markRejected(providerName, field)) {
+            log.warn("[THINKING] provider=[{}] 가 {} 를 거부했다 — 이 프로세스 동안은 싣지 않는다"
+                    + "(이 서버에서는 생각 수준을 정하지 못한다): {}", providerName, field, e.getMessage());
         }
     }
 
@@ -91,14 +98,71 @@ public class ThinkingControlChatModel implements ChatModel {
     }
 
     /**
-     * 스트리밍은 이 체인을 거의 지나지 않는다(채팅 답변은 {@code OpenAiApi} 직행 — 3단계에서 따로 싣는다). 와도 같은
-     * 규칙으로 싣되 거부 뒤 재시도는 없다 — 오류가 구독 시점에 나기 때문이다. 관측도 3단계다.
+     * 이 체인을 지나는 스트림은 {@code stream=false} 프로바이더의 채팅 답변뿐이다(그 경로는 {@code ChatClient.stream()}
+     * 으로 받아 한 덩어리로 모은다). {@code stream=true} 의 채팅 답변은 체인을 통째로 우회하는 {@code OpenAiApi} 직행이라
+     * {@code AnswerStreamer} 가 같은 규칙을 따로 싣는다.
+     *
+     * <p>블로킹({@link #call})과 같은 두 가지 — 거부 재시도와 관측 — 를 구독 위에서 한다. 재시도는 <b>응답이 하나도 오기
+     * 전</b>에 난 거부에만 건다: 하나라도 흘러 나갔다면 호출부가 이미 받았으므로, 다시 보내면 앞부분이 두 번 간다. 거부는
+     * 서버가 요청을 받기 전에 내리는 판정이라 실제로는 언제나 첫 응답 전이다. 관측은 정상 완료에만 남긴다 — 취소·오류로
+     * 끊긴 스트림의 수치는 그 수준의 실제 동작이 아니다.
      */
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         ThinkingSite site = ThinkingControl.siteOf(prompt);
         if (site == null) return delegate.stream(prompt);
-        return delegate.stream(apply(prompt, dialects.wireFor(providerName, levels.apply(site))));
+        return Flux.defer(() -> {
+            ThinkingLevel level = levels.apply(site);
+            return streamAndObserve(prompt, site, level, dialects.wireFor(providerName, level), true);
+        });
+    }
+
+    private Flux<ChatResponse> streamAndObserve(Prompt prompt, ThinkingSite site, ThinkingLevel level,
+                                                ThinkingWire wire, boolean mayRetry) {
+        log.debug("[THINKING] site={} level={} provider={} sent={} (stream)",
+                site.id(), level.value(), providerName, wire.describe());
+        StreamedResponses seen = new StreamedResponses();
+        return delegate.stream(apply(prompt, wire))
+                .doOnSubscribe(s -> seen.started = System.nanoTime())
+                .doOnNext(seen::accept)
+                .doOnComplete(() -> observations.record(site, providerName, level, seen.sample(wire.sent())))
+                .onErrorResume(e -> {
+                    String field = mayRetry && !seen.received ? ThinkingControl.rejectedField(e, wire) : null;
+                    if (field == null) return Flux.error(e);
+                    remember(field, e);
+                    return streamAndObserve(prompt, site, level, dialects.wireFor(providerName, level), false);
+                });
+    }
+
+    /**
+     * 체인을 지나는 스트림 한 번에서 본 것 — 응답 여러 개를 모아 블로킹과 같은 규칙({@link ThinkingObservations#sampleOf})
+     * 으로 센다. 신호는 Reactive Streams 규약대로 직렬로 오므로 필드에 동기화가 필요 없다.
+     */
+    private static final class StreamedResponses {
+        long started = System.nanoTime();
+        boolean received;
+        final StringBuilder content = new StringBuilder();
+        final StringBuilder reasoning = new StringBuilder();
+        String finish;
+        OpenAiApi.Usage usage;
+
+        void accept(ChatResponse response) {
+            received = true;
+            Generation generation = response == null ? null : response.getResult();
+            String text = ThinkingObservations.textOf(generation);
+            if (text != null) content.append(text);
+            String thought = ThinkingObservations.reasoningOf(generation);
+            if (thought != null) reasoning.append(thought);
+            String reason = ThinkingObservations.finishReasonOf(generation);
+            if (reason != null && !reason.isBlank()) finish = reason;
+            OpenAiApi.Usage reported = ThinkingObservations.nativeUsageOf(response);
+            if (reported != null) usage = reported;
+        }
+
+        ThinkingObservations.Sample sample(ThinkingWire.Sent sent) {
+            return ThinkingObservations.sampleOf(sent, usage, content.toString(), reasoning.toString(), finish,
+                    (System.nanoTime() - started) / 1_000_000);
+        }
     }
 
     @Override
@@ -118,15 +182,5 @@ public class ThinkingControlChatModel implements ChatModel {
         copy.setExtraBody(body.isEmpty() ? null : body);
         if (wire.reasoningEffort() != null) copy.setReasoningEffort(wire.reasoningEffort());
         return new Prompt(prompt.getInstructions(), copy);
-    }
-
-    /** 실은 필드 중 오류 문구에 이름이 나온 것 — 원인 사슬 전체를 본다. 없으면 {@code null}(다른 실패다). */
-    private static String rejectedField(Throwable e, ThinkingWire wire) {
-        for (String field : wire.fields()) {
-            for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
-                if (t.getMessage() != null && t.getMessage().contains(field)) return field;
-            }
-        }
-        return null;
     }
 }

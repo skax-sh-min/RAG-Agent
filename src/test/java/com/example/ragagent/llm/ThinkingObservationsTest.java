@@ -103,16 +103,70 @@ class ThinkingObservationsTest {
         assertThat(s.sent()).isEqualTo(ThinkingWire.Sent.OFF);
     }
 
+    // ── 체인 밖 스트리밍(AnswerStreamer) ─────────────────────────────────────
+
+    @Test
+    @DisplayName("스트리밍 — 생각 델타가 오면 생각한 것이다. 토큰 수는 델타 수(추정), 출력은 생각+답 델타")
+    void streamingCountsDeltas() {
+        // 2026-10-02 llama.cpp 실측 모양: 생각 델타 111 + 답 델타 1, usage 없음, finish_reason=stop
+        var s = ThinkingObservations.streamSampleOf(ThinkingWire.Sent.ON, 1, 111, "STOP", null, 2600);
+
+        assertThat(s.thinkingObserved()).isTrue();
+        assertThat(s.thinkingTokens()).isEqualTo(111);
+        assertThat(s.thinkingEstimated()).isTrue();
+        assertThat(s.outputTokens()).isEqualTo(112);
+        assertThat(s.outputEstimated()).as("서버가 센 값이 아니다").isTrue();
+        assertThat(s.truncated()).isFalse();
+        assertThat(s.latencyMs()).isEqualTo(2600);
+    }
+
+    @Test
+    @DisplayName("스트리밍 — 생각 델타가 없으면 생각하지 않은 것이다(끔이 지켜졌다)")
+    void streamingWithoutReasoningDeltasDidNotThink() {
+        var s = ThinkingObservations.streamSampleOf(ThinkingWire.Sent.OFF, 1, 0, "stop", null, 300);
+
+        assertThat(s.thinkingObserved()).isFalse();
+        assertThat(s.thinkingTokens()).isNull();
+        assertThat(s.outputTokens()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("스트리밍 — 서버가 usage 를 함께 보냈으면 출력은 그 값(추정 아님), 보고된 생각 토큰이 델타 수보다 앞선다")
+    void streamingPrefersReportedUsage() {
+        var usage = new OpenAiApi.Usage(240, 31, 271, null,
+                new OpenAiApi.Usage.CompletionTokenDetails(200, null, null, null));
+
+        var s = ThinkingObservations.streamSampleOf(ThinkingWire.Sent.ON, 30, 190, "LENGTH", usage, 5000);
+
+        assertThat(s.outputTokens()).isEqualTo(240);
+        assertThat(s.outputEstimated()).isFalse();
+        assertThat(s.thinkingTokens()).isEqualTo(200);
+        assertThat(s.thinkingEstimated()).isFalse();
+        assertThat(s.truncated()).as("finish_reason=length").isTrue();
+    }
+
+    @Test
+    @DisplayName("블로킹 표본은 출력 추정 표시가 없다 — 보고가 없으면 출력은 null 이다")
+    void blockingOutputIsNeverMarkedEstimated() {
+        var reported = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON,
+                response("답", null, "stop", new OpenAiApi.Usage(10, 5, 15)), 10);
+        var unreported = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON, response("답", null, "stop", null), 10);
+
+        assertThat(reported.outputEstimated()).isFalse();
+        assertThat(unreported.outputTokens()).isNull();
+        assertThat(unreported.outputEstimated()).isFalse();
+    }
+
     @Test
     @DisplayName("키마다 최근 50회만 남긴다 — 오래된 것부터 버린다")
     void keepsOnlyTheMostRecent() {
         ThinkingObservations o = new ThinkingObservations();
         for (int i = 0; i < ThinkingObservations.CAPACITY + 7; i++) {
             o.record(ThinkingSite.EVAL, "local", ThinkingLevel.LOW,
-                    new ThinkingObservations.Sample(ThinkingWire.Sent.ON, i, null, false, false, false, i));
+                    new ThinkingObservations.Sample(ThinkingWire.Sent.ON, i, false, null, false, false, false, i));
         }
         o.record(ThinkingSite.EVAL, "local", ThinkingLevel.HIGH,
-                new ThinkingObservations.Sample(ThinkingWire.Sent.ON, 1, null, false, false, false, 1));
+                new ThinkingObservations.Sample(ThinkingWire.Sent.ON, 1, false, null, false, false, false, 1));
 
         List<ThinkingObservations.Sample> low = o.samples(ThinkingSite.EVAL, "local", ThinkingLevel.LOW);
         assertThat(low).hasSize(ThinkingObservations.CAPACITY);

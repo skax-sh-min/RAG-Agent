@@ -14,8 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 그 레코드는 여러 곳에서 생성되고, 이 값은 프로바이더를 식별하는 정보가 아니라 그에 관한 설정·관측이다.
  * 기동 시 {@code LlmConfig} 가 채운다.
  *
- * <p><b>거부 기억이 여기 있는 이유</b>: 블로킹 체인({@link ThinkingControlChatModel})과 체인을 지나지 않는 스트리밍
- * 경로(3단계)가 같은 기억을 봐야 한다. 데코레이터 인스턴스에 두면 스트리밍은 매번 거부당한다. 기억은 프로세스가
+ * <p><b>거부 기억이 여기 있는 이유</b>: 블로킹 체인({@link ThinkingControlChatModel})과 체인을 지나지 않는 채팅 답변
+ * 스트리밍({@code AnswerStreamer})이 같은 기억을 봐야 한다. 데코레이터 인스턴스에 두면 스트리밍은 매번 거부당한다. 기억은 프로세스가
  * 사는 동안만 간다 — 서버를 바꾸면 앱도 다시 뜨는 것이 이 앱의 운영 형태다.
  */
 @Component
