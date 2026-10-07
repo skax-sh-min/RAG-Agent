@@ -19,7 +19,7 @@ import java.util.function.Function;
  * 합쳐 입력 예산이 창의 65% 밑으로 내려가지 않게 하는 바닥이다.
  *
  * <pre>{@code
- *   h  = headroom(수준)              켬으로 나갈 때만. LOW 512 · MEDIUM 1,024 · HIGH 2,048
+ *   h  = headroom(수준)              켬으로 나갈 때만. LOW 1,024 · MEDIUM 2,048 · HIGH 4,096
  *   C  = min(프로바이더 max-tokens, 창 × 25%)   창을 모르면 프로바이더 max-tokens 만
  *   h' = clamp(C − 기본 예약, 0, h)    상한까지 남은 만큼만
  *   예약 = 기본 예약 + h'
@@ -48,15 +48,18 @@ public class ThinkingBudget {
     public static final int CEILING_PERCENT = 25;
 
     /**
-     * 수준별 생각 여유(토큰) — 켬으로 나갈 때만 더한다. 끔은 0. 처음 값은 설계값이고 6단계 실측(관측의 생각 토큰
-     * p95)으로 조정한다.
+     * 수준별 생각 여유(토큰) — 켬으로 나갈 때만 더한다. 끔은 0. <b>낮게는 6단계 실측(2026-10-07, llama.cpp b11433 +
+     * gemma-4-E2B)으로 512 → 1,024 로 올렸다</b>: 낮게로 생각을 켠 호출의 생각 토큰 p95 가 한 줄짜리 호출에서 420~970,
+     * 검증에서 1,180~1,420 이었고, 기본 예약이 256 인 큐레이션 제안은 여유 512(예약 768)에서 12건 중 1건이 예약에 걸려 잘렸다
+     * (다른 셋도 예약의 5% 안쪽이었다). 중간·높게는 llama.cpp 에서 켬으로 접혀 이 서버로는 잴 수 없어 설계의 비율(1:2:4)을
+     * 그대로 두었다 — 낮게의 두 배·네 배다.
      */
     public static int headroom(ThinkingLevel level) {
         return switch (level) {
             case OFF -> 0;
-            case LOW -> 512;
-            case MEDIUM -> 1_024;
-            case HIGH -> 2_048;
+            case LOW -> 1_024;
+            case MEDIUM -> 2_048;
+            case HIGH -> 4_096;
         };
     }
 

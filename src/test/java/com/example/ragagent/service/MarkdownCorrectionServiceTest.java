@@ -1469,15 +1469,15 @@ class MarkdownCorrectionServiceTest {
     @org.junit.jupiter.api.parallel.ResourceLock("global-state")   // 수준을 정적 오버라이드 계층을 거쳐 읽는다
     @DisplayName("§6.29 ④ — 생각이 켜지면 그 여유만큼 섹션이 작아진다(재작성은 여유를 예약 상한으로 깎지 않고 조각에서 비운다)")
     void thinkingHeadroomShrinksTheSections() {
-        // 창 8,192: 생각 없이 (8192 − 1300 − 819) / 2.5 = 2,429 → 80자 줄 30개, 켜면(낮게 512) 2,224 → 27개
+        // 창 8,192: 생각 없이 (8192 − 1300 − 819) / 2.5 = 2,429 → 80자 줄 30개, 켜면(낮게 1,024) (8192 − 1300 − 819 − 1024) / 2.5 = 2,019 → 25개
         String body = ("가".repeat(79) + "\n").repeat(60);   // 4,800자
         ProviderContextWindows windows = new ProviderContextWindows();
         windows.record("local", 8_192, ProviderContextWindows.Source.CONFIGURED);
         when(llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST)).thenReturn("local");
         com.example.ragagent.llm.ProviderThinkingDialects dialects = new com.example.ragagent.llm.ProviderThinkingDialects();
-        dialects.record("local", com.example.ragagent.llm.ThinkingDialect.AUTO, true);   // md-correct 출하값 낮게 → 켬
+        dialects.record("local", com.example.ragagent.llm.ThinkingDialect.AUTO, true);   // 출하값은 끔 — 설정 줄로 낮게(→ 켬)를 명시한다
 
-        AppProperties props = narrowProps();
+        AppProperties props = narrowProps(java.util.Map.of("md-correct", "low"));
         List<String> plain = narrowService(windows).splitBySections(body);
         List<String> thinking = new MarkdownCorrectionService(llmRouter, props, windows,
                 new com.example.ragagent.llm.ThinkingBudget(props, dialects, windows)).splitBySections(body);
@@ -1494,12 +1494,17 @@ class MarkdownCorrectionServiceTest {
     }
 
     private static AppProperties narrowProps() {
+        return narrowProps(java.util.Map.of());
+    }
+
+    /** {@code thinking} 은 app.llm.thinking.* 줄 — 출하값(대부분 끔)과 다른 수준을 가정할 때 쓴다. */
+    private static AppProperties narrowProps(java.util.Map<String, String> thinking) {
         AppProperties props = mock(AppProperties.class);
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true, thinking));
         return props;
     }
 }

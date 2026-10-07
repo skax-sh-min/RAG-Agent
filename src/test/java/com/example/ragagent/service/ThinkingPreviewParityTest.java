@@ -126,7 +126,7 @@ class ThinkingPreviewParityTest {
     // ── 독립화(CONDENSE) — 호출부가 실제로 만든 요청 ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("독립화 — 낮게로 켜면 요청의 max_tokens 가 미리보기의 예약(기본 256 + 여유 512 = 768)과 같고, 서버에는 enable_thinking=true 가 간다")
+    @DisplayName("독립화 — 낮게로 켜면 요청의 max_tokens 가 미리보기의 예약(기본 256 + 여유 1,024 = 1,280)과 같고, 서버에는 enable_thinking=true 가 간다")
     void condenseRequestMatchesThePreview() {
         ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()
                 .file(ThinkingPreviewHarness.levels(ThinkingSite.CONDENSE, ThinkingLevel.LOW)).build();
@@ -141,7 +141,7 @@ class ThinkingPreviewParityTest {
 
         assertThat(sent).hasSize(1);
         ThinkingPreview.Cell previewed = h.row(ThinkingSite.CONDENSE).cell(ThinkingLevel.LOW);
-        assertThat(maxTokensOf(sent.get(0))).isEqualTo(previewed.reservedTokens()).isEqualTo(768);
+        assertThat(maxTokensOf(sent.get(0))).isEqualTo(previewed.reservedTokens()).isEqualTo(1_280);
         assertThat(((OpenAiChatOptions) sent.get(0).getOptions()).getExtraBody())
                 .containsKey("chat_template_kwargs")
                 .doesNotContainKey("__rag_thinking_site");
@@ -213,7 +213,7 @@ class ThinkingPreviewParityTest {
     }
 
     @Test
-    @DisplayName("검증 — 요청의 max_tokens 와 프롬프트의 발췌 수가 미리보기와 같다(중간: 예약 3,072 · 발췌 k/10)")
+    @DisplayName("검증 — 요청의 max_tokens 와 프롬프트의 발췌 수가 미리보기와 같다(중간: 예약 4,096 · 발췌 k/10)")
     void evalRequestAndExcerptsMatchThePreview() {
         ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()
                 .file(ThinkingPreviewHarness.levels(ThinkingSite.EVAL, ThinkingLevel.MEDIUM)).build();
@@ -228,7 +228,7 @@ class ThinkingPreviewParityTest {
 
         assertThat(evalSent).as("검증 호출").hasSize(1);
         ThinkingPreview.Cell previewed = h.row(ThinkingSite.EVAL).cell(ThinkingLevel.MEDIUM);
-        assertThat(maxTokensOf(evalSent.get(0))).as("요청의 max_tokens").isEqualTo(previewed.reservedTokens()).isEqualTo(3_072);
+        assertThat(maxTokensOf(evalSent.get(0))).as("요청의 max_tokens").isEqualTo(previewed.reservedTokens()).isEqualTo(4_096);
         // 시스템 프롬프트도 [D1] 같은 표기를 설명하므로, 실제 발췌 블록([문서 발췌] 이후)만 센다
         String evalText = textOf(evalSent.get(0));
         Matcher marks = EXCERPT_MARK.matcher(evalText.substring(evalText.lastIndexOf("[문서 발췌]")));

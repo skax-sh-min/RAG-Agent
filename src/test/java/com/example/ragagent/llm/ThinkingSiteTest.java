@@ -45,14 +45,20 @@ class ThinkingSiteTest {
     }
 
     @Test
-    @DisplayName("출하 기본값 — 이미 생각을 끄던 세 자리만 끔, 나머지는 낮게(참조 배포에서 지금과 같은 전송 결과)")
+    @DisplayName("출하 기본값 — 6단계 실측: 생각이 이득을 준 검증·응용 답변과 측정하지 못한 요약·이미지 셋만 낮게, 나머지는 끔")
     void shippedDefaults() {
         assertThat(Arrays.stream(ThinkingSite.values())
-                .filter(s -> s.shippedDefault() == ThinkingLevel.OFF))
-                .containsExactlyInAnyOrder(ThinkingSite.CONDENSE, ThinkingSite.POST_ANSWER, ThinkingSite.CURATED_SUGGEST);
+                .filter(s -> s.shippedDefault() == ThinkingLevel.LOW))
+                .containsExactlyInAnyOrder(
+                        // 실측(2026-10-07)에서 생각이 이득을 줬다 — 문서가 받쳐 주지 않는 답을 잡는 비율 6% → 44%, 응용 코드가
+                        // 문서의 API 를 따르는 정도
+                        ThinkingSite.EVAL, ThinkingSite.EVAL_CREATIVE, ThinkingSite.ANSWER_RAG_C,
+                        // 그 구성에서 측정하지 못했다(소형 모델 계층이 없으면 요약은 LLM 을 안 부른다 · 비전 모델 없음) — 옛 값 그대로
+                        ThinkingSite.SUMMARY, ThinkingSite.IMAGE_DESCRIBE, ThinkingSite.IMAGE_TYPE,
+                        ThinkingSite.MD_CORRECT_VISION);
         assertThat(Arrays.stream(ThinkingSite.values())
-                .filter(s -> s.shippedDefault() != ThinkingLevel.OFF))
-                .allMatch(s -> s.shippedDefault() == ThinkingLevel.LOW);
+                .filter(s -> s.shippedDefault() != ThinkingLevel.LOW))
+                .allMatch(s -> s.shippedDefault() == ThinkingLevel.OFF);
     }
 
     @Test

@@ -316,7 +316,7 @@ class ThinkingControlChatModelTest {
     }
 
     @Test
-    @DisplayName("켬으로 나가면 호출부의 maxTokens(기본 예약)에 수준의 여유를 더한다 — 검증 2,048 + 낮게 = 2,560")
+    @DisplayName("켬으로 나가면 호출부의 maxTokens(기본 예약)에 수준의 여유를 더한다 — 검증 2,048 + 낮게 = 3,072")
     void headroomIsAddedWhenThinkingGoesOutOn() {
         ChatModel delegate = mock(ChatModel.class);
         when(delegate.call(any(Prompt.class))).thenReturn(ok());
@@ -324,7 +324,7 @@ class ThinkingControlChatModelTest {
 
         budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.LOW).call(prompt);
 
-        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(2_560);
+        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(3_072);
         assertThat(optionsOf(prompt).getMaxTokens()).as("원본은 건드리지 않는다").isEqualTo(2_048);
     }
 
@@ -358,14 +358,14 @@ class ThinkingControlChatModelTest {
     }
 
     @Test
-    @DisplayName("재작성 사이트 — 창 25% 로 깎지 않는다(조각이 이미 자리를 비웠다): MD 교정 6,000 + 중간 = 7,024")
+    @DisplayName("재작성 사이트 — 창 25% 로 깎지 않는다(조각이 이미 자리를 비웠다): MD 교정 6,000 + 중간 = 8,048")
     void rewriteSitesGetTheFullHeadroom() {
         ChatModel delegate = mock(ChatModel.class);
         when(delegate.call(any(Prompt.class))).thenReturn(ok());
 
         budgeted(delegate, ThinkingDialect.AUTO, true, ThinkingLevel.MEDIUM).call(marked(ThinkingSite.MD_CORRECT, 6_000));
 
-        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(7_024);
+        assertThat(optionsOf(sent(delegate)).getMaxTokens()).isEqualTo(8_048);
     }
 
     @Test
@@ -384,7 +384,7 @@ class ThinkingControlChatModelTest {
 
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
         verify(delegate, times(2)).call(captor.capture());
-        assertThat(captor.getAllValues()).extracting(p -> optionsOf(p).getMaxTokens()).containsExactly(2_560, 2_048);
+        assertThat(captor.getAllValues()).extracting(p -> optionsOf(p).getMaxTokens()).containsExactly(3_072, 2_048);
     }
 
     @Test
@@ -397,7 +397,7 @@ class ThinkingControlChatModelTest {
 
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
         verify(delegate).stream(captor.capture());
-        assertThat(optionsOf(captor.getValue()).getMaxTokens()).isEqualTo(2_560);
+        assertThat(optionsOf(captor.getValue()).getMaxTokens()).isEqualTo(3_072);
     }
 
     // ── 스트림(stream=false 프로바이더의 채팅 답변) — 거부 재시도와 관측 ───────────────────
