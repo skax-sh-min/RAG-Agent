@@ -90,7 +90,15 @@ public class MemoryService {
      * 만들어진다.
      */
     public int maxConversationChars() {
-        return Math.max(1_000, props.llmSafe().maxTokens() / 2);
+        return conversationChars(props.llmSafe().maxTokens());
+    }
+
+    /**
+     * {@link #maxConversationChars()} 의 식 — {@code /settings} 의 생각 수준 미리보기가 "이력이 상한일 때 문서가 몇 개
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     */
+    static int conversationChars(int maxTokens) {
+        return Math.max(1_000, maxTokens / 2);
     }
 
     /**

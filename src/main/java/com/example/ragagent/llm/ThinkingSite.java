@@ -26,30 +26,56 @@ import java.util.Optional;
  * ({@code AnswerStreamer} 가 사이트를 받아 요청에 직접 싣는다). 생각 수준이 먹지 않는 LLM 호출은 남아 있지 않다.
  */
 public enum ThinkingSite {
-    ANSWER_RAG_S("answer-rag-s", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    ANSWER_RAG_N("answer-rag-n", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    ANSWER_RAG_C("answer-rag-c", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    ANSWER_DIRECT_S("answer-direct-s", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    ANSWER_DIRECT_N("answer-direct-n", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    ANSWER_META("answer-meta", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    EVAL("eval", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    EVAL_CREATIVE("eval-creative", ThinkingLevel.LOW, Route.conversation(TaskType.TEXT)),
-    CLASSIFY("classify", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT)),
-    CONDENSE("condense", ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
+    ANSWER_RAG_S("answer-rag-s", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_RAG_N("answer-rag-n", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_RAG_C("answer-rag-c", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_DIRECT_S("answer-direct-s", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_DIRECT_N("answer-direct-n", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_META("answer-meta", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    EVAL("eval", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 400),
+    EVAL_CREATIVE("eval-creative", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 400),
+    CLASSIFY("classify", Group.QUERY, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 40),
+    CONDENSE("condense", Group.QUERY, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 60),
     /** 작은 모델부터 — 없으면 같은 서버의 큰 모델로 내려간다(§6.21, {@code routeProviderWithFallback}). */
-    QUERY_EXPANSION("query-expansion", ThinkingLevel.LOW,
-            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT)),
-    RERANK("rerank", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT)),
-    POST_ANSWER("post-answer", ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
-    TITLE("title", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
-    SUMMARY("summary", ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.MICRO_TEXT)),
-    KEYWORD_CONTEXT("keyword-context", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT)),
-    MD_CORRECT("md-correct", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), true),
-    TXT_TO_MD("txt-to-md", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), true),
-    IMAGE_DESCRIBE("image-describe", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.VISION)),
-    IMAGE_TYPE("image-type", ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_BOTH)),
-    MD_CORRECT_VISION("md-correct-vision", ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.VISION)),
-    CURATED_SUGGEST("curated-suggest", ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT));
+    QUERY_EXPANSION("query-expansion", Group.QUERY, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), 150),
+    RERANK("rerank", Group.QUERY, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 80),
+    POST_ANSWER("post-answer", Group.POST, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 250),
+    TITLE("title", Group.POST, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 30),
+    SUMMARY("summary", Group.POST, ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.MICRO_TEXT), 800),
+    KEYWORD_CONTEXT("keyword-context", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 0),
+    MD_CORRECT("md-correct", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), 0, true),
+    TXT_TO_MD("txt-to-md", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), 0, true),
+    IMAGE_DESCRIBE("image-describe", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.VISION), 150),
+    IMAGE_TYPE("image-type", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_BOTH), 10),
+    MD_CORRECT_VISION("md-correct-vision", Group.INDEX, ThinkingLevel.LOW,
+            Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.VISION), 150),
+    CURATED_SUGGEST("curated-suggest", Group.ADMIN, ThinkingLevel.OFF,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 80);
+
+    /**
+     * {@code /settings} 미리보기의 표 묶음(PLAN §6.29 ⑦-나 — 채팅 답변 / 검증 / 질문 처리 / 답변 뒤 / 인덱싱 / 관리자).
+     * 사이트가 자기 묶음을 선언해야 사이트를 더하고 묶음을 잊는 일이 컴파일 오류로 드러난다.
+     */
+    public enum Group {
+        ANSWER("answer"), VERIFY("verify"), QUERY("query"), POST("post"), INDEX("index"), ADMIN("admin");
+
+        private final String id;
+
+        Group(String id) {
+            this.id = id;
+        }
+
+        /** 화면 제목 메시지 키의 마지막 마디 — {@code settings.thinking.group.<id>}. */
+        public String id() {
+            return id;
+        }
+    }
 
     /**
      * 사이트의 라우팅.
@@ -69,19 +95,41 @@ public enum ThinkingSite {
     }
 
     private final String id;
+    private final Group group;
     private final ThinkingLevel shippedDefault;
     private final Route route;
     private final boolean rewritesInput;
+    private final int expectedOutputTokens;
 
-    ThinkingSite(String id, ThinkingLevel shippedDefault, Route route) {
-        this(id, shippedDefault, route, false);
+    ThinkingSite(String id, Group group, ThinkingLevel shippedDefault, Route route, int expectedOutputTokens) {
+        this(id, group, shippedDefault, route, expectedOutputTokens, false);
     }
 
-    ThinkingSite(String id, ThinkingLevel shippedDefault, Route route, boolean rewritesInput) {
+    ThinkingSite(String id, Group group, ThinkingLevel shippedDefault, Route route, int expectedOutputTokens,
+                 boolean rewritesInput) {
         this.id = id;
+        this.group = group;
         this.shippedDefault = shippedDefault;
         this.route = route;
+        this.expectedOutputTokens = expectedOutputTokens;
         this.rewritesInput = rewritesInput;
+    }
+
+    /** {@code /settings} 미리보기에서 이 사이트가 속한 표. */
+    public Group group() {
+        return group;
+    }
+
+    /**
+     * 이 호출이 <b>생각을 빼고 실제로 내는</b> 출력의 전형 토큰 수 — 미리보기의 "생각 자리"({@code 예약 − 이 값})를 정하는
+     * 상수다(PLAN §6.29 ⑦-다). 처음 값은 기존 주석·실측(검증 JSON 은 {@code AnswerService.MAX_EVAL_OUTPUT_TOKENS} 주석의
+     * "~400 tokens", 독립화는 한 줄)에서 가져왔고 6단계에서 관측 p95 로 갱신한다.
+     *
+     * <p><b>0 은 "이 호출의 모양이 정한다"</b>는 뜻이다 — 채팅 답변은 응답 모드의 최소 보장({@code ResponseMode.minChars}),
+     * 키워드+맥락은 배치 건수, 재작성은 조각 크기가 필요분이라 상수 하나로 둘 수 없다. 그 계산은 미리보기가 한다.
+     */
+    public int expectedOutputTokens() {
+        return expectedOutputTokens;
     }
 
     /**
@@ -112,7 +160,7 @@ public enum ThinkingSite {
      * 5단계에서 {@code /settings} 가 이 키로 쓰고, {@code AppProperties.LlmConfig.thinkingLevel()} 이 이 키로 읽는다.
      */
     public String settingsKey() {
-        return "llm.thinking." + id;
+        return SETTINGS_KEY_PREFIX + id;
     }
 
     /** 이 사이트의 작업 유형 — 라우터 호출의 첫 인자. */
@@ -147,6 +195,15 @@ public enum ThinkingSite {
     public RoutingMode routingMode(RoutingMode conversationMode) {
         return route.fixedMode() != null ? route.fixedMode() : Objects.requireNonNull(conversationMode);
     }
+
+    /** {@code llm.thinking.<id>} 형태의 {@code /settings} 오버라이드 키로 사이트를 찾는다 — 모르는 키면 비어 있다. */
+    public static Optional<ThinkingSite> bySettingsKey(String key) {
+        if (key == null || !key.startsWith(SETTINGS_KEY_PREFIX)) return Optional.empty();
+        return byId(key.substring(SETTINGS_KEY_PREFIX.length()));
+    }
+
+    /** 오버라이드 키의 접두 — {@link #settingsKey()} 가 이것에 id 를 붙인다. */
+    public static final String SETTINGS_KEY_PREFIX = "llm.thinking.";
 
     public static Optional<ThinkingSite> byId(String id) {
         if (id == null) return Optional.empty();

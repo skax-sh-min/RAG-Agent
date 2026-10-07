@@ -84,11 +84,26 @@ public class TextToMarkdownService {
     private int blockCharBudget() {
         String provider = llmRouter.findProviderName(
                 ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode());
-        int window = contextWindows.tokensOrZero(provider);
-        if (window <= 0) return MAX_BLOCK_CHARS;
-        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS,
+        return blockChars(contextWindows.tokensOrZero(provider),
                 thinkingBudget.rewriteHeadroom(ThinkingSite.TXT_TO_MD, provider));
+    }
+
+    /**
+     * {@link #blockCharBudget()} 의 식 — 순수 함수다. {@code /settings} 의 생각 수준 미리보기가 수준마다 "블록이 몇 글자까지
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     *
+     * @param window   받을 프로바이더의 창. 0 이하 = 모름
+     * @param headroom 생각 여유 — 켬으로 나가지 않으면 0
+     */
+    static int blockChars(int window, int headroom) {
+        if (window <= 0) return MAX_BLOCK_CHARS;
+        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS, headroom);
         return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
+    }
+
+    /** 구조화 지시 프롬프트(본문 제외)의 토큰 추정 — 미리보기의 "지시" 칸. */
+    static int promptOverheadTokens() {
+        return STRUCTURING_PROMPT_TOKENS;
     }
 
     /**

@@ -225,13 +225,33 @@ public class MarkdownCorrectionService {
     private int sectionCharBudget() {
         String provider = llmRouter.findProviderName(
                 ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode());
-        int window = contextWindows.tokensOrZero(provider);
-        int configured = maxSectionChars();
-        if (window <= 0) return configured;
-        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS,
+        return sectionChars(props.llmSafe().maxTokens(), contextWindows.tokensOrZero(provider),
                 thinkingBudget.rewriteHeadroom(ThinkingSite.MD_CORRECT, provider));
+    }
+
+    /**
+     * {@link #sectionCharBudget()} 의 식 — 순수 함수다. {@code /settings} 의 생각 수준 미리보기가 수준마다 "조각이 몇 글자까지
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     *
+     * @param window   받을 프로바이더의 창. 0 이하 = 모름(→ {@code max-tokens} 파생값 그대로)
+     * @param headroom 생각 여유 — 켬으로 나가지 않으면 0
+     */
+    static int sectionChars(int configuredMaxTokens, int window, int headroom) {
+        int configured = Math.max(MIN_SECTION_CHARS, (configuredMaxTokens - MIN_SECTION_CHARS) / 2);
+        if (window <= 0) return configured;
+        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS, headroom);
         if (fromWindow <= 0) return configured;   // 창이 지시 프롬프트도 못 담는다 — 판단 불가
         return Math.min(configured, Math.max(MIN_SECTION_CHARS, fromWindow));
+    }
+
+    /** 교정 지시 프롬프트(본문 제외)의 토큰 추정 — 미리보기의 "지시" 칸. */
+    static int promptOverheadTokens() {
+        return CORRECTION_PROMPT_TOKENS;
+    }
+
+    /** 이미지 설명(비전 패스)의 <b>기본</b> 출력 예약 — 요청 옵션과 미리보기가 같은 함수를 지난다. */
+    static int visionReservation(int configuredMaxTokens) {
+        return IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, configuredMaxTokens);
     }
 
     /**
@@ -1205,7 +1225,7 @@ public class MarkdownCorrectionService {
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
             // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
-            int cap = IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, props.llmSafe().maxTokens());
+            int cap = visionReservation(props.llmSafe().maxTokens());
             String response = llmRouter.executeWithTracking(ThinkingSite.MD_CORRECT_VISION.taskType(),
                     ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode(), BackgroundUsage.IMAGE_PREFIX,
                     model -> model.call(new Prompt(userMessage, indexingOptions(ThinkingSite.MD_CORRECT_VISION, cap))));

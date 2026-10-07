@@ -74,6 +74,43 @@ public enum ThinkingDialect {
         };
     }
 
+    /**
+     * 이 서버가 구분해서 알아듣는 수준의 폭 — {@code /settings} 프로바이더 표의 "생각 제어" 칸이 읽는다.
+     * {@link #wire} 가 실제로 만드는 값과 어긋나지 않게 {@code ThinkingDialectTest} 가 둘을 함께 본다.
+     */
+    public enum Support {
+        /** 아무것도 싣지 않는다 — 서버가 정한다. */
+        NONE,
+        /** 켬/끔만 — 낮게·중간·높게가 같은 값으로 접힌다. */
+        ON_OFF,
+        /** 낮게·중간·높게를 구분하고 끔은 {@code none}. */
+        EFFORT,
+        /** 낮게·중간·높게를 구분하지만 끌 수 없다 — 끔도 {@code low}. */
+        EFFORT_NO_OFF
+    }
+
+    /** @throws IllegalStateException {@code AUTO} 에 부르면 — {@link #resolve} 를 먼저 거쳐야 한다({@link #wire} 와 같은 이유) */
+    public Support support() {
+        return switch (this) {
+            case AUTO -> throw new IllegalStateException("AUTO 는 resolve() 로 먼저 푼다");
+            case NONE -> Support.NONE;
+            case TEMPLATE_KWARGS -> Support.ON_OFF;
+            case TEMPLATE_KWARGS_EFFORT -> Support.EFFORT_NO_OFF;
+            case OPENAI_EFFORT -> Support.EFFORT;
+        };
+    }
+
+    /** 이 dialect 가 싣는 본문 필드 — 화면에 그대로 적는다. 싣지 않으면 {@code null}. */
+    public String field() {
+        return switch (this) {
+            case AUTO -> throw new IllegalStateException("AUTO 는 resolve() 로 먼저 푼다");
+            case NONE -> null;
+            case TEMPLATE_KWARGS -> TEMPLATE_KWARGS_FIELD + ".enable_thinking";
+            case TEMPLATE_KWARGS_EFFORT -> TEMPLATE_KWARGS_FIELD + ".reasoning_effort";
+            case OPENAI_EFFORT -> ThinkingWire.REASONING_EFFORT_FIELD;
+        };
+    }
+
     private static String effort(ThinkingLevel level) {
         return switch (level) {
             case OFF, LOW -> "low";

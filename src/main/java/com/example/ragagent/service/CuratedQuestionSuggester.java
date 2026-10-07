@@ -133,8 +133,16 @@ public class CuratedQuestionSuggester {
     private OpenAiChatOptions options() {
         OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.CURATED_SUGGEST);
-        int configured = props.llmSafe().maxTokens();
-        if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
+        int base = baseReservation(props.llmSafe().maxTokens());
+        if (base > 0) builder.maxTokens(base);
         return builder.build();
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — {@link #MAX_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더
+     * 기본값). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens) {
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, MAX_OUTPUT_TOKENS) : 0;
     }
 }

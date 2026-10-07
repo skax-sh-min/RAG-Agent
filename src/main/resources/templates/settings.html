@@ -116,6 +116,17 @@
         </div>
     </div>
 
+    <!--/* ── 생각(추론) 수준 — 호출 지점별 (PLAN §6.29 ⑦) ──────────────────────────────────────────────
+         (파서 수준 주석 — 렌더 결과에 남지 않는다: 게스트의 페이지에 엔드포인트 경로가 새지 않게 한다)
+         관리자에게만 그린다(읽기까지 — 프로바이더 이름·창 크기·관측값이 드러난다). 내용은 /admin/settings/thinking 이 채운다:
+         그 경로가 /admin/** 이라 화면에서 감추는 것이 아니라 서버가 게스트·일반 사용자를 막는다. 페이지를 열 때 한 번,
+         그리고 창 재탐지가 끝났을 때(thinking-preview-stale) 다시 불러온다 — 창이 바뀌면 예산 숫자가 전부 바뀌기 때문이다. */-->
+    <div th:if="${isAdmin}" id="thinking-card" class="card mb-4"
+         hx-get="/admin/settings/thinking" hx-trigger="load, thinking-preview-stale from:body" hx-swap="outerHTML">
+        <div class="card-header fw-semibold" th:text="#{settings.thinking.title}">Thinking level per call site</div>
+        <div class="card-body text-secondary small" th:text="#{settings.thinking.loading}">Loading…</div>
+    </div>
+
     <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
     <div class="card mb-4" th:each="group : ${settings.groups}">
         <div class="card-header fw-semibold" th:text="#{__${group.title}__}">Group</div>
@@ -142,14 +153,40 @@
     });
 </script>
 
-</section>
+<!-- 생각 수준 카드 — 드롭다운을 바꾸면 서버가 미리 그려 둔 그 수준의 칸을 보이기만 한다(숫자는 하나도 계산하지 않는다).
+     이벤트 위임으로 문서에 한 번만 건다 — 카드와 행이 HTMX 로 통째로 바뀌어도 리스너를 다시 달 필요가 없다.
+     - [data-pane=<수준>] : 칸·계산 근거 목록 — 고른 수준만 보인다
+     - [data-col=<수준>]  : 비교표의 열 — 고른 수준을 강조한다
+     - .thinking-unsaved  : 저장된 값과 다르면 "저장 전" 배지가 보인다(차이 줄은 칸 안에 미리 렌더돼 있다) -->
+<script>
+    (function () {
+        document.addEventListener('change', function (e) {
+            var select = e.target.closest ? e.target.closest('.thinking-level-select') : null;
+            if (!select) return;
+            var row = select.closest('.thinking-row');
+            if (!row) return;
+            var level = select.value;
+            row.querySelectorAll('[data-pane]').forEach(function (el) {
+                el.hidden = el.getAttribute('data-pane') !== level;
+            });
+            row.querySelectorAll('[data-col]').forEach(function (el) {
+                el.classList.toggle('thinking-col-selected', el.getAttribute('data-col') === level);
+            });
+            var unsaved = row.querySelector('.thinking-unsaved');
+            if (unsaved) unsaved.hidden = (level === row.getAttribute('data-saved'));
+        });
+    })();
+</script>
 
+<!-- ⚠ 이 스크립트는 반드시 콘텐츠 조각(<section layout:fragment="content">) 안에 있어야 한다 — 조각 밖의 본문은 레이아웃 방언이
+     버려서, 예전에는 이 블록이 페이지에 실리지 않았고 Bootstrap 툴팁이 한 번도 초기화되지 않았다(네이티브 title 로만 보였다).
+     생각 수준 카드의 배지 설명이 data-bs-toggle="tooltip" 에 기대므로 위치를 옮겼다. -->
 <!-- 툴팁 초기화. 네이티브 title 은 브라우저 기본 지연(~1.5s)이 있어 체감상 너무 늦다.
      /admin/settings/update|reset 이 행을 hx-swap=outerHTML 로 갈아끼우므로 스왑 이후에도 다시
      걸어야 한다 — 그때 옛 인스턴스를 dispose 하지 않으면 떠 있던 툴팁이 유령으로 남는다
      (admin.html 의 같은 패턴). Thymeleaf 표현식을 쓰지 않으므로 th:inline 은 필요 없다.
 
-     ⚠️ 재초기화 훅은 htmx:afterSwap 이 아니라 htmx.onLoad 여야 한다. outerHTML 스왑은 기존 행을
+     ⚠️ 재초기화 훅은 htmx:afterSwap 이 아니라 htmx:load(htmx.onLoad 가 듣는 이벤트)여야 한다. outerHTML 스왑은 기존 행을
      **DOM 에서 떼어내므로**, 그 행(또는 그 안의 저장 버튼)에서 발화하는 afterSwap 은 document.body
      까지 버블링하지 못해 리스너가 아예 돌지 않을 수 있다. htmx:load 는 반대로 **새로 삽입된**
      노드에서 발화하니 항상 버블링한다. 이 차이는 편집 가능한 행에 툴팁(허용 범위 안내)이 생기기
@@ -163,16 +200,19 @@
                 new bootstrap.Tooltip(el, {delay: {show: 100, hide: 0}});
             });
         }
-        /* 훅 등록도 DOMContentLoaded 안에서 한다 — 이 블록이 htmx 스크립트 태그보다 먼저 실행되면
-           window.htmx 가 아직 없고, 그러면 재초기화가 조용히 등록되지 않는다(저장 후 그 행만 툴팁을
-           잃는데, 화면 어디에도 오류가 남지 않는다). DOMContentLoaded 시점에는 body 의 일반 스크립트가
-           모두 끝나 있어 순서를 따질 필요가 없다. */
-        document.addEventListener('DOMContentLoaded', function () {
-            initTooltips(document);
-            if (window.htmx) htmx.onLoad(function (content) { initTooltips(content); });
-        });
+        /* 초기 화면의 툴팁은 DOMContentLoaded 에서 한 번. HTMX 가 새로 넣은 노드(저장·기본값 뒤의 행, 카드 전체)의 툴팁은
+           htmx:load 에서 — htmx.onLoad() 를 DOMContentLoaded 안에서 등록하면 이 자리에서는 **한 번도 발화하지 않았다**
+           (htmx 자신의 초기화보다 먼저 등록된 리스너가 사라지는 것으로 보이고, 오류도 없다 — 같은 훅을 로드 뒤에 등록하면
+           동작한다). htmx:load 는 htmx 가 새 노드마다 그 노드에 띄우는 DOM 이벤트(bubbles)라 htmx 객체가 있는지 볼 필요 없이
+           바로 문서에 걸 수 있고, htmx.onLoad 는 이 이벤트의 설탕일 뿐이다. */
+        document.addEventListener('DOMContentLoaded', function () { initTooltips(document); });
+        document.addEventListener('htmx:load', function (e) { initTooltips((e.detail && e.detail.elt) || e.target); });
     })();
 </script>
+
+</section>
+
+
 
 </body>
 </html>

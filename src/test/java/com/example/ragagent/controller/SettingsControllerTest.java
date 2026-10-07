@@ -1,9 +1,12 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.config.SettingsKeys;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.SettingItem;
+import com.example.ragagent.model.ThinkingPreview;
 import com.example.ragagent.service.SettingsService;
+import com.example.ragagent.service.ThinkingPreviewService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ui.ExtendedModelMap;
@@ -27,7 +30,8 @@ import static org.mockito.Mockito.when;
 class SettingsControllerTest {
 
     private final SettingsService service = mock(SettingsService.class);
-    private final SettingsController controller = new SettingsController(service);
+    private final ThinkingPreviewService thinking = mock(ThinkingPreviewService.class);
+    private final SettingsController controller = new SettingsController(service, thinking);
 
     private static SettingItem sampleItem() {
         return new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "80",
@@ -71,6 +75,48 @@ class SettingsControllerTest {
 
         verify(service).reset(SettingsKeys.SEARCH_RRF_K);
         assertThat(name).isEqualTo("fragments/settings-item :: item");
+    }
+
+    @Test
+    @DisplayName("POST /admin/settings/update — 생각 수준 키는 그 사이트의 행을 새로 계산해 돌려준다(값 칸만 갈아끼우면 낡은 숫자가 남는다)")
+    void update_thinkingKey_returnsRecalculatedRow() {
+        ThinkingPreview.Row row = mock(ThinkingPreview.Row.class);
+        when(thinking.row(ThinkingSite.EVAL)).thenReturn(row);
+
+        Model model = new ExtendedModelMap();
+        String name = controller.update(ThinkingSite.EVAL.settingsKey(), "high", model);
+
+        verify(service).update(ThinkingSite.EVAL.settingsKey(), "high");
+        assertThat(name).isEqualTo("fragments/settings-thinking :: row");
+        assertThat(model.getAttribute("row")).isSameAs(row);
+        assertThat(model.getAttribute("item")).isNull();
+    }
+
+    @Test
+    @DisplayName("POST /admin/settings/reset — 생각 수준 키도 행 조각을 돌려준다")
+    void reset_thinkingKey_returnsRecalculatedRow() {
+        ThinkingPreview.Row row = mock(ThinkingPreview.Row.class);
+        when(thinking.row(ThinkingSite.CONDENSE)).thenReturn(row);
+
+        Model model = new ExtendedModelMap();
+        String name = controller.reset(ThinkingSite.CONDENSE.settingsKey(), model);
+
+        verify(service).reset(ThinkingSite.CONDENSE.settingsKey());
+        assertThat(name).isEqualTo("fragments/settings-thinking :: row");
+        assertThat(model.getAttribute("row")).isSameAs(row);
+    }
+
+    @Test
+    @DisplayName("GET /admin/settings/thinking — 미리보기를 계산해 카드 조각을 돌려준다")
+    void thinkingCard_returnsCardFragment() {
+        ThinkingPreview preview = new ThinkingPreview(java.time.Instant.now(), null, List.of());
+        when(thinking.preview()).thenReturn(preview);
+
+        Model model = new ExtendedModelMap();
+        String name = controller.thinkingCard(model);
+
+        assertThat(name).isEqualTo("fragments/settings-thinking :: card");
+        assertThat(model.getAttribute("thinking")).isSameAs(preview);
     }
 
     @Test

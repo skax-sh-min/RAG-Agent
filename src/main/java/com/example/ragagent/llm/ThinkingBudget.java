@@ -150,11 +150,19 @@ public class ThinkingBudget {
     /**
      * 입력 예산을 미리 재는 자리의 출력 예약 — {@code providerName} 은 그 호출을 받을 것으로 라우터가 답한 프로바이더다.
      * 실제 호출 사이에 답이 달라질 수 있지만 대체되는 것은 보통 다른 역할(원격 — 생각 제어 안 함)이라 "덜 줄였어야 했는데
-     * 더 줄였다" 쪽이다({@code AnswerService.budgetFor} 와 같은 근사).
+     * 더 줄였다" 쪽이다({@code AnswerService.budgetFor} 와 같은 근사). 수준은 그 사이트의 <b>지금 설정값</b>이다.
      */
     public Reservation reservation(ThinkingSite site, String providerName, int base) {
         if (props == null) return Reservation.unchanged(base);
-        ThinkingLevel level = levels.apply(site);
+        return reservation(site, levels.apply(site), providerName, base);
+    }
+
+    /**
+     * 같은 계산을 <b>가정한 수준</b>으로 — {@code /settings} 미리보기(§6.29 ⑦)가 네 수준을 모두 계산하는 자리다. 위의
+     * 오버로드가 이 함수에 설정값을 넘기는 것이 전부이므로, 미리보기와 런타임은 같은 식을 지난다.
+     */
+    public Reservation reservation(ThinkingSite site, ThinkingLevel level, String providerName, int base) {
+        if (props == null) return Reservation.unchanged(base);
         int window = contextWindows.tokensOrZero(providerName);
         return compute(base, level, thinkingOn(providerName, level), site.rewritesInput(),
                 providerMaxTokens(providerName, window), window);
@@ -166,8 +174,31 @@ public class ThinkingBudget {
      */
     public int rewriteHeadroom(ThinkingSite site, String providerName) {
         if (props == null) return 0;
-        ThinkingLevel level = levels.apply(site);
+        return rewriteHeadroom(site, levels.apply(site), providerName);
+    }
+
+    /** {@link #rewriteHeadroom(ThinkingSite, String)} 를 가정한 수준으로 — 미리보기용. */
+    public int rewriteHeadroom(ThinkingSite site, ThinkingLevel level, String providerName) {
+        if (props == null) return 0;
         return thinkingOn(providerName, level) ? headroom(level) : 0;
+    }
+
+    /** 그 사이트의 <b>지금 설정된</b> 수준 — 핫 편집을 반영한다. 생각 제어를 모르는 예산({@link #none()})이면 출하값. */
+    public ThinkingLevel level(ThinkingSite site) {
+        return props == null ? site.shippedDefault() : levels.apply(site);
+    }
+
+    /** 그 프로바이더의 창(토큰) — 모르면 0. 미리보기가 입력 예산·문서 수를 낼 수 있는지 가른다. */
+    public int contextWindow(String providerName) {
+        return contextWindows == null ? 0 : contextWindows.tokensOrZero(providerName);
+    }
+
+    /**
+     * 그 프로바이더의 지금 유효한 출력 상한 — 요청이 {@code maxTokens} 를 싣지 않는 호출(열린 항목 (d))이 실제로 예약하는
+     * 값이기도 하다. 미리보기가 그 호출들의 "기본 예약"으로 드러낸다.
+     */
+    public int providerMaxTokens(String providerName) {
+        return props == null ? 0 : providerMaxTokens(providerName, contextWindow(providerName));
     }
 
     private boolean thinkingOn(String providerName, ThinkingLevel level) {
