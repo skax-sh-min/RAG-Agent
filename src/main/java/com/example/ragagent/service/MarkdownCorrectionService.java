@@ -193,7 +193,7 @@ public class MarkdownCorrectionService {
     }
 
     // Section sizing derives from the single "LLM max tokens" source (app.llm.max-tokens /
-    // LLM_MAX_TOKENS, default 10000) — see maxSectionChars()/sectionCharBudget() below.
+    // LLM_MAX_TOKENS, default 12000) — see maxSectionChars()/sectionCharBudget() below.
     public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
                                      ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;

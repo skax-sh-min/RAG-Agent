@@ -213,7 +213,7 @@ class AppPropertiesOverrideTest {
     @DisplayName("LLM — temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 0.3]으로 clamp된다 (§6.18)")
     void override_temperature() {
         bind();
-        assertThat(base().llmSafe().temperature()).isEqualTo(0.0); // 기본값
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.2); // 기본값
 
         overrides.put(SettingsKeys.LLM_TEMPERATURE, "0.15");
         assertThat(base().llmSafe().temperature()).isEqualTo(0.15);
@@ -226,8 +226,8 @@ class AppPropertiesOverrideTest {
     @DisplayName("LLM — direct-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다 (§6.18)")
     void override_directTemperature() {
         bind();
-        assertThat(base().llmSafe().directTemperature()).isEqualTo(0.1); // 기본값
-        assertThat(base().llmSafe().temperature()).isEqualTo(0.0);       // 일반 temperature 기본값
+        assertThat(base().llmSafe().directTemperature()).isEqualTo(0.5); // 기본값
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.2);       // 일반 temperature 기본값
 
         overrides.put(SettingsKeys.LLM_DIRECT_TEMPERATURE, "0.05");
         assertThat(base().llmSafe().directTemperature()).isEqualTo(0.05);
@@ -256,7 +256,7 @@ class AppPropertiesOverrideTest {
     void override_creativeTemperature() {
         bind();
         assertThat(base().llmSafe().creativeTemperature()).isEqualTo(0.7); // 기본값
-        assertThat(base().llmSafe().temperature()).isEqualTo(0.0);         // 일반 temperature 기본값
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.2);         // 일반 temperature 기본값
 
         overrides.put(SettingsKeys.LLM_CREATIVE_TEMPERATURE, "0.45");
         assertThat(base().llmSafe().creativeTemperature()).isEqualTo(0.45);
@@ -265,7 +265,23 @@ class AppPropertiesOverrideTest {
         assertThat(base().llmSafe().creativeTemperature()).isEqualTo(1.0);
 
         // 일반 temperature 의 [0.0, 0.3] 상한이 창의 온도까지 끌어내리면 존재 이유가 사라진다.
-        assertThat(base().llmSafe().temperature()).isEqualTo(0.0);
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.2);
+    }
+
+    @Test
+    @DisplayName("LLM — app.llm 이 없거나 값이 비었을 때의 폴백: temperature 0.2 · direct 0.5 · max-tokens 12,000")
+    void llmFallbacks_whenNothingIsConfigured() {
+        // 이 수들은 application.properties 의 기본값과 같게 유지한다(AppProperties 의 DEFAULT_* 상수 참고).
+        // app.llm 자체가 없을 때(base())와, 있되 값이 비었을 때 — 폴백이 두 갈래에 따로 있어서 둘 다 본다.
+        AppProperties.LlmConfig absent = base().llmSafe();
+        AppProperties.LlmConfig unset = withLlm(new AppProperties.LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
+                null, null, null, null, null, null, null, null)).llmSafe();
+
+        for (AppProperties.LlmConfig llm : List.of(absent, unset)) {
+            assertThat(llm.temperature()).isEqualTo(0.2);
+            assertThat(llm.directTemperature()).isEqualTo(0.5);
+            assertThat(llm.maxTokens()).isEqualTo(12_000);
+        }
     }
 
     @Test
@@ -295,22 +311,25 @@ class AppPropertiesOverrideTest {
     @Test
     @DisplayName("§6.29 생각 수준 — 오버라이드 → app.llm.thinking.<id> → 출하값 순서, 틀린 값은 다음으로 떨어진다")
     void thinkingLevel_overrideThenFileThenShipped() {
+        // 출하값은 전부 끔이라 "끔이 나왔다" 만으로는 어느 층에서 왔는지 알 수 없다 — 층마다 끔이 아닌 값을 둬서 가른다.
         AppProperties p = withLlm(new AppProperties.LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
-                0.0, 0.1, 0.0, 0.7, true, 6000, 1, false, Map.of("eval", "high", "answer-rag-c", "bogus")));
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.HIGH);
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.ANSWER_RAG_C)).as("틀린 값 → 출하값(낮게)").isEqualTo(ThinkingLevel.LOW);
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("줄 없음 → 출하값").isEqualTo(ThinkingLevel.OFF);
+                0.0, 0.1, 0.0, 0.7, true, 6000, 1, false,
+                Map.of("eval", "high", "answer-rag-c", "bogus", "condense", "medium")));
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).as("파일의 줄").isEqualTo(ThinkingLevel.HIGH);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.ANSWER_RAG_C)).as("틀린 값 → 출하값")
+                .isEqualTo(ThinkingSite.ANSWER_RAG_C.shippedDefault()).isEqualTo(ThinkingLevel.OFF);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CLASSIFY)).as("줄 없음 → 출하값").isEqualTo(ThinkingLevel.OFF);
 
         bind();
         overrides.put(ThinkingSite.EVAL.settingsKey(), "off");
         overrides.put(ThinkingSite.TITLE.settingsKey(), "medium");
         overrides.put(ThinkingSite.CONDENSE.settingsKey(), "nonsense");
 
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.OFF);
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.TITLE)).isEqualTo(ThinkingLevel.MEDIUM);
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("틀린 오버라이드 → 그 아래(출하값)")
-                .isEqualTo(ThinkingLevel.OFF);
-        assertThat(base().llmSafe().thinkingLevel(ThinkingSite.EVAL)).as("app.llm 자체가 없어도 오버라이드가 먹는다")
-                .isEqualTo(ThinkingLevel.OFF);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).as("오버라이드가 파일의 줄을 이긴다").isEqualTo(ThinkingLevel.OFF);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.TITLE)).as("오버라이드가 출하값을 이긴다").isEqualTo(ThinkingLevel.MEDIUM);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("틀린 오버라이드 → 그 아래(파일의 줄)")
+                .isEqualTo(ThinkingLevel.MEDIUM);
+        assertThat(base().llmSafe().thinkingLevel(ThinkingSite.TITLE)).as("app.llm 자체가 없어도 오버라이드가 먹는다")
+                .isEqualTo(ThinkingLevel.MEDIUM);
     }
 }

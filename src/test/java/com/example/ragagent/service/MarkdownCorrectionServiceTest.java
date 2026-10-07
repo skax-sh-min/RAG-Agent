@@ -1497,7 +1497,7 @@ class MarkdownCorrectionServiceTest {
         return narrowProps(java.util.Map.of());
     }
 
-    /** {@code thinking} 은 app.llm.thinking.* 줄 — 출하값(대부분 끔)과 다른 수준을 가정할 때 쓴다. */
+    /** {@code thinking} 은 app.llm.thinking.* 줄 — 출하값(끔)과 다른 수준을 가정할 때 쓴다. */
     private static AppProperties narrowProps(java.util.Map<String, String> thinking) {
         AppProperties props = mock(AppProperties.class);
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
