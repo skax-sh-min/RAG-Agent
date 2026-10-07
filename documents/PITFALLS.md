@@ -101,6 +101,7 @@ PLAN §6.19.3 — the single place deciding "this request's client IP" for `Rate
 - **재작성 사이트는 창 25% 로 깎지 않는다** — 기본 예약(입력 × 1.5)이 거의 언제나 C 를 넘어서다. 대신 `rewriteHeadroom()` 만큼 조각을 줄여 자리를 만들고(16k 창 MD 교정 섹션이 낮게에서 ~204자 작아진다 — 문서당 호출 수가 는다), 요청에는 h 를 프로바이더 max-tokens 까지 더한다.
 - **상한을 하나도 모르면 늘리지 않는다**(창도 프로바이더 상한도 모름 — 테스트용 축약 생성자). 상한을 싣지 않는 호출(기본 예약 0 = 프로바이더 기본값, PLAN 열린 항목 (d))도 손대지 않는다.
 - **깎인 것을 숨기지 않는다.** `[PROMPT]` 줄의 `출력 예약 5,000 (기본 5,000 + 생각 0/512, 상한 4,096)`, 데코레이터의 `[THINKING] … 예약=…` DEBUG 줄. 미리보기(5단계)의 "여유 깎임" 배지가 같은 `Reservation.clipped()` 를 읽는다.
+- **낮게의 여유는 실측으로 1,024 다**(6단계, 2026-10-07 — 처음 512). 낮게로 생각을 켠 호출의 생각 토큰 p95 가 한 줄짜리 호출에서 420~970 · 검증에서 1,180~1,421 이었고, **모자란 쪽은 기본 예약이 작은 호출**이다 — 큐레이션 제안(256 + 512 = 768)이 12건 중 1건 예약에 걸려 잘렸고 셋이 예약의 5% 안쪽이었다. 기본 예약이 큰 호출(검증 2,048 · 답변 5,000 이상)은 512 에서도 잘리지 않았다. 중간·높게(2,048 · 4,096)는 llama.cpp 에서 켬으로 접혀 못 쟀고 낮게와의 비율(1:2:4)만 지켰다 — 같은 서버에서는 셋의 실제 생각이 같으니 중간·높게는 예산만 키울 뿐이다. 값을 바꾸면 `ThinkingBudgetTest`·`ThinkingPreviewServiceTest` 골든과 PLAN ⑦-나 예시가 같이 움직인다.
 
 ### `llm/TokenEstimateCalibration.java`
 
@@ -138,7 +139,7 @@ PLAN §6.19.3 — the single place deciding "this request's client IP" for `Rate
 
 **프롬프트를 스스로 만드는 프레임워크 호출**(`MultiQueryExpander` 의 `ChatClient`)은 호출부가 옵션에 표시할 자리가 없어 그 모델 앞에 `ThinkingSiteChatModel` 을 끼운다 — 지나가는 프롬프트마다 표시한다. 이 앱의 프로바이더 체인은 `getDefaultOptions()` 로 일반 `ChatOptions` 를 돌려주므로(`LoggingChatModel` 이 넘기지 않는다) 그 경로의 프롬프트 옵션은 `OpenAiChatOptions` 가 아니다 — 래퍼가 `OpenAiChatModel` 과 같은 변환(`ModelOptionsUtils.copyToTarget`)으로 옮겨 담고 표시한다. 반대로 `ChatClient.prompt().options(표시된 옵션)` 은 넘긴 객체를 그대로 써서 `stream()` 까지 표시가 간다(stream=false 프로바이더의 답변 경로, `ThinkingSiteChatModelTest` 가 실제 `ChatClient` 로 확인).
 
-**"서버 기본값" 수준은 두지 않았다.** 그건 관리자가 고르는 값이 아니라 앱이 모르는 값이라, 그걸 고르면 그 호출이 실제로 생각하는지 아무도 답할 수 없다. 수준은 넷뿐이고 사이트마다 구체적인 기본값이 있다. "서버가 정한다"는 프로바이더의 성질(dialect `none`)로만 남는다. 출하 기본값은 참조 배포에서 지금과 같은 전송 결과가 되게 골랐다(아무것도 보내지 않던 자리 = 낮게, 이미 끄던 셋 = 끔) — **서버에서 생각을 꺼 두고 운영하던 배포는 2단계부터 낮게가 생각을 다시 켤 수 있다**(요청의 `enable_thinking` 이 서버 기본값을 덮는다) — 2단계는 블로킹 호출, 3단계부터는 채팅 답변 스트리밍(`answer-*`)도. 출하값은 `ThinkingSite` 와 `application.properties` 두 곳에 있고 `ThinkingSiteTest` 가 둘을 맞춘다.
+**"서버 기본값" 수준은 두지 않았다.** 그건 관리자가 고르는 값이 아니라 앱이 모르는 값이라, 그걸 고르면 그 호출이 실제로 생각하는지 아무도 답할 수 없다. 수준은 넷뿐이고 사이트마다 구체적인 기본값이 있다. "서버가 정한다"는 프로바이더의 성질(dialect `none`)로만 남는다. 출하 기본값은 처음(2단계)에는 참조 배포에서 지금과 같은 전송 결과가 되게 골랐지만(아무것도 보내지 않던 자리 = 낮게, 이미 끄던 셋 = 끔), **6단계 실측으로 다시 정했다** — 생각이 이득을 준 검증·응용 답변만 낮게, 나머지는 끔([생각 수준 실측과 출하 기본값](#생각-수준-실측과-출하-기본값-629-6단계)). **낮게인 사이트는 서버를 생각 끔으로 띄운 배포에서도 생각을 켠다**(요청의 `enable_thinking` 이 서버 기본값을 덮는다). 출하값은 `ThinkingSite` 와 `application.properties` 두 곳에 있고 `ThinkingSiteTest` 가 둘을 맞춘다.
 
 **LM Studio 는 이 스위치를 문서화하지 않는다** — OpenAI 호환 경로의 지원 파라미터 목록에 없고, 네이티브 `/api/v1/chat` 에만 `reasoning: off` 가 있다. 거부하지 않고 흘려 넘기면 효과 없이 모델이 계속 생각할 수 있으므로, 호출부의 출력 상한은 **스위치가 안 먹는 경우를 위해** 정한다(질문 다듬기 2,048 · 독립화 256 은 빈 응답 → 원문 검색으로 수렴). 그 상태를 숫자로 드러내는 것이 관측(`ThinkingObservations`)의 "끔으로 보냈는데 생각했다"다.
 
@@ -171,6 +172,21 @@ PLAN §6.19.3 — the single place deciding "this request's client IP" for `Rate
 - **`settings.html` 의 스크립트는 반드시 `<section layout:fragment="content">` 안에 있어야 한다** — 조각 밖의 본문은 레이아웃 방언이 버린다. 예전 툴팁 초기화 스크립트가 `</section>` 뒤에 있어서 **페이지에 실리지 않았고 Bootstrap 툴팁이 한 번도 초기화되지 않았다**(네이티브 `title` 로만 보였다 — 33개 행 툴팁 전부). 옮긴 뒤에도 `htmx.onLoad()` 를 `DOMContentLoaded` 안에서 등록하면 **한 번도 발화하지 않았다**(같은 훅을 로드 뒤에 등록하면 동작한다 — htmx 자신의 초기화와 순서가 얽히는 것으로 보이고 오류도 없다). 그래서 `document.addEventListener('htmx:load', …)` 로 건다 — `htmx.onLoad` 가 듣는 그 DOM 이벤트이고 `htmx` 객체의 유무를 볼 필요가 없다.
 - **`Spec.Kind.CHOICE`** — 허용 값 목록(`off/low/medium/high`)에 없는 값은 400 이고 `default` 같은 값은 일부러 없다. 키는 `ThinkingSite.settingsKey()`(`llm.thinking.<id>`)에서 **생성**되며 `SettingsKeys.HOT_EDITABLE`(일반 항목 격자의 목록)에는 넣지 않는다 — 이 카드가 유일한 편집 자리다(같은 키를 두 곳에서 고칠 수 있으면 한쪽이 낡는다). 읽기는 매 호출 `props.llmSafe().thinkingLevel(site)`(핫).
 - **프로바이더 표의 "생각 제어" 열**(관리자만)은 `ProviderRow.thinking` 이 나른다 — 설정에 적힌 값(`AUTO` 면 "자동(AUTO → …)"), 서버가 구분해 알아듣는 폭(`ThinkingDialect.support()`), 싣는 필드(`field()`), 거부 기억. 등록되지 않은 프로바이더(키·주소가 없어 꺼진 것)는 기록이 없어 "안 함 — 서버가 정함"으로 읽히므로 칸을 비운다.
+
+### 생각 수준 실측과 출하 기본값 (§6.29 6단계)
+
+출하 기본값(`ThinkingSite.shippedDefault` = `application.properties` 의 `app.llm.thinking.*`)과 상수(`ThinkingSite.expectedOutputTokens` · `ThinkingBudget.headroom`)는 추측이 아니라 **실측**(2026-10-07, llama.cpp b11433 + gemma-4-E2B-it Q4_K_M, 창 32,768, 같은 입력을 끔/낮게로 번갈아 부름)으로 정했다. 하네스는 `ThinkingLevelEvaluationTest`(기본 skip), 표는 `scripts/thinking_eval_summary.py`, 환경·방법·절별 숫자·재현 방법은 [THINKING_EVALUATION.md](THINKING_EVALUATION.md)(PLAN §6.29 ② 표에 한 줄 요약)이다. 값을 다시 정하려면 하네스를 돌린다 — 아래 함정을 읽고.
+
+- **생각이 이득을 준 곳은 둘뿐이다**: **응답 검증**(`eval` · `eval-creative`) — 문서가 받쳐 주지 않는 답을 걸러내는 비율이 끔 1/18(6%) → 낮게 8/18(44%), 근거 있는 답은 둘 다 12/12 통과 — 와 **응용(C) 답변의 코드**(문서의 API·템플릿을 더 충실히 따른다 — 4건 중 3건). 나머지는 같은 품질에 짧은 호출이 10~40배, 채팅 답변은 첫 글자가 11~34초 느렸다. 그래서 그 셋만 낮게, 15곳은 끔이다. 출하값을 낮게로 되돌리면 **모든 호출이 이 서버에서 되살아난 생각의 대가**를 치른다.
+- **서버가 `--reasoning off` 로 떠 있어도 낮게인 사이트는 생각한다** — 요청의 `chat_template_kwargs.enable_thinking=true` 가 서버 기본값을 덮는다(측정 서버가 바로 그 모양이었다). 검증은 한 번에 2~14초 → 45~60초가 된다(답변이 화면에 나온 뒤라 첫 글자는 늦지 않다). 처리량이 중요한 다중 사용자 배포는 `eval`·`eval-creative` 를 끔으로 — 잡는 비율이 6% 로 떨어지는 것이 대가다.
+- **독립화는 생각이 켜지면 원문을 그대로 돌려주는 일이 는다**(10건 중 4건, 끔은 0건). 프롬프트의 "이미 혼자서 뜻이 통하면 원문 그대로" 규칙을 생각이 과하게 적용해서이고 — 잘림이 아니다(예약 768 안에서 `finish=stop`). `QuestionCondenser` 가 그 경우를 `Optional.empty()`(원문으로 검색)로 처리하므로 오류는 없지만, 후속 질문의 검색이 독립화 이득을 못 받는다.
+- **답변 뒤 보강을 낮게로 두면 추가 질문 칩이 안 뜬다.** 화면은 한 번에 최대 `PostAnswerService.MAX_EXTRAS_WAIT`(25초, 기본 요청 20초)만 기다리고 낮게의 중앙값이 28.7초다(화면 기다림 안에 도착 12/12 → 0/12). 하네스는 이 한도를 넘겨 다시 물어 실제 소요를 쟀다 — 한 번만 물으면 25초를 넘기는 수준이 "실패"로 보인다. `/settings` 의 "⚠ 타임아웃 넘음" 배지는 읽기 타임아웃만 봐서 이것을 미리 알려 주지 못한다(PLAN 열린 항목 (h)).
+- **리랭크는 낮게가 실제로 낫다(작게) — 그래도 끔이 출하값이다**: ndcg@10 0.625 → 0.731 · recall@10 0.692 → 0.769(13건, 정답 하나 더, 나빠진 사례 없음). 그러나 답변이 시작되기 전에 +45~108초이고(끔이 이미 15.7초), 리랭커 자체가 opt-in 이다. 리랭커를 켠 배포가 품질을 원하면 `rerank=low`.
+- **쿼리 확장은 이 코퍼스에서 recall 을 올리지 못한다**(확장 없음·끔·낮게 모두 recall@10 0.692, ndcg@10 0.554 · 0.547 · 0.545). 줄 수 불일치로 확장이 버려지는 비율(`MultiQueryExpander` 의 "exactly N 줄")은 수준과 무관하게 2/26 이다. 이 절의 범위 밖이라 기능은 그대로 두었다.
+- **관측의 생각 판정은 긴 출력에서 생각을 놓친다**(`ThinkingObservations.MIN_EXCESS_TOKENS` · "생각이 답보다 클 때만") — MD 교정 낮게는 출력 토큰이 28% 늘었는데(2,578 → 3,303) `thinkSeen` 이 0 이다. 의도된 보수성이지만 **`thinkSeen=0` 이 "생각 안 함"은 아니다**: 긴 출력의 절은 두 수준의 출력 토큰 차이로 읽는다. 같은 이유로 재작성 사이트의 "⚠ 스위치 무시됨" 배지는 놓칠 수 있다.
+- **`keyHit`(마커 부분 문자열) 은 거짓 부정이 난다** — 낮게의 답이 `IDataSet` 처럼 백틱으로 감싸 쓰면 마커 `IDataSet 타입으로 구성` 이 안 맞는다. 답변 품질은 마커 수치만이 아니라 쌍을 직접 읽어 비교했다(끔 답이 한 답 안에서 모순된 사례, 낮게만 "XA 불가"를 짚은 사례 등).
+- **측정하지 못한 자리**: `summary`(소형 모델 계층 MICRO_TEXT offload 가 없으면 LLM 을 부르지 않는다) · `image-describe` · `image-type` · `md-correct-vision`(비전 모델 없음)은 옛 값(낮게)을 그대로 뒀다 — 근거 없이 바꾸지 않는다. 모델 하나·서버 하나·코퍼스 하나의 결과이므로 더 큰 모델에서는 다시 재야 한다.
+- **하네스 함정**: ① **쓰는 하네스다** — 설정 오버라이드(수준을 바꾼다)·대화 턴·제목이 DB 에 남는다. 그래서 `-Dthinking-eval.data-dir=<data/ 의 스크래치 복사본>` 이 필수이고(없으면 시작하지 않는다) 개발 DB 를 쓰지 않는다. ② **서버 하나를 직렬로 쓴다** — 절을 병렬로 돌리면 지연이 서로를 밀어 측정이 흐려진다. 사례 하나가 1~3분인 절은 `-Dthinking-eval.stride=2` 로 줄이고 `answer`·`evalacc`·`post`·`curated` 는 같은 JVM 에서 돌려 끔 답변을 한 번만 만든다. ③ **스크래치 DB 에 운영자의 설정 오버라이드가 그대로 있다** — 샘플링 온도(`llm.temperature` · `llm.direct-temperature` …)가 형식 준수(Direct 의 `## 요약` 첫머리: 온도 0.85 에서 끔 5/8, 출하 0.1 에서 6/8, 낮게는 둘 다 8/8)를 바꾼다. 출하값으로 재려면 복사본의 그 행을 지운다. ④ 하네스가 로그를 잡을 때는 `LogbackTestSupport.logger(...)` 를 써야 한다(`ParallelIsolationConventionTest`) — 직접 캐스팅은 빌드가 막는다. ⑤ **측정이 오래 걸리니 디스크·임시 폴더를 확인한다** — 본 측정 중 C: 가 한 번 가득 차 `Error creating properties files for forking` 으로 뒤 구간이 즉시 실패했다(원인은 확인하지 못했다 — 프로젝트·임시 폴더에는 큰 파일이 없었고 몇 분 뒤 스스로 풀렸다). 로그는 임시 폴더가 아니라 프로젝트(`target/`) 안에 둘 것.
 
 ### `llm/LlmRouter.java`
 
@@ -622,6 +638,12 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 - **배지가 「수정됨」인데 차이는 「동일」일 수 있다 — 화면이 그 자리를 짚어야 한다.** 변경 판정(`changeStatus`)은 `chunk_fts` 의 **파생 검색 텍스트** 해시로 내는데(§10.1: 맥락 헤더 + 정규화 본문), 나란히 놓는 텍스트는 sqlite-vec 배포에서 `vec_document_chunks.content`(원문)다. 그래서 본문은 그대로 두고 요약·키워드만 고치면 해시만 달라져 배지와 비교가 서로 다른 말을 하는 것처럼 보인다. `ChunkReportDetail.modifiedButTextIdentical()` 이 그 조합을 값으로 집어내고 화면이 이유를 적는다 — 둘 중 하나를 "고쳐서" 맞추면 안 된다(해시는 재사용 무효화가 쓰는 판정이고, 본문은 관리자가 읽어야 하는 것이다).
 - **비교할 수 없는 것과 차이가 없는 것은 다르다.** `ChunkDiff.compare()` 는 한쪽이라도 `null` 이면 `null` 을 돌려준다 — 없는 스냅샷을 빈 문자열로 바꿔 비교하면 "청크가 통째로 새로 쓰였다"로 그려져 관리자가 없던 사건을 읽는다. 상한(`MAX_LINE_MATRIX_CELLS`)을 넘을 때도 `tooLarge` 로 말하고 나란히 보기로 떨어진다. 비교 대상의 크기는 문서에서 오므로 상한 자체가 필요하다(LCS 는 O(n×m)).
 - **관리자 화면의 "현재 내용"은 백엔드마다 다른 텍스트다.** sqlite-vec 는 `vec_document_chunks.content`(원문), 그 테이블이 없는 배포는 `chunk_fts.content` 인데 후자는 원문이 아니라 **파생 검색 텍스트**(§10.1: 맥락 헤더 + 정규화 본문)다 — 스냅샷과 나란히 놓는 화면이라 어느 쪽인지 라벨로 밝히지 않으면 "고쳐져서 다른 것"과 "원래 다른 텍스트"가 구별되지 않는다(`ChunkLocation.source`). `vec_document_chunks` 는 sqlite-vec 배포에만 존재하므로 조회 전에 테이블 존재를 확인한다(없는 테이블을 참조하면 쿼리 자체가 예외다).
+- **신고자는 고칠 수 없다 — 제출물은 사유 코드(`WRONG`·`OUTDATED`·`BROKEN`·`OTHER`)와 필수 코멘트(500자)뿐이다.** 수정본 텍스트를 받으면 코퍼스로 들어가는 입구가 지식 제안(§10.11)과 둘이 되어 승인 절차도 둘로 갈린다. 코멘트가 필수인 이유는 사유 코드만으로는 관리자가 청크의 *어디를* 고칠지 알 수 없어 다시 물어야 하고, "무엇이 틀렸는지 모르는 신고"가 쌓이는 것이 이 기능의 가장 흔한 실패 모양이기 때문이다.
+- **사용자당 건수 상한을 두지 않는다**(지식 제안의 `MAX_PENDING_PER_USER=20` 을 옮기면 `shared` 모드 배포 전체가 20건에서 멈춘다). 남용은 중복 키 + `RateLimitFilter` 의 `default` 버킷으로 충분하다 — **신고 엔드포인트 경로에 `/chat`·`/documents` 문자열이 들어가면 안 된다**(`policyFor()` 가 경로 부분 문자열로 버킷을 고른다).
+- **엔드포인트의 자리**: `/api/v1/**` 아래에 두면 CSRF 예외 + management-only 게스트 개방이 함께 붙는다(`AdminController` 가 같은 이유로 `/admin/**` 을 골랐다) — 사용자 쓰기는 `/ui/**`, 관리자 조치는 `/admin/**`.
+- **관리자 조치는 판정만 남긴다**(처리 완료 / 반려 + 사유). 신고 패널이 자체 편집기를 갖는 순간 편집 경로가 둘이 되어 `MetaKey.EDITED_AT` 스탬프·재인덱싱 사전 경고(`countEditedChunks`)·`QuestionReuseService` 통지가 한쪽에만 붙는다.
+- **신고자 알림은 범위 밖이라 `reporter_read_at` 같은 읽음 컬럼도 없다** — 쓰지 않을 컬럼은 "알림이 있는 줄 알았다"는 오해만 남긴다. 필요해지면 `curated_submission.author_read_at` 선례를 따른다.
+- **`AdminController` 에 서비스를 하나 더 넣으면 `AdminControllerWebMvcTest`·`ManagementOnlyAuthorizationTest` 의 컨텍스트가 뜨지 않는다**(`@MockitoBean` 누락) — 협력자를 더할 때 함께 고친다. 헤더 배지 폴링은 `pollBadge` 가 배지 엘리먼트가 없으면 요청을 안 보내 비관리자에겐 무해하다(`pending-submission-badge` 선례).
 
 ### 큐레이션 요약·키워드의 단일 출처와 그 사본
 
