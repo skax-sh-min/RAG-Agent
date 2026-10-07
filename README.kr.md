@@ -106,7 +106,7 @@ container system stop
 
 자세한 사용법은 [USER_MANUAL.md](documents/USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)를 참고하세요.
 
-> 코드를 고칠 때: [CLAUDE.md](CLAUDE.md)가 안정적인 지도(스택·파일 역할·규약·하드 제약)이고, [documents/PITFALLS.md](documents/PITFALLS.md)에 각 규칙의 근거와 **실제로 깨졌던 기록**이 있습니다 — 거기 이름이 나온 파일을 고치기 전에 해당 항목을 읽으세요. 테이블·컬럼과 벡터 저장 구조는 [documents/DATABASE.md](documents/DATABASE.md)에 정리돼 있습니다.
+> 코드를 고칠 때: [CLAUDE.md](CLAUDE.md)가 안정적인 지도(스택·파일 역할·규약·하드 제약)이고, [documents/PITFALLS.md](documents/PITFALLS.md)에 각 규칙의 근거와 **실제로 깨졌던 기록**이 있습니다 — 거기 이름이 나온 파일을 고치기 전에 해당 항목을 읽으세요. 테이블·컬럼과 벡터 저장 구조는 [documents/DATABASE.md](documents/DATABASE.md)에 정리돼 있습니다. 호출 지점별 생각 수준의 출하값을 어떻게 쟀는지는 [documents/THINKING_EVALUATION.md](documents/THINKING_EVALUATION.md)에 있습니다.
 
 ## 환경 변수
 
@@ -400,6 +400,7 @@ rag_java/
 - **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
 - **태스크별 모델 라우팅 (소형 LLM 오프로딩)** — 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장·§10.12 후속 질문 독립화)는 `TaskType.MICRO_TEXT`로 라우팅됨. `type=MICRO_TEXT` 소형(~500MB) 로컬 모델을 등록하면 이 잡무만 소형으로 내려가고, 답변·품질 민감한 분류/meta 직답은 큰 모델이 전담. 소형 미등록 시 큰 모델이 흡수(회귀 0) — [LLM_ROUTING.md §9](documents/LLM_ROUTING.md) 참고
+- **호출 지점별 생각(추론) 수준 (§6.29)** — LLM 호출 22곳마다 생각 수준(`off`/`low`/`medium`/`high`, `app.llm.thinking.<호출 지점>`)을 따로 정하고, 관리자가 `/settings` 카드에서 재기동 없이 고친다. 카드는 저장하기 전에 수준마다 출력 예약·입력 예산·들어가는 문서 수·최악 소요를 미리 보여 준다. 수준이 서버에서 무엇이 되는지는 서버마다 다르다(llama.cpp 는 `chat_template_kwargs.enable_thinking` — `low`/`medium`/`high` 는 "켬"으로 접힌다). 출하값은 실측으로 정했다 — 같은 입력을 끔/켬으로 번갈아 부른 결과([THINKING_EVALUATION.md](documents/THINKING_EVALUATION.md)): 생각이 이득을 준 곳은 응답 검증(근거 없는 답을 잡는 비율 6% → 44%)과 응용(C) 모드의 코드뿐이라 그 둘만 `low`, 측정한 나머지는 `off`(10~40배 빠르고 품질은 같았다). 요청의 `enable_thinking` 이 서버 기본값을 덮으므로 생각을 끈 서버에서도 그 둘은 생각한다 — 검증 속도가 중요하면 `app.llm.thinking.eval=off`(근거 없는 답을 잡는 비율이 떨어진다). 관리자 전용, [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 의 "권장 프로파일" 참고
 - **임베딩 로드밸런싱 + 병렬 서브배치 임베딩** — 다중 임베딩 엔드포인트(`EMBED_ADDITIONAL_BASE_URLS`, 동일 모델·차원)를 least-in-flight로 분산; 인덱싱 시 한 문서의 서브배치를 병렬 임베딩(`EMBED_MAX_CONCURRENT_BATCHES`)해 엔드포인트를 채움. 둘 다 opt-in(기본 단일 엔드포인트·직렬) — [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) 참고
 - **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 여러 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·**청크 분할 전략**·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), LLM temperature 4종(일반/RAG·Direct 답변·인덱싱/백그라운드·C(응용) 창의 — 각각 해당 종류의 다음 호출부터 적용)과 **C(응용) 모드 자체의 사용 여부**, UI 토글 2종(출처 미리보기·출처 검색 수치). 편집 가능한 항목은 입력칸에 마우스를 올리면 허용 범위가 툴팁으로 뜬다. 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·max-tokens·임베딩 설정 등)은 조회 전용으로 표시
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
