@@ -66,12 +66,12 @@ public record AppProperties(
             String defaultRoutingMode,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
-            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService, QuestionCondenser); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
-            Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
+            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.2, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService, QuestionCondenser); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
+            Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.5, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService, CuratedQuestionSuggester) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss the streaming branch (the temperature it hands AnswerStreamer) and only the chat UI stays cold
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
-            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 10000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
+            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 12000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
             Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
             Boolean verifyLocalModelsOnStartup, // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
             Map<String, String> thinking     // PLAN §6.29 — 호출 지점별 생각 수준 (app.llm.thinking.<site-id> = off|low|medium|high). 키는 ThinkingSite.id(). 읽기는 thinkingLevel(site) 로만 — 줄이 없거나 값이 틀리면 그 사이트의 출하 기본값이다. 환경변수는 두지 않는다(사이트 수만큼 늘어나고, /settings 핫 편집이 같은 일을 한다)
@@ -856,7 +856,14 @@ public record AppProperties(
      * <b>같은 수여야 한다</b>. 두 곳에 흩어진 리터럴이라 한쪽만 바꾸면 프로퍼티가 비었을 때만
      * 다른 값이 나오는, 재현이 까다로운 불일치가 된다.
      */
-    private static final int DEFAULT_MAX_TOKENS = 10_000;
+    private static final int DEFAULT_MAX_TOKENS = 12_000;
+
+    /**
+     * {@code app.llm.temperature}(일반/RAG)·{@code app.llm.direct-temperature}(Direct)의 코드 쪽 폴백 — 위 max-tokens
+     * 와 같은 이유로 {@code application.properties} 의 기본값(0.2 · 0.5)과 <b>같은 수여야 한다</b>.
+     */
+    private static final double DEFAULT_TEMPERATURE = 0.2;
+    private static final double DEFAULT_DIRECT_TEMPERATURE = 0.5;
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
@@ -879,8 +886,8 @@ public record AppProperties(
         Integer shrinkStepOverride = overrideInt(SettingsKeys.LLM_SHRINK_STEP);
         Integer maxTokensOverride = overrideInt(SettingsKeys.LLM_MAX_TOKENS);
         if (llm == null) {
-            double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
-            double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
+            double t = clamp(tempOverride != null ? tempOverride : DEFAULT_TEMPERATURE, 0.0, 0.3);
+            double dt = clamp(directOverride != null ? directOverride : DEFAULT_DIRECT_TEMPERATURE, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 0.1);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
             boolean cm = creativeModeOverride == null || creativeModeOverride;
@@ -898,10 +905,10 @@ public record AppProperties(
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
         double temperatureBase = tempOverride != null ? tempOverride
-                : (llm.temperature() != null ? llm.temperature() : 0.0);
+                : (llm.temperature() != null ? llm.temperature() : DEFAULT_TEMPERATURE);
         double temperature = clamp(temperatureBase, 0.0, 0.3);
         double directBase = directOverride != null ? directOverride
-                : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
+                : (llm.directTemperature() != null ? llm.directTemperature() : DEFAULT_DIRECT_TEMPERATURE);
         double directTemperature = clamp(directBase, 0.0, 1.0);
         double indexingBase = indexingOverride != null ? indexingOverride
                 : (llm.indexingTemperature() != null ? llm.indexingTemperature() : 0.0);

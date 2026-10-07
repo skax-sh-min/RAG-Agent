@@ -46,7 +46,7 @@ public class MemoryService {
     private final ThinkingBudget thinkingBudget;
 
     // The history budget derives from the single "LLM max tokens" source (app.llm.max-tokens /
-    // LLM_MAX_TOKENS, default 10000) — see maxConversationChars() below.
+    // LLM_MAX_TOKENS, default 12000) — see maxConversationChars() below.
     @org.springframework.beans.factory.annotation.Autowired
     public MemoryService(MemoryRepository repository, AppProperties props,
                          LlmRouter llmRouter, ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {

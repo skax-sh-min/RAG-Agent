@@ -35,7 +35,7 @@ class ThinkingStartupReportTest {
 
         assertThat(report.warnings()).singleElement().asString()
                 .contains("app.llm.thinking.eval=default")
-                .contains("출하값 low");
+                .contains("출하값 off");
         assertThat(report.summary()).contains("설정 파일 0곳");
     }
 

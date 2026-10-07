@@ -44,7 +44,8 @@ class ThinkingConfigBindingTest {
         assertThat(llm.thinkingLevel(ThinkingSite.ANSWER_RAG_N)).isEqualTo(ThinkingLevel.HIGH);
         assertThat(llm.thinkingLevel(ThinkingSite.CONDENSE)).isEqualTo(ThinkingLevel.LOW);
         assertThat(llm.thinkingLevel(ThinkingSite.POST_ANSWER)).as("틀린 값 → 출하값").isEqualTo(ThinkingLevel.OFF);
-        assertThat(llm.thinkingLevel(ThinkingSite.ANSWER_RAG_C)).as("줄 없음 → 출하값(낮게)").isEqualTo(ThinkingLevel.LOW);
+        assertThat(llm.thinkingLevel(ThinkingSite.ANSWER_RAG_C)).as("줄 없음 → 출하값")
+                .isEqualTo(ThinkingSite.ANSWER_RAG_C.shippedDefault()).isEqualTo(ThinkingLevel.OFF);
     }
 
     @Test

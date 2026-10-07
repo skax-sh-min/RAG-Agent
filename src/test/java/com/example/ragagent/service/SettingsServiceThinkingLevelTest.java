@@ -83,7 +83,7 @@ class SettingsServiceThinkingLevelTest {
     @Test
     @DisplayName("저장하면 다음 호출부터 그 수준이다 — 감사 로그가 남고, 대소문자·공백은 정규화되며, '오버라이드됨' 이 선다")
     void updateTakesEffectImmediately() {
-        assertThat(effective(ThinkingSite.EVAL)).as("출하값").isEqualTo(ThinkingLevel.LOW);
+        assertThat(effective(ThinkingSite.EVAL)).as("출하값").isEqualTo(ThinkingLevel.OFF);
         assertThat(service.isOverridden(ThinkingSite.EVAL.settingsKey())).isFalse();
 
         String after = service.update(ThinkingSite.EVAL.settingsKey(), "  HIGH ");
@@ -96,7 +96,7 @@ class SettingsServiceThinkingLevelTest {
         assertThat(service.editableItem("llm.thinking.eval").type()).isEqualTo("choice");
         verify(audit).log(eq("settings.update"), eq("llm.thinking.eval"), anyMap());
         assertThat(effective(ThinkingSite.CLASSIFY)).as("다른 사이트는 그대로(출하값 끔)").isEqualTo(ThinkingLevel.OFF);
-        assertThat(effective(ThinkingSite.ANSWER_RAG_C)).as("다른 사이트는 그대로(출하값 낮게)").isEqualTo(ThinkingLevel.LOW);
+        assertThat(effective(ThinkingSite.EVAL_CREATIVE)).as("짝인 사이트도 그대로(출하값 끔)").isEqualTo(ThinkingLevel.OFF);
     }
 
     @Test
@@ -110,7 +110,7 @@ class SettingsServiceThinkingLevelTest {
         assertThatThrownBy(() -> service.update("llm.thinking.eval", " "))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(repo.store).isEmpty();
-        assertThat(effective(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.LOW);
+        assertThat(effective(ThinkingSite.EVAL)).as("출하값 그대로").isEqualTo(ThinkingLevel.OFF);
         verify(audit, never()).log(eq("settings.update"), eq("llm.thinking.eval"), anyMap());
     }
 
