@@ -68,8 +68,16 @@ public final class IndexingOutputCap {
      * @param configuredMax {@code app.llm.max-tokens}
      */
     public static int forRewrite(String input, int configuredMax) {
+        return forRewriteTokens(TokenEstimator.estimate(input), configuredMax);
+    }
+
+    /**
+     * {@link #forRewrite} 의 몸통 — 입력을 이미 토큰으로 센 호출자(생각 수준 미리보기가 "조각이 꽉 찼을 때"의 예약을 잰다)가
+     * 같은 식을 지나게 한다.
+     */
+    public static int forRewriteTokens(long inputTokens, int configuredMax) {
         if (configuredMax <= 0) return 0;
-        long fromInput = TokenEstimator.estimate(input) * REWRITE_HEADROOM_PERCENT / 100;
+        long fromInput = inputTokens * REWRITE_HEADROOM_PERCENT / 100;
         long floor = Math.round(configuredMax * REWRITE_FLOOR_RATIO);
         return clamp(Math.max(fromInput, floor), configuredMax);
     }

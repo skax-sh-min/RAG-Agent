@@ -16,6 +16,7 @@ import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingLevel;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -235,7 +236,17 @@ public class AnswerService {
      */
     static ThinkingBudget.Reservation answerReservation(ThinkingBudget budget, ThinkingSite site, String provider,
                                                         ResponseMode mode, boolean streaming, int configuredMaxTokens) {
-        return budget.reservation(site, provider, outputReservation(mode, streaming, configuredMaxTokens));
+        return answerReservation(budget, site, budget.level(site), provider, mode, streaming, configuredMaxTokens);
+    }
+
+    /**
+     * 위 함수를 <b>가정한 수준</b>으로 — {@code /settings} 미리보기가 네 수준을 모두 재는 자리다. 설정값으로 부르는 위
+     * 오버로드가 이 함수에 수준만 넘기므로 둘은 같은 식을 지난다(§6.29 ⑦-바).
+     */
+    static ThinkingBudget.Reservation answerReservation(ThinkingBudget budget, ThinkingSite site, ThinkingLevel level,
+                                                        String provider, ResponseMode mode, boolean streaming,
+                                                        int configuredMaxTokens) {
+        return budget.reservation(site, level, provider, outputReservation(mode, streaming, configuredMaxTokens));
     }
 
     /**
@@ -254,7 +265,13 @@ public class AnswerService {
      */
     static ThinkingBudget.Reservation evalReservation(ThinkingBudget budget, ThinkingSite evalSite, String provider,
                                                       int configuredMaxTokens) {
-        return budget.reservation(evalSite, provider, evalBaseReservation(configuredMaxTokens));
+        return evalReservation(budget, evalSite, budget.level(evalSite), provider, configuredMaxTokens);
+    }
+
+    /** 위 함수를 <b>가정한 수준</b>으로 — 미리보기용({@link #answerReservation(ThinkingBudget, ThinkingSite, ThinkingLevel, String, ResponseMode, boolean, int)} 와 같은 이유). */
+    static ThinkingBudget.Reservation evalReservation(ThinkingBudget budget, ThinkingSite evalSite, ThinkingLevel level,
+                                                      String provider, int configuredMaxTokens) {
+        return budget.reservation(evalSite, level, provider, evalBaseReservation(configuredMaxTokens));
     }
 
     private ThinkingBudget.Reservation evalReservation(AgentState state, String provider) {
@@ -284,6 +301,51 @@ public class AnswerService {
     static int outputReservation(ResponseMode mode, boolean streaming, int configuredMaxTokens) {
         int blocking = mode.maxTokens(configuredMaxTokens);
         return streaming ? Math.min(blocking, mode.minChars()) : blocking;
+    }
+
+    /**
+     * 답변 프롬프트에서 <b>줄일 수 없는</b> 몫 — 시스템 프롬프트 + 질문 + 검색 경고 + 섹션 머리말. {@link #fitToBudget} 이
+     * 문서·이력에 남길 자리를 이 값으로 잰다. {@code /settings} 의 생각 수준 미리보기가 같은 함수로 "문서가 몇 개 들어가는가"를
+     * 낸다(§6.29 ⑦-바).
+     */
+    static long answerFixedCost(long systemTokens, long questionTokens, long warningTokens) {
+        return systemTokens + questionTokens + warningTokens + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
+    }
+
+    /** 검증 프롬프트에서 발췌를 뺀 고정 몫 — 시스템 프롬프트 + 답변 전문 + 질문 + 응답 스키마. */
+    static long evalFixedCost(long systemTokens, long answerTokens, long questionTokens, long schemaTokens) {
+        return systemTokens + answerTokens + questionTokens + schemaTokens;
+    }
+
+    /**
+     * 검증 발췌에 쓸 수 있는 토큰 — 입력 예산에서 고정 몫을 뺀 것. 창을 모르면 0(= 토큰 예산 없음, 글자 상한만).
+     *
+     * @param reservation {@link #evalReservation} 의 결과 — 생각 여유까지 더한 예약. 숫자가 아니라 예약 자체를 받는 이유는
+     *                    예산에 넘기는 출력 예약이 늘 {@code Reservation.tokens()} 여야 한다는 규칙({@code ThinkingSiteConventionTest})을
+     *                    이 함수 안에서 지키게 하기 위해서다
+     */
+    static long evalExcerptBudget(int window, ThinkingBudget.Reservation reservation, long fixedCost) {
+        if (window <= 0) return 0;
+        return Math.max(0, new PromptBudget(window, reservation.tokens()).inputBudget() - fixedCost);
+    }
+
+    /** 검증 응답 스키마 — 두 검증 경로가 각자 실어 보내는 그 문자열이다(미리보기가 크기를 잰다). */
+    static String evalSchema(boolean creative) {
+        return creative ? new BeanOutputConverter<>(CreativeEvalOutput.class).getFormat()
+                        : new BeanOutputConverter<>(EvalOutput.class).getFormat();
+    }
+
+    /**
+     * 검증 발췌에 이 문서를 <b>더 실을 수 있는가</b> — {@link #buildEvalExcerpts} 가 문서마다 묻는 그 판정이다. 첫 문서는
+     * 예산을 넘어도 늘 싣는다(전부 버리면 검증할 근거가 없다). 이 판정이 한 곳이어야 미리보기의 "발췌 k개"가 실제 요청과 갈라지지
+     * 않는다.
+     */
+    static boolean excerptFits(int alreadyIncluded, int usedChars, int textChars,
+                               long usedTokens, long tokens, long tokenBudget) {
+        if (alreadyIncluded == 0) return true;
+        boolean overChars = usedChars + textChars > MAX_EVAL_EXCERPT_CHARS;
+        boolean overTokens = tokenBudget > 0 && usedTokens + tokens > tokenBudget;
+        return !(overChars || overTokens);
     }
 
     /** 아직 프로바이더가 정해지지 않은 자리에서 쓰는 추정 — 라우터에게 "지금이라면 누구" 를 묻는다(답변 호출). */
@@ -1097,11 +1159,9 @@ public class AnswerService {
         String provider = likelyProvider(state, state.responseMode().evalThinkingSite());
         int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return 0;   // 창 모름 → 글자 상한만 적용(예전 동작 그대로)
-        long fixed = TokenEstimator.estimate(systemPrompt)
-                + TokenEstimator.estimate(answer)
-                + TokenEstimator.estimate(state.question())
-                + TokenEstimator.estimate(schema);
-        return Math.max(0, new PromptBudget(window, evalReservation(state, provider).tokens()).inputBudget() - fixed);
+        long fixed = evalFixedCost(TokenEstimator.estimate(systemPrompt), TokenEstimator.estimate(answer),
+                TokenEstimator.estimate(state.question()), TokenEstimator.estimate(schema));
+        return evalExcerptBudget(window, evalReservation(state, provider), fixed);
     }
 
     /**
@@ -1173,9 +1233,7 @@ public class AnswerService {
         for (Document d : docs) {
             String text = MarkdownNoiseNormalizer.normalize(d.getText());
             long tokens = TokenEstimator.estimate(text);
-            boolean overChars = used + text.length() > MAX_EVAL_EXCERPT_CHARS;
-            boolean overTokens = tokenBudget > 0 && usedTokens + tokens > tokenBudget;
-            if (included > 0 && (overChars || overTokens)) break;
+            if (!excerptFits(included, used, text.length(), usedTokens, tokens, tokenBudget)) break;
             if (included > 0) sb.append("\n---\n");
             // [D1], [D2], … — the numbering the eval prompt's usedDocs field refers to. 1-based and
             // in prompt order, so an index maps straight back to retrievedDocs.get(n-1). A document
@@ -1524,10 +1582,9 @@ public class AnswerService {
 
         // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
         // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
-        long fixedCost = TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode()))
-                + TokenEstimator.estimate(state.question())
-                + TokenEstimator.estimate(String.join("\n", state.retrievalWarnings()))
-                + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
+        long fixedCost = answerFixedCost(TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode())),
+                TokenEstimator.estimate(state.question()),
+                TokenEstimator.estimate(String.join("\n", state.retrievalWarnings())));
         long limit = budget.inputBudget();
 
         List<SizedDoc> keptDocs = PromptBudget.fitByPrefix(sized, SizedDoc::tokens,

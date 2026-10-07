@@ -6,9 +6,14 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ProviderThinkingDialects;
 import com.example.ragagent.llm.ProviderToggle;
+import com.example.ragagent.llm.ThinkingDialect;
+import com.example.ragagent.llm.ThinkingLevel;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
+import com.example.ragagent.model.SettingsView.ProviderThinking;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SettingsView.SettingGroup;
 import com.example.ragagent.model.SettingsView.SettingItem;
@@ -49,10 +54,23 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
 
-    private enum Kind { DOUBLE, INT, BOOL }
+    /** {@code CHOICE} — 허용 값 목록 중 하나(§6.29 ⑦-아: 생각 수준 off/low/medium/high). 목록에 없는 값은 400 이다. */
+    private enum Kind { DOUBLE, INT, BOOL, CHOICE }
 
-    /** One editable setting's validation + input metadata. {@code labelKey} is an i18n message key. */
-    private record Spec(String key, Kind kind, double min, double max, double step, String labelKey) {}
+    /**
+     * One editable setting's validation + input metadata. {@code labelKey} is an i18n message key.
+     * {@code choices} 는 {@link Kind#CHOICE} 일 때만 의미가 있다.
+     */
+    private record Spec(String key, Kind kind, double min, double max, double step, String labelKey,
+                        List<String> choices) {
+        Spec(String key, Kind kind, double min, double max, double step, String labelKey) {
+            this(key, kind, min, max, step, labelKey, List.of());
+        }
+    }
+
+    /** 생각 수준의 허용 값 — {@code ThinkingLevel} 이 단일 출처다. {@code default} 같은 값은 없다(PLAN §6.29 ①). */
+    private static final List<String> THINKING_CHOICES =
+            java.util.Arrays.stream(ThinkingLevel.values()).map(ThinkingLevel::value).toList();
 
     // Insertion order = render order in the "검색 튜닝 (핫 수정)" group. Apply on the next search.
     private static final List<Spec> SEARCH_HOT_SPECS = List.of(
@@ -108,6 +126,12 @@ public class SettingsService implements AppProperties.OverrideSource {
         for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : UI_HOT_SPECS) m.put(s.key(), s);
+        // §6.29 — 호출 지점별 생각 수준. 키는 ThinkingSite 가 만든다(사이트를 더하면 여기도 저절로 는다). 일반 항목 격자(*_HOT_SPECS)에는
+        // 넣지 않는다 — 이 키들의 유일한 편집 자리는 생각 수준 카드다.
+        for (ThinkingSite site : ThinkingSite.values()) {
+            m.put(site.settingsKey(), new Spec(site.settingsKey(), Kind.CHOICE, 0, 0, 0,
+                    "settings.thinking.site." + site.id(), THINKING_CHOICES));
+        }
         SPECS = Map.copyOf(m);
     }
 
@@ -119,14 +143,27 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final ProviderContextWindows contextWindows;
     /** §6.15 — only for the read-only 저장 사용량 row; nothing on this page edits the cap. */
     private final StorageQuotaService storageQuotaService;
+    /** §6.29 — 프로바이더 표의 "생각 제어" 열이 읽는 dialect·거부 기억. */
+    private final ProviderThinkingDialects thinkingDialects;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
+    /** 생각 제어 열을 쓰지 않는 호출부(테스트)를 위한 축약 — 기록이 없는 프로바이더는 그 열에 "서버가 정함" 으로 나온다. */
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
                            ProviderToggle providerToggle, ProviderContextWindows contextWindows,
                            StorageQuotaService storageQuotaService) {
+        this(repo, props, audit, circuitBreaker, providerToggle, contextWindows, storageQuotaService,
+                new ProviderThinkingDialects());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SettingsService(SettingsOverrideRepository repo, AppProperties props,
+                           AuditLogger audit, CircuitBreaker circuitBreaker,
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows,
+                           StorageQuotaService storageQuotaService, ProviderThinkingDialects thinkingDialects) {
+        this.thinkingDialects = thinkingDialects;
         this.repo = repo;
         this.props = props;
         this.audit = audit;
@@ -209,6 +246,11 @@ public class SettingsService implements AppProperties.OverrideSource {
         return after;
     }
 
+    /** 이 키에 {@code /settings} 오버라이드가 있는가 — 생각 수준 카드의 "오버라이드됨" 배지와 [기본값] 버튼이 읽는다. */
+    public boolean isOverridden(String key) {
+        return cache.containsKey(key);
+    }
+
     /** Removes an override, reverting the key to its property default. No-op-safe. Audited. */
     public void reset(String key) {
         Spec spec = SPECS.get(key);
@@ -246,6 +288,14 @@ public class SettingsService implements AppProperties.OverrideSource {
                             "허용 범위 [%d, %d] 를 벗어났습니다: %d".formatted((long) spec.min(), (long) spec.max(), n));
                 }
                 yield Integer.toString(n);
+            }
+            case CHOICE -> {
+                String choice = v.toLowerCase(java.util.Locale.ROOT);
+                if (!spec.choices().contains(choice)) {
+                    throw new IllegalArgumentException(
+                            "허용 값은 %s 입니다: %s".formatted(String.join(" / ", spec.choices()), raw));
+                }
+                yield choice;
             }
             case DOUBLE -> {
                 double d;
@@ -316,11 +366,26 @@ public class SettingsService implements AppProperties.OverrideSource {
                             until != null,
                             until != null ? until.toString() : null,
                             providerToggle.isEnabled(cfg.name()),
-                            contextWindowLabel(cfg.name()));
+                            contextWindowLabel(cfg.name()),
+                            providerThinking(cfg));
                 })
                 .toList();
     }
 
+
+    /**
+     * 프로바이더 표의 "생각 제어" 열 — 실제 전송과 같은 값을 읽는다: 설정값은 {@code ProviderConfig}, 실제로 쓰는 값은
+     * {@link ProviderThinkingDialects}(기동 시 {@code LlmConfig} 가 {@code AUTO} 를 풀어 기록한 것), 거부는 그 기억이다.
+     * 기록이 없는 프로바이더(등록되지 않은 것)는 "아무것도 싣지 않는다"로 나온다 — {@code dialectOf} 가 쓰는 규칙과 같다.
+     */
+    private ProviderThinking providerThinking(AppProperties.ProviderConfig cfg) {
+        // 등록되지 않은 프로바이더(키·주소가 없어 꺼진 것)에는 기록 자체가 없다 — "아무것도 싣지 않는다"로 적으면 그 프로바이더가
+        // 생각 제어를 못 받는 서버인 것처럼 읽힌다. 말할 것이 없으면 칸을 비운다.
+        if (!cfg.isEnabled()) return null;
+        ThinkingDialect resolved = thinkingDialects.dialectOf(cfg.name());
+        return new ProviderThinking(cfg.thinkingDialectOrAuto(), resolved, resolved.support(), resolved.field(),
+                thinkingDialects.rejectedFields(cfg.name()));
+    }
 
     // ── 컨텍스트 창 재탐지 (§6.26 A5) ─────────────────────────────────────────
 
@@ -490,17 +555,18 @@ public class SettingsService implements AppProperties.OverrideSource {
         Spec spec = SPECS.get(key);
         if (spec == null) throw new IllegalArgumentException("알 수 없는 설정 키입니다: " + key);
         boolean bool = spec.kind() == Kind.BOOL;
+        boolean choice = spec.kind() == Kind.CHOICE;
         return new SettingItem(
                 spec.key(),
                 spec.labelKey(),
                 effectiveValue(spec.key()),
-                bool ? "bool" : "number",
+                bool ? "bool" : choice ? "choice" : "number",
                 true,
                 cache.containsKey(spec.key()),
                 null,
-                bool ? null : spec.min(),
-                bool ? null : spec.max(),
-                bool ? null : spec.step(),
+                bool || choice ? null : spec.min(),
+                bool || choice ? null : spec.max(),
+                bool || choice ? null : spec.step(),
                 null);   // 편집 가능한 행은 라벨·범위로 충분해 툴팁을 쓰지 않는다
     }
 
@@ -757,7 +823,9 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED -> Boolean.toString(followUpQuestionsEnabled());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
-            default -> "";
+            default -> ThinkingSite.bySettingsKey(key)
+                    .map(site -> props.llmSafe().thinkingLevel(site).value())
+                    .orElse("");
         };
     }
 

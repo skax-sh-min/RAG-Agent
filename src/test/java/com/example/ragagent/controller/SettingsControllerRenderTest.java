@@ -5,12 +5,15 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.context.ThreadContextResolver;
+import com.example.ragagent.llm.ThinkingLevel;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
 import com.example.ragagent.model.SettingsView.SettingGroup;
 import com.example.ragagent.model.SettingsView.SettingItem;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.SettingsService;
+import com.example.ragagent.service.ThinkingPreviewHarness;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +24,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
@@ -50,6 +56,7 @@ class SettingsControllerRenderTest {
     @Autowired MockMvc mvc;
 
     @MockitoBean SettingsService settingsService;
+    @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;   // §6.29 — 생각 수준 카드
     @MockitoBean AppProperties props;               // GlobalModelAdvice + SecurityConfig
     @MockitoBean ThreadContextResolver threadContextResolver; // WebMvcConfig
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel; // WebConfig.chatClient()
@@ -233,5 +240,154 @@ class SettingsControllerRenderTest {
                         org.hamcrest.Matchers.containsString("NORMAL/PREMIUM"))))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("re-enables every provider"))));
+    }
+
+    // ── §6.29 ⑦ 생각(추론) 수준 카드 ─────────────────────────────────────────────────────────────
+
+    /** 로케일은 계산 시점(서비스의 문구)과 렌더 시점(템플릿의 #{...}) 둘 다 같은 것으로 맞춘다. */
+    private static com.example.ragagent.model.ThinkingPreview previewIn(Locale locale) {
+        Locale previous = org.springframework.context.i18n.LocaleContextHolder.getLocale();
+        org.springframework.context.i18n.LocaleContextHolder.setLocale(locale);
+        try {
+            return ThinkingPreviewHarness.builder().build().service.preview();
+        } finally {
+            org.springframework.context.i18n.LocaleContextHolder.setLocale(previous);
+        }
+    }
+
+    private static int count(String haystack, String regex) {
+        Matcher m = Pattern.compile(regex).matcher(haystack);
+        int n = 0;
+        while (m.find()) n++;
+        return n;
+    }
+
+    @Test
+    @DisplayName("GET /admin/settings/thinking — 카드가 모든 호출 지점을 행으로, 편집 컨트롤과 네 수준의 칸을 미리 그려 렌더된다(한국어)")
+    void thinkingCardRendersEveryRowInKorean() throws Exception {
+        // 다른 목을 부르는 계산은 스텁 바깥에서 — when(...) 이 끝나기 전에 다른 목을 건드리면 Mockito 가 스텁을 놓친다
+        com.example.ragagent.model.ThinkingPreview preview = previewIn(Locale.KOREAN);
+        when(thinkingPreview.preview()).thenReturn(preview);
+
+        String html = mvc.perform(get("/admin/settings/thinking").locale(Locale.KOREAN))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("id=\"thinking-card\"", "hx-get=\"/admin/settings/thinking\"",
+                "thinking-preview-stale from:body", "생각(추론) 수준 — 호출 지점별", "관리자 전용");
+        int sites = ThinkingSite.values().length;
+        assertThat(count(html, "class=\"thinking-row ")).as("사이트마다 한 행").isEqualTo(sites);
+        assertThat(count(html, "name=\"key\" value=\"llm\\.thinking\\.")).as("행마다 설정 키가 hidden 으로 간다").isEqualTo(sites);
+        for (ThinkingSite site : ThinkingSite.values()) {
+            assertThat(html).contains("app.llm.thinking." + site.id(), "id=\"thinking-" + site.id() + "\"");
+        }
+        // 네 수준이 모두 미리 그려져 있고(드롭다운은 보이기만 한다), 저장된 수준 하나만 숨겨지지 않는다
+        assertThat(count(html, "class=\"thinking-pane\" data-pane=\"off\"")).isEqualTo(sites);
+        assertThat(count(html, "class=\"thinking-pane\" data-pane=\"(off|low|medium|high)\" hidden"))
+                .as("행마다 네 칸 중 셋은 숨겨져 있다").isEqualTo(sites * 3);
+        // settings-item 과 같은 컨트롤 모양: 행 전체를 hx-include 로(id 셀렉터가 아니다 — 키에 점이 있다)
+        assertThat(html).contains("hx-include=\"closest .thinking-row\"").doesNotContain("hx-include=\"#thinking-");
+        assertThat(html).contains("/admin/settings/update").contains("저장 전");
+        // 번들에서 빠진 키는 오류 없이 ??key?? 로만 보인다
+        assertThat(html).doesNotContain("??");
+        // 숫자가 서버에서 계산돼 있다 — 16k 창의 검증 예약 2,560(낮게)과 입력 예산 12,186
+        assertThat(html).contains("2,560").contains("12,186");
+    }
+
+    @Test
+    @DisplayName("GET /admin/settings/thinking — 영어 로케일에서도 키가 빠지지 않고 영어 문구로 나온다")
+    void thinkingCardRendersInEnglish() throws Exception {
+        com.example.ragagent.model.ThinkingPreview preview = previewIn(Locale.ENGLISH);
+        when(thinkingPreview.preview()).thenReturn(preview);
+
+        String html = mvc.perform(get("/admin/settings/thinking").cookie(new jakarta.servlet.http.Cookie("lang", "en")))   // 앱의 로케일은 쿠키로 정한다(WebConfig)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("Thinking (reasoning) level per call site", "Admin only", "Output reservation",
+                "Input budget", "Chat answers");
+        assertThat(html).doesNotContain("??").doesNotContain("생각(추론)");
+    }
+
+    @Test
+    @DisplayName("POST /admin/settings/update (생각 수준 키) — 그 사이트의 행이 새로 계산돼 돌아오고, 오버라이드면 [기본값] 이 있다")
+    void thinkingRowFragmentAfterUpdate() throws Exception {
+        ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()
+                .file(ThinkingPreviewHarness.levels(ThinkingSite.EVAL, ThinkingLevel.MEDIUM)).build();
+        org.mockito.Mockito.when(h.settings.isOverridden("llm.thinking.eval")).thenReturn(true);
+        com.example.ragagent.model.ThinkingPreview.Row row = h.row(ThinkingSite.EVAL);
+        when(thinkingPreview.row(ThinkingSite.EVAL)).thenReturn(row);
+
+        String html = mvc.perform(post("/admin/settings/update")
+                        .param("key", "llm.thinking.eval").param("value", "medium")
+                        .locale(Locale.KOREAN).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        verify(settingsService).update("llm.thinking.eval", "medium");
+        assertThat(count(html, "class=\"thinking-row ")).as("카드가 아니라 한 행").isEqualTo(1);
+        assertThat(html).contains("id=\"thinking-eval\"", "data-saved=\"medium\"", "오버라이드됨",
+                "/admin/settings/reset");
+        // 라벨 아래에 늘 보이는 기본값 — 누르기 전에 무엇으로 돌아가는지 안다
+        assertThat(html).contains("기본값: 중간");
+        assertThat(html).contains("app.llm.thinking.eval");
+        assertThat(html).doesNotContain("??");
+    }
+
+    @Test
+    @DisplayName("GET /settings — 관리자에게만 카드 자리표시자를 그린다(내용은 /admin/settings/thinking 이 채운다)")
+    void thinkingPlaceholderIsAdminOnly() throws Exception {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)))));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String forAdmin = mvc.perform(get("/settings").with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forAdmin).contains("id=\"thinking-card\"", "hx-get=\"/admin/settings/thinking\"",
+                "hx-trigger=\"load, thinking-preview-stale from:body\"");
+
+        // 관리 전용 인증의 비관리자 — 읽기까지 막는다. 화면에 자리표시자조차 없다(서버의 /admin 게이트가 진짜 방어선이다).
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        AppUserDetails guest = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+        String forGuest = mvc.perform(get("/settings").with(user(guest)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forGuest).doesNotContain("thinking-card").doesNotContain("/admin/settings/thinking");
+    }
+
+    @Test
+    @DisplayName("창 재탐지 응답은 생각 수준 카드를 다시 불러오라는 이벤트(HX-Trigger)를 싣는다 — 창이 바뀌면 예산 숫자가 전부 바뀐다")
+    void reprobeTellsTheThinkingCardToReload() throws Exception {
+        when(settingsService.reprobeContextWindows()).thenReturn(
+                new SettingsService.ReprobeResult(List.of(), false, ""));
+        when(settingsService.providerRows()).thenReturn(List.of());
+
+        mvc.perform(post("/admin/settings/context-window/reprobe").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .header().string("HX-Trigger", "thinking-preview-stale"));
+    }
+
+    @Test
+    @DisplayName("프로바이더 표 — 관리자에게만 '생각 제어' 열이 있고, 켬/끔 서버는 필드 이름과 AUTO 를 함께 적는다")
+    void providerTableShowsTheThinkingControlColumnToAdmins() throws Exception {
+        SettingsView.ProviderThinking info = new SettingsView.ProviderThinking(
+                com.example.ragagent.llm.ThinkingDialect.AUTO, com.example.ragagent.llm.ThinkingDialect.TEMPLATE_KWARGS,
+                com.example.ragagent.llm.ThinkingDialect.Support.ON_OFF, "chat_template_kwargs.enable_thinking",
+                java.util.Set.of("chat_template_kwargs"));
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
+                new ProviderRow("local", "LOCAL", 1, "qwen", "http://localhost:1234/v1", true, false, null, true,
+                        "16,384 (탐지됨)", info)));
+
+        String html = mvc.perform(post("/admin/settings/provider/toggle")
+                        .param("name", "local").param("enabled", "true").locale(Locale.KOREAN).with(csrf()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("생각 제어", "켬/끔", "chat_template_kwargs.enable_thinking",
+                "자동(AUTO → template-kwargs)", "거부됨 · 재시작 시 초기화");
+        assertThat(html).doesNotContain("??");
     }
 }

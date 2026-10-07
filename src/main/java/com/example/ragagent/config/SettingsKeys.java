@@ -67,6 +67,11 @@ public final class SettingsKeys {
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
     public static final String UI_RETRIEVAL_METRICS_ENABLED   = "ui.retrieval-metrics-enabled";
 
+    // ── 호출 지점별 생각 수준 (PLAN §6.29 ⑦-아) ───────────────────────────────────────────────────
+    // 키는 ThinkingSite 가 만든다(llm.thinking.<id>) — 사이트를 더할 때 여기·SPECS·llmSafe() 분기를 손으로 맞추지 않게 하기
+    // 위해서다. 아래 HOT_EDITABLE 에는 넣지 않는다: 그 목록은 일반 항목 격자에 한 줄씩 나오는 키들이고, 이 키들의 유일한 편집
+    // 자리는 /settings 의 "생각(추론) 수준" 카드다(같은 키를 두 곳에서 고칠 수 있으면 한쪽 화면이 낡는다).
+
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
             SEARCH_SIMILARITY_THRESHOLD,

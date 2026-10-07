@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!-- ── 생각(추론) 수준 카드 — 관리자 전용 (PLAN §6.29 ⑦) ───────────────────────────────────────
+     GET /admin/settings/thinking 이 카드 전체를, POST /admin/settings/update|reset 이 한 행을 돌려준다
+     (hx-swap=outerHTML). `isAdmin` 은 GlobalModelAdvice 가 넣는다.
+
+     ⚠ 화면 쪽에서 감추는 것은 보안이 아니다 — 실제 게이트는 서버의 /admin/** 이다. 이 조각을 쓰는 엔드포인트가 전부
+        /admin/settings/ 아래인 이유다.
+
+     숫자는 하나도 여기서 계산하지 않는다 — ThinkingPreviewService 가 런타임과 같은 함수로 네 수준 전부를 미리 계산해 두었고,
+     드롭다운은 미리 그려진 칸(data-pane)을 보이기만 한다(settings.html 의 스크립트). JS 테스트 하네스가 없어 계산을 서버에 둔다. -->
+
+<div th:fragment="card" id="thinking-card" class="card mb-4"
+     hx-get="/admin/settings/thinking" hx-trigger="thinking-preview-stale from:body" hx-swap="outerHTML">
+    <div class="card-header d-flex align-items-center flex-wrap gap-2">
+        <i class="bi bi-lightbulb"></i>
+        <span class="fw-semibold" th:text="#{settings.thinking.title}">Thinking level per call site</span>
+        <span class="badge bg-secondary" th:text="#{settings.thinking.admin-only}">Admin only</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
+                hx-get="/admin/settings/thinking" hx-target="#thinking-card" hx-swap="outerHTML">
+            <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.thinking.recalc}">Recalculate</span>
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="text-secondary small mb-2" th:text="#{settings.thinking.intro}">intro</p>
+
+        <!-- 계산 기준 줄 — 이 숫자들이 서 있는 값. 추정이 얼마나 맞는지가 같은 화면에 있어야 한다. -->
+        <div class="small thinking-basis-line mb-3">
+            <div>
+                <span th:text="#{settings.thinking.basis.line(${thinking.computedAtText()}, ${thinking.basis.maxTokens},
+                          ${thinking.basis.topK}, ${thinking.basis.chunkSize}, ${thinking.basis.keywordBatchSize})}">
+                    basis</span>
+            </div>
+            <div>
+                <span th:if="${thinking.basis.estimateRatio != null}"
+                      th:text="#{settings.thinking.basis.estimate(${#numbers.formatDecimal(thinking.basis.estimateRatio, 1, 2)},
+                              ${thinking.basis.estimateSamples})}">estimate</span>
+                <span th:if="${thinking.basis.estimateRatio == null}"
+                      th:text="#{settings.thinking.basis.estimate.none}">no samples</span>
+                <span class="text-secondary" th:text="' — ' + #{settings.thinking.basis.estimate.note}">note</span>
+            </div>
+            <div class="text-secondary"
+                 th:text="#{settings.thinking.basis.assume(${thinking.basis.questionChars}, ${thinking.basis.shortAnswerChars},
+                         ${thinking.basis.longAnswerChars})}">assumptions</div>
+        </div>
+
+        <div th:each="group : ${thinking.groups}" class="mb-4 thinking-group" th:attr="data-group=${group.id()}">
+            <h6 class="fw-semibold mb-2" th:text="#{__${group.titleKey()}__}">Group</h6>
+            <div class="thinking-head d-none d-lg-flex row g-2 small text-secondary border-bottom pb-1">
+                <div class="col-lg-3" th:text="#{settings.thinking.col.site}">Call site</div>
+                <div class="col-lg-3" th:text="#{settings.thinking.col.level}">Level</div>
+                <div class="col-lg-6" th:text="#{settings.thinking.col.preview}">Preview</div>
+            </div>
+            <th:block th:each="row : ${group.rows}">
+                <div th:replace="~{fragments/settings-thinking :: row}"></div>
+            </th:block>
+        </div>
+    </div>
+</div>
+
+
+<!-- ── 한 호출 지점 ───────────────────────────────────────────────────────────────────────────
+     편집 컨트롤은 settings-item 과 같은 모양이다: 값 → [기본값] → [저장]. [기본값] 은 오버라이드가 있을 때만 보이고,
+     누르기 전에 무엇으로 돌아가는지 알 수 있게 라벨 아래에 "기본값: 낮게" 가 늘 적혀 있다.
+     hx-include 는 id 셀렉터가 아니라 `closest .thinking-row` 다 — settings-item 과 같은 이유로(키에 점이 있다). -->
+<div th:fragment="row" class="thinking-row py-2 border-bottom" th:id="'thinking-' + ${row.id()}"
+     th:attr="data-saved=${row.saved.value()}">
+    <input type="hidden" name="key" th:value="${row.settingsKey()}"/>
+
+    <div class="row g-2 align-items-start">
+
+        <!-- 1. 호출 지점 -->
+        <div class="col-12 col-lg-3">
+            <span class="fw-semibold" th:text="#{__${row.labelKey()}__}">Call site</span>
+            <span th:if="${row.overridden}" class="badge bg-info ms-1"
+                  th:text="#{settings.badge.overridden}">overridden</span>
+            <code class="d-block small text-secondary mt-1" th:text="${row.propertyKey()}">app.llm.thinking.x</code>
+            <span class="d-block small text-secondary"
+                  th:text="${#messages.msg('settings.thinking.default-is', #messages.msg('settings.thinking.level.' + row.defaultLevel.value()))}">
+                Default: Low</span>
+        </div>
+
+        <!-- 2. 수준 편집 -->
+        <div class="col-12 col-lg-3">
+            <div th:if="${isAdmin}" class="input-group input-group-sm">
+                <select name="value" class="form-select thinking-level-select"
+                        th:attr="aria-label=#{settings.thinking.col.level}">
+                    <option th:each="cell : ${row.cells}" th:value="${cell.level.value()}" th:selected="${cell.saved}"
+                            th:text="#{__${cell.levelKey()}__} + (${cell.byDefault} ? ' ' + #{settings.thinking.default-mark} : '')">
+                        Low</option>
+                </select>
+                <button type="button" class="btn btn-outline-secondary" th:if="${row.overridden}"
+                        hx-post="/admin/settings/reset"
+                        hx-include="closest .thinking-row"
+                        hx-target="closest .thinking-row" hx-swap="outerHTML"
+                        data-bs-toggle="tooltip" data-bs-trigger="hover"
+                        th:title="${#messages.msg('settings.thinking.reset.hint', #messages.msg('settings.thinking.level.' + row.defaultLevel.value()), row.propertyKey())}"
+                        th:text="#{settings.btn.reset}">Reset</button>
+                <button type="button" class="btn btn-primary"
+                        hx-post="/admin/settings/update"
+                        hx-include="closest .thinking-row"
+                        hx-target="closest .thinking-row" hx-swap="outerHTML"
+                        th:text="#{settings.btn.save}">Save</button>
+            </div>
+            <span th:unless="${isAdmin}" class="font-monospace"
+                  th:text="#{__${row.savedCell().levelKey()}__}">Low</span>
+            <!-- 드롭다운을 저장된 값과 다르게 바꾸면 보인다(스크립트). 저장 전의 숫자라는 표시다. -->
+            <span class="badge bg-warning text-dark mt-1 thinking-unsaved" hidden
+                  th:text="#{settings.thinking.unsaved}">Unsaved</span>
+
+            <!-- 받는 프로바이더 -->
+            <div class="small mt-2">
+                <span th:if="${row.receiver.none()}" class="text-secondary"
+                      th:text="#{settings.thinking.receiver.none}">No provider</span>
+                <span th:unless="${row.receiver.none()}" class="font-monospace text-secondary"
+                      th:text="${row.receiver.label}">local · LOCAL</span>
+                <div th:if="${!#strings.isEmpty(row.receiver.note)}" class="text-warning-emphasis"
+                     th:text="${row.receiver.note}">blocked</div>
+            </div>
+        </div>
+
+        <!-- 3. 수준별 칸 — 네 수준이 모두 그려져 있고 선택된 것만 보인다 -->
+        <div class="col-12 col-lg-6">
+            <div th:each="cell : ${row.cells}" class="thinking-pane" th:attr="data-pane=${cell.level.value()}"
+                 th:hidden="${!cell.saved}">
+                <div class="row row-cols-2 row-cols-md-3 g-2 thinking-figs">
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.sent}">Sent</div>
+                        <div class="thinking-v" th:text="${cell.sentLabel}">on</div>
+                        <code th:if="${cell.wire.sent().name() != 'NOTHING'}" class="small text-secondary"
+                              th:text="${cell.wire.describe()}">chat_template_kwargs</code>
+                    </div>
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.reserve}">Reservation</div>
+                        <div class="thinking-v" th:text="${#numbers.formatInteger(cell.reservedTokens, 1, 'COMMA')}">2,560</div>
+                        <div class="small text-secondary" th:text="${cell.reservation.base() > 0
+                                ? (cell.reservation.requested() > 0
+                                        ? (cell.reservation.clipped()
+                                                ? #messages.msg('settings.thinking.reserve.clipped', cell.reservation.base(), cell.reservation.granted(), cell.reservation.requested())
+                                                : #messages.msg('settings.thinking.reserve.sum', cell.reservation.base(), cell.reservation.granted()))
+                                        : #messages.msg('settings.thinking.reserve.base', cell.reservation.base()))
+                                : #messages.msg('settings.thinking.reserve.default')}">base + headroom</div>
+                        <div class="small text-secondary" th:text="#{__${cell.use.messageKey()}__}">use</div>
+                    </div>
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.input}">Input budget</div>
+                        <div class="thinking-v" th:if="${cell.inputBudget != null}"
+                             th:text="${#numbers.formatInteger(cell.inputBudget, 1, 'COMMA')}">12,186</div>
+                        <div class="thinking-v text-secondary" th:if="${cell.inputBudget == null}">—</div>
+                        <div class="small text-secondary" th:if="${cell.inputPercent != null}"
+                             th:text="#{settings.thinking.input.vs-off(${cell.inputPercent})}">-4%</div>
+                    </div>
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.meaning}">Meaning</div>
+                        <div class="thinking-v thinking-meaning" th:text="${cell.meaning.text()}">meaning</div>
+                    </div>
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.room}">Thinking room</div>
+                        <div class="thinking-v" th:if="${cell.thinkingRoom != null}"
+                             th:text="${#numbers.formatInteger(cell.thinkingRoom, 1, 'COMMA')} + (${cell.roomUncertain} ? ' (?)' : '')">2,160</div>
+                        <div class="thinking-v text-secondary" th:if="${cell.thinkingRoom == null}">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="thinking-k" th:text="#{settings.thinking.col.worst}">Worst case</div>
+                        <div class="thinking-v" th:if="${cell.worstCaseSeconds != null}"
+                             th:text="${cell.worstCaseText}">56s</div>
+                        <div class="thinking-v text-secondary" th:if="${cell.worstCaseSeconds == null}">—</div>
+                    </div>
+                </div>
+                <div class="mt-1 thinking-badges">
+                    <span th:each="b : ${cell.badges}" class="badge me-1"
+                          th:classappend="${b.severity().css()}"
+                          data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+                          th:title="${b.hint()}" th:text="${b.text()}">badge</span>
+                </div>
+                <!-- 저장된 값과의 차이 — 저장된 칸에는 없다. 서버가 수준마다 미리 계산해 둔 줄이다. -->
+                <div th:unless="${cell.saved}" class="small mt-1 thinking-diff">
+                    <span class="text-secondary"
+                          th:text="${#messages.msg('settings.thinking.diff.prefix', #messages.msg(row.savedCell().levelKey()))}">Compared with saved</span>
+                    <span th:if="${cell.diff.none()}" th:text="#{settings.thinking.diff.none}">no change</span>
+                    <span th:each="part, it : ${cell.diff.parts()}"
+                          th:text="${part} + (${it.last} ? '' : ' · ')">part</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 자세히 — 계산 근거 · 수준별 비교 · 모드별 차이 · 관측 -->
+    <details class="mt-1 thinking-details">
+        <summary class="small text-secondary" th:text="#{settings.thinking.details}">Details</summary>
+        <div class="mt-2 small">
+
+            <!-- 계산 근거 — 선택된 수준의 것만 보인다 -->
+            <div class="fw-semibold" th:text="#{settings.thinking.detail.basis}">Calculation</div>
+            <ul th:each="cell : ${row.cells}" class="thinking-basis mb-2" th:attr="data-pane=${cell.level.value()}"
+                th:hidden="${!cell.saved}">
+                <li th:each="line : ${cell.basis}" th:text="${line}">line</li>
+            </ul>
+
+            <!-- 수준별 비교 -->
+            <div class="fw-semibold" th:text="#{settings.thinking.detail.compare}">Compare levels</div>
+            <div class="table-responsive mb-2">
+                <table class="table table-sm table-bordered align-middle mb-0 thinking-compare">
+                    <thead class="table-light">
+                    <tr>
+                        <th></th>
+                        <th th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'">
+                            <span th:text="#{__${cell.levelKey()}__}">Low</span>
+                            <span class="text-secondary fw-normal"
+                                  th:if="${cell.byDefault or cell.saved}"
+                                  th:text="${(cell.byDefault and cell.saved) ? #messages.msg('settings.thinking.mark.default-saved')
+                                          : (cell.byDefault ? #messages.msg('settings.thinking.mark.default')
+                                          : #messages.msg('settings.thinking.mark.saved'))}">(default)</span>
+                        </th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.sent}">Sent</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'" th:text="${cell.sentLabel}">on</td>
+                    </tr>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.reserve}">Reservation</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'"
+                            th:text="${#numbers.formatInteger(cell.reservedTokens, 1, 'COMMA')}">2,560</td>
+                    </tr>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.input}">Input budget</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'"
+                            th:text="${cell.inputBudget != null ? #numbers.formatInteger(cell.inputBudget, 1, 'COMMA') : '—'}">12,186</td>
+                    </tr>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.meaning}">Meaning</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'" th:text="${cell.meaning.text()}">meaning</td>
+                    </tr>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.room}">Thinking room</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'"
+                            th:text="${cell.thinkingRoom != null ? #numbers.formatInteger(cell.thinkingRoom, 1, 'COMMA') + (cell.roomUncertain ? ' (?)' : '') : '—'}">2,160</td>
+                    </tr>
+                    <tr>
+                        <th class="fw-normal" th:text="#{settings.thinking.col.worst}">Worst case</th>
+                        <td th:each="cell : ${row.cells}" class="thinking-col" th:attr="data-col=${cell.level.value()}"
+                            th:classappend="${cell.saved} ? 'thinking-col-selected'"
+                            th:text="${cell.worstCaseSeconds != null ? cell.worstCaseText : '—'}">56s</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 라우팅 모드별 차이 — 다른 프로바이더가 받을 때만 -->
+            <div th:if="${!row.modeLines.isEmpty()}" class="mb-2">
+                <div class="fw-semibold" th:text="#{settings.thinking.detail.modes}">By routing mode</div>
+                <ul class="mb-0">
+                    <li th:each="line : ${row.modeLines}"
+                        th:text="${#messages.msg('settings.thinking.mode.line', line.mode().name(), line.receiver().name(),
+                                line.receiver().window(), line.cell().reservedTokens(),
+                                line.cell().inputBudget() != null ? line.cell().inputBudget() : '—', line.cell().meaning().text())}">
+                        QUALITY_FIRST → remote</li>
+                </ul>
+            </div>
+
+            <!-- 관측 — 재시작하면 초기화된다. 숫자만 남긴다(프롬프트·생각 본문에는 검색 문서가 들어 있다). -->
+            <div class="fw-semibold"
+                 th:text="#{settings.thinking.detail.observed(${T(com.example.ragagent.llm.ThinkingObservations).CAPACITY})}">Observations</div>
+            <ul class="mb-0 thinking-observed">
+                <li th:each="o : ${row.observations}">
+                    <span th:if="${!o.stats().any()}" class="text-secondary"
+                          th:text="${#messages.msg('settings.thinking.obs.none', #messages.msg('settings.thinking.level.' + o.level().value()))}">none</span>
+                    <span th:if="${o.stats().any()}"
+                          th:text="${#messages.msg('settings.thinking.obs.line',
+                                  #messages.msg('settings.thinking.level.' + o.level().value()),
+                                  o.stats().count(),
+                                  #messages.msg('settings.thinking.sent.' + o.sent().name().toLowerCase()),
+                                  o.stats().thinkingObserved(),
+                                  o.stats().outputP50() != null ? o.stats().outputP50() : '—',
+                                  o.stats().outputP95() != null ? o.stats().outputP95() : '—',
+                                  o.stats().thinkingP95() != null ? o.stats().thinkingP95() + (o.stats().thinkingEstimated() ? ' (est.)' : '') : '—',
+                                  o.stats().truncated())}">line</span>
+                </li>
+                <li class="text-secondary">
+                    <span th:if="${row.speed != null}"
+                          th:text="#{settings.thinking.obs.speed(${#numbers.formatDecimal(row.speed, 1, 1)})}">speed</span>
+                    <span th:if="${row.speed == null}" th:text="#{settings.thinking.obs.speed.none}">no speed</span>
+                </li>
+            </ul>
+        </div>
+    </details>
+</div>
+
+</body>
+</html>

@@ -585,3 +585,20 @@
 .source-metrics {
     white-space: nowrap;
 }
+
+/* ── 설정: 생각(추론) 수준 카드 (PLAN §6.29 ⑦) ──────────────────────────────────────────────────────
+   숫자는 서버가 미리 계산해 그려 둔 것이고, 수준을 고르면 data-pane 이 맞는 칸만 보인다(settings.html 의 스크립트).
+   모바일(< lg)에서는 표가 사이트별 카드로 쌓인다 — 열 머리글(.thinking-head)은 데스크톱에서만 보이고, 각 칸이 자기 이름표
+   (.thinking-k)를 들고 있다. 페이지 전체가 가로로 밀리지 않게 칸은 min-width:0 이고 비교표는 자기 컨테이너 안에서만 스크롤한다. */
+.thinking-row { min-width: 0; }
+.thinking-row > .row > [class*="col-"] { min-width: 0; }
+.thinking-k { font-size: 0.72rem; color: var(--bs-secondary-color); }
+.thinking-v { font-size: 0.9rem; font-weight: 600; overflow-wrap: anywhere; }
+.thinking-meaning { font-weight: 500; font-size: 0.85rem; }
+.thinking-badges .badge { font-weight: 500; cursor: help; }
+.thinking-basis { padding-left: 1.1rem; }
+.thinking-basis li { margin-bottom: 0.15rem; overflow-wrap: anywhere; }
+.thinking-compare th, .thinking-compare td { font-size: 0.8rem; white-space: nowrap; }
+.thinking-col-selected { background-color: var(--bs-primary-bg-subtle); }
+.thinking-details > summary { cursor: pointer; }
+.thinking-basis-line > div { line-height: 1.55; }

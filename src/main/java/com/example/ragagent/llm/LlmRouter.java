@@ -502,6 +502,27 @@ public class LlmRouter {
                 .orElse("unknown");
     }
 
+    /**
+     * 서킷 브레이커의 <b>차단을 무시했을 때</b> 이 라우팅이 받을 프로바이더 — 운영자가 끈 것·키가 없는 것은 그대로 거른다.
+     * {@code /settings} 미리보기가 "local-main 차단 중 → 지금은 remote-x" 를 말하려면 지금의 답({@link #findProviderName})과
+     * 차단이 없었다면의 답이 둘 다 필요하다. 차단은 곧 풀리는 일시 상태라, 미리보기의 기준은 이쪽이고 지금의 답은 주석이다.
+     */
+    public Optional<String> findNominalProviderName(TaskType taskType, RoutingMode mode) {
+        boolean imageTask = isImageTask(taskType);
+        for (ProviderRole role : roleOrder(mode)) {
+            Optional<String> hit = providers.stream()
+                    .filter(x -> x.role() == role
+                            && x.supports(taskType)
+                            && x.hasValidApiKey()
+                            && !providerToggle.isDisabled(x.name())
+                            && !(imageTask && visionUnsupportedProviders.contains(x.name())))
+                    .map(LlmProvider::name)
+                    .findFirst();
+            if (hit.isPresent()) return hit;
+        }
+        return Optional.empty();
+    }
+
     public RoutingMode getDefaultMode() { return defaultMode; }
 
     // ── Private ────────────────────────────────────────────────────────────

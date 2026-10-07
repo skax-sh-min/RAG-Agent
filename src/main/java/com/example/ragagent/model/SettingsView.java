@@ -43,8 +43,44 @@ public record SettingsView(
             boolean blocked,
             String blockedUntil,
             boolean enabled,
-            String contextWindow
-    ) {}
+            String contextWindow,
+            ProviderThinking thinking
+    ) {
+        /** 생각 제어 열 없이 만드는 형태 — 이 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
+        public ProviderRow(String name, String role, int priority, String model, String baseUrl,
+                           boolean configured, boolean blocked, String blockedUntil, boolean enabled,
+                           String contextWindow) {
+            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow, null);
+        }
+    }
+
+    /**
+     * 한 프로바이더가 생각 수준을 어떻게 받는가(PLAN §6.29 ⑦-나) — 관리자에게만 보이는 "생각 제어" 열의 재료다.
+     *
+     * @param configured 설정에 적힌 값. {@code AUTO} 면 화면이 "자동(AUTO)" 이라고 함께 적는다 — 어느 쪽을 골랐는지가 곧 운영자의 의도다
+     * @param resolved   실제로 쓰는 값({@code AUTO} 가 풀린 것)
+     * @param support    그 서버가 구분해서 알아듣는 수준의 폭
+     * @param field      싣는 본문 필드 — 싣지 않으면 {@code null}
+     * @param rejected   서버가 거부해 이 프로세스가 다시는 싣지 않기로 한 필드 — 재시작하면 초기화된다
+     */
+    public record ProviderThinking(com.example.ragagent.llm.ThinkingDialect configured,
+                                   com.example.ragagent.llm.ThinkingDialect resolved,
+                                   com.example.ragagent.llm.ThinkingDialect.Support support,
+                                   String field, java.util.Set<String> rejected) {
+
+        public boolean auto() {
+            return configured == com.example.ragagent.llm.ThinkingDialect.AUTO;
+        }
+
+        public boolean hasRejected() {
+            return rejected != null && !rejected.isEmpty();
+        }
+
+        /** 메시지 키 — {@code settings.thinking.support.on-off} 처럼. */
+        public String supportKey() {
+            return "settings.thinking.support." + support.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+        }
+    }
 
     /** A titled group of settings on the page (e.g. "검색 튜닝 (핫 수정)"). */
     public record SettingGroup(String id, String title, List<SettingItem> items) {}

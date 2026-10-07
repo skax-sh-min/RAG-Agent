@@ -63,6 +63,8 @@
 │    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
 │    채팅 답변 스트리밍(체인 우회)은 AnswerStreamer 가 같은 규칙으로 싣는다 │
 │    켬으로 나가면 max_tokens 에 생각 여유 — ThinkingBudget(창 25% 상한)  │
+│    /settings 의 생각 수준 카드(관리자 전용)가 호출 지점마다 이 라우팅이  │
+│    고른 프로바이더·dialect·창으로 예약·입력 예산을 미리 계산해 보인다   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

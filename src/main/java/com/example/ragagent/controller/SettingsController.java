@@ -1,6 +1,9 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.service.SettingsService;
+import com.example.ragagent.service.ThinkingPreviewService;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,14 +18,24 @@ import org.springframework.web.bind.annotation.RequestParam;
  * {@code /admin/settings/**} so they inherit the existing {@code /admin/**} authorization
  * (SecurityConfig + NoAuthAutoLoginFilter) — ROLE_ADMIN in management-only mode — with no new
  * security wiring. Both return the single updated setting row as an HTMX fragment.
+ *
+ * <p><b>생각(추론) 수준 카드</b>(PLAN §6.29 ⑦)는 관리자 전용이고 읽기까지 막는다 — 그래서 카드의 모든 엔드포인트가
+ * {@code /admin/settings/**} 아래에 있다. 화면에서 감추는 것은 보안이 아니다(실제 게이트는 {@code SecurityConfig} 의
+ * {@code /admin/** → hasRole("ADMIN")}). {@code /settings} 페이지는 관리자일 때만 카드의 자리표시자를 그리고, 내용은 아래
+ * {@link #thinkingCard} 가 채운다.
  */
 @Controller
 public class SettingsController {
 
-    private final SettingsService settingsService;
+    /** 컨텍스트 창이 바뀌면(재탐지) 예산 숫자가 전부 바뀐다 — 카드가 이 이벤트를 듣고 스스로 다시 불러온다. */
+    static final String THINKING_STALE_EVENT = "thinking-preview-stale";
 
-    public SettingsController(SettingsService settingsService) {
+    private final SettingsService settingsService;
+    private final ThinkingPreviewService thinkingPreview;
+
+    public SettingsController(SettingsService settingsService, ThinkingPreviewService thinkingPreview) {
         this.settingsService = settingsService;
+        this.thinkingPreview = thinkingPreview;
     }
 
     @GetMapping("/settings")
@@ -35,16 +48,39 @@ public class SettingsController {
     @PostMapping("/admin/settings/update")
     public String update(@RequestParam String key, @RequestParam String value, Model model) {
         settingsService.update(key, value);
-        model.addAttribute("item", settingsService.editableItem(key));
-        return "fragments/settings-item :: item";
+        return rowFor(key, model);
     }
 
     /** Clear an override, reverting the key to its property default. */
     @PostMapping("/admin/settings/reset")
     public String reset(@RequestParam String key, Model model) {
         settingsService.reset(key);
+        return rowFor(key, model);
+    }
+
+    /**
+     * 갱신 뒤에 돌려줄 조각 — 일반 항목은 한 줄({@code settings-item}), 생각 수준 키({@code llm.thinking.<site>})는 그 사이트의
+     * 행을 <b>새로 계산해서</b> 돌려준다(저장한 수준이 예약·예산·배지를 바꾸므로 값 칸만 갈아끼우면 낡은 숫자가 남는다).
+     */
+    private String rowFor(String key, Model model) {
+        var site = ThinkingSite.bySettingsKey(key);
+        if (site.isPresent()) {
+            model.addAttribute("row", thinkingPreview.row(site.get()));
+            return "fragments/settings-thinking :: row";
+        }
         model.addAttribute("item", settingsService.editableItem(key));
         return "fragments/settings-item :: item";
+    }
+
+    /**
+     * 생각 수준 카드 전체(PLAN §6.29 ⑦) — 페이지를 열 때와 [다시 계산]·창 재탐지 뒤에 불린다. 계산은 산술과 번들 길이
+     * 추정뿐이라 LLM·DB 호출이 없다. <b>읽기도 관리자만</b> 한다: 프로바이더 이름·창 크기·관측값이 드러나는데 게스트가 그 값으로
+     * 할 수 있는 일이 없다.
+     */
+    @GetMapping("/admin/settings/thinking")
+    public String thinkingCard(Model model) {
+        model.addAttribute("thinking", thinkingPreview.preview());
+        return "fragments/settings-thinking :: card";
     }
 
     /**
@@ -74,9 +110,11 @@ public class SettingsController {
      * only fix the input budget and never the output reservation baked into the provider bean.
      */
     @PostMapping("/admin/settings/context-window/reprobe")
-    public String reprobeContextWindows(Model model) {
+    public String reprobeContextWindows(Model model, HttpServletResponse response) {
         model.addAttribute("probeResult", settingsService.reprobeContextWindows());
         model.addAttribute("providers", settingsService.providerRows());
+        // 창이 바뀌면 생각 수준 카드의 예산 숫자가 전부 달라진다 — 카드가 이 이벤트를 듣고 다시 불러온다.
+        response.setHeader("HX-Trigger", THINKING_STALE_EVENT);
         return "fragments/settings-providers :: providers";
     }
 }

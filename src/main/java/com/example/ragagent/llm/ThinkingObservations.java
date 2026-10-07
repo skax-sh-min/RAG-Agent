@@ -100,6 +100,88 @@ public class ThinkingObservations {
     }
 
     /**
+     * 한 키의 표본을 {@code /settings} 미리보기가 읽는 숫자로 줄인 것(PLAN §6.29 ⑧).
+     *
+     * <p>생각 토큰의 분위수는 <b>생각한 표본만</b>으로 센다 — 생각하지 않은 호출(0)까지 넣으면 p50 이 0 으로 내려가
+     * "생각 자리가 p50 보다 작은가"라는 잘림 판정이 늘 거짓이 된다. 출력 토큰의 분위수는 서버가 센 값이 있는 표본만이다.
+     *
+     * @param count            표본 수
+     * @param thinkingObserved 생각한 흔적이 있던 표본 수
+     * @param truncated        {@code finish_reason=length} 로 끝난 표본 수
+     * @param outputP50        출력 토큰 중앙값 — 센 표본이 없으면 {@code null}
+     * @param thinkingP50      생각 토큰 중앙값 — 생각 토큰을 잰(보고·추정) 표본이 없으면 {@code null}
+     * @param thinkingEstimated 생각 토큰이 추정인 표본이 하나라도 섞였는가 — 화면이 "(추정)" 을 붙인다
+     */
+    public record Stats(int count, int thinkingObserved, int truncated, Integer outputP50, Integer outputP95,
+                        Integer thinkingP50, Integer thinkingP95, boolean thinkingEstimated) {
+
+        public static final Stats EMPTY = new Stats(0, 0, 0, null, null, null, null, false);
+
+        public boolean any() {
+            return count > 0;
+        }
+    }
+
+    /** 표본 한 묶음의 요약 — 순수 함수. 빈 목록이면 {@link Stats#EMPTY}. */
+    public static Stats statsOf(List<Sample> samples) {
+        if (samples == null || samples.isEmpty()) return Stats.EMPTY;
+        List<Integer> outputs = samples.stream().map(Sample::outputTokens).filter(java.util.Objects::nonNull)
+                .sorted().toList();
+        List<Integer> thinking = samples.stream().map(Sample::thinkingTokens).filter(java.util.Objects::nonNull)
+                .sorted().toList();
+        return new Stats(
+                samples.size(),
+                (int) samples.stream().filter(Sample::thinkingObserved).count(),
+                (int) samples.stream().filter(Sample::truncated).count(),
+                percentile(outputs, 50), percentile(outputs, 95),
+                percentile(thinking, 50), percentile(thinking, 95),
+                samples.stream().anyMatch(s -> s.thinkingTokens() != null && s.thinkingEstimated()));
+    }
+
+    /** 가까운 순위 방식 — 오름차순 목록의 p 분위수. 빈 목록이면 {@code null}. */
+    static Integer percentile(List<Integer> sortedAscending, int percent) {
+        if (sortedAscending.isEmpty()) return null;
+        int rank = (int) Math.ceil(percent / 100.0 * sortedAscending.size());
+        return sortedAscending.get(Math.max(0, Math.min(sortedAscending.size() - 1, rank - 1)));
+    }
+
+    /** 생성 속도를 믿으려면 필요한 최소 표본 수 — 그보다 적으면 "최악 소요"를 내지 않는다. */
+    static final int MIN_SPEED_SAMPLES = 3;
+
+    /** 속도 표본으로 쓰려면 이만큼은 걸리고 이만큼은 내야 한다 — 짧은 호출은 prefill·왕복 지연이 속도를 지배한다. */
+    private static final long MIN_SPEED_LATENCY_MS = 500;
+    private static final int MIN_SPEED_OUTPUT_TOKENS = 16;
+
+    /**
+     * 이 프로바이더의 생성 속도(토큰/초) — 모든 사이트·수준의 표본에서 낸 중앙값. 속도는 사이트가 아니라 서버·모델의 성질이라
+     * 키를 가리지 않는다(그래야 처음 켜 본 수준도 숫자를 받는다). 출력 토큰 ÷ 지연이라 prefill 시간이 섞여 실제보다
+     * <b>느리게</b> 나오는 하한 추정이고, 그만큼 "최악 소요"는 보수적이다. 표본이 모자라면 {@code null}.
+     */
+    public Double speedTokensPerSecond(String provider) {
+        if (provider == null) return null;
+        List<Sample> all = new java.util.ArrayList<>();
+        samples.forEach((key, deque) -> {
+            if (!provider.equals(key.provider())) return;
+            synchronized (deque) {
+                all.addAll(deque);
+            }
+        });
+        return speedOf(all);
+    }
+
+    /** {@link #speedTokensPerSecond} 의 몸통 — 순수 함수. */
+    static Double speedOf(List<Sample> all) {
+        List<Double> speeds = all.stream()
+                .filter(s -> s.outputTokens() != null && s.outputTokens() >= MIN_SPEED_OUTPUT_TOKENS
+                        && s.latencyMs() >= MIN_SPEED_LATENCY_MS)
+                .map(s -> s.outputTokens() * 1000.0 / s.latencyMs())
+                .sorted().toList();
+        if (speeds.size() < MIN_SPEED_SAMPLES) return null;
+        int mid = speeds.size() / 2;
+        return speeds.size() % 2 == 1 ? speeds.get(mid) : (speeds.get(mid - 1) + speeds.get(mid)) / 2.0;
+    }
+
+    /**
      * 블로킹 응답 하나를 표본으로. 생각한 흔적은 근거가 강한 것부터 본다:
      * <ol>
      *   <li>서버가 보고한 {@code reasoning_tokens} — 그대로 쓴다(OpenAI 계열).</li>
