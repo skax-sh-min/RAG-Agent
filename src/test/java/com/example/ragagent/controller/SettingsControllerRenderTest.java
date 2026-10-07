@@ -290,8 +290,8 @@ class SettingsControllerRenderTest {
         assertThat(html).contains("/admin/settings/update").contains("저장 전");
         // 번들에서 빠진 키는 오류 없이 ??key?? 로만 보인다
         assertThat(html).doesNotContain("??");
-        // 숫자가 서버에서 계산돼 있다 — 16k 창의 검증 예약 2,560(낮게)과 입력 예산 12,186
-        assertThat(html).contains("2,560").contains("12,186");
+        // 숫자가 서버에서 계산돼 있다 — 16k 창의 검증 예약 3,072(낮게)와 입력 예산 11,674
+        assertThat(html).contains("3,072").contains("11,674");
     }
 
     @Test

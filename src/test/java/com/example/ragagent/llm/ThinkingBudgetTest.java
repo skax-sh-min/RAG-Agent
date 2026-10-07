@@ -27,24 +27,25 @@ class ThinkingBudgetTest {
     }
 
     @Test
-    @DisplayName("수준별 여유 — 끔 0 · 낮게 512 · 중간 1,024 · 높게 2,048")
+    @DisplayName("수준별 여유 — 끔 0 · 낮게 1,024 · 중간 2,048 · 높게 4,096 (6단계 실측으로 낮게를 512 에서 올렸다)")
     void headroomPerLevel() {
         assertThat(List.of(ThinkingLevel.values())).extracting(ThinkingBudget::headroom)
-                .containsExactly(0, 512, 1_024, 2_048);
+                .containsExactly(0, 1_024, 2_048, 4_096);
     }
 
     @Test
-    @DisplayName("골든 — 16k 창의 검증(기본 2,048): 끔 2,048 · 낮게 2,560 · 중간 3,072 · 높게 4,096(상한에 닿음)")
+    @DisplayName("골든 — 16k 창의 검증(기본 2,048): 끔 2,048 · 낮게 3,072 · 중간 4,096(상한에 닿음) · 높게 4,096(상한에 깎임)")
     void goldenEvalOn16k() {
         assertThat(PROVIDER_MAX_16K).as("전제 — 16k 창의 프로바이더 상한").isEqualTo(10_000);
         assertThat(List.of(ThinkingLevel.values())).extracting(l -> eval16k(l).tokens())
-                .containsExactly(2_048, 2_560, 3_072, 4_096);
+                .containsExactly(2_048, 3_072, 4_096, 4_096);
         assertThat(eval16k(ThinkingLevel.HIGH).ceiling()).as("창의 25%").isEqualTo(4_096);
-        assertThat(eval16k(ThinkingLevel.HIGH).clipped()).as("상한에 정확히 닿았을 뿐 깎이지 않았다").isFalse();
-        // PLAN ⑦-나 예시의 입력 예산 줄: 12,698 · 12,186 · 11,674 · 10,650
+        assertThat(eval16k(ThinkingLevel.MEDIUM).clipped()).as("상한에 정확히 닿았을 뿐 깎이지 않았다").isFalse();
+        assertThat(eval16k(ThinkingLevel.HIGH).clipped()).as("높게는 4,096 을 요구해 2,048 만 받았다 — 깎임").isTrue();
+        // PLAN ⑦-나 예시의 입력 예산 줄: 12,698 · 11,674 · 10,650 · 10,650
         assertThat(List.of(ThinkingLevel.values()))
                 .extracting(l -> new PromptBudget(WINDOW_16K, eval16k(l).tokens()).inputBudget())
-                .containsExactly(12_698, 12_186, 11_674, 10_650);
+                .containsExactly(12_698, 11_674, 10_650, 10_650);
     }
 
     @Test
@@ -68,18 +69,18 @@ class ThinkingBudgetTest {
 
         assertThat(r.tokens()).as("앞선 초안의 min(기본 + h, C) 는 여기서 4,096 으로 깎았다").isEqualTo(5_000);
         assertThat(r.granted()).isZero();
-        assertThat(r.describe()).isEqualTo("5,000 (기본 5,000 + 생각 0/2,048, 상한 4,096)");
+        assertThat(r.describe()).isEqualTo("5,000 (기본 5,000 + 생각 0/4,096, 상한 4,096)");
     }
 
     @Test
-    @DisplayName("32k 창의 스트리밍 답변(N 5,000) + 낮게 — 상한 8,192 까지 남은 자리에서 512 를 받는다")
+    @DisplayName("32k 창의 스트리밍 답변(N 5,000) + 낮게 — 상한 8,192 까지 남은 자리에서 1,024 를 받는다")
     void answerOn32kGetsTheHeadroom() {
         int window = 32_768;
         ThinkingBudget.Reservation r = ThinkingBudget.compute(5_000, ThinkingLevel.LOW, true, false,
                 ProviderContextWindows.cappedMaxTokens(10_000, window), window);
 
-        assertThat(r.tokens()).isEqualTo(5_512);
-        assertThat(r.describe()).isEqualTo("5,512 (기본 5,000 + 생각 512)");
+        assertThat(r.tokens()).isEqualTo(6_024);
+        assertThat(r.describe()).isEqualTo("6,024 (기본 5,000 + 생각 1,024)");
     }
 
     @Test
@@ -111,7 +112,7 @@ class ThinkingBudgetTest {
         ThinkingBudget.Reservation nearCap = ThinkingBudget.compute(9_500, ThinkingLevel.MEDIUM, true, true,
                 PROVIDER_MAX_16K, WINDOW_16K);
 
-        assertThat(rewrite.tokens()).as("창 25%(4,096) 를 넘어도 여유를 준다").isEqualTo(7_024);
+        assertThat(rewrite.tokens()).as("창 25%(4,096) 를 넘어도 여유를 준다").isEqualTo(8_048);
         assertThat(nearCap.tokens()).as("프로바이더 상한 10,000 에서 멈춘다").isEqualTo(10_000);
         assertThat(nearCap.clipped()).isTrue();
     }
@@ -122,7 +123,7 @@ class ThinkingBudgetTest {
         ThinkingBudget.Reservation r = ThinkingBudget.compute(2_048, ThinkingLevel.LOW, true, false, 0, 0);
 
         assertThat(r.tokens()).isEqualTo(2_048);
-        assertThat(r.requested()).isEqualTo(512);
+        assertThat(r.requested()).isEqualTo(1_024);
     }
 
     @Test
@@ -160,23 +161,23 @@ class ThinkingBudgetTest {
     }
 
     @Test
-    @DisplayName("빈 — 프로바이더의 dialect·창·max-tokens 로 같은 함수를 부른다(LOCAL auto + 낮게 = 2,560)")
+    @DisplayName("빈 — 프로바이더의 dialect·창·max-tokens 로 같은 함수를 부른다(LOCAL auto + 낮게 = 3,072)")
     void beanUsesTheProvidersFacts() {
         assertThat(bean(ThinkingDialect.AUTO, true, null, ThinkingLevel.LOW, WINDOW_16K)
-                .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).isEqualTo(2_560);
+                .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).isEqualTo(3_072);
         assertThat(bean(ThinkingDialect.AUTO, false, null, ThinkingLevel.LOW, WINDOW_16K)
                 .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).as("원격(auto) — 생각 제어 안 함").isEqualTo(2_048);
         assertThat(bean(ThinkingDialect.AUTO, true, 2_300, ThinkingLevel.LOW, WINDOW_16K)
                 .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).as("프로바이더 자기 max-tokens 가 상한").isEqualTo(2_300);
         assertThat(bean(ThinkingDialect.AUTO, true, null, ThinkingLevel.LOW, 0)
-                .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).as("창 모름 — 프로바이더 max-tokens 만").isEqualTo(2_560);
+                .reservation(ThinkingSite.EVAL, "p", 2_048).tokens()).as("창 모름 — 프로바이더 max-tokens 만").isEqualTo(3_072);
     }
 
     @Test
     @DisplayName("빈 — 재작성 사이트의 조각 여유는 켬으로 나갈 때만 수준의 여유 그대로")
     void rewriteHeadroom() {
         assertThat(bean(ThinkingDialect.AUTO, true, null, ThinkingLevel.MEDIUM, WINDOW_16K)
-                .rewriteHeadroom(ThinkingSite.MD_CORRECT, "p")).isEqualTo(1_024);
+                .rewriteHeadroom(ThinkingSite.MD_CORRECT, "p")).isEqualTo(2_048);
         assertThat(bean(ThinkingDialect.AUTO, true, null, ThinkingLevel.OFF, WINDOW_16K)
                 .rewriteHeadroom(ThinkingSite.MD_CORRECT, "p")).isZero();
         assertThat(bean(ThinkingDialect.NONE, true, null, ThinkingLevel.HIGH, WINDOW_16K)

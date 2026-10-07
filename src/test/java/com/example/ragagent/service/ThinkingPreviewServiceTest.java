@@ -134,18 +134,19 @@ class ThinkingPreviewServiceTest {
     // ── 골든 — PLAN ⑦-나 예시와 같다 ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("골든 — 16k 창의 검증: 예약 2,048 · 2,560 · 3,072 · 4,096 → 입력 예산 12,698 · 12,186 · 11,674 · 10,650 (PLAN 예시)")
+    @DisplayName("골든 — 16k 창의 검증: 예약 2,048 · 3,072 · 4,096 · 4,096 → 입력 예산 12,698 · 11,674 · 10,650 · 10,650 (PLAN 예시)")
     void goldenEvalOn16k() {
         Row eval = ThinkingPreviewHarness.builder().window(16_384).build().row(ThinkingSite.EVAL);
 
-        assertThat(reserved(eval)).containsExactly(2_048, 2_560, 3_072, 4_096);
-        assertThat(inputs(eval)).containsExactly(12_698, 12_186, 11_674, 10_650);
+        assertThat(reserved(eval)).containsExactly(2_048, 3_072, 4_096, 4_096);
+        assertThat(inputs(eval)).containsExactly(12_698, 11_674, 10_650, 10_650);
         assertThat(eval.cell(ThinkingLevel.HIGH).reservation().ceiling()).as("창의 25%").isEqualTo(4_096);
-        assertThat(eval.cell(ThinkingLevel.HIGH).reservation().clipped()).as("정확히 닿았을 뿐 깎이지 않았다").isFalse();
-        assertThat(eval.cell(ThinkingLevel.LOW).inputPercent()).isEqualTo(-4);
+        assertThat(eval.cell(ThinkingLevel.MEDIUM).reservation().clipped()).as("정확히 닿았을 뿐 깎이지 않았다").isFalse();
+        assertThat(eval.cell(ThinkingLevel.HIGH).reservation().clipped()).as("높게는 4,096 을 요구해 2,048 만 받았다").isTrue();
+        assertThat(eval.cell(ThinkingLevel.LOW).inputPercent()).isEqualTo(-8);
         assertThat(eval.cell(ThinkingLevel.OFF).inputPercent()).as("끔이 기준이다").isNull();
         assertThat(eval.cell(ThinkingLevel.LOW).use()).isEqualTo(ThinkingPreview.Use.REQUEST);
-        assertThat(eval.cell(ThinkingLevel.LOW).thinkingRoom()).as("예약 2,560 − 응답 필요분 400").isEqualTo(2_160);
+        assertThat(eval.cell(ThinkingLevel.LOW).thinkingRoom()).as("예약 3,072 − 응답 필요분 150").isEqualTo(2_922);
         assertThat(eval.cell(ThinkingLevel.OFF).thinkingRoom()).as("끔으로 나가면 생각 자리가 없다").isNull();
     }
 
@@ -177,13 +178,13 @@ class ThinkingPreviewServiceTest {
     }
 
     @Test
-    @DisplayName("32k 창의 답변(N) + 낮게 — 상한 8,192 까지 남은 자리에서 512 를 받는다")
+    @DisplayName("32k 창의 답변(N) + 낮게 — 상한 8,192 까지 남은 자리에서 1,024 를 받는다")
     void answerOn32kGetsTheHeadroom() {
         Row answer = ThinkingPreviewHarness.builder().window(32_768).build().row(ThinkingSite.ANSWER_RAG_N);
 
-        assertThat(answer.cell(ThinkingLevel.LOW).reservedTokens()).isEqualTo(5_512);
+        assertThat(answer.cell(ThinkingLevel.LOW).reservedTokens()).isEqualTo(6_024);
         assertThat(answer.cell(ThinkingLevel.OFF).reservedTokens()).isEqualTo(5_000);
-        assertThat(answer.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(512);
+        assertThat(answer.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(1_024);
     }
 
     @Test
@@ -220,7 +221,7 @@ class ThinkingPreviewServiceTest {
             }
         }
         // 창 25% 상한은 못 구해도 프로바이더 max-tokens 상한은 안다 — 여유는 그 상한까지 준다
-        assertThat(reserved(h.row(ThinkingSite.EVAL))).containsExactly(2_048, 2_560, 3_072, 4_096);
+        assertThat(reserved(h.row(ThinkingSite.EVAL))).containsExactly(2_048, 3_072, 4_096, 6_144);
     }
 
     @Test
@@ -316,7 +317,7 @@ class ThinkingPreviewServiceTest {
             assertThat(cell.wire().sent()).isEqualTo(ThinkingWire.Sent.NOTHING);
             assertThat(cell.reservedTokens()).as("켬으로 나가지 않으니 여유가 없다").isEqualTo(2_048);
             assertThat(cell.roomUncertain()).isTrue();
-            assertThat(cell.thinkingRoom()).isEqualTo(2_048 - 400);
+            assertThat(cell.thinkingRoom()).isEqualTo(2_048 - 150);
             assertThat(cell.has(Badge.Kind.NO_CONTROL)).isTrue();
             assertThat(cell.has(Badge.Kind.COLLAPSED)).as("보내지 않으니 '같은 값' 이 의미 없다").isFalse();
             assertThat(cell.sentLabel()).contains("생각 제어 안 함");
@@ -348,7 +349,7 @@ class ThinkingPreviewServiceTest {
         assertThat(inputs(classify)).containsExactly(4_746, 4_746, 4_746, 4_746);
         assertThat(classify.cell(ThinkingLevel.LOW).use()).isEqualTo(ThinkingPreview.Use.PROVIDER_DEFAULT);
         assertThat(classify.cell(ThinkingLevel.LOW).reservation().requested()).as("요구하지도 않는다 — 기본 예약이 이미 상한 위다").isZero();
-        assertThat(classify.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(10_000 - 40);
+        assertThat(classify.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(10_000 - 20);
     }
 
     @Test
@@ -416,9 +417,9 @@ class ThinkingPreviewServiceTest {
     @DisplayName("저장된 값과의 차이 — 저장된 수준의 칸은 비어 있고, 다른 칸에는 예약·입력·뜻하는 것·최악 소요의 증감이 있다")
     void diffAgainstTheSavedLevel() {
         Row eval = ThinkingPreviewHarness.builder()
-                .file(ThinkingPreviewHarness.levels(ThinkingSite.EVAL, ThinkingLevel.MEDIUM)).build().row(ThinkingSite.EVAL);
+                .file(ThinkingPreviewHarness.levels(ThinkingSite.EVAL, ThinkingLevel.LOW)).build().row(ThinkingSite.EVAL);
 
-        assertThat(eval.cell(ThinkingLevel.MEDIUM).diff().none()).isTrue();
+        assertThat(eval.cell(ThinkingLevel.LOW).diff().none()).isTrue();
         List<String> high = eval.cell(ThinkingLevel.HIGH).diff().parts();
         assertThat(high).anyMatch(p -> p.contains("예약") && p.contains("+1,024"));
         assertThat(high).anyMatch(p -> p.contains("입력") && p.contains("-1,024"));
@@ -435,16 +436,16 @@ class ThinkingPreviewServiceTest {
         ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().build();
         for (int i = 0; i < 2; i++) {
             h.observations.record(ThinkingSite.EVAL, ThinkingPreviewHarness.PROVIDER, ThinkingLevel.LOW,
-                    sample(ThinkingWire.Sent.ON, 3_000, 2_900, true, false, 40_000));
+                    sample(ThinkingWire.Sent.ON, 3_600, 3_500, true, false, 40_000));
         }
         assertThat(h.row(ThinkingSite.EVAL).cell(ThinkingLevel.LOW).has(Badge.Kind.TRUNCATION_LIKELY))
                 .as("표본 2건은 판정하기에 모자란다").isFalse();
 
         h.observations.record(ThinkingSite.EVAL, ThinkingPreviewHarness.PROVIDER, ThinkingLevel.LOW,
-                sample(ThinkingWire.Sent.ON, 3_000, 2_900, true, false, 40_000));
+                sample(ThinkingWire.Sent.ON, 3_600, 3_500, true, false, 40_000));
         Cell low = h.row(ThinkingSite.EVAL).cell(ThinkingLevel.LOW);
-        assertThat(low.thinkingRoom()).isEqualTo(2_160);
-        assertThat(low.has(Badge.Kind.TRUNCATION_LIKELY)).as("생각 자리 2,160 < 관측 중앙값 2,900").isTrue();
+        assertThat(low.thinkingRoom()).isEqualTo(2_922);
+        assertThat(low.has(Badge.Kind.TRUNCATION_LIKELY)).as("생각 자리 2,922 < 관측 중앙값 3,500").isTrue();
     }
 
     @Test
@@ -489,8 +490,8 @@ class ThinkingPreviewServiceTest {
         }
         Cell low = h.row(ThinkingSite.EVAL).cell(ThinkingLevel.LOW);
         assertThat(h.row(ThinkingSite.EVAL).speed()).isEqualTo(50.0);
-        assertThat(low.worstCaseSeconds()).as("예약 2,560 ÷ 50").isEqualTo(52L);
-        assertThat(low.worstCaseText()).isEqualTo("52초");
+        assertThat(low.worstCaseSeconds()).as("예약 3,072 ÷ 50").isEqualTo(62L);
+        assertThat(low.worstCaseText()).isEqualTo("1분 2초");
         assertThat(low.has(Badge.Kind.TIMEOUT_EXCEEDED)).as("읽기 타임아웃 30초보다 길다").isTrue();
         assertThat(h.row(ThinkingSite.EVAL).cell(ThinkingLevel.HIGH).worstCaseText()).isEqualTo("1분 22초");
 

@@ -296,9 +296,9 @@ class AppPropertiesOverrideTest {
     @DisplayName("§6.29 생각 수준 — 오버라이드 → app.llm.thinking.<id> → 출하값 순서, 틀린 값은 다음으로 떨어진다")
     void thinkingLevel_overrideThenFileThenShipped() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
-                0.0, 0.1, 0.0, 0.7, true, 6000, 1, false, Map.of("eval", "high", "title", "bogus")));
+                0.0, 0.1, 0.0, 0.7, true, 6000, 1, false, Map.of("eval", "high", "answer-rag-c", "bogus")));
         assertThat(p.llmSafe().thinkingLevel(ThinkingSite.EVAL)).isEqualTo(ThinkingLevel.HIGH);
-        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.TITLE)).as("틀린 값 → 출하값").isEqualTo(ThinkingLevel.LOW);
+        assertThat(p.llmSafe().thinkingLevel(ThinkingSite.ANSWER_RAG_C)).as("틀린 값 → 출하값(낮게)").isEqualTo(ThinkingLevel.LOW);
         assertThat(p.llmSafe().thinkingLevel(ThinkingSite.CONDENSE)).as("줄 없음 → 출하값").isEqualTo(ThinkingLevel.OFF);
 
         bind();

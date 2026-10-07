@@ -95,7 +95,8 @@ class SettingsServiceThinkingLevelTest {
         assertThat(service.editableItem("llm.thinking.eval").value()).isEqualTo("high");
         assertThat(service.editableItem("llm.thinking.eval").type()).isEqualTo("choice");
         verify(audit).log(eq("settings.update"), eq("llm.thinking.eval"), anyMap());
-        assertThat(effective(ThinkingSite.CLASSIFY)).as("다른 사이트는 그대로").isEqualTo(ThinkingLevel.LOW);
+        assertThat(effective(ThinkingSite.CLASSIFY)).as("다른 사이트는 그대로(출하값 끔)").isEqualTo(ThinkingLevel.OFF);
+        assertThat(effective(ThinkingSite.ANSWER_RAG_C)).as("다른 사이트는 그대로(출하값 낮게)").isEqualTo(ThinkingLevel.LOW);
     }
 
     @Test

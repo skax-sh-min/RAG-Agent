@@ -11,9 +11,13 @@ import java.util.Optional;
  * ({@code app.llm.thinking.<id>}), 그 수준을 어떤 필드로 보낼지는 받는 프로바이더가 정해진 뒤
  * {@link ThinkingControlChatModel} 이 정한다 — 어느 프로바이더가 받을지는 라우터가 나중에 정하기 때문이다.
  *
- * <p><b>출하 기본값</b>은 참조 배포(llama.cpp + 생각이 기본으로 켜진 모델)에서 지금과 같은 전송 결과가 되게
- * 골랐다: 아무것도 보내지 않던 자리는 그 서버의 기본값대로 생각하고 있었으므로 {@code LOW}, 이미 생각을 끄던
- * 세 자리는 {@code OFF}. {@code application.properties} 에도 같은 값이 사이트마다 한 줄씩 있고 둘이 같은지는
+ * <p><b>출하 기본값</b>은 6단계 실측(2026-10-07, PLAN §6.29 — llama.cpp b11433 + gemma-4-E2B 에서 같은 입력으로 끔/낮게를
+ * 번갈아 부른 결과, {@code ThinkingLevelEvaluationTest})으로 정했다. 생각이 이득을 준 곳만 {@code LOW} 다 — 응답 검증(문서가
+ * 받쳐 주지 않는 답을 잡는 비율 6% → 44%, 근거 있는 답은 그대로 통과)과 응용(C) 답변의 코드(문서의 API 를 더 충실히 따른다).
+ * 나머지는 같은 품질에 10~40배 느려서 {@code OFF} 다. 그 구성에서 <b>측정하지 못한</b> 자리(대화 요약 — 소형 모델 계층이 없으면
+ * LLM 을 부르지 않는다, 이미지 셋 — 비전 모델이 없다)는 옛 값 {@code LOW} 를 그대로 둔다. 이 값이 서버의 기본값을 뒤집을 수
+ * 있다는 점은 그대로다 — 요청의 {@code enable_thinking} 이 서버 기본값을 덮으므로, 생각을 꺼서 띄운 서버에서도 {@code LOW} 인
+ * 자리는 그 호출에서만 켠다. {@code application.properties} 에도 같은 값이 사이트마다 한 줄씩 있고 둘이 같은지는
  * {@code ThinkingSiteTest} 가 지킨다 — 이 값은 파일의 줄이 빠지거나 값이 틀렸을 때 떨어지는 자리다.
  *
  * <p><b>라우팅의 단일 출처이기도 하다</b>(§6.29 ⑦-바). 사이트가 어느 {@link TaskType} 으로, 어느
@@ -26,28 +30,28 @@ import java.util.Optional;
  * ({@code AnswerStreamer} 가 사이트를 받아 요청에 직접 싣는다). 생각 수준이 먹지 않는 LLM 호출은 남아 있지 않다.
  */
 public enum ThinkingSite {
-    ANSWER_RAG_S("answer-rag-s", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
-    ANSWER_RAG_N("answer-rag-n", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_RAG_S("answer-rag-s", Group.ANSWER, ThinkingLevel.OFF, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_RAG_N("answer-rag-n", Group.ANSWER, ThinkingLevel.OFF, Route.conversation(TaskType.TEXT), 0),
     ANSWER_RAG_C("answer-rag-c", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
-    ANSWER_DIRECT_S("answer-direct-s", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
-    ANSWER_DIRECT_N("answer-direct-n", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
-    ANSWER_META("answer-meta", Group.ANSWER, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 0),
-    EVAL("eval", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 400),
-    EVAL_CREATIVE("eval-creative", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 400),
-    CLASSIFY("classify", Group.QUERY, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 40),
-    CONDENSE("condense", Group.QUERY, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 60),
+    ANSWER_DIRECT_S("answer-direct-s", Group.ANSWER, ThinkingLevel.OFF, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_DIRECT_N("answer-direct-n", Group.ANSWER, ThinkingLevel.OFF, Route.conversation(TaskType.TEXT), 0),
+    ANSWER_META("answer-meta", Group.ANSWER, ThinkingLevel.OFF, Route.conversation(TaskType.TEXT), 0),
+    EVAL("eval", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 150),
+    EVAL_CREATIVE("eval-creative", Group.VERIFY, ThinkingLevel.LOW, Route.conversation(TaskType.TEXT), 120),
+    CLASSIFY("classify", Group.QUERY, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 20),
+    CONDENSE("condense", Group.QUERY, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 40),
     /** 작은 모델부터 — 없으면 같은 서버의 큰 모델로 내려간다(§6.21, {@code routeProviderWithFallback}). */
-    QUERY_EXPANSION("query-expansion", Group.QUERY, ThinkingLevel.LOW,
-            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), 150),
-    RERANK("rerank", Group.QUERY, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 80),
-    POST_ANSWER("post-answer", Group.POST, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 250),
-    TITLE("title", Group.POST, ThinkingLevel.LOW, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 30),
+    QUERY_EXPANSION("query-expansion", Group.QUERY, ThinkingLevel.OFF,
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), 60),
+    RERANK("rerank", Group.QUERY, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.TEXT), 150),
+    POST_ANSWER("post-answer", Group.POST, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 200),
+    TITLE("title", Group.POST, ThinkingLevel.OFF, Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 20),
     SUMMARY("summary", Group.POST, ThinkingLevel.LOW, Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.MICRO_TEXT), 800),
-    KEYWORD_CONTEXT("keyword-context", Group.INDEX, ThinkingLevel.LOW,
+    KEYWORD_CONTEXT("keyword-context", Group.INDEX, ThinkingLevel.OFF,
             Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 0),
-    MD_CORRECT("md-correct", Group.INDEX, ThinkingLevel.LOW,
+    MD_CORRECT("md-correct", Group.INDEX, ThinkingLevel.OFF,
             Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), 0, true),
-    TXT_TO_MD("txt-to-md", Group.INDEX, ThinkingLevel.LOW,
+    TXT_TO_MD("txt-to-md", Group.INDEX, ThinkingLevel.OFF,
             Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), 0, true),
     IMAGE_DESCRIBE("image-describe", Group.INDEX, ThinkingLevel.LOW,
             Route.fixed(RoutingMode.COST_FIRST, TaskType.VISION), 150),
@@ -56,7 +60,7 @@ public enum ThinkingSite {
     MD_CORRECT_VISION("md-correct-vision", Group.INDEX, ThinkingLevel.LOW,
             Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.VISION), 150),
     CURATED_SUGGEST("curated-suggest", Group.ADMIN, ThinkingLevel.OFF,
-            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 80);
+            Route.fixed(RoutingMode.COST_FIRST, TaskType.MICRO_TEXT), 60);
 
     /**
      * {@code /settings} 미리보기의 표 묶음(PLAN §6.29 ⑦-나 — 채팅 답변 / 검증 / 질문 처리 / 답변 뒤 / 인덱싱 / 관리자).
@@ -122,8 +126,9 @@ public enum ThinkingSite {
 
     /**
      * 이 호출이 <b>생각을 빼고 실제로 내는</b> 출력의 전형 토큰 수 — 미리보기의 "생각 자리"({@code 예약 − 이 값})를 정하는
-     * 상수다(PLAN §6.29 ⑦-다). 처음 값은 기존 주석·실측(검증 JSON 은 {@code AnswerService.MAX_EVAL_OUTPUT_TOKENS} 주석의
-     * "~400 tokens", 독립화는 한 줄)에서 가져왔고 6단계에서 관측 p95 로 갱신한다.
+     * 상수다(PLAN §6.29 ⑦-다). 6단계(2026-10-07)에서 <b>생각을 끈 호출의 출력 토큰 p95</b> 에 여유를 얹어 갱신했다 —
+     * 분류 14 → 20, 독립화 24 → 40, 질의 확장 38 → 60, 리랭크 132 → 150, 검증 133 → 150(응용 검증 93 → 120), 답변 뒤 보강
+     * 139 → 200, 제목 10 → 20, 큐레이션 제안 46 → 60. 측정하지 못한 자리(요약·이미지)는 옛 값 그대로다.
      *
      * <p><b>0 은 "이 호출의 모양이 정한다"</b>는 뜻이다 — 채팅 답변은 응답 모드의 최소 보장({@code ResponseMode.minChars}),
      * 키워드+맥락은 배치 건수, 재작성은 조각 크기가 필요분이라 상수 하나로 둘 수 없다. 그 계산은 미리보기가 한다.
