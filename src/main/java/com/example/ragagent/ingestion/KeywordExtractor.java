@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -60,9 +62,9 @@ public class KeywordExtractor {
         this.props = props;
     }
 
-    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
     /**
-     * 온도 + 출력 상한. 이 호출의 응답은 <b>키워드 몇 개와 1~2문장</b>이라 입력 크기와 무관하게
+     * 온도(indexing/background, hot-editable — 매 호출 새로 읽는다: {@code AppProperties.LlmConfig})
+     * + 출력 상한. 이 호출의 응답은 <b>키워드 몇 개와 1~2문장</b>이라 입력 크기와 무관하게
      * 작다 — 상한을 비워 두면 그 응답을 위해 {@code app.llm.max-tokens} 전체가 예약된다
      * ({@link IndexingOutputCap}).
      */
@@ -86,7 +88,8 @@ public class KeywordExtractor {
         // single-chunk path below — behavior-identical to pre-§10.8.2.
         int batchSize = Math.max(1, props.indexingSafe().keywordBatchSize());
         List<List<Document>> batches = partition(chunks, batchSize);
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             List<CompletableFuture<List<Document>>> futures = batches.stream()
                 .map(batch -> CompletableFuture.supplyAsync(() -> {
                     llmGate.acquireUninterruptibly();
@@ -113,7 +116,7 @@ public class KeywordExtractor {
                 return results;
             } catch (InterruptedException e) {
                 log.warn("[ENRICH] cancelled — interrupting in-flight keyword extraction: {}", filename);
-                exec.shutdownNow();
+                pool.shutdownNow();
                 Thread.currentThread().interrupt();
                 throw new IndexingCancelledException("keyword extraction cancelled: " + filename);
             } catch (ExecutionException e) {
@@ -284,8 +287,9 @@ public class KeywordExtractor {
     /**
      * {@code "{filename} > {heading}"} — deterministic, LLM-free baseline context (§10.1).
      * Public: also reused at query time by {@link com.example.ragagent.service.RerankerService}
-     * (§10.7.1) — the LLM-enhanced {@link MetaKey#CHUNK_CONTEXT} sentence itself is transient and
-     * never persisted, so this structural fallback is the only context available post-retrieval.
+     * (§10.7.1). {@link MetaKey#CHUNK_CONTEXT} <em>is</em> persisted, but a search hit does not
+     * carry it back on every backend/path, so this structural fallback is what the reranker can
+     * always derive from the metadata a hit does have.
      */
     public static String buildStructuralContext(Document chunk) {
         String filename = str(chunk.getMetadata().get(MetaKey.FILENAME));

@@ -283,14 +283,18 @@ public class LlmRouter {
     }
 
     /**
-     * Records approximate usage (chars/4, mirrors {@code TrackingEmbeddingModel}'s embedding
-     * fallback) for calls whose real token count isn't available — real-time SSE token streaming
+     * Records approximate usage ({@link TokenEstimator}, the same assumption
+     * {@code TrackingEmbeddingModel}'s embedding fallback uses) for calls whose real token count
+     * isn't available — real-time SSE token streaming
      * reads only content deltas, never a {@link ChatResponse} with usage metadata, and reading
      * one would mean buffering the full response first and breaking the token-by-token UX.
      * No-op when {@code answerText} is blank (failed/empty call — nothing was actually served).
      */
     public void recordApproxUsage(String providerName, String promptText, String answerText) {
         if (answerText == null || answerText.isBlank()) return;
+        // 스트리밍 경로는 이 라우터의 호출 메서드를 거치지 않으므로, 비어 있지 않은 답변이 여기 온
+        // 것이 그 경로의 유일한 "성공" 신호다 — 연속 실패 횟수를 여기서 되돌린다.
+        circuitBreaker.recordSuccess(providerName);
         try {
             usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
         } catch (Exception e) {
@@ -377,8 +381,33 @@ public class LlmRouter {
                         && !providerToggle.isDisabled(p.name()));
     }
 
-    /** {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}. */
-    public record ConcurrencySnapshot(int inUse, int capacity) {}
+    /**
+     * {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}.
+     *
+     * @param blockedSeconds the longest remaining circuit-breaker block among the tier's providers,
+     *                       {@code 0} when none is blocked. The header indicator shows this instead of
+     *                       {@code inUse/capacity} — a blocked lone LOCAL provider already counts as
+     *                       fully in use (see {@link #localTier1Concurrency()}), but "3/3" reads as
+     *                       "busy", not "the server just failed and we are waiting 4s", and those
+     *                       call for different operator reactions.
+     */
+    public record ConcurrencySnapshot(int inUse, int capacity, int blockedSeconds) {
+        public ConcurrencySnapshot(int inUse, int capacity) {
+            this(inUse, capacity, 0);
+        }
+    }
+
+    /**
+     * The "main" LOCAL tier — {@code role=LOCAL, priority=1}, minus runtime-disabled providers.
+     * Shared by {@link #localTier1Concurrency()} (header indicator) and the ping endpoint
+     * ({@code LlmPing}) so both agree on which providers "the local LLM" means.
+     */
+    public List<LlmProvider> localTier1Providers() {
+        return providers.stream()
+                .filter(p -> p.role() == LOCAL && p.priority() == 1)
+                .filter(p -> !providerToggle.isDisabled(p.name()))
+                .toList();
+    }
 
     /**
      * In-flight vs. capacity for the "main" LOCAL tier — {@code role=LOCAL, priority=1}, the
@@ -398,27 +427,27 @@ public class LlmRouter {
      * the whole indicator vanish instead of showing e.g. a fully-saturated {@code 3/3}.)
      */
     public Optional<ConcurrencySnapshot> localTier1Concurrency() {
-        List<LlmProvider> matches = providers.stream()
-                .filter(p -> p.role() == LOCAL && p.priority() == 1)
-                .filter(p -> !providerToggle.isDisabled(p.name()))
-                .toList();
+        List<LlmProvider> matches = localTier1Providers();
         if (matches.isEmpty()) {
             return Optional.empty();
         }
         int capacity = 0;
         int inUse = 0;
+        int blockedSeconds = 0;
         for (LlmProvider p : matches) {
             int cap = providerCapacity.getOrDefault(p.name(), defaultProviderConcurrency);
             capacity += cap;
-            if (circuitBreaker.isBlocked(p.name())) {
+            int blocked = circuitBreaker.secondsUntilUnblocked(p.name());
+            if (blocked > 0) {
                 inUse += cap;
+                blockedSeconds = Math.max(blockedSeconds, blocked);
             } else {
                 Semaphore gate = providerGates.get(p.name());
                 int free = gate != null ? gate.availablePermits() : cap;
                 inUse += Math.max(0, cap - free);
             }
         }
-        return Optional.of(new ConcurrencySnapshot(inUse, capacity));
+        return Optional.of(new ConcurrencySnapshot(inUse, capacity, blockedSeconds));
     }
 
     /** Returns the name of the first available provider for the given routing, or "unknown". */
@@ -503,13 +532,38 @@ public class LlmRouter {
      */
     private LlmProviderExhaustedException exhausted(TaskType taskType, List<ProviderRole> roleOrder) {
         int wait = secondsUntilAnyUnblocks(taskType, roleOrder);
+        int streak = maxConsecutiveFailures(taskType, roleOrder);
         String detail = " (task=" + taskType + ")";
+        if (streak >= LlmProviderExhaustedException.REPEATED_FAILURE_THRESHOLD) {
+            // 유일 프로바이더의 5초 차단은 "4초 후 다시"를 매번 참으로 만들지만, 서버 프로세스는 살았는데
+            // 엔진이 죽은 경우(GPU 소실)에는 기다려도 같은 실패다. 세 번째부터는 기다리라 하지 않는다.
+            log.warn("[REPEATED-FAILURE] task={} consecutive failures={} — the server keeps failing; "
+                    + "check GET /api/v1/llm/ping?deep=true (model reload / server restart usually needed)",
+                    taskType, streak);
+            String message = "AI 서버가 연속 " + streak + "회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요."
+                    + (wait >= 0 ? " (" + wait + "초 후 재시도 가능)" : "") + detail;
+            return new LlmProviderExhaustedException(message, wait, streak);
+        }
         if (wait < 0) {
             return new LlmProviderExhaustedException(
-                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail);
+                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail, -1, streak);
         }
         return new LlmProviderExhaustedException(
-                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait);
+                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait, streak);
+    }
+
+    /** 이 작업을 받을 수 있었을 프로바이더들 중 가장 긴 연속 실패 횟수 — 후보가 없으면 0. */
+    private int maxConsecutiveFailures(TaskType taskType, List<ProviderRole> roleOrder) {
+        boolean imageTask = isImageTask(taskType);
+        return providers.stream()
+                .filter(p -> roleOrder.contains(p.role())
+                        && p.supports(taskType)
+                        && p.hasValidApiKey()
+                        && !providerToggle.isDisabled(p.name())
+                        && !(imageTask && visionUnsupportedProviders.contains(p.name())))
+                .mapToInt(p -> circuitBreaker.consecutiveFailures(p.name()))
+                .max()
+                .orElse(0);
     }
 
     /**
@@ -623,17 +677,6 @@ public class LlmRouter {
     }
 
     /**
-     * For overload-type errors (429/402/503), a full circuit-breaker block is
-     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
-     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
-     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
-     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
-     * multi-minute total outage for every subsequent request — worse than leaving it open, since
-     * the concurrency gate already throttles how hard the app hammers it. An explicit
-     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
-     * guidance from the provider itself, not a default we're second-guessing).
-     */
-    /**
      * 오버로드가 아닌 일반 실패(연결 거부·리셋·5xx 등)의 차단.
      *
      * <p>{@link #blockForOverload} 와 <b>같은 판단</b>을 한다 — 넘겨줄 상대가 있으면 차단이 곧
@@ -654,6 +697,17 @@ public class LlmRouter {
         circuitBreaker.block(provider.name(), NO_FALLBACK_BLOCK_SECONDS);
     }
 
+    /**
+     * For overload-type errors (429/402/503), a full circuit-breaker block is
+     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
+     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
+     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
+     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
+     * multi-minute total outage for every subsequent request — worse than leaving it open, since
+     * the concurrency gate already throttles how hard the app hammers it. An explicit
+     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
+     * guidance from the provider itself, not a default we're second-guessing).
+     */
     private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
                                   Set<String> tried, String retryAfterHeader) {
         boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();
@@ -811,6 +865,7 @@ public class LlmRouter {
             }
         }
         long elapsed = System.currentTimeMillis() - t0;
+        circuitBreaker.recordSuccess(provider.name());
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;

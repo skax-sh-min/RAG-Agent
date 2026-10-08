@@ -27,6 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class QuestionReuseModeFilterTest {
 
+    /** 추천 술어는 활성 출처가 있는 턴만 통과시키므로, 후보로 기대하는 턴마다 하나씩 넣는다. */
+    private static final String ACTIVE_SOURCE_SQL =
+            "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, chunk_hash, status) "
+            + "VALUES (?, ?, ?, ?, 'h1', ?)";
+
     private Path dbFile;
     private JdbcTemplate jdbc;
     private QuestionReuseRepository repo;
@@ -41,7 +46,7 @@ class QuestionReuseModeFilterTest {
                     id INTEGER PRIMARY KEY, user_id TEXT, thread_id TEXT,
                     question TEXT, answer TEXT, created_at TEXT,
                     feedback TEXT, response_mode TEXT, direct_mode INTEGER,
-                    reused_from_turn_id INTEGER)
+                    reused_from_turn_id INTEGER, selected_tags TEXT)
                 """);
         jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
         jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
@@ -62,10 +67,19 @@ class QuestionReuseModeFilterTest {
                     + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
                     + "VALUES (?, 'u1', 't1', 'sqlite 연결 설정 방법', '답변 본문', '2026-08-24', NULL, ?, 0)",
                 id, responseMode);
+        activeSource(id, "u1", "t1");
+    }
+
+    private void activeSource(long turnId, String userId, String threadId) {
+        source(turnId, userId, threadId, "active");
+    }
+
+    private void source(long turnId, String userId, String threadId, String status) {
+        jdbc.update(ACTIVE_SOURCE_SQL, turnId, userId, threadId, "chunk-" + turnId, status);
     }
 
     private List<Long> suggestionIds() {
-        return repo.findSuggestionCandidates("sqlite", false, "u1", 50).stream()
+        return repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .sorted()
                 .toList();
@@ -132,5 +146,235 @@ class QuestionReuseModeFilterTest {
 
         // 모드를 하나 더 추가하면서 allowsReuse()=false 로 두면 이 단언이 자동으로 그것까지 덮는다.
         assertThat(suggestionIds()).containsExactly(allowedId);
+    }
+
+    /** 같은 질문 텍스트로 사용자·대화·모드·피드백을 지정해 넣는다. */
+    private void insertTurn(long id, String userId, String threadId, String responseMode, String feedback) {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (?, ?, ?, 'sqlite 연결 설정 방법', '답변 본문', '2026-08-24', ?, ?, 0)",
+                id, userId, threadId, feedback, responseMode);
+        activeSource(id, userId, threadId);
+    }
+
+    private List<Long> suggestionIdsInOrder(String userId, String threadId) {
+        return repo.findSuggestionCandidates(List.of("sqlite"), false, userId, threadId, 50).stream()
+                .map(QuestionReuseRepository.CandidateTurn::turnId)
+                .toList();
+    }
+
+    @Test
+    @DisplayName("현재 대화의 턴은 재사용 술어(S/C·싫어요)를 타지 않는다 — 이동 대상이지 재사용 후보가 아니다")
+    void currentThreadTurns_bypassReusePredicates() {
+        insertTurn(1L, "u1", "t-here",  ResponseMode.S.name(), null);       // 현재 대화, S
+        insertTurn(2L, "u1", "t-here",  ResponseMode.N.name(), "DISLIKE");  // 현재 대화, 싫어요
+        insertTurn(3L, "u1", "t-other", ResponseMode.S.name(), null);       // 다른 대화, S → 제외
+        insertTurn(4L, "u1", "t-other", ResponseMode.N.name(), "DISLIKE");  // 다른 대화, 싫어요 → 제외
+        insertTurn(5L, "u1", "t-other", ResponseMode.N.name(), null);       // 다른 대화, 정상
+
+        assertThat(suggestionIdsInOrder("u1", "t-here")).containsExactly(2L, 1L, 5L);
+        // 실제 재사용 조회는 여전히 엄격하다 — 현재 대화의 S 턴 id 로 불러도 나오지 않는다.
+        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        // 대화 id 없이(REST) 부르면 그 면제는 없다.
+        assertThat(suggestionIdsInOrder("u1", null)).containsExactly(5L);
+    }
+
+    @Test
+    @DisplayName("정렬 — 현재 대화 → 내 다른 대화 → 그 외, 그 안에서 최신순")
+    void ordering_currentThreadThenMineThenOthers() {
+        insertTurn(10L, "u2", "t-x",     ResponseMode.N.name(), null);  // 남
+        insertTurn(11L, "u1", "t-here",  ResponseMode.N.name(), null);  // 현재 대화 (오래됨)
+        insertTurn(12L, "u1", "t-other", ResponseMode.N.name(), null);  // 내 다른 대화
+        insertTurn(13L, "u2", "t-y",     ResponseMode.N.name(), null);  // 남 (최신)
+        insertTurn(14L, "u1", "t-here",  ResponseMode.N.name(), null);  // 현재 대화 (최신)
+
+        assertThat(suggestionIdsInOrder("u1", "t-here")).containsExactly(14L, 11L, 12L, 13L, 10L);
+        // 대화 id 가 다른 사용자의 것과 겹쳐도 사용자가 다르면 현재 대화가 아니다.
+        assertThat(suggestionIdsInOrder("u2", "t-here")).containsExactly(13L, 10L, 14L, 12L, 11L);
+    }
+
+    @Test
+    @DisplayName("원본이 다른 사용자의 턴인 재사용 턴도 추천·재사용 조회에서 원본 답변을 그대로 낸다")
+    void reuseTurnWhoseSourceBelongsToAnotherUser_resolvesTheSourceAnswer() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (1, 'u2', 't-src', 'sqlite 연결 설정 방법', '원본 답변', '2026-08-24', NULL, 'N', 0)");
+        // u1 이 u2 의 턴을 재사용했다 — 답변은 비워 두고 참조만 남는 저장 모양.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id) "
+                    + "VALUES (2, 'u1', 't-reuse', 'sqlite 연결 설정 방법', '', '2026-08-25', NULL, 'N', 0, 1)");
+        activeSource(1L, "u2", "t-src");
+        activeSource(2L, "u1", "t-reuse");   // 재사용 턴은 원본의 출처를 복제해 갖는다(cloneTurnSourceRefs)
+
+        // 예전 조인(`src.user_id = t.user_id`)이었다면 두 조회 모두 "참조 원문 삭제됨" 을 답변으로 냈다 —
+        // 재사용의 재사용에서는 그 문구가 그대로 사용자에게 답변으로 나갔다.
+        QuestionReuseRepository.CandidateTurn forReuse = repo.findTurnForReuse(2L, false, "u1");
+        assertThat(forReuse).isNotNull();
+        assertThat(forReuse.answer()).isEqualTo("원본 답변");
+
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::answer)
+                .containsOnly("원본 답변");
+
+        // 원본이 실제로 지워지면 폴백은 그대로다.
+        jdbc.update("DELETE FROM conversation_turns WHERE id = 1");
+        assertThat(repo.findTurnForReuse(2L, false, "u1").answer()).isEqualTo("참조 원문 삭제됨");
+    }
+
+    /**
+     * 후보가 스스로 재사용 턴이면 답변 텍스트와 같은 행(원본)에서 모드·태그도 가져온다. 원본 값을
+     * 복사해 저장하기 전에 만들어진 재사용 행은 자리표시자('M', 0, '')를 들고 있는데, 그 행을 다시
+     * 재사용하면 이 COALESCE 가 원본의 값을 되돌려 준다 — 백필 없이.
+     */
+    @Test
+    @DisplayName("재사용 턴을 다시 재사용할 때 답변의 모양(모드·태그)은 원본 행에서 온다")
+    void reuseOfAReuseTurn_takesTheAnswerShapeFromTheSource() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, selected_tags) "
+                    + "VALUES (1, 'u2', 't-src', 'sqlite 연결 설정 방법', '원본 답변', '2026-08-24', NULL, 'N', 0, 'policy,billing')");
+        // 자리표시자를 저장하던 시절의 재사용 행.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id, selected_tags) "
+                    + "VALUES (2, 'u1', 't-reuse', 'sqlite 연결 설정 방법', '', '2026-08-25', NULL, 'M', 0, 1, '')");
+        activeSource(1L, "u2", "t-src");
+        activeSource(2L, "u1", "t-reuse");
+
+        QuestionReuseRepository.CandidateTurn viaReuse = repo.findTurnForReuse(2L, false, "u1");
+        assertThat(viaReuse).isNotNull();
+        assertThat(viaReuse.responseMode()).isEqualTo("N");
+        assertThat(viaReuse.directMode()).isFalse();
+        assertThat(viaReuse.selectedTags()).isEqualTo("policy,billing");
+
+        // 원본이 아닌 보통 턴은 자기 행 그대로다.
+        QuestionReuseRepository.CandidateTurn plain = repo.findTurnForReuse(1L, false, "u2");
+        assertThat(plain.responseMode()).isEqualTo("N");
+        assertThat(plain.selectedTags()).isEqualTo("policy,billing");
+
+        // 추천 목록도 같은 열을 싣는다.
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::selectedTags)
+                .containsOnly("policy,billing");
+    }
+
+    /**
+     * Direct 답변은 근거 청크가 없어 validateTurn() 이 언제나 거부한다 — 후보에 올려 봐야 헛클릭이고,
+     * §10.11 이후 좋아요는 지식 제안을 여는 신호이지 재사용 자격이 아니다. 판정은 답변과 같은 행
+     * (재사용 턴이면 원본)에서 하므로, 자리표시자(direct 0)를 든 옛 재사용 행도 원본이 Direct 면 빠진다.
+     * 현재 대화의 턴은 이동 대상이라 예외 그대로다.
+     */
+    @Test
+    @DisplayName("Direct 턴은 좋아요가 있어도 추천·재사용 후보가 아니다 — 재사용 턴은 원본의 Direct 여부로 판정")
+    void directTurns_areNeverReuseCandidates_evenWhenLiked() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (1, 'u1', 't-a', 'sqlite 연결 설정 방법', 'Direct 답변', '2026-08-24', 'LIKE', 'N', 1)");
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (2, 'u1', 't-b', 'sqlite 연결 설정 방법', 'Direct 답변', '2026-08-24', NULL, 'N', 1)");
+        // 옛 재사용 행: 자기 행은 direct 0 이지만 원본(1)이 Direct 다.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id) "
+                    + "VALUES (3, 'u1', 't-c', 'sqlite 연결 설정 방법', '', '2026-08-25', NULL, 'M', 0, 1)");
+        // 대조군: 보통 RAG 턴.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (4, 'u1', 't-d', 'sqlite 연결 설정 방법', 'RAG 답변', '2026-08-24', NULL, 'N', 0)");
+        // 넷 다 활성 출처를 준다 — 여기서 보려는 제외 사유는 Direct 이지 출처 없음이 아니다.
+        activeSource(1L, "u1", "t-a");
+        activeSource(2L, "u1", "t-b");
+        activeSource(3L, "u1", "t-c");
+        activeSource(4L, "u1", "t-d");
+
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::turnId)
+                .containsExactly(4L);
+        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(3L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(4L, false, "u1")).isNotNull();
+
+        // 현재 대화의 Direct 턴은 여전히 목록에 오른다 — 재사용이 아니라 그 자리로의 이동이므로.
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", "t-a", 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::turnId)
+                .containsExactly(1L, 4L);
+    }
+
+    /**
+     * validateTurn() 이 보는 사실 가운데 이 테이블에 이미 있는 둘 — 출처 행이 없다, 통지가
+     * status 를 찍어 두었다 — 은 추천 SQL 이 먼저 거른다. 예전에는 그 행이 LIMIT 창을 차지한 채
+     * 서비스에서 키 입력마다 다시 확인되고 버려졌다. 재사용 조회(findTurnForReuse)는 일부러 그대로
+     * 둔다: 그 뒤의 validateTurn() 이 내는 사유가 폴백 토스트 문구이기 때문이다.
+     */
+    @Test
+    @DisplayName("활성 출처가 하나도 없는 턴은 추천에 오르지 않는다 — 재사용 조회와 현재 대화 이동은 그대로")
+    void turnsWithoutAnActiveSource_areFilteredBySuggestionSql() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (1, 'u1', 't-a', 'sqlite 연결 설정 방법', '출처 없는 답변', '2026-08-24', NULL, 'N', 0)");
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (2, 'u1', 't-b', 'sqlite 연결 설정 방법', '문서가 지워진 답변', '2026-08-24', NULL, 'N', 0)");
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (3, 'u1', 't-c', 'sqlite 연결 설정 방법', '출처 하나는 살아 있는 답변', '2026-08-24', NULL, 'N', 0)");
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (4, 'u1', 't-d', 'sqlite 연결 설정 방법', '옛 inactive 답변', '2026-08-24', NULL, 'N', 0)");
+        // 1: 출처 행 없음(검색을 돌리지 않은 턴·기능 이전 턴)
+        // 2: 출처 전부가 통지로 무효화됨(문서 삭제·재인덱싱)
+        source(2L, "u1", "t-b", "deleted");
+        source(2L, "u1", "t-b", "modified");
+        // 3: 낡은 행 옆에 활성 행 하나 — SQL 은 통과시키고(엄격하지 않다) 판정은 서비스 몫
+        source(3L, "u1", "t-c", "modified");
+        source(3L, "u1", "t-c", "active");
+        // 4: 레거시 'inactive' — 'active' 가 아니므로 없음과 같다
+        source(4L, "u1", "t-d", "inactive");
+
+        assertThat(suggestionIdsInOrder("u1", null)).containsExactly(3L);
+
+        // 재사용 조회는 이 술어를 타지 않는다 — 사유("출처 청크가 없어…")는 validateTurn() 이 낸다.
+        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNotNull();
+        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNotNull();
+
+        // 현재 대화의 턴은 이동 대상이라 출처가 없어도 오른다.
+        assertThat(suggestionIdsInOrder("u1", "t-a")).containsExactly(1L, 3L);
+    }
+
+    /** 질문 텍스트만 다른 턴 — 키워드 매칭용. */
+    private void insertQuestion(long id, String question) {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (?, 'u1', 't1', ?, '답변 본문', '2026-08-24', NULL, 'N', 0)", id, question);
+        activeSource(id, "u1", "t1");
+    }
+
+    private List<Long> idsFor(List<String> keywords) {
+        return repo.findSuggestionCandidates(keywords, false, "u1", null, 50).stream()
+                .map(QuestionReuseRepository.CandidateTurn::turnId)
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * 키워드는 전부(AND) 각각 부분 일치다 — 어순과 무관하고 대소문자를 가리지 않는다. {@code _}·{@code %} 는
+     * 문자 그대로 대조한다: 이스케이프가 없으면 {@code max_tokens} 의 {@code _} 가 한 글자 와일드카드라
+     * {@code maxxtokens} 도 맞는다.
+     */
+    @Test
+    @DisplayName("키워드는 전부 각각 부분 일치(AND) — 어순·대소문자 무관, _ 와 % 는 문자 그대로")
+    void keywords_matchIndependentlyAndAll() {
+        insertQuestion(1L, "sqlite 연결 설정 방법");
+        insertQuestion(2L, "SQLite 백업 방법");
+        insertQuestion(3L, "MySQL 연결 설정");
+        insertQuestion(4L, "max_tokens 값 설정");
+        insertQuestion(5L, "maxxtokens 값 설정");
+
+        assertThat(idsFor(List.of("sqlite", "연결"))).containsExactly(1L);
+        assertThat(idsFor(List.of("연결", "sqlite"))).containsExactly(1L);          // 어순 무관
+        assertThat(idsFor(List.of("SQLITE"))).containsExactly(1L, 2L);              // 대소문자 무관
+        assertThat(idsFor(List.of("연결", "설정"))).containsExactly(1L, 3L);
+        assertThat(idsFor(List.of("max_tokens"))).containsExactly(4L);              // _ 는 와일드카드가 아니다
+        assertThat(idsFor(List.of("100%"))).isEmpty();                              // % 도
+        assertThat(idsFor(List.of())).isEmpty();
     }
 }

@@ -391,6 +391,80 @@ class LlmRouterTest {
                         .isBetween(25, 30));
     }
 
+    /**
+     * 유일 프로바이더는 실패해도 5초만 차단되므로 문구는 늘 "4초 후 다시"다. 서버 프로세스는 살았는데
+     * 엔진이 죽은 경우(2026-09-21 GPU 소실)에는 5초 뒤에도 같은 실패라 세 번째부터는 기다리라 하지 않고
+     * 서버(모델) 상태를 보라고 한다. 성공이 한 번 있으면 처음부터 다시 센다.
+     */
+    @Test
+    @DisplayName("연속 3회 실패부터는 '잠시 후 다시' 대신 '서버 상태를 확인하라' — 성공 한 번에 리셋")
+    void repeatedFailures_escalateTheMessage_andASuccessResets() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        ChatModel cm = mock(ChatModel.class);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("500 - decode() failed: ErrorDeviceLost"));
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                    m -> m.call(new Prompt("x"))))
+                    .isInstanceOf(LlmProviderExhaustedException.class)
+                    .hasMessageNotContaining("연속")
+                    .satisfies(e -> assertThat(((LlmProviderExhaustedException) e).repeated()).isFalse());
+            // 다음 시도가 차단에 막히지 않도록 — 실제로는 5초를 기다리는 자리다.
+            forceUnblock(cb, "lm");
+        }
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class)
+                .hasMessageContaining("연속 3회")
+                .hasMessageContaining("서버(모델) 상태")
+                .satisfies(e -> {
+                    var ex = (LlmProviderExhaustedException) e;
+                    assertThat(ex.repeated()).isTrue();
+                    assertThat(ex.consecutiveFailures()).isEqualTo(3);
+                    assertThat(ex.retryAfterSeconds()).as("차단 잔여 초는 여전히 실린다").isBetween(1, 5);
+                });
+
+        // 성공 한 번 — 다음 실패는 다시 첫 실패처럼 말한다.
+        forceUnblock(cb, "lm");
+        ChatResponse ok = new ChatResponse(List.of(new Generation(new AssistantMessage("답변"))));
+        org.mockito.Mockito.reset(cm);
+        when(cm.call(any(Prompt.class))).thenReturn(ok);
+        r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+
+        org.mockito.Mockito.reset(cm);
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("500 - decode() failed: ErrorDeviceLost"));
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .hasMessageNotContaining("연속");
+    }
+
+    @Test
+    @DisplayName("스트리밍 경로의 성공(recordApproxUsage 에 비어 있지 않은 답변)도 연속 실패 횟수를 되돌린다")
+    void streamingSuccess_resetsTheStreak() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, mock(ChatModel.class), null);
+        var r = new LlmRouter(List.of(p), mock(LlmUsageRepository.class), cb,
+                RoutingMode.COST_FIRST, 180, Map.of(), 3, 20, new ProviderToggle());
+        cb.block("lm", "1");
+        cb.block("lm", "1");
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(2);
+
+        r.recordApproxUsage("lm", "prompt", "");        // 빈 답변 = 실패한 스트림 — 성공이 아니다
+        assertThat(cb.consecutiveFailures("lm")).isEqualTo(2);
+        r.recordApproxUsage("lm", "prompt", "답변");
+        assertThat(cb.consecutiveFailures("lm")).isZero();
+    }
+
+    /** 5초 차단의 만료를 기다리는 대신 차단만 걷는다 — 연속 실패 횟수는 그대로다(성공이 아니라 시계 조작). */
+    private static void forceUnblock(CircuitBreaker cb, String name) {
+        cb.clearBlock(name);
+    }
+
     @Test
     @DisplayName("차단이 아니라 시도했다가 실패한 경우엔 시간을 말하지 않는다 — 기다린다고 풀리지 않는다")
     void exhaustedAfterTrying_doesNotPromiseATime() {
@@ -853,16 +927,31 @@ class LlmRouterTest {
         var before = r.localTier1Concurrency().orElseThrow();
         assertThat(before.capacity()).isEqualTo(7);
         assertThat(before.inUse()).isEqualTo(0);
+        assertThat(before.blockedSeconds()).isEqualTo(0);
 
         breaker.block("local", null);
         var afterBlock = r.localTier1Concurrency().orElseThrow();
         assertThat(afterBlock.capacity()).isEqualTo(7); // 차단돼도 capacity 합계에는 그대로 남는다
         assertThat(afterBlock.inUse()).isEqualTo(3); // local의 capacity(3) 전체가 "사용 중"으로 집계됨
+        // 헤더 표시기가 "3/7"이 아니라 "차단 중 Ns"를 보여줄 수 있게 남은 초를 함께 낸다(breaker 기본 2분 → 1..120).
+        assertThat(afterBlock.blockedSeconds()).isBetween(1, 120);
 
         breaker.block("local-2", null);
         var bothBlocked = r.localTier1Concurrency().orElseThrow();
         assertThat(bothBlocked.capacity()).isEqualTo(7);
         assertThat(bothBlocked.inUse()).isEqualTo(7); // 전부 차단 → 완전 포화로 표시(사라지지 않음)
+        assertThat(bothBlocked.blockedSeconds()).isBetween(1, 120);
+    }
+
+    @Test
+    @DisplayName("localTier1Providers — 헤더 표시기와 핑이 같은 프로바이더 집합을 본다 (LOCAL priority=1, 비활성 제외)")
+    void localTier1Providers_sameSetAsTheIndicator() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var fast = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
+        var cloud = p("openai", ProviderRole.NORMAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local, fast, cloud), null, breaker, RoutingMode.COST_FIRST);
+
+        assertThat(r.localTier1Providers()).extracting(LlmProvider::name).containsExactly("local");
     }
 
     @Test

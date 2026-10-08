@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
@@ -38,7 +39,10 @@ import java.util.stream.Stream;
 
 /**
  * Orchestrates single-document indexing: load → split → tag → enrich → store.
- * Does not call {@link DocRegistry#save()} — callers decide when to persist.
+ *
+ * <p>Registry writes are durable the moment {@link DocRegistry#put} runs (SQLite); the
+ * {@link DocRegistry#save()} calls left in the sync/re-index paths are no-ops kept for API
+ * compatibility, not a commit point.
  */
 @Component
 public class DocumentIndexer {
@@ -124,7 +128,7 @@ public class DocumentIndexer {
     // ── Public API ─────────────────────────────────────────────────────────
 
     /**
-     * Indexes one document. Does NOT call {@link DocRegistry#save()} — caller's responsibility.
+     * Indexes one document. Every registry write it makes is already durable (see this class's javadoc).
      */
     public DocumentInfo index(IndexRequest req) throws IOException {
         log.info("[INDEX] 시작: {} (version={})", req.filename(), req.version());
@@ -142,10 +146,11 @@ public class DocumentIndexer {
         log.debug("[INDEX] docId={}, imageId={}, type={}, sha256={}", docId, imageId, docType, sha256);
 
         // Preserve tags on operator re-index / directory sync (those paths carry no tag input):
-        // the request has no tags, but they live in the FTS index under the prior docId
-        // (staleDocId when content changed, else this docId). Read BEFORE the delete below
-        // wipes those rows. Interactive single upload keeps its explicit tags — an empty list
-        // there means the user intentionally cleared them, so we do not auto-restore.
+        // the request has no tags, but they live in doc_registry.tags under the prior docId
+        // (staleDocId when content changed, else this docId). Read BEFORE the stale row is
+        // removed at the end of this method (deleteArtifacts). Interactive single upload keeps
+        // its explicit tags — an empty list there means the user intentionally cleared them, so
+        // we do not auto-restore.
         String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
         List<String> effectiveTags = req.tags();
         if (effectiveTags.isEmpty() && req.parallelGate() != null) {
@@ -206,8 +211,17 @@ public class DocumentIndexer {
             String rawMd = Files.readString(req.path());
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
+            if (req.skipLlmCorrection()) {
+                // The LLM pass is the only thing that would rewrite a fence the author got wrong, so
+                // without it the defects go straight to the deterministic passes. The operator has
+                // already been shown them by the upload pre-flight (DocumentController, same contract
+                // as reindexFromMd's checkFenceHealth) and chose to proceed — this log is the record.
+                warnFenceProblems("[INDEX]", req.filename(), MarkdownCorrectionService.findFenceProblems(rawMd));
+                req.onProgress().accept(IndexingProgressEvent.of("correcting", 0, 0, req.filename(),
+                        "LLM 교정 건너뜀 — 서식 정리만 적용"));
+            }
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false, req.skipLlmCorrection(),
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")),
@@ -254,8 +268,9 @@ public class DocumentIndexer {
                                 "loading", done, total, req.filename(),
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
             } else {
-                // Non-scanned PDF has unambiguous page numbers → convert to MD ([페이지: N] marker
-                // + synthetic per-page heading, inline [이미지: ...] markers like DOCX) and run it
+                // Non-scanned PDF has unambiguous page numbers → convert to MD (a [페이지: N] marker
+                // per page — that marker IS the section boundary, no heading is synthesized — plus
+                // inline [이미지: ...] markers like DOCX) and run it
                 // through the same pipeline DOCX uses. loadFromMarkdown() promotes the image
                 // markers into image_paths metadata automatically — no separate attach step needed.
                 req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PDF → Markdown 변환 중..."));
@@ -271,11 +286,11 @@ public class DocumentIndexer {
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")),
                         imageDescribeProgress(req));
-                // skipChapterNumbers=true — PdfToMarkdownConverter's "## N페이지" heading is a
-                // synthetic per-page container (see its own class comment), never a real chapter;
-                // MetaKey.CHAPTER_NO would otherwise just re-derive the page count under a
-                // different name, and drift from the real page number the first time a page with
-                // no text/image is skipped (see PdfToMarkdownConverter).
+                // skipChapterNumbers=true — a plain PDF has no author headings at all (the
+                // converter emits only [페이지: N] markers), so whatever "##" survives extraction is
+                // incidental text, never a real chapter. Numbering it would re-derive the page count
+                // under a different name, and drift from the real page number the first time a page
+                // with no text/image is skipped (see PdfToMarkdownConverter).
                 rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
             }
         } else {
@@ -352,8 +367,9 @@ public class DocumentIndexer {
     }
 
     /**
-     * Re-indexes from a saved Markdown file (DOCX flow). Keeps MD files on disk.
-     * Calls {@link DocRegistry#save()} at the end.
+     * Re-indexes from the document's saved Markdown file — every format that produces one (DOCX,
+     * TXT, MD, PPTX and non-scanned PDF; a scanned PDF has none and is rejected). Keeps the MD
+     * files on disk.
      */
     public void reindexFromMd(String docId) throws IOException {
         reindexFromMd(docId, event -> {});
@@ -381,6 +397,34 @@ public class DocumentIndexer {
         }
     }
 
+    /**
+     * Read-only pre-flight for a {@code .md} upload that skips the LLM correction pass
+     * ({@link IndexRequest#skipLlmCorrection()}) — the upload-time twin of {@link #checkFenceHealth(String)}.
+     * Reports the fence defects in the file at {@code mdFile} so the operator can fix the source or
+     * proceed before anything is persisted; a file that cannot be read yields an empty list (that is
+     * an upload error, not a fence problem). Nothing is modified and no LLM call is made.
+     */
+    public List<MarkdownCorrectionService.FenceProblem> checkFenceHealth(Path mdFile) {
+        try {
+            return MarkdownCorrectionService.findFenceProblems(Files.readString(mdFile));
+        } catch (IOException e) {
+            log.warn("[INDEX] 펜스 사전 점검용 MD 읽기 실패: {}, {}", mdFile.getFileName(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Fence defects are only logged, never repaired, on the two paths that take a hand-authored MD
+     *  as-is (re-index, and a {@code .md} upload with the LLM pass skipped) — the operator already
+     *  saw them in the pre-flight and chose to proceed; this line is the record of what they
+     *  proceeded with. */
+    private static void warnFenceProblems(String tag, String filename,
+                                          List<MarkdownCorrectionService.FenceProblem> fenceProblems) {
+        if (fenceProblems.isEmpty()) return;
+        log.warn("{} {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", tag, filename, fenceProblems.size(),
+                String.join(", ", fenceProblems.stream()
+                        .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
+    }
+
     /** The MD file {@link #reindexFromMd} would read — corrected one first, raw fallback — or
      *  {@code null} when neither exists (scanned PDF/image documents never produce one). */
     private Path resolveMdPath(String docId) {
@@ -403,7 +447,7 @@ public class DocumentIndexer {
         Path mdPath = resolveMdPath(docId);
         if (mdPath == null) {
             throw new IllegalStateException(
-                    "MD 파일이 없습니다 (DOCX/TXT/PPTX/PDF 문서만 MD 재인덱싱 지원): " + docId);
+                    "MD 파일이 없습니다 (스캔 PDF처럼 MD로 변환되지 않은 문서는 재인덱싱할 수 없습니다): " + docId);
         }
 
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
@@ -421,19 +465,13 @@ public class DocumentIndexer {
         // re-run the rewriting passes (see postProcessIfNeeded). The operator has already been asked
         // to proceed or stop by the pre-flight check (checkFenceHealth); this log is the record of
         // what they proceeded with.
-        List<MarkdownCorrectionService.FenceProblem> fenceProblems =
-                MarkdownCorrectionService.findFenceProblems(md);
-        if (!fenceProblems.isEmpty()) {
-            log.warn("[REINDEX] {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", filename, fenceProblems.size(),
-                    String.join(", ", fenceProblems.stream()
-                            .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
-        }
+        warnFenceProblems("[REINDEX]", filename, MarkdownCorrectionService.findFenceProblems(md));
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         md = postProcessIfNeeded(md, mdPath, filename);
         // skipChapterNumbers: re-derived from the original filename extension (see the live-indexing
-        // PPTX/PDF branches above) — both have synthetic (not real chapter) headings, so
-        // MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
+        // PPTX/PDF branches above) — neither format carries real chapter structure (PPTX headings are
+        // slide title/subtitle labels; a plain PDF has none), so MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
         // PDFs never produce an MD file, so they fail the "MD 파일이 없습니다" check above instead.
         String lowerFilename = filename.toLowerCase();
         boolean skipChapterNumbers = lowerFilename.endsWith(".pptx") || lowerFilename.endsWith(".pdf");
@@ -450,7 +488,7 @@ public class DocumentIndexer {
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크 (granular={})", rawDocs.size(), chunks.size(), granular);
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
                 chunks.size() + "개 청크로 분할 완료"));
-        // Keep tags across re-index (same docId): read from FTS before the old rows are removed.
+        // Keep tags across re-index (same docId): read from doc_registry.tags (the authoritative source).
         List<String> preservedTags = restoreTags(docId);
         List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
@@ -487,7 +525,6 @@ public class DocumentIndexer {
 
     /**
      * Synchronises the documents directory with the vector store.
-     * Calls {@link DocRegistry#save()} once at the end.
      */
     public SyncResult syncDirectory(String userId, String version, Path documentsDir,
                                     Consumer<IndexingProgressEvent> onProgress) throws IOException {
@@ -538,6 +575,9 @@ public class DocumentIndexer {
 
         try (ExecutorService filePool = Executors.newFixedThreadPool(
                 fileConcurrency, Thread.ofVirtual().factory())) {
+            // 파일별 작업이 동기화를 시작한 요청의 traceId 를 잇는다 — 그 아래 청킹·키워드 추출의
+            // 중첩 실행기도 각자 같은 식으로 감싸, 한 문서의 인덱싱 줄이 전부 한 id 로 묶인다.
+            Executor fileExec = MdcPropagation.propagating(filePool);
             List<CompletableFuture<Void>> futures = filesToIndex.entrySet().stream()
                 .map(e -> CompletableFuture.runAsync(() -> {
                     boolean failed = false;
@@ -560,7 +600,7 @@ public class DocumentIndexer {
                         onProgress.accept(IndexingProgressEvent.of("sync_file_done", k, totalFiles,
                                 e.getKey(), k + "/" + totalFiles + " 완료"));
                     }
-                }, filePool))
+                }, fileExec))
                 .toList();
             // .get() (not .join()) so a cancel-driven interrupt of this coordinating thread
             // actually unblocks the wait instead of parking through it (§6.16.1).
@@ -575,8 +615,9 @@ public class DocumentIndexer {
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
-                // Persist whatever succeeded before cancellation so completed work isn't lost;
-                // step 3 (deletion detection) is skipped — it can run on the next normal sync.
+                // Whatever finished before the cancel is already durable (each index() wrote its
+                // own registry row); step 3 (deletion detection) is skipped — it can run on the
+                // next normal sync.
                 docRegistry.save();
                 throw new IndexingCancelledException(
                         "sync cancelled: " + doneFiles.get() + "/" + totalFiles + " files processed");
@@ -606,7 +647,6 @@ public class DocumentIndexer {
 
     /**
      * Deletes vector chunks, image/MD files, and removes the entry from {@link DocRegistry}.
-     * Does NOT call {@link DocRegistry#save()} — caller decides when to persist.
      */
     public void deleteArtifacts(String userId, String docId, String version) {
         deleteExistingVectorsOnly(userId, docId, version);
@@ -649,11 +689,6 @@ public class DocumentIndexer {
     }
 
     /**
-     * Recovers a document's search-scope tags from {@code doc_registry} so operator re-index /
-     * directory-sync paths — which carry no tag input — do not silently drop tags set at original
-     * upload. Returns an empty list when the document has no recorded tags.
-     */
-    /**
      * Reports Vision image-description progress ("이미지 분석 중 (N/M)") for the given request —
      * fires while {@code correctionService.correct()}'s image-description pre-pass runs, which
      * otherwise leaves the last pre-correction "loading" message (e.g. "PPTX → Markdown 변환 중...")
@@ -665,6 +700,11 @@ public class DocumentIndexer {
                         "이미지 분석 중 (" + done + "/" + total + ")"));
     }
 
+    /**
+     * Recovers a document's search-scope tags from {@code doc_registry} so operator re-index /
+     * directory-sync paths — which carry no tag input — do not silently drop tags set at original
+     * upload. Returns an empty list when the document has no recorded tags.
+     */
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return docRegistry.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());

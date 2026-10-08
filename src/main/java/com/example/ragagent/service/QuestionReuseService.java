@@ -5,9 +5,16 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
+import com.example.ragagent.security.GuestIdentityResolver;
+import com.fasterxml.jackson.annotation.JsonValue;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -32,12 +39,52 @@ public class QuestionReuseService {
             "(?:\\d|[A-Za-z]{3,}|\\.[A-Za-z]{2,4}|[/#:_-]|오류코드|에러코드|클래스|메서드|함수|설정|포트|버전|로그|파일|문서|테이블|컬럼|endpoint|api)",
             Pattern.CASE_INSENSITIVE);
 
+    /**
+     * 검증에 떨어진 턴의 부정 캐시 — {@code turnId} 만 기억한다.
+     *
+     * <p>{@link #suggest} 는 키 입력마다(클라이언트 디바운스 220ms) 후보 최대 {@code limit×4} 행에
+     * {@link #validateTurn} 을 돌리는데, 그 판정은 행당 쿼리 둘({@code findAllSourceRefs} +
+     * {@code currentChunkHashes})이고 결과는 거의 언제나 영구다 — 출처가 없는 턴에 출처가 생기지
+     * 않고, 바뀐 청크의 해시가 스냅샷과 다시 같아지는 일은 없다. 저장된 사실(출처 0건, 통지로
+     * 찍힌 {@code status})은 SQL 이 먼저 거르고({@code QuestionReuseRepository.HAS_ACTIVE_SOURCE_PREDICATE}),
+     * 해시 대조에서만 드러나는 실패(통지 없이 바뀐 청크 — 큐레이션 편집·비활성화)가 여기 남는다.
+     *
+     * <p>영구 표시(write-back)가 아니라 TTL 캐시인 이유: "부재"는 되돌아올 수 있다. 큐레이션 청크
+     * id 는 결정적({@code curated-{id}[-n]})이라 비활성화 → 재승인이면 같은 id 로 같은 해시가
+     * 돌아오고, 벡터 DB 파일 교체·복구도 마찬가지다. 그걸 {@code status=deleted} 로 굳히면 되돌아온
+     * 뒤에도 영영 재사용되지 않는다. 영구 표시는 지금처럼 통지 경로의 몫이고, 이 캐시는 그 사이의
+     * 반복 확인만 줄인다 — 캐시가 낡아서 생기는 최악은 "되살아난 답변이 TTL 동안 추천에 안 뜬다" 다.
+     *
+     * <p>{@link #reuseLookup} 은 이 캐시를 <b>읽지 않는다</b>(클릭은 최종 관문이라 늘 신선하게
+     * 판정한다) — 실패하면 채우고, 성공하면 지운다. 통지 이벤트로 비울 필요는 없다: 통지는 무효
+     * 쪽으로만 움직인다. 현재 대화 항목은 검증 자체를 안 하므로 캐시도 보지 않는다.
+     */
+    static final Duration INVALID_TURN_TTL = Duration.ofMinutes(10);
+    private static final int INVALID_TURN_CACHE_MAX = 10_000;
+
     private final QuestionReuseRepository repository;
     private final DocRegistry docRegistry;
+    private final Cache<Long, Boolean> recentlyInvalidTurns;
 
+    @Autowired
     public QuestionReuseService(QuestionReuseRepository repository, DocRegistry docRegistry) {
+        this(repository, docRegistry, Ticker.systemTicker());
+    }
+
+    /** 테스트용 — 부정 캐시의 시계를 바꿔 TTL 만료를 재현한다. */
+    QuestionReuseService(QuestionReuseRepository repository, DocRegistry docRegistry, Ticker ticker) {
         this.repository = repository;
         this.docRegistry = docRegistry;
+        this.recentlyInvalidTurns = Caffeine.newBuilder()
+                .expireAfterWrite(INVALID_TURN_TTL)
+                .maximumSize(INVALID_TURN_CACHE_MAX)
+                .ticker(ticker)
+                .build();
+    }
+
+    /** 최근 검증에 떨어져 다음 추천에서 검증 없이 건너뛰는 턴인가 (테스트 관찰용). */
+    boolean isRecentlyInvalid(long turnId) {
+        return recentlyInvalidTurns.getIfPresent(turnId) != null;
     }
 
     public void recordTurnSources(long turnId, String userId, String threadId, List<Document> retrievedDocs) {
@@ -131,29 +178,81 @@ public class QuestionReuseService {
         }
     }
 
-    public List<Suggestion> suggest(String userId, Scope scope, String q, int limit) {
+    /**
+     * 입력 중인 질문에 대한 추천 목록.
+     *
+     * <p>항목마다 {@link Origin}(어디서 온 질문인가)을 함께 돌려준다. <b>현재 대화의 항목은
+     * 재사용 검증({@link #validateTurn})을 거치지 않는다</b> — 그 항목의 클릭은 답변 재사용이
+     * 아니라 그 질문이 있는 자리로의 이동이라, 근거 청크가 그 뒤 바뀌었든 말든 그 자리는
+     * 거기 있다. 같은 이유로 리포지토리도 그 행에는 재사용 술어를 걸지 않는다
+     * ({@link QuestionReuseRepository#findSuggestionCandidates}).
+     *
+     * <p>중복 제거는 후보 순서(현재 대화 → 내 대화 → 그 외 → 최신순)대로 첫 항목을 남기므로,
+     * 같은 질문이 이 대화와 남의 대화에 다 있으면 <em>이동</em> 항목이 남는다.
+     *
+     * <p>검증에 떨어진 후보는 {@link #INVALID_TURN_TTL} 동안 기억해 두고 다음 호출에서는 검증
+     * 없이 건너뛴다({@code recentlyInvalidTurns}) — 같은 행을 키 입력마다 다시 확인하지 않기
+     * 위해서다.
+     *
+     * <p>질문 매칭은 입력 문장 통째가 아니라 {@link QuestionKeywords#extract} 가 뽑은 내용어
+     * 전부의 부분 일치다 — 어순·조사·의문 표현이 달라도 같은 질문을 찾는다.
+     *
+     * @param threadId 지금 열려 있는 대화. {@code null}/공백이면 어떤 항목도 현재 대화로 분류되지
+     *                 않는다(REST 호출)
+     */
+    public List<Suggestion> suggest(String userId, String threadId, Scope scope, String q, int limit) {
         String query = q == null ? "" : q.strip();
         if (query.length() < 2) return List.of();
+
+        // 의문·기능어와 조사·어미를 걷어낸 내용어로 맞춘다. 아무것도 안 남으면(예: "이거 왜 안 돼요")
+        // 입력 전체를 키워드 하나로 — 예전의 통째 부분 일치라 어떤 입력도 이전보다 나빠지지 않는다.
+        List<String> keywords = QuestionKeywords.extract(query);
+        if (keywords.isEmpty()) keywords = List.of(query);
 
         int fetch = Math.max(limit * 4, 20);
         boolean meOnly = scope == Scope.ME;
         List<QuestionReuseRepository.CandidateTurn> candidates =
-                repository.findSuggestionCandidates(query, meOnly, userId, fetch);
+                repository.findSuggestionCandidates(keywords, meOnly, userId, threadId, fetch);
 
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();
         for (QuestionReuseRepository.CandidateTurn c : candidates) {
             if (isTooLongForSuggestion(c.question())) continue;
             if (isDirectiveOnlyQuestion(c.question())) continue;
-            ValidationResult valid = validateTurn(c.turnId());
-            if (!valid.reusable()) continue;
+            Origin origin = originOf(c, userId, threadId);
+            if (origin != Origin.THREAD) {
+                if (isRecentlyInvalid(c.turnId())) continue;
+                ValidationResult valid = validateTurn(c.turnId());
+                if (!valid.reusable()) {
+                    recentlyInvalidTurns.put(c.turnId(), Boolean.TRUE);
+                    continue;
+                }
+            }
             String key = normalizeQuestionKey(c.question());
             if (!seenQuestions.add(key)) continue;
             out.add(new Suggestion(c.turnId(), c.question(), summarize(c.answer()),
-                    scope == Scope.ME ? "me" : "shared"));
+                    scope == Scope.ME ? "me" : "shared", origin));
             if (out.size() >= limit) break;
         }
         return out;
+    }
+
+    /**
+     * 후보 턴이 지금 사용자·대화 기준으로 어디서 온 것인가.
+     *
+     * <p>사용자 비교는 <b>구별이 가능할 때만</b> 한다. no-auth 의 기본 전략({@code guest-identity=shared})
+     * 에서는 모든 방문자가 {@link GuestIdentityResolver#SHARED_ID} 하나를 쓰므로 "내 것"과
+     * "남의 것"이 같은 id 다 — 그대로 비교하면 남이 물은 질문까지 전부 "내 질문"으로 뜬다.
+     * 그래서 그 경우는 {@link Origin#ELSEWHERE}(다른 대화, 누구 것인지는 모름)로 접는다.
+     * 현재 대화 판정은 그 안에서도 성립한다 — 대화 id 는 방문자마다 새로 만들어지기 때문.
+     */
+    static Origin originOf(QuestionReuseRepository.CandidateTurn c, String userId, String threadId) {
+        boolean sameUser = userId != null && userId.equals(c.userId());
+        boolean sameThread = threadId != null && !threadId.isBlank() && threadId.equals(c.threadId());
+        if (sameUser && sameThread) return Origin.THREAD;
+        boolean userDistinguishable = userId != null && !GuestIdentityResolver.SHARED_ID.equals(userId);
+        if (!userDistinguishable) return Origin.ELSEWHERE;
+        return sameUser ? Origin.MINE : Origin.OTHERS;
     }
 
     public ReuseLookup reuseLookup(String userId, Scope scope, long turnId) {
@@ -164,14 +263,17 @@ public class QuestionReuseService {
         }
         ValidationResult valid = validateTurn(turn.turnId());
         if (!valid.reusable()) {
+            recentlyInvalidTurns.put(turn.turnId(), Boolean.TRUE);
             return ReuseLookup.notReusable(valid.reason(), turn.question());
         }
+        recentlyInvalidTurns.invalidate(turn.turnId());
         List<String> chunkIds = repository.findSourceRefs(turn.turnId()).stream()
             .map(QuestionReuseRepository.SourceSnapshot::chunkId)
             .filter(v -> v != null && !v.isBlank())
             .distinct()
             .toList();
-        return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId(), chunkIds);
+        return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId(), chunkIds,
+                turn.responseMode(), turn.directMode(), turn.selectedTags());
     }
 
     public List<SourceRef> sourceRefsForTurn(long turnId) {
@@ -344,28 +446,64 @@ public class QuestionReuseService {
         return question.strip().length() > MAX_SUGGESTION_QUESTION_LENGTH;
     }
 
+    /**
+     * 재사용 후보를 고르는 범위. <b>오늘 {@link #ME} 를 만드는 경로는 없다</b> — 채팅의 두
+     * 엔드포인트가 {@link #SHARED} 로 고정이라(ChatController) 요청 문자열을 이 enum 으로
+     * 옮기던 {@code parse()} 도 호출자가 없어 지웠다. 되살리려면 화면 토글과 공유 게스트 id
+     * 문제를 함께 풀어야 한다.
+     */
     public enum Scope {
         ME,
-        SHARED;
-
-        public static Scope parse(String raw) {
-            if (raw == null || raw.isBlank()) return SHARED;
-            return "me".equalsIgnoreCase(raw) ? ME : SHARED;
-        }
+        SHARED
     }
 
-    public record Suggestion(long turnId, String question, String answerPreview, String scope) {}
+    /**
+     * 추천 항목이 어디서 온 질문인가. JSON 으로는 소문자 코드({@code thread}/{@code mine}/
+     * {@code others}/{@code elsewhere})로 나가고, 화면은 이 값으로 배지와 클릭 동작을 가른다 —
+     * {@code thread} 만 이동이고 나머지는 재사용이다.
+     */
+    public enum Origin {
+        /** 지금 열려 있는 대화에서 이미 물었던 질문 — 클릭은 그 자리로 이동. */
+        THREAD("thread"),
+        /** 내 다른 대화의 질문. */
+        MINE("mine"),
+        /** 다른 사용자의 질문. */
+        OTHERS("others"),
+        /** 다른 대화의 질문인데 누구 것인지 구별할 수 없다(공유 게스트 id). */
+        ELSEWHERE("elsewhere");
 
+        private final String code;
+
+        Origin(String code) { this.code = code; }
+
+        @JsonValue
+        public String code() { return code; }
+    }
+
+    public record Suggestion(long turnId, String question, String answerPreview, String scope,
+                             Origin origin) {}
+
+    /**
+     * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는
+     * <b>답변이 만들어진 모양</b>(원본 턴의 값, 원본이 다시 재사용 턴이면 그 원본의 값 —
+     * {@code QuestionReuseRepository.ANSWER_SHAPE_COLUMNS})이다. 컨트롤러는 새 턴을 저장할 때 이 셋을
+     * 그대로 복사한다 — 요청 쪽 폼 값이나 자리표시자를 쓰면 새로고침 전후로 두 글자 표기가 달라지고,
+     * 좋아요→지식 제안 프리필의 태그 스코프와 다음 턴의 이력 렌더(Direct 여부)도 원본과 어긋난다.
+     * 재사용 불가면 셋은 기본값(null·false·빈 문자열)이다.
+     */
     public record ReuseLookup(boolean reusable, String reason, Long sourceTurnId,
                               String question, String answer, String sourceThreadId,
-                              List<String> sourceChunkIds) {
+                              List<String> sourceChunkIds,
+                              String responseMode, boolean directMode, String selectedTags) {
         static ReuseLookup reusable(long sourceTurnId, String question, String answer, String sourceThreadId,
-                                    List<String> sourceChunkIds) {
-            return new ReuseLookup(true, null, sourceTurnId, question, answer, sourceThreadId, sourceChunkIds);
+                                    List<String> sourceChunkIds,
+                                    String responseMode, boolean directMode, String selectedTags) {
+            return new ReuseLookup(true, null, sourceTurnId, question, answer, sourceThreadId, sourceChunkIds,
+                    responseMode, directMode, selectedTags == null ? "" : selectedTags);
         }
 
         static ReuseLookup notReusable(String reason, String question) {
-            return new ReuseLookup(false, reason, null, question, null, null, List.of());
+            return new ReuseLookup(false, reason, null, question, null, null, List.of(), null, false, "");
         }
     }
 

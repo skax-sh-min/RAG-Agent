@@ -226,4 +226,19 @@ class AgentServiceTest {
 
         verify(summarizerService, times(1)).precomputeAfterTurn("anonymous", "t1", 42L, Locale.KOREAN);
     }
+
+    /** StreamingAgentService 와 같은 이유 — join() 의 CompletionException 을 풀어 REST 핸들러가 503 을 내게. */
+    @Test
+    @DisplayName("사전 분류 future 안의 소진은 CompletionException 이 아니라 LlmProviderExhaustedException 으로 나온다")
+    void chat_llmExhaustedInsidePreRunFuture_isUnwrapped() {
+        when(classifierService.classifyOnly(any(), any()))
+                .thenThrow(new com.example.ragagent.exception.LlmProviderExhaustedException("no providers", 4));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST)))
+                .isInstanceOf(com.example.ragagent.exception.LlmProviderExhaustedException.class)
+                .satisfies(e -> assertThat(((com.example.ragagent.exception.LlmProviderExhaustedException) e)
+                        .retryAfterSeconds()).isEqualTo(4));
+        verify(agentGraph, never()).run(any());
+    }
 }

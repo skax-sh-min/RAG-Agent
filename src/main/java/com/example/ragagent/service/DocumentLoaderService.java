@@ -213,7 +213,7 @@ public class DocumentLoaderService {
 
     /**
      * Converts a DOCX file to a Markdown string via {@link DocxToMarkdownConverter}.
-     * Called by RagService before optional LLM format correction.
+     * Called by {@code DocumentIndexer}'s {@code .docx} branch before LLM format correction.
      */
     public String convertDocxToMd(Path filePath, String imageId, Path imagesDir) throws IOException {
         log.debug("[LOADER:DOCX] MD 변환 시작: {}", filePath.getFileName());
@@ -235,12 +235,11 @@ public class DocumentLoaderService {
      * [이미지: ...] path markers into image_paths metadata.
      * Used both after DOCX→MD conversion and during MD re-indexing.
      *
-     * @param skipChapterNumbers true for a document whose ##/### headings are synthetic
-     *                           per-page/per-slide labels rather than a real table-of-contents —
-     *                           PPTX ({@code DocumentIndexer}'s PPTX branch: slide title/subtitle)
-     *                           and non-scanned PDF (its PDF branch: {@code PdfToMarkdownConverter}
-     *                           emits one synthetic {@code "## N페이지"} H2 heading per page, purely
-     *                           so each page gets its own section — never a real chapter). Treating
+     * @param skipChapterNumbers true for a document that carries no real table-of-contents —
+     *                           PPTX ({@code DocumentIndexer}'s PPTX branch, whose {@code ##}/{@code ###}
+     *                           are per-slide title/subtitle labels) and non-scanned PDF (its PDF
+     *                           branch: {@code PdfToMarkdownConverter} emits no heading at all, so any
+     *                           {@code "##"} that survives text extraction is incidental). Treating
      *                           either as real chapter structure would make every section's
      *                           {@link MetaKey#CHAPTER_NO} a near-duplicate of the page/slide number
      *                           at best, and for PDF actively WRONG at worst (a page with neither
@@ -270,8 +269,12 @@ public class DocumentLoaderService {
     /**
      * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
      * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
-     * Called from RagService when imageId and imagesDir are available.
      * If mdOutputPath is non-null the converted Markdown is also saved there for inspection.
+     *
+     * <p>Currently unused by the indexing pipeline — {@code DocumentIndexer} calls
+     * {@link #convertDocxToMd} and runs the correction pass itself before
+     * {@link #loadFromMarkdown}, so this skips that pass. Kept as the one-call form for tests and
+     * for a caller that wants the raw (uncorrected) conversion.
      */
     public List<Document> loadDocx(Path filePath, String imageId, Path imagesDir,
                                    Path mdOutputPath) throws IOException {

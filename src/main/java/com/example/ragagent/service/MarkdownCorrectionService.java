@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.IndexingOutputCap;
@@ -32,6 +33,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -157,7 +159,7 @@ public class MarkdownCorrectionService {
      * code at the marker — never trusted to the model to omit — so no content is ever duplicated.
      */
     private static final int OVERLAP_LINES = 5;
-    /** Max PPTX slides bundled into one correction call, subject to {@link #maxSectionChars()}. */
+    /** Max PPTX slides bundled into one correction call, subject to {@link #sectionCharBudget()}. */
     private static final int PPTX_MAX_BUNDLE_PAGES = 4;
     /** Marker placed right BEFORE this section's real content, after a prepended previous-section
      *  overlap. The model reproduces it verbatim; {@link #cutOverlap} drops everything up to and
@@ -187,10 +189,8 @@ public class MarkdownCorrectionService {
         return Math.max(MIN_SECTION_CHARS, (props.llmSafe().maxTokens() - MIN_SECTION_CHARS) / 2);
     }
 
-    // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
-    // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
-    // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
-    // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
+    // Section sizing derives from the single "LLM max tokens" source (app.llm.max-tokens /
+    // LLM_MAX_TOKENS, default 10000) — see maxSectionChars()/sectionCharBudget() below.
     public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
                                      ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
@@ -199,15 +199,6 @@ public class MarkdownCorrectionService {
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
-    /**
-     * Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig.
-     *
-     * <p><b>출력 상한을 함께 싣는다</b>({@link IndexingOutputCap}). 이걸 비워 두면 프로바이더 빈에
-     * 구워진 {@code app.llm.max-tokens} 전체가 출력으로 <b>예약</b>되는데, 서버는
-     * {@code 프롬프트 + max_tokens ≤ n_ctx} 를 검사하므로 그만큼 입력 자리가 사라진다. 창 20,480 ·
-     * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
-     * 같은 프로퍼티가 {@link #maxSectionChars()} 까지 정하므로 입력과 예약이 함께 커진다.
-     */
     /**
      * 이번 교정 호출에 넣을 섹션의 글자 상한.
      *
@@ -233,6 +224,15 @@ public class MarkdownCorrectionService {
         return Math.min(configured, Math.max(MIN_SECTION_CHARS, fromWindow));
     }
 
+    /**
+     * Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig.
+     *
+     * <p><b>출력 상한을 함께 싣는다</b>({@link IndexingOutputCap}). 이걸 비워 두면 프로바이더 빈에
+     * 구워진 {@code app.llm.max-tokens} 전체가 출력으로 <b>예약</b>되는데, 서버는
+     * {@code 프롬프트 + max_tokens ≤ n_ctx} 를 검사하므로 그만큼 입력 자리가 사라진다. 창 20,480 ·
+     * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
+     * 같은 프로퍼티가 {@link #maxSectionChars()} 까지 정하므로 입력과 예약이 함께 커진다.
+     */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
         OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().indexingTemperature());
@@ -299,6 +299,33 @@ public class MarkdownCorrectionService {
                           boolean groupByPage,
                           BiConsumer<Integer, Integer> onSectionDone,
                           BiConsumer<Integer, Integer> onImageDescribed) {
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers,
+                groupByPage, false, onSectionDone, onImageDescribed);
+    }
+
+    /**
+     * Same as the 8-arg overload plus {@code skipLlmCorrection}: {@code true} skips <b>only</b> the
+     * LLM section-by-section rewrite ({@link #correctSection}) — every deterministic pass still
+     * runs ({@link #fixClosingFences}, {@link #normalizeCodeBlocks}, heading numbering when asked,
+     * {@link #postProcessMarkdown}), and the image-description pre-pass stays governed by its own
+     * {@code addImageDescriptions} flag. The result is still written to {@code correctedOutputPath}.
+     *
+     * <p>Meant for a hand-authored {@code .md} upload whose author does not want the model touching
+     * their text. The LLM pass is also what normally wraps unfenced code and repairs odd fences, so
+     * a fence defect in the source is carried into the deterministic passes as-is — the operator is
+     * shown {@link #findFenceProblems} <em>before</em> this runs ({@code DocumentController}'s
+     * upload pre-flight, the same contract the re-index pre-flight has) and decides to fix the file
+     * or proceed. Proceeding heals {@code unclosed}/{@code tagged_closer} the way
+     * {@link #fixClosingFences} always does; a {@code mid_line} fence stays, and
+     * {@link #normalizeCodeBlocks} then declines to tag any block in the document.
+     */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions,
+                          boolean addHeadingNumbers,
+                          boolean groupByPage,
+                          boolean skipLlmCorrection,
+                          BiConsumer<Integer, Integer> onSectionDone,
+                          BiConsumer<Integer, Integer> onImageDescribed) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         // Hot-editable (indexing family) — read fresh per correction run so a /settings override
@@ -313,59 +340,18 @@ public class MarkdownCorrectionService {
                 ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath, onImageDescribed)
                 : rawMd;
 
-        List<String> sections = groupByPage ? splitByPages(preprocessed) : splitBySections(preprocessed);
-        log.debug("[MD_CORRECT] 섹션 {}개 분할 완료 (groupByPage={})", sections.size(), groupByPage);
-        int total = sections.size();
-
-        // Only UNNATURAL boundaries (converter/code artifacts, size-forced mid-flow cuts) carry
-        // overlap context; clean chapter breaks — and every PPTX page/bundle boundary, since slides
-        // are self-contained — split with no overlap, so most boundaries pay nothing and can never
-        // duplicate. unnaturalAfter[i] == the boundary between section i and section i+1.
-        boolean[] unnaturalAfter = new boolean[sections.size()];
-        if (!groupByPage) {
-            for (int i = 0; i + 1 < sections.size(); i++) {
-                unnaturalAfter[i] = isUnnaturalBoundary(sections.get(i), sections.get(i + 1));
-            }
+        String result;
+        if (skipLlmCorrection) {
+            // No split, no join: the document reaches the deterministic passes exactly as authored
+            // (re-joining sections with "\n\n" would already be a rewrite the user asked us not to make).
+            log.info("[MD_CORRECT] LLM 교정 건너뜀(사용자 옵션): docId={} — 결정적 정리 패스만 적용", docId);
+            result = preprocessed;
+        } else {
+            List<String> corrected = correctSectionsWithLlm(preprocessed, docId, groupByPage,
+                    onSectionDone, maxConcurrent);
+            if (corrected == null) return rawMd;   // LLM 사용 불가 — 원본 유지 (예전 동작 그대로)
+            result = String.join("\n\n", corrected);
         }
-
-        Semaphore gate = new Semaphore(maxConcurrent);
-        AtomicInteger doneCount = new AtomicInteger(0);
-        List<String> corrected;
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
-            for (int i = 0; i < sections.size(); i++) {
-                final String sec = sections.get(i);
-                // Head overlap: the PREVIOUS section's last few non-blank lines, prepended only when
-                // the boundary INTO this section was flagged unnatural. Corrected in place, then cut
-                // back off deterministically by code (see correctSection/cutOverlap).
-                final String headOverlap = (i > 0 && unnaturalAfter[i - 1])
-                        ? trailingNonBlankLines(sections.get(i - 1), OVERLAP_LINES) : "";
-                // Tail overlap: the NEXT section's first few non-blank lines, appended only when the
-                // boundary OUT of this section is unnatural. Same deterministic cut on the other end.
-                final String tailOverlap = (i + 1 < sections.size() && unnaturalAfter[i])
-                        ? leadingNonBlankLines(sections.get(i + 1), OVERLAP_LINES) : "";
-                futures.add(CompletableFuture.supplyAsync(() -> {
-                    gate.acquireUninterruptibly();
-                    try {
-                        String result = correctSection(sec, tailOverlap, headOverlap);
-                        int done = doneCount.incrementAndGet();
-                        if (onSectionDone != null) onSectionDone.accept(done, total);
-                        return result;
-                    } finally {
-                        gate.release();
-                    }
-                }, exec));
-            }
-            corrected = futures.stream().map(CompletableFuture::join).toList();
-        } catch (CompletionException ce) {
-            if (ce.getCause() instanceof LlmProviderExhaustedException) {
-                log.info("[MD_CORRECT] LLM 사용 불가, 원본 유지: docId={}", docId);
-                return rawMd;
-            }
-            throw ce;
-        }
-
-        String result = String.join("\n\n", corrected);
         // FIX: a ```lang-tagged CLOSING fence → bare ``` — must run BEFORE normalizeCodeBlocks so its
         // fence regex sees well-formed pairs.
         result = fixClosingFences(result);
@@ -396,6 +382,70 @@ public class MarkdownCorrectionService {
             }
         }
         return result;
+    }
+
+    /**
+     * The LLM part of {@link #correct}: split into sections, rewrite each in parallel (bounded by
+     * {@code maxConcurrent}), and return them in document order. Returns {@code null} when the
+     * provider is exhausted ({@link LlmProviderExhaustedException}) — the caller then keeps the
+     * raw input untouched.
+     */
+    private List<String> correctSectionsWithLlm(String preprocessed, String docId, boolean groupByPage,
+                                                BiConsumer<Integer, Integer> onSectionDone,
+                                                int maxConcurrent) {
+        List<String> sections = groupByPage ? splitByPages(preprocessed) : splitBySections(preprocessed);
+        log.debug("[MD_CORRECT] 섹션 {}개 분할 완료 (groupByPage={})", sections.size(), groupByPage);
+        int total = sections.size();
+
+        // Only UNNATURAL boundaries (converter/code artifacts, size-forced mid-flow cuts) carry
+        // overlap context; clean chapter breaks — and every PPTX page/bundle boundary, since slides
+        // are self-contained — split with no overlap, so most boundaries pay nothing and can never
+        // duplicate. unnaturalAfter[i] == the boundary between section i and section i+1.
+        boolean[] unnaturalAfter = new boolean[sections.size()];
+        if (!groupByPage) {
+            for (int i = 0; i + 1 < sections.size(); i++) {
+                unnaturalAfter[i] = isUnnaturalBoundary(sections.get(i), sections.get(i + 1));
+            }
+        }
+
+        Semaphore gate = new Semaphore(maxConcurrent);
+        AtomicInteger doneCount = new AtomicInteger(0);
+        List<String> corrected;
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
+            List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
+            for (int i = 0; i < sections.size(); i++) {
+                final String sec = sections.get(i);
+                // Head overlap: the PREVIOUS section's last few non-blank lines, prepended only when
+                // the boundary INTO this section was flagged unnatural. Corrected in place, then cut
+                // back off deterministically by code (see correctSection/cutOverlap).
+                final String headOverlap = (i > 0 && unnaturalAfter[i - 1])
+                        ? trailingNonBlankLines(sections.get(i - 1), OVERLAP_LINES) : "";
+                // Tail overlap: the NEXT section's first few non-blank lines, appended only when the
+                // boundary OUT of this section is unnatural. Same deterministic cut on the other end.
+                final String tailOverlap = (i + 1 < sections.size() && unnaturalAfter[i])
+                        ? leadingNonBlankLines(sections.get(i + 1), OVERLAP_LINES) : "";
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    gate.acquireUninterruptibly();
+                    try {
+                        String result = correctSection(sec, tailOverlap, headOverlap);
+                        int done = doneCount.incrementAndGet();
+                        if (onSectionDone != null) onSectionDone.accept(done, total);
+                        return result;
+                    } finally {
+                        gate.release();
+                    }
+                }, exec));
+            }
+            corrected = futures.stream().map(CompletableFuture::join).toList();
+        } catch (CompletionException ce) {
+            if (ce.getCause() instanceof LlmProviderExhaustedException) {
+                log.info("[MD_CORRECT] LLM 사용 불가, 원본 유지: docId={}", docId);
+                return null;
+            }
+            throw ce;
+        }
+        return corrected;
     }
 
     /**
@@ -481,7 +531,7 @@ public class MarkdownCorrectionService {
     }
 
     /**
-     * Bundles consecutive small sections up to {@link #maxSectionChars()} into one correction call —
+     * Bundles consecutive small sections up to {@link #sectionCharBudget()} into one correction call —
      * same pattern {@link #splitByPages} already uses to bundle PPTX slides. Without this, a
      * document with frequent short headings (a heading every few lines — common in DOCX/MD with
      * deep subsection structure) sent one tiny LLM call per heading instead of a handful of
@@ -511,12 +561,12 @@ public class MarkdownCorrectionService {
 
     /**
      * PPTX-only split: bundle up to {@link #PPTX_MAX_BUNDLE_PAGES} consecutive {@code [페이지: N]}
-     * slides into one correction call, filling each bundle up to {@link #maxSectionChars()} before
+     * slides into one correction call, filling each bundle up to {@link #sectionCharBudget()} before
      * starting the next. Slides are self-contained (each {@code [페이지: N]} + heading(s) + body),
      * so every bundle boundary lands cleanly on a page marker and needs no overlap context — and
      * batching several small slides per call cuts the LLM round-trips a per-slide split would make.
      *
-     * <p>A single slide larger than {@link #maxSectionChars()} can't be bundled; it's split on its
+     * <p>A single slide larger than {@link #sectionCharBudget()} can't be bundled; it's split on its
      * own by {@link #splitOversizedPage} (at shape-group/diagram/chart block boundaries) and its
      * pieces are emitted un-bundled.
      */
@@ -554,7 +604,7 @@ public class MarkdownCorrectionService {
      * {@code PptxToMarkdownConverter} as a self-contained {@code [label] … [/label]} block) so a
      * grouped-shape block stays whole in one correction call. The {@code [페이지: N]} marker and
      * heading(s) that precede the first block stay attached to the first piece. A single block still
-     * larger than {@link #maxSectionChars()} falls back to the shared char-budget force-split.
+     * larger than {@link #sectionCharBudget()} falls back to the shared char-budget force-split.
      */
     private List<String> splitOversizedPage(String page) {
         return splitByBoundary(page, line -> {
@@ -568,7 +618,7 @@ public class MarkdownCorrectionService {
      * {@link #splitOversizedPage}: never splits while inside a fenced code block (``` / ~~~),
      * regardless of what {@code isBoundaryLine} matches.
      *
-     * <p>When {@code enforceSize} is true and a section grows past {@link #maxSectionChars()}, it is
+     * <p>When {@code enforceSize} is true and a section grows past {@link #sectionCharBudget()}, it is
      * force-split so no single correction call is oversized. If the check trips while a fence is
      * still open, the fence is not cut — but it also isn't unconditionally kept in the current
      * (already-full) section. If the fence started at or after {@code MIN_SECTION_CHARS / 2} chars
@@ -623,7 +673,7 @@ public class MarkdownCorrectionService {
     /**
      * True when the boundary between {@code before} and {@code after} looks like a converter/code
      * artifact rather than a clean chapter break, so it should carry deterministic overlap context.
-     * Three signals (all confirmed with the user):
+     * Two signals (both confirmed with the user):
      * <ol>
      *   <li><b>Non-heading start</b> — {@code after}'s first non-blank line is not a well-formed
      *       {@code ## }/{@code ### }/{@code #### } heading. Covers a size-forced mid-flow cut, a
@@ -988,7 +1038,8 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 이미지 설명 병렬 생성: {}장, maxConcurrent={}", total, maxConcurrent);
         Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Executor exec = MdcPropagation.propagating(pool);
             List<CompletableFuture<Void>> futures = new ArrayList<>(toDescribe.size());
             int seq = 0;
             for (Map.Entry<String, Path> e : toDescribe.entrySet()) {
@@ -1246,9 +1297,10 @@ public class MarkdownCorrectionService {
      * the document would be misread as a closer instead, silently stripping its language tag one
      * boundary at a time — and once that parity is off, {@link #normalizeCodeBlocks} pairs fences the
      * same wrong way and <em>writes</em> an inferred language tag onto a line that is really a closer
-     * (the reported {@code ```java … ```java} corruption). The page marker matters because PPTX and
-     * non-scanned PDF emit no {@code ##} headings at all (see {@link #splitBySections}), so a heading
-     * is never reached in those formats and the desync would run to the end of the document.
+     * (the reported {@code ```java … ```java} corruption). The page marker matters because a
+     * title-less PPTX slide and every page of a plain PDF emit no heading at all (see
+     * {@link #splitBySections}), so across those stretches a heading is never reached and the desync
+     * would run to the end of the document.
      */
     static String fixClosingFences(String md) {
         if (md == null || md.isEmpty()) return md;
@@ -1860,8 +1912,9 @@ public class MarkdownCorrectionService {
      * "Java misdetected as SQL" case — a {@code sql} tag on code that carries a strong Java signal
      * ({@link #JAVA_CODE_SIGNAL}) and holds no real SQL statement ({@link #SQL_STATEMENT}) is
      * rewritten to {@code java}; (2) otherwise keeps an existing tag; (3) infers a tag for an
-     * untagged block when {@code inferWhenBlank}. Runs in both normalize passes, so the sql→java fix
-     * applies even when heading-number inference is off. Package-private for unit testing.
+     * untagged block when {@code inferWhenBlank}. {@link #normalizeCodeBlocks} now always passes
+     * {@code inferLanguage=true}, so both this fix and the inference apply regardless of the
+     * heading-number option. Package-private for unit testing.
      */
     String resolveCodeLanguage(String existingLang, String code, boolean inferWhenBlank) {
         String lang = existingLang == null ? "" : existingLang.trim();
@@ -1920,8 +1973,9 @@ public class MarkdownCorrectionService {
      * the first of two-or-more consecutive line comments), or (b) a function/class/method signature
      * that isn't already preceded by a comment. No blank line is ever inserted at the very start of
      * the block (leading blanks stay trimmed).
+     *
+     * <p>Package-private for unit testing.
      */
-    /** Package-private for unit testing. */
     String normalizeCodeContent(String code) {
         String[] lines = code.split("\\n", -1);
         List<String> cleaned = new ArrayList<>(lines.length);

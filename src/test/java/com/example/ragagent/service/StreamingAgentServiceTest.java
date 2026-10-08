@@ -216,6 +216,37 @@ class StreamingAgentServiceTest {
         verify(emitter, never()).completeWithError(any());
     }
 
+    /**
+     * 2026-09-21 의 GPU 소실 그대로 — 소진이 그래프가 아니라 사전 분류 future 안에서 났다. join() 이
+     * CompletionException 으로 감싸므로 예전엔 전용 catch 를 지나쳐 completeWithError + ERROR 로그 +
+     * 클래스 이름이 앞에 붙은 raw 메시지가 토스트로 나갔다.
+     */
+    @Test
+    @DisplayName("사전 분류 future 안의 소진도 전용 catch 로 — complete() + 현지화 문구, 클래스 이름 노출 없음")
+    void run_llmExhaustedInsidePreRunFuture_isUnwrappedAndLocalized() throws Exception {
+        when(classifierService.classifyOnly(any(), any()))
+                .thenThrow(new LlmProviderExhaustedException(
+                        "AI 서버가 일시적으로 응답하지 않아 4초 후 다시 시도할 수 있습니다. (task=TEXT)", 4));
+        when(messageSource.getMessage(eq("error.llm.exhausted.retry"), any(), anyString(), any(Locale.class)))
+                .thenReturn("AI 서버가 일시적으로 응답하지 않습니다. 4초 후 다시 시도해 주세요.");
+
+        service.run("u1", form(false, null), emitter);
+
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+        verify(agentGraph, never()).runStreaming(any(), any());
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, org.mockito.Mockito.atLeastOnce()).send(events.capture());
+        String wire = events.getAllValues().stream()
+                .flatMap(b -> b.build().stream())
+                .map(d -> String.valueOf(d.getData()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(wire)
+                .contains("4초 후 다시 시도해 주세요")
+                .doesNotContain("LlmProviderExhaustedException")
+                .doesNotContain("task=TEXT");
+    }
+
     @Test
     @DisplayName("일반 예외 + 부분 답변 존재 — 부분 답변에 중단 문구 붙여 저장 후 completeWithError")
     void run_genericError_withPartialAnswer_persistsPartialAndCompletesWithError() {

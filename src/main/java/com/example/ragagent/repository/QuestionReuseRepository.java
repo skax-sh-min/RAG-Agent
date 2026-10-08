@@ -4,6 +4,7 @@ import com.example.ragagent.model.ResponseMode;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
@@ -17,6 +18,42 @@ import java.util.stream.Collectors;
 public class QuestionReuseRepository {
 
     private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
+
+    /**
+     * 재사용 턴의 답변을 원본에서 가져오는 조인 — 추천 후보와 재사용 조회가 공유한다.
+     * <b>사용자 조건 없이</b> id 로만 조인한다: 이유는 {@code SqliteMemoryRepository.REUSE_SOURCE_JOIN}
+     * 과 같다(원본이 다른 사용자의 턴인 것이 shared 추천의 정상 경로이고, 예전의
+     * {@code src.user_id = t.user_id} 는 그 경우 답변을 "참조 원문 삭제됨" 으로 만들었다). 여기서는
+     * 더 나빴다 — 그런 턴이 다시 추천에 올라 재사용되면 {@code /reuse} 가 그 문구를 <em>답변으로</em>
+     * 내줬다.
+     */
+    private static final String REUSE_SOURCE_JOIN =
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id ";
+
+    /**
+     * 후보 답변이 <b>어떻게 만들어졌는가</b> — 응답 모드·검색 축(Direct 여부)·태그 스코프. 답변
+     * 텍스트를 {@code src} 에서 가져오는 것과 같은 이유로 셋도 {@code src} 를 먼저 본다: 후보가
+     * 스스로 재사용 턴이면 그 답변을 실제로 만든 행은 원본이고, 세 값이 답변과 다른 행에서 오면
+     * "이 답변이 왜 이런 모양인가"를 설명하지 못한다. 원본이 없으면 자기 행이다.
+     *
+     * <p>재사용 턴이 원본 값을 복사해 저장하기 전에 만들어진 행은 자리표시자({@code 'M'}·0·빈
+     * 태그)를 들고 있다 — 이 COALESCE 가 그 행들에도 원본의 값을 되돌려 주므로 백필이 필요 없다.
+     */
+    private static final String ANSWER_SHAPE_COLUMNS =
+            "COALESCE(NULLIF(src.response_mode, ''), t.response_mode) AS response_mode, " +
+            "COALESCE(src.direct_mode, t.direct_mode, 0) AS direct_mode, " +
+            "COALESCE(src.selected_tags, t.selected_tags, '') AS selected_tags";
+
+    private static final RowMapper<CandidateTurn> CANDIDATE_MAPPER = (rs, n) -> new CandidateTurn(
+            rs.getLong("id"),
+            rs.getString("user_id"),
+            rs.getString("thread_id"),
+            rs.getString("question"),
+            rs.getString("answer"),
+            rs.getString("created_at"),
+            rs.getString("response_mode"),
+            rs.getInt("direct_mode") != 0,
+            rs.getString("selected_tags"));
 
     /**
      * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
@@ -40,17 +77,51 @@ public class QuestionReuseRepository {
     private static final String REUSABLE_MODE_PREDICATE = buildReusableModePredicate();
 
     /**
-     * A Direct turn's answer may only be reused if its asker liked it. Direct answers are not
-     * grounded in any document, so a 좋아요 is the only evidence anyone found this one correct.
+     * Direct 답변은 추천·재사용 후보가 아니다. 재사용의 유효성 판정({@code QuestionReuseService.validateTurn})은
+     * 그 답변이 근거로 삼은 청크가 지금도 같은 내용인지를 대조하는 것인데, Direct 턴은 검색을 돌리지
+     * 않아 {@code turn_source_ref} 가 0건이라 대조할 것이 없다 — 판정은 언제나 "출처 청크가 없어
+     * 재사용할 수 없습니다" 다.
      *
-     * <p><b>This is the second reader of {@code feedback='LIKE'}</b>, and §10.11 changed what
-     * writes it: the chat now asks "지식 제안으로 등록할까요?" on a like and records nothing when the
-     * answer is no. So "the answer was good, but I don't want it published" is no longer
-     * expressible, and such a Direct turn stays out of reuse. Accepted — reuse is an optimisation,
-     * and the alternative (a like that means two different things depending on a dialog) is worse.
+     * <p>예전에는 {@code (direct_mode = 0 OR feedback = 'LIKE')} 로 <b>좋아요한</b> Direct 턴을 후보에
+     * 올렸다 — 문서 근거가 없으니 좋아요를 "누군가 맞다고 본 증거"로 삼자는 뜻이었다. 그런데 그
+     * 조건은 후보 목록만 통과시킬 뿐 위 판정을 바꾸지 않아, 사용자에게는 "재사용할 수 있는
+     * 답변"으로 떴다가 누르면 경고 토스트와 함께 일반 질의로 떨어지는 헛클릭이었다. 게다가 §10.11
+     * 이후 좋아요는 <b>지식 제안 폼을 여는 신호</b>이지 재사용 자격이 아니다 — 근거 없는 답변을
+     * 공유 지식으로 만드는 문은 관리자 승인 하나뿐이고, 재사용 경로가 그 옆에 두 번째 문을 내면
+     * 안 된다. 그래서 좋아요 여부와 무관하게 뺀다.
+     *
+     * <p>판정 기준은 {@code t} 가 아니라 <b>답변 텍스트와 같은 행</b>이다({@link #ANSWER_SHAPE_COLUMNS} 와
+     * 같은 COALESCE): 후보가 재사용 턴이면 Direct 여부도 원본이 정한다. 원본 값을 복사하기 전에
+     * 저장된 재사용 행은 {@code direct_mode=0} 을 들고 있어, {@code t} 만 보면 그 행이 다시 후보에
+     * 올라 같은 헛클릭이 된다.
      */
-    private static final String DIRECT_NEEDS_LIKE_PREDICATE =
-            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') ";
+    private static final String NOT_DIRECT_PREDICATE =
+            "AND COALESCE(src.direct_mode, t.direct_mode, 0) = 0 ";
+
+    /**
+     * 활성 출처가 하나도 없는 턴을 추천 후보에서 미리 뺀다 — <b>추천 쿼리 전용</b>.
+     *
+     * <p>{@code QuestionReuseService.validateTurn()} 이 보는 사실 가운데 이 테이블에 이미 있는 것은
+     * 둘이다: 출처 행이 아예 없다(검색을 돌리지 않은 턴, 기능 이전 턴), 그리고 통지 경로가
+     * {@code status} 를 이미 {@code deleted}/{@code modified} 로 찍어 둔 행(문서 삭제·재인덱싱, 청크
+     * 삭제·편집). 둘 다 영구적이고 저장된 사실인데, 예전에는 SQL 이 그 행을 후보로 내고 서비스가
+     * 키 입력마다 행당 쿼리 둘로 다시 확인해 버렸다. 비용보다 나쁜 것은 <b>창</b>이다 — 후보는
+     * {@code LIMIT} 하나로 잘리므로, 실패할 게 정해진 행이 창을 채우면 그 뒤의 유효한 질문은
+     * 목록에 오르지 못한다.
+     *
+     * <p>{@code validateTurn()} 보다 절대 엄격하지 않다: 활성 행이 하나도 없으면 검증 범위가 참여
+     * 청크든 NULL 폴백이든 첫 루프에서 반드시 실패한다. 반대는 성립하지 않는다(활성 행 옆에 낡은
+     * 참여 행이 있는 턴은 여기를 통과하고 서비스에서 떨어진다) — 해시 대조는 다른 파일
+     * ({@code chunk_fts_key}, vectorJdbc)이라 SQL 로 내릴 수 없고, 그쪽 실패는 서비스의 부정 캐시가
+     * 맡는다. 레거시 {@code 'inactive'} 행은 {@code = 'active'} 비교라 자동으로 "없음" 쪽이다.
+     *
+     * <p>{@link #findTurnForReuse} 에는 걸지 않는다 — 그 조회는 행 하나이고 뒤에 {@code validateTurn()}
+     * 이 어차피 돌며, 그 판정의 <b>사유</b>("출처 청크가 없어…"/"삭제 또는 재인덱싱되어…")가 폴백
+     * 토스트로 사용자에게 나간다. 여기서 먼저 걸러 버리면 그 자리가 "선택한 항목을 찾을 수 없거나
+     * 접근 권한이 없습니다" 로 뭉개진다. 현재 대화 항목(이동 대상)도 예외 그대로다.
+     */
+    private static final String HAS_ACTIVE_SOURCE_PREDICATE =
+            "AND EXISTS (SELECT 1 FROM turn_source_ref r WHERE r.turn_id = t.id AND r.status = 'active') ";
 
     private static String buildReusableModePredicate() {
         String excluded = java.util.Arrays.stream(ResponseMode.values())
@@ -139,72 +210,87 @@ public class QuestionReuseRepository {
                 """, toTurnId, userId, threadId, fromTurnId);
     }
 
-    public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId, int limit) {
+    /**
+     * 입력 중인 질문에 대한 추천 후보.
+     *
+     * <p><b>현재 대화({@code threadId})의 턴은 재사용 술어를 타지 않는다.</b> 그 항목의 클릭은
+     * 답변 재사용이 아니라 "이 대화에서 이미 물었던 자리로 이동"이라, 싫어요·응답 모드·Direct
+     * 제외·활성 출처 유무 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
+     * 것보다 그 자리를 보여주는 편이 항상 낫고, 그 조건으로 걸러 버리면 "방금 여기서 물었는데
+     * 왜 목록에 없지"가 된다. 실제 재사용 조회({@link #findTurnForReuse})는 술어를 그대로 두므로,
+     * 클라이언트가 현재 대화의 턴 id 로 재사용을 부르더라도 엄격한 쪽이 이긴다.
+     *
+     * <p>정렬은 <b>현재 대화 → 내 다른 대화 → 그 외</b>, 그 안에서 최신순이다. 앞 두 키가 필요한
+     * 이유는 표시만이 아니다 — 후보는 {@code LIMIT} 창 하나로 잘리므로, 최신순만으로는 공유
+     * 코퍼스에서 같은 질문이 많이 오갔을 때 <em>이 대화</em>의 그 질문이 창 밖으로 밀려 이동
+     * 대상 자체가 사라진다. {@code threadId} 가 없으면(REST 호출) 첫 키는 아무 행도 고르지 않는다.
+     *
+     * <p>질문 매칭은 {@code keywords} <b>전부</b>(AND)를 각각 대소문자 무시 부분 일치로 건다 —
+     * 키워드는 {@code QuestionKeywords.extract()} 가 뽑고, 아무것도 안 남으면 서비스가 입력 전체를
+     * 키워드 하나로 넘긴다(예전의 통째 부분 일치와 같다). {@code %}·{@code _} 는 {@code ESCAPE} 로
+     * 문자 그대로 대조한다 — {@code max_tokens} 의 {@code _} 가 한 글자 와일드카드로 풀리면
+     * {@code maxxtokens} 도 맞는다.
+     *
+     * @param keywords 비어 있으면 빈 목록을 돌려준다(아무 행도 맞히지 않는 술어 대신)
+     */
+    public List<CandidateTurn> findSuggestionCandidates(List<String> keywords, boolean meOnly, String userId,
+                                                        String threadId, int limit) {
+        if (keywords == null || keywords.isEmpty()) return List.of();
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
-        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+        String currentThread = threadId == null ? "" : threadId;
+        String questionMatch = keywords.stream()
+                .map(k -> "lower(t.question) LIKE lower(?) ESCAPE '\\' ")
+                .collect(Collectors.joining("AND "));
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
+            ANSWER_SHAPE_COLUMNS + " " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
-            "WHERE lower(t.question) LIKE lower(?) " +
-            "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
-            "AND " + REUSABLE_MODE_PREDICATE +
-            DIRECT_NEEDS_LIKE_PREDICATE +
+            REUSE_SOURCE_JOIN +
+            "WHERE " + questionMatch +
+            "AND ( (t.thread_id = ? AND t.user_id = ?) " +
+            "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "        AND " + REUSABLE_MODE_PREDICATE +
+            NOT_DIRECT_PREDICATE +
+            HAS_ACTIVE_SOURCE_PREDICATE + ") ) " +
             (meOnly ? "AND t.user_id = ? " : "") +
-            "ORDER BY t.id DESC LIMIT ?";
+            "ORDER BY CASE WHEN t.thread_id = ? AND t.user_id = ? THEN 0 ELSE 1 END, " +
+            "         CASE WHEN t.user_id = ? THEN 0 ELSE 1 END, " +
+            "         t.id DESC " +
+            "LIMIT ?";
 
-        if (meOnly) {
-            return jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    "%" + q + "%", userId, Math.max(1, limit));
-        }
-        return jdbc.query(sql,
-                (rs, n) -> new CandidateTurn(
-                        rs.getLong("id"),
-                        rs.getString("user_id"),
-                        rs.getString("thread_id"),
-                        rs.getString("question"),
-                        rs.getString("answer"),
-                        rs.getString("created_at")),
-                "%" + q + "%", Math.max(1, limit));
+        List<Object> args = new ArrayList<>();
+        for (String k : keywords) args.add("%" + escapeLike(k) + "%");
+        args.add(currentThread);
+        args.add(userId);
+        if (meOnly) args.add(userId);
+        args.add(currentThread);
+        args.add(userId);
+        args.add(userId);
+        args.add(Math.max(1, limit));
+        return jdbc.query(sql, CANDIDATE_MAPPER, args.toArray());
+    }
+
+    /** {@code LIKE ... ESCAPE '\'} 용 — 백슬래시·{@code %}·{@code _} 를 문자 그대로. */
+    static String escapeLike(String s) {
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
-        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
+            ANSWER_SHAPE_COLUMNS + " " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.id = ? " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +
-            DIRECT_NEEDS_LIKE_PREDICATE +
+            NOT_DIRECT_PREDICATE +
             (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
         List<CandidateTurn> rows = meOnly
-                ? jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    turnId, userId)
-                : jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    turnId);
+                ? jdbc.query(sql, CANDIDATE_MAPPER, turnId, userId)
+                : jdbc.query(sql, CANDIDATE_MAPPER, turnId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -491,6 +577,19 @@ public class QuestionReuseRepository {
         }
     }
 
+    /**
+     * 추천·재사용 후보 한 건. 뒤의 셋({@code responseMode}·{@code directMode}·{@code selectedTags})은
+     * 그 답변이 만들어진 모양이다({@link #ANSWER_SHAPE_COLUMNS}) — 재사용 턴을 저장할 때 원본에서
+     * 그대로 복사해, 재사용한 답변의 두 글자 표기·이력 렌더·좋아요 프리필의 태그 스코프가 원본과
+     * 같아지게 한다.
+     */
     public record CandidateTurn(long turnId, String userId, String threadId,
-                                String question, String answer, String createdAt) {}
+                                String question, String answer, String createdAt,
+                                String responseMode, boolean directMode, String selectedTags) {
+        /** 답변 모양을 모르는 후보 — 옛 행과 같은 기본값(모드 미상 → N, RAG, 태그 없음). 테스트 편의용. */
+        public CandidateTurn(long turnId, String userId, String threadId,
+                             String question, String answer, String createdAt) {
+            this(turnId, userId, threadId, question, answer, createdAt, null, false, "");
+        }
+    }
 }

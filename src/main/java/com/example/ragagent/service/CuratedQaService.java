@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.ingestion.ChunkSplitter;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
@@ -16,6 +17,8 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -144,8 +147,8 @@ public class CuratedQaService {
         repository.deactivate(turnId);
         long curatedId = existing.get().id();
         int chunks = existing.get().chunkCount();
-        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() ->
-                deleteVectors(curatedId, chunks));
+        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() ->
+                deleteVectors(curatedId, chunks)));
     }
 
     /**
@@ -198,7 +201,7 @@ public class CuratedQaService {
         // 여기서 vectorStore 를 직접 부르던 동안 FTS 행이 남아, 대화를 지워도 그 항목이 BM25
         // 축에서 계속 근거로 붙었다.
         Thread.ofVirtual().name("curated-deindex-thread-" + threadId)
-                .start(() -> deindex(vectorIds, "threadId=" + threadId));
+                .start(MdcPropagation.wrap(() -> deindex(vectorIds, "threadId=" + threadId)));
         log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
                 threadId, rows.size(), vectorIds.size());
         return rows.size();
@@ -254,8 +257,8 @@ public class CuratedQaService {
         if (hasQuestion)   repository.updateQuestion(curatedId, newQuestion.strip());
         if (hasAnswer)     repository.updateAnswer(curatedId, newAnswer);
         if (hasEnrichment) repository.updateEnrichment(curatedId, newSummary, newKeywords);
-        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
-                embedActiveRow(curatedId, "edit"));
+        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(MdcPropagation.wrap(() ->
+                embedActiveRow(curatedId, "edit")));
         return true;
     }
 
@@ -267,7 +270,8 @@ public class CuratedQaService {
      *
      * <p>{@code title} lands in the {@code question} column on purpose — {@code defaultSearchText()}
      * embeds {@code question + answer}, so a descriptive title is what makes a manually written
-     * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
+     * chunk retrievable by a question-shaped query at all. Returns one curated row id per chunk the
+     * body was split into (see {@link #splitForEmbedding}).
      */
     public List<Long> createFromSubmission(long submissionId, String authorUserId, String title,
                                            List<String> bodyChunks, String tags,
@@ -283,8 +287,8 @@ public class CuratedQaService {
                     summary, keywords));
         }
         for (long curatedId : curatedIds) {
-            Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
-                    embedActiveRow(curatedId, "submission"));
+            Thread.ofVirtual().name("curated-embed-" + curatedId).start(MdcPropagation.wrap(() ->
+                    embedActiveRow(curatedId, "submission")));
         }
         return List.copyOf(curatedIds);
     }
@@ -314,8 +318,8 @@ public class CuratedQaService {
                 .orElse(null);
         long curatedId = repository.upsertActive(turnId, userId, threadId, title, body, version,
                 tags, submissionId, summary, keywords);
-        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
-                embedActiveRow(curatedId, "submission-like"));
+        Thread.ofVirtual().name("curated-embed-" + curatedId).start(MdcPropagation.wrap(() ->
+                embedActiveRow(curatedId, "submission-like")));
         return curatedId;
     }
 
@@ -332,7 +336,7 @@ public class CuratedQaService {
             repository.deactivateById(row.id());
             long curatedId = row.id();
             int chunks = row.chunkCount();
-            Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVectors(curatedId, chunks));
+            Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() -> deleteVectors(curatedId, chunks)));
         }
         if (!rows.isEmpty()) {
             log.info("[CURATED] 제안 {}의 청크 {}건 회수", submissionId, rows.size());
@@ -360,7 +364,7 @@ public class CuratedQaService {
         // WHERE source_turn_id = ? can ever match.
         repository.deactivateById(curatedId);
         int chunks = rowOpt.get().chunkCount();
-        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVectors(curatedId, chunks));
+        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(MdcPropagation.wrap(() -> deleteVectors(curatedId, chunks)));
         return true;
     }
 
@@ -381,8 +385,9 @@ public class CuratedQaService {
 
     /**
      * Embeds an already-active row and records the outcome in {@code embed_status} — used by both
-     * the owner/admin edit path and the submission-approval path. No like-state re-check (unlike
-     * {@link #embed}): both callers are explicit save/approve actions that can't race an unlike.
+     * the owner/admin edit path and the submission-approval path. No feedback re-check: both callers
+     * are explicit save/approve actions, and since §10.11 a curated row's existence is decoupled from
+     * the originating turn's 좋아요 anyway, so there is no unlike left to race.
      */
     private boolean embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
@@ -585,11 +590,12 @@ public class CuratedQaService {
      */
     private Document buildDocument(CuratedQa row, int chunkIndex, String storedText, String searchText) {
         Map<String, Object> meta = new HashMap<>();
-        meta.put(MetaKey.DOC_ID, "curated:" + row.id());
+        meta.put(MetaKey.DOC_ID, curatedDocId(row.id()));
         meta.put(MetaKey.FILENAME, "curated_qa");
         meta.put(MetaKey.VERSION, CURATED_VERSION);
         meta.put(MetaKey.DOC_TYPE, "curated_qa");
-        // 검색 시 좋아요 큐레이션과 지식 제안을 서로 다른 가중치의 RRF 축으로 나누기 위한 표식.
+        // 이 행이 좋아요 출신 제안인지 직접 작성 제안인지 — 감사·통계용 표식이다. §10.11 이후
+        // 검색은 이 값으로 갈리지 않는다(큐레이션은 가중치 하나짜리 축 하나다 — RetrievalService).
         // DOC_TYPE 을 갈라 쓰지 않는 이유: 출처 라벨("💬 큐레이션 Q&A")과 태그 면제 판정이 모두
         // DOC_TYPE="curated_qa" 를 보고 있어, 그쪽을 바꾸면 둘 다 조용히 깨진다.
         meta.put(MetaKey.CURATED_ORIGIN,
@@ -659,6 +665,84 @@ public class CuratedQaService {
             keywordRepo.indexChunks(docs.stream().map(d -> ftsDocument(d, row.summary())).toList());
         } catch (Exception e) {
             log.warn("[CURATED] FTS index failed curatedId={}: {}", row.id(), e.getMessage());
+        }
+    }
+
+    /**
+     * 이 축의 {@code doc_id} 형식 — {@code curated:{행 번호}}. 쓰는 곳과 읽는 곳이 갈리면
+     * 접두사 하나 바꾸는 것이 조용한 사고가 되므로 형식은 여기 한 쌍에만 둔다
+     * ({@code CuratedImageStore.markerPaths()} 와 같은 이유로 static 이다 — 읽는 쪽이
+     * 이 서비스에 의존할 필요가 없다).
+     */
+    public static String curatedDocId(long rowId) {
+        return DOC_ID_PREFIX + rowId;
+    }
+
+    /** {@link #curatedDocId} 의 역방향. 형식이 아니면 빈 값 — 추측해서 숫자를 만들지 않는다. */
+    public static java.util.OptionalLong rowIdOf(String docId) {
+        if (docId == null || !docId.startsWith(DOC_ID_PREFIX)) return java.util.OptionalLong.empty();
+        try {
+            return java.util.OptionalLong.of(Long.parseLong(docId.substring(DOC_ID_PREFIX.length())));
+        } catch (NumberFormatException e) {
+            return java.util.OptionalLong.empty();
+        }
+    }
+
+    private static final String DOC_ID_PREFIX = "curated:";
+
+    /**
+     * 기동 시 <b>유령 FTS 행</b>을 쓸어낸다 — 이 축에서 내려간 항목인데 {@code chunk_fts} 행만
+     * 남아 있는 경우.
+     *
+     * <p><b>왜 필요한가.</b> 벡터와 FTS 삭제는 {@link #deindex} 안에서 <b>각자의 try/catch</b> 를
+     * 갖는다(한쪽이 실패해도 나머지는 진행한다 — 그 편이 회수를 통째로 포기하는 것보다 낫다).
+     * 그래서 "벡터는 지워졌는데 FTS 는 남은" 상태가 설계상 도달 가능하고, 실제로 그렇게 남은 행이
+     * 관찰됐다: 철회된 지식 제안의 청크가 채팅 답변에 계속 인용됐다. {@code RetrievalService}
+     * 의 큐레이션 BM25 절반이 그 행을 그대로 집어 오고 {@code markCurated()} 가 출처 라벨까지
+     * 붙여 주기 때문에, <b>내려간 지식이 멀쩡한 항목처럼 보인다</b>.
+     *
+     * <p><b>판정은 행 단위다</b>({@code chunk_count} 를 보지 않는다). 활성 행이 하나라도 소유한
+     * id 는 건드리지 않고, <b>활성 행이 아예 없는</b> 행 번호의 것만 지운다 — {@code chunk_count}
+     * 가 낡아 있으면 id 집합 비교는 살아 있는 청크의 키워드 축을 지울 수 있는데, 그 위험을 지지
+     * 않기 위해서다(개수 드리프트는 {@code pruneStaleVectors} 의 일이다).
+     *
+     * <p>FTS 를 못 쓰는 빌드에서는 목록이 비어 no-op 이고, 실패해도 기동을 막지 않는다.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void sweepOrphanFtsRows() {
+        try {
+            List<String> inFts = keywordRepo.springDocIdsForVersion(CURATED_VERSION);
+            if (inFts.isEmpty()) return;
+
+            Set<Long> active = repository.activeIds();
+            List<String> orphans = inFts.stream()
+                    .filter(id -> {
+                        java.util.OptionalLong row = rowIdOfSpringDocId(id);
+                        return row.isEmpty() || !active.contains(row.getAsLong());
+                    })
+                    .toList();
+            if (orphans.isEmpty()) return;
+
+            keywordRepo.deleteBySpringDocIds(orphans);
+            log.warn("[CURATED] 유령 FTS 행 {}건 제거 — 내려간 항목이 키워드 축에 남아 답변 근거로 "
+                     + "붙고 있었다: {}", orphans.size(), orphans);
+        } catch (Exception e) {
+            log.warn("[CURATED] 유령 FTS 행 청소 실패 (무시하고 계속): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * {@link #springDocId} 의 역방향 — {@code curated-2} · {@code curated-2-1} → {@code 2}.
+     * 형식이 아니면 빈 값이고, 그런 행은 이 축의 것이 아니므로 유령으로 본다.
+     */
+    private static java.util.OptionalLong rowIdOfSpringDocId(String springDocId) {
+        if (springDocId == null || !springDocId.startsWith("curated-")) return java.util.OptionalLong.empty();
+        String rest = springDocId.substring("curated-".length());
+        int dash = rest.indexOf('-');
+        try {
+            return java.util.OptionalLong.of(Long.parseLong(dash < 0 ? rest : rest.substring(0, dash)));
+        } catch (NumberFormatException e) {
+            return java.util.OptionalLong.empty();
         }
     }
 

@@ -37,8 +37,10 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    /* 지금 보내는 메시지라 사실상 늘 시:분만 나오지만, 표기 규칙은 복원된 turn 과 한 곳
+       (base.html 의 formatBubbleTime)에서 나와야 같은 대화의 버블이 서로 다른 형식을 달지 않는다. */
     function nowTimeStr() {
-        return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+        return formatBubbleTime(new Date());
     }
 
     function stripImagePreviewFromSourceMarkdown(raw) {
@@ -120,7 +122,7 @@
 
     // ── DOM builders ─────────────────────────────────────────────────────────
 
-    function appendUserBubble(question, responseMode, directMode) {
+    function appendUserBubble(question, responseMode, directMode, bubbleId) {
         const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
         // .user-turn + data-question: chat.html's question navigation (the floating
@@ -129,6 +131,10 @@
         // without the other and freshly sent questions drop out of the list.
         wrap.className = 'd-flex justify-content-end mb-3 align-items-end user-turn';
         wrap.dataset.question = question;
+        // The turn id does not exist yet (the turn is saved when the stream ends); onDone()
+        // finds this bubble by id and stamps data-turn-id then — the key chat.html's question
+        // suggestions use to jump to an earlier question in this conversation.
+        if (bubbleId) wrap.id = `user-turn-${bubbleId}`;
         // 질문 앞의 [RN]/[DS] 표기(앞이 검색 축, 뒤가 답변의 성격). data-question 에는 넣지 않는다 —
         // 그 값은 질문 '원본'이고, 질문 내비게이션이 표기를 붙이는 일은 data-response-mode 를 보고
         // 스스로 한다. 규칙은 base.html 의 bubbleModeLabel() 하나뿐이다.
@@ -659,6 +665,10 @@
         scrollToBottom();
 
         if (data.turnId) {
+            // 질문 버블에도 턴 id — 서버 렌더 경로의 .user-turn[data-turn-id] 와 같은 표식
+            // (chat.html 의 findThreadQuestionTurn 이 읽는다).
+            const userTurn = document.getElementById(`user-turn-${bubbleId}`);
+            if (userTurn) userTurn.dataset.turnId = String(data.turnId);
             document.querySelectorAll(`#stream-images-${bubbleId} .chat-image-thumb`)
                 .forEach(el => { el.dataset.turnId = String(data.turnId); });
             /* 출처 배지에도 같은 턴 id를 심는다 — 원문 보기 모달의 "현재 대화에서 이 청크 제거"가
@@ -704,7 +714,7 @@
     async function submitStream(formData, question) {
         const bubbleId = genId();
 
-        appendUserBubble(question, formData.get('responseMode'), formData.get('directMode'));
+        appendUserBubble(question, formData.get('responseMode'), formData.get('directMode'), bubbleId);
         appendStreamingBubble(bubbleId);
         scrollToBottom(true);   // user just sent — re-anchor to bottom
 
@@ -825,7 +835,7 @@
             const question   = questionEl ? questionEl.value.trim() : '';
             if (!question) return;
 
-            // Defensive sync: capture the currently checked S/M/L radio into the hidden field
+            // Defensive sync: capture the currently checked S/N/C radio into the hidden field
             // right before FormData is built. This avoids stale hidden values when users
             // quickly switch mode and submit in one interaction.
             const selectedMode = document.querySelector('input[name="response-mode-radio"]:checked');

@@ -60,8 +60,9 @@ public class ChunkReportService {
      */
     public record ReportResult(boolean created, long id) {}
 
-    /** 관리자 상세 — 한 청크에 달린 신고 전부 + 그 청크의 현재 상태. */
     /**
+     * 관리자 상세 — 한 청크에 달린 신고 전부 + 그 청크의 현재 상태.
+     *
      * @param newestSnapshot 가장 최근 신고가 붙잡은 원문. 비교의 기준이고, 화면이 신고 목록을
      *                       뒤에서부터 인덱싱해 꺼내지 않도록 여기서 골라 준다
      * @param diff           {@code newestSnapshot} 대 {@code currentContent}. 한쪽이라도 없으면
@@ -171,6 +172,16 @@ public class ChunkReportService {
     }
 
     // ── 관리자 조회 ─────────────────────────────────────────────────────
+
+    /**
+     * 이 청크가 <b>어디에 사는가</b>(문서·버전·파일명 + 지금 저장된 텍스트). 신고와 무관한 질문
+     * 이지만 그 답을 아는 SQL 이 이 저장소에 하나뿐이라 여기로 낸다 — 채팅의 「청크 수정」이
+     * {@code /admin} 으로 보낼 때 컬렉션과 큐레이션 여부를 정하는 데 쓴다
+     * ({@code AdminController.adminPage}). 벡터 스토어를 건드리지 않는다.
+     */
+    public Optional<ChunkLocation> locate(String chunkId) {
+        return repository.findChunkLocation(chunkId);
+    }
 
     /** 대기열 — 열린 신고를 청크로 묶은 목록(최근 신고순). */
     public List<Group> openGroups(int offset, int limit) {

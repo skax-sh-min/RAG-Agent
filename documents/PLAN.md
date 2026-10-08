@@ -1,7 +1,7 @@
 # RAG-Agent 온라인 확장 개발 계획
 
 > Java 개발자 관점 · Spring Boot 3.5 + Spring AI 1.1 + Java 21 · 작성일 2026-05-11  
-> **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. `documents/refactoring/18-extension-roadmap.md`는 각 항목의 기술 레퍼런스.
+> **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. 살아 있는 동작 명세는 코드와 [CLAUDE.md](../CLAUDE.md), 결정 근거·실패 기록은 [PITFALLS.md](PITFALLS.md).
 
 ---
 
@@ -15,6 +15,8 @@
 
 ### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.16.2·6.19.1·6.20 제외)
 
+> **2026-09-22 추가 완료**: **§6.28 로컬 LLM 장애 가시성**(`GET /api/v1/llm/ping` 3단계 생사 확인 · 헤더 `차단 중 Ns` · 연속 3회 실패 문구 전환 · 사전 future 의 `CompletionException` 풀기 · traceId 를 워커·future·인덱싱 중첩 실행기까지 전파) · **§10.15 질문 추천 개선**(Direct 제외 · 재사용 턴의 모양 복사 · 활성 출처 사전 필터 + 10분 부정 캐시 · 내용어 AND 매칭 · 상한 20) · 코드 블록 이중 축소 제거
+>
 > **2026-09-07 추가 완료**: **§6.19.4 폐쇄망 배포 실사 하드닝**(CORS 와일드카드 제거 · REST 문서 쓰기 게이트 · full-auth 문서 RBAC + `/setup` 부트스트랩 · 공유 게스트 레이트리밋 키 · 게스트 이미지 업로드 버킷·주기 정리 · 감사 IP·trace id·세션 위생 · 비-root 컨테이너) · **성능/기능 4건**: `chunk_fts` 를 청크 id 로 찾던 **코퍼스 전체 스캔 제거**(동반 키 테이블 `chunk_fts_key` — 대화 열기·턴 저장·재사용 검증·원문 보기·신고가 전부 여기 걸려 있었고, 같은 커밋에서 Chroma 배포의 `vec_document_chunks` 조인 실패도 함께 해결) · 재사용 답변이 새 대화의 첫 메시지일 때 `thread_meta` 미생성으로 **대화가 사라지던 버그** · PPTX 도형 래스터라이즈 픽셀 상한(슬라이드 밖 앵커 하나가 수 GB 할당) · 관리자 청크 편집의 메타데이터 병합(임의 키 주입 차단 + Chroma 경로 메타데이터 유실 수정) · **큐레이션 축의 요약·키워드와 BM25 색인**: 승인된 지식 제안이 `/admin` 청크 화면에서 그 두 칸이 늘 비어 있던 것을 "화면을 채우는" 쪽으로 고치지 않고 **읽는 경로를 먼저 만들었다** — 큐레이션 청크를 `chunk_fts` 에 색인하고, `RetrievalService.curatedAxis()` 가 예약 네임스페이스로 BM25 를 한 번 더 물어 **자기 축 안에서** 벡터 결과와 합친다(키워드 축으로 보내면 두 가중치를 동시에 받아 이중 가산). 그 위에 지식 제안 폼의 요약·키워드 입력란과 "빈 칸 자동 생성"(LLM 1회, 채워진 칸은 서버가 지킨다)을 얹었다. 곁에서 나온 버그 하나 — `/admin` 청크 재인덱싱이 큐레이션 청크를 문서 청크 규칙으로 태워 **제목이 빠진 채 재임베딩**하고 있었다(`CuratedQaService.reembedRow()` 로 분기).
 >
 > **2026-09-03 추가 완료**: **§10.13 Direct 턴의 이력 확대**(문서 자리가 비면 그만큼 이력에 돌려준다 — DN 답변의 `## 요약` 유도 · 두 이력 경로의 규칙 통일 · Direct 경로의 예산 안전망) · **§10.12 짧은 후속 질문의 독립화**(재작성 한 번이 검색 축 셋 + 분류기를 함께 고친다 — LLM 호출 순증 0, 재료를 이전 '질문'으로 좁혀 열린 항목 (b) 해소).
@@ -71,13 +73,13 @@
 1. [요약 (Executive Summary)](#1-요약-executive-summary)
 2. [현재 구조 분석](#2-현재-구조-분석)
 3. [핵심 기술 의사결정](#3-핵심-기술-의사결정)
-4. [Phase 1 — 보안 기반 구축](#4-phase-1--보안-기반-구축-2주)
-5. [Phase 2 — 모바일 UI](#5-phase-2--모바일-ui-개선-12주)
-6. [Phase 3 — 운영 견고화](#6-phase-3--운영-견고화-1주)
-7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부)
-8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동)
-9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원)
-10. [Phase 7 — 검색 품질·성능 고도화](#10-phase-7--검색-품질성능-고도화)
+4. [Phase 1 — 보안 기반 구축](#4-phase-1--보안-기반-구축--완료)
+5. [Phase 2 — 모바일 UI](#5-phase-2--모바일-ui-개선--완료)
+6. [Phase 3 — 운영 견고화](#6-phase-3--운영-견고화--일부-완료)
+7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부--미착수)
+8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동--완료--확장-계획)
+9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원--g1g5-완료-sqlite-vec-라이브-부팅은-운영-인수)
+10. [Phase 7 — 검색 품질·성능 고도화](#10-phase-7--검색-품질성능-고도화--완료)
 11. [리스크 및 이슈](#11-리스크-및-이슈)
 12. [의존성 변경 사항](#12-의존성-변경-사항-pomxml)
 13. [DB 스키마 변경](#13-db-스키마-변경-요약)
@@ -99,7 +101,7 @@
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 (Step 5.1~5.10) |
 | Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
-| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 성능/메모리 최적화 제안(7-E) | 중요 | 🟡 7-A·7-B·7-C 완료, 7-E 제안 검토중 |
+| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 정확도 마무리·속도·메모리(7-E) · 큐레이션 Q&A·지식 제안·질의 독립화·청크 신고(§10.10~10.14) | 중요 | ✅ 완료 (7-D 만 범위 제외, §10.5) |
 
 ---
 
@@ -209,7 +211,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `data/audit/audit.log` — NDJSON 포맷 (jq 분석 가능)
 - 일별 로테이션 + 10MB 분할, gzip 압축, 7일 자동 삭제, 100MB 전체 상한
 - `application.properties`로 모든 파라미터 조정 가능, `app.audit.enabled=false`로 즉시 비활성
-- 이벤트 8개 기록: upload×2, delete×2, sync×2, routing-mode, thread-delete
+- 완료 당시 이벤트 8개(upload×2, delete×2, sync×2, routing-mode, thread-delete)로 시작해 이후 기능마다 늘었다 — 현재 목록의 단일 출처는 OPERATOR_MANUAL §3.3 「감사 로그」 표
 
 ### 6.5 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
@@ -225,7 +227,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.8 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
-Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다(`LIKE`는 저장만, 아직 미소비).
+Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다. `LIKE`는 완료 당시 저장만 했고, 이후 §10.10~10.11 에서 지식 제안 폼을 여는 신호로 소비된다(한때 Direct 턴의 재사용 자격으로도 읽었으나 근거 청크가 없어 검증을 통과한 적이 없는 규칙이라 2026-09-21 제거 — PITFALLS `QuestionReuseRepository.java`).
 
 ### 6.9 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
@@ -308,7 +310,7 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료
 
-라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 **전부 죽은 설정**이던 문제 — 하드코딩 4곳을 제거하고 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용)·`app.llm.max-tokens`로 전환. direct-temperature만 매 호출 재조회해 핫 수정(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입). 이후 §6.13 확장으로 세 temperature가 모두 핫이 됐고 max-tokens만 조회 전용으로 남았다(현행 clamp·소비처는 CLAUDE.md §6.13 항목 참조).
+라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 **전부 죽은 설정**이던 문제 — 하드코딩 4곳을 제거하고 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용)·`app.llm.max-tokens`로 전환. direct-temperature만 매 호출 재조회해 핫 수정(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입). 이후 §6.13 확장으로 세 temperature가 모두 핫이 됐고(§6.24 에서 creative-temperature 가 넷째로 추가), max-tokens 는 §6.26 A6 에서 마지막으로 핫 편집 대상이 됐다(현행 clamp·소비처는 CLAUDE.md §6.13 항목 참조).
 
 **동작 변경(주의)**: `MemoryService`·`MarkdownCorrectionService`가 읽던 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000)를 `props.llmSafe().maxTokens()`(6000)로 통일하면서 **대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자**로 기본값이 줄었다. 과거 분량을 유지하려면 `LLM_MAX_TOKENS`를 올려야 한다.
 
@@ -440,6 +442,28 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 - **조기 종료 미구현**: 같은 사유로 두 번 반려돼도 `max-retry-count` 까지 전부 소진한다. `evalReason` 비교 한 줄로 최악 비용의 1/3 을 품질 손실 없이 줄일 수 있다.
 - 효과 측정은 `[AgentGraph] retry #N ... detail=` 로그로 한다(도입 전후 "재시도 후 통과율"). 별도 지표는 만들지 않았다.
 - `EVAL_OVERHEAD_TOKENS`(1,500)는 측정이 아니라 허용치다. 정확히 재려면 모드별 시스템 프롬프트와 스키마 문자열을 `RetrievalService` 로 끌고 와야 하는데, 그 둘은 문서 하나 크기에도 못 미치면서 계산만 두 곳으로 갈라 놓는다. 과대 추정은 "늘리지 않음"으로 떨어져 안전한 방향이다.
+
+---
+
+### 6.28 로컬 LLM 장애 가시성 — 생사 핑 · 소진 문구 · traceId 전파 ✅ 완료 2026-09-22
+
+> **결정 근거와 틀렸던 지점** → [PITFALLS.md](PITFALLS.md#llmllmpingjava) · [연속 실패와 소진 문구](PITFALLS.md#llmcircuitbreakerjava--연속-실패와-소진-문구) · [MdcPropagation](PITFALLS.md#webmdcpropagationjava)
+
+**문제.** 2026-09-21 로컬 LLM 의 GPU 가 소실됐다(`decode() failed: vk::Queue::submit: ErrorDeviceLost`). 서버 프로세스와 `/v1/models` 는 멀쩡했고 모델은 "로드됨"이었으며 엔진만 죽었는데, 앱은 그것을 알 방법이 없었다 — 사용자는 5초 차단마다 "4초 후 다시 시도"(거짓)를, 그것도 사전 분류 future 의 `CompletionException` 이 전용 catch 를 지나쳐 **클래스 이름이 붙은 raw 문구**로 받았고, 로그는 모든 줄이 `[-]` 라 한 사고를 trace id 로 묶을 수 없었다.
+
+**구현 결과.** `LlmPing`(`GET /api/v1/llm/ping`, 200/503 — 닿는가 / 로드됐는가 / `deep=true` 1토큰 추론이 되는가를 따로 답한다, 라우터·브레이커 우회) · `/api/v1/llm/concurrency` 의 `blockedSeconds` 와 헤더의 `LLM: 차단 중 Ns` · `CircuitBreaker` 의 연속 실패 횟수 + `LlmProviderExhaustedException.consecutiveFailures` + 3회부터 "서버(모델) 상태를 확인하라"(`LlmOutageMessages`, 한/영) · `AsyncExceptions.unwrap` · `MdcPropagation`(채팅 워커·사전 future·검색 축·Vision·인덱싱 워커와 그 안의 중첩 실행기 전부) + `TraceIdFilter` 의 ASYNC 재디스패치.
+
+**앞으로도 지켜야 할 결정**
+
+- **"살아 있는가"는 세 답이다** — `/v1/models`·`/health` 로는 엔진 사망을 구분할 수 없고, 1토큰 추론만이 가른다. 핑은 진단이라 브레이커를 만지지 않는다.
+- **소진 문구는 예외 메시지가 아니라 예외가 나르는 사실(`repeated()`·`retryAfterSeconds()`)로 고른다** — 예외 메시지는 한국어 고정에 `(task=TEXT)` 꼬리가 붙는다. 연속 실패 횟수는 성공이 있어야만 0 이다(차단 만료로 지우면 죽은 서버가 매번 첫 실패처럼 보인다).
+- **future 로 LLM 을 부르는 자리는 `CompletionException` 을 풀어야 한다** — 안 풀면 예상된 장애가 ERROR + `RAG-INT-001` 이 된다.
+- **새로 실행기나 `Thread.ofVirtual()` 을 여는 자리는 `MdcPropagation` 으로 감싼다** — 감싸지 않은 한 곳의 줄만 `[-]` 로 남는다. `SseHeartbeat` 만 예외(스케줄러가 깨우므로 넘겨줄 MDC 가 없다).
+
+**남은 열린 항목**
+
+- 핑은 요청이 있어야 돈다 — 주기적 자가 점검(예: 표시기 폴링에 얕은 핑을 얹기)은 넣지 않았다. 브레이커 상태로 충분한지 운영에서 본 뒤 결정.
+- 연속 실패 문턱(3)은 상수다(`LlmProviderExhaustedException.REPEATED_FAILURE_THRESHOLD`). 프로퍼티로 뺄 이유가 생기기 전까지는 그대로.
 
 ---
 
@@ -844,6 +868,27 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 - **(b) 신고를 검색 품질 지표로 쓸 것인가** — §10.7.5 골든셋과 연결하면 "사람이 표시한 오답 청크"라는 라벨이 생긴다.
 - **(c) 개별 신고 반려** — 지금은 조치가 그룹 단위다. 한 청크의 신고 3건 중 하나만 틀린 지적인 경우가 반복되면 행 단위 반려를 얹을지 판단한다(그때도 기본 동선은 그룹이어야 한다).
 - ~~(d) 신고자에게 처리 결과 알림~~ — **범위 제외**(설계 결정 ⑩).
+
+---
+
+### 10.15 질문 추천 개선 — Direct 제외 · 모양 복사 · 사전 필터 · 부정 캐시 · 내용어 매칭 ✅ 완료 (2026-09-21)
+
+> **결정 근거와 틀렸던 지점** → [PITFALLS.md](PITFALLS.md#servicequestionreuseservicejava) · [QuestionKeywords](PITFALLS.md#servicequestionkeywordsjava) · [QuestionReuseRepository](PITFALLS.md#repositoryquestionreuserepositoryjava)
+
+**무엇을 왜.** §6.23 의 추천·재사용에 남아 있던 헛클릭과 낭비를 걷어냈다. ① 재사용 턴이 자리표시자(`'M'`·direct 0·빈 태그)로 저장돼 표기·프리필·이력 렌더가 원본과 어긋났다 → 원본 턴의 모양을 복사. ② 좋아요한 Direct 턴이 후보에 올랐지만 근거 청크가 없어 검증을 통과한 적이 없었다 → Direct 는 후보에서 제외(좋아요는 지식 제안 신호일 뿐). ③ 검증에 떨어질 것이 확정된 행이 `LIMIT` 창을 차지하고 키 입력마다 행당 쿼리 둘로 재확인됐다 → 활성 출처가 없는 턴은 SQL 이 미리 빼고(`HAS_ACTIVE_SOURCE_PREDICATE`), 해시 대조에서만 드러나는 실패는 10분 부정 캐시. ④ 입력 문장 통째 부분 일치라 어순·조사가 조금만 달라도 못 찾았다 → `QuestionKeywords` 가 의문·기능어·조사·어미를 걷어낸 내용어(최대 6개)를 뽑고 전부(AND) 부분 일치. 상한 12 → 20.
+
+**앞으로도 지켜야 할 결정**
+
+- **접미사 절단은 언제나 접두사를 남긴다** — 부분 일치에서 접두사는 재현율을 깎지 않는다. 한 글자 조사는 2음절 어간이 남을 때만(`경로·결과·추가·정의` 보호), 어미 뒤에 한 음절만 남으면 토큰을 버린다(AND 에서 노이즈 키워드는 후보를 떨어뜨린다).
+- **부정 캐시는 TTL 이지 영구 표시가 아니다** — 큐레이션 청크 id 는 결정적이라 재승인이면 같은 해시가 돌아온다. 영구 표시는 통지 경로의 몫.
+- **사전 필터는 `validateTurn()` 보다 엄격하지 않아야 하고 재사용 조회에는 걸지 않는다** — 클릭 시 사유 문구는 검증이 낸다.
+- **범위는 `shared` 고정이며 HTTP 로 받지 않는다**(2026-09-23 보강) — `suggest`/`reuse` 가 `scope` 파라미터를 선언해 놓고 값을 읽지 않아 `?scope=me` 가 동작한다고 믿게 했다. 받되 읽지 않는 손잡이는 없느니만 못하다. "내 질문만"이 성립하려면 화면 토글과 함께 기본 배포(`guest-identity=shared`)의 공유 게스트 id 부터 풀어야 한다 — 방문자 전원이 같은 `user_id` 라 그 필터가 아무것도 걸러내지 못한다. 출처 구분은 필터가 아니라 항목마다 붙는 `origin` 이 한다.
+
+**남은 열린 항목**
+
+- AND 매칭이라 키워드 하나가 저장 질문에 없으면 못 찾는다(용언 활용 `바꾸`↔`변경`, 동의어). "3개 이상이면 하나까지 빠져도 허용" 같은 완화는 실사용 관찰 뒤.
+- 불용어·조사·어미 목록은 `QuestionKeywords` 상수 하나다 — 빠지거나 과한 단어는 거기서만 고친다.
+- 서비스·리포지토리의 `Scope.ME`/`meOnly` 축은 위 결정으로 도달 불가가 됐다(`Suggestion.scope` 도 항상 `"shared"` 이고 읽는 곳이 없다). 걷어내려면 enum · 서비스 2 · 리포지토리 2 시그니처와 SQL 분기 · 응답 필드 · 테스트가 함께 움직이므로, 되살릴 계획이 없다고 판단될 때 한 번에.
 
 ---
 

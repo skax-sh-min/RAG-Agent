@@ -533,9 +533,9 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
      *  creative generation is impossible on it. Paired with it is creative-mode-enabled, the on/off
      *  switch for that mode as a whole ({@link #effectiveResponseMode}) — the two sit together, the
-     *  knob first and the switch that makes it moot right after it. max-tokens sits in the LLM
-     *  providers card footer as read-only (baked into the provider beans at startup — restart to
-     *  change). */
+     *  knob first and the switch that makes it moot right after it. max-tokens is hot here too
+     *  (§6.26 A6); only each provider bean's defaultOptions still needs a restart, and that is just
+     *  the fallback for callers that attach no options of their own. */
     private List<SettingItem> llmHotItems() {
         List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
@@ -548,9 +548,9 @@ public class SettingsService implements AppProperties.OverrideSource {
      *
      * <p>{@code max-tokens} 한 줄만 보여주는 것으로는 지금 무슨 값이 적용 중인지 알 수 없다.
      * 모드 예산은 비율분과 글자수 바닥 중 <b>큰 쪽</b>을 취하되 설정 상한에서 잘리므로, 같은
-     * {@code max-tokens} 변경이 모드마다 다른 폭으로 움직인다 — 실사용 12,000에서는 세 항 모두
-     * 바닥이 이기고 16,000에서는 모두 비율이 이긴다(전환점 S 13,334 / N 12,501). 어느 구간에
-     * 있는지를 값 옆에 함께 적어 그 혼란을 없앤다.
+     * {@code max-tokens} 변경이 모드마다 다른 폭으로 움직인다 — 전환점이 모드마다 다르기 때문이다
+     * (S 는 0.15·2,000 이라 13,334, N/C 는 0.70·5,000 이라 7,143). 기본 10,000 에서는 S 만 바닥이
+     * 이기고 N/C 는 이미 비율이 이긴다. 어느 구간에 있는지를 값 옆에 함께 적어 그 혼란을 없앤다.
      *
      * <p>{@link ResponseMode#values()}를 돌므로 모드가 늘면 행도 저절로 늘어난다. 다만 라벨은
      * 메시지 키라 번들에 한 줄이 필요하고, 그 누락은 화면에 {@code ??key??}로만 드러나므로
@@ -658,9 +658,9 @@ public class SettingsService implements AppProperties.OverrideSource {
     /**
      * §6.15 저장 상한 — 조회 전용 2행: 지금 쓰고 있는 양과 상한.
      *
-     * <p>편집 가능하게 만들지 않은 이유는 {@code max-tokens} 와 같다 — 여기서 고쳐도 다음 호출부터
-     * 적용되는 종류의 값이 아니라 배포 정책이고, 무엇보다 {@code Spec} 의 수치 종류가 {@code int}
-     * 라 GB 단위(20GB = 2.1e10)를 담지 못한다. 대신 <b>사용량</b>을 함께 보여준다: 상한만 적혀
+     * <p>편집 가능하게 만들지 않은 이유는 두 가지다 — 다음 호출부터 적용되는 종류의 값이 아니라
+     * 배포 정책이고, 무엇보다 {@code Spec} 의 수치 종류가 {@code int} 라 GB 단위(20GB = 2.1e10)를
+     * 담지 못한다. 대신 <b>사용량</b>을 함께 보여준다: 상한만 적혀
      * 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이다.
      */
     private List<SettingItem> storageItems() {

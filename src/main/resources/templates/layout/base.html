@@ -124,7 +124,7 @@
             <!-- LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — hidden until the
                  first poll confirms such a provider exists; refreshed every ~3s (script below).
                  Bootstrap Tooltip (not native title) for the same fast-appearance reason as the
-                 S/M/L response-mode buttons in chat.html — see that file's tooltip init comment. -->
+                 S/N/C response-mode buttons in chat.html — see that file's tooltip init comment. -->
             <span id="llm-concurrency" class="small text-secondary d-none"
                   data-bs-toggle="tooltip" th:title="#{nav.llm.tooltip}">
                 <span th:text="#{nav.llm.label}">LLM</span>: <span id="llm-concurrency-value">0/0</span>
@@ -245,6 +245,8 @@ const I18N = {
     cancelBtnLabel:  /*[[#{doc.btn.cancel}]]*/ 'Cancel',
     llmStatusNormal:     /*[[#{llm.status.normal}]]*/ 'Normal',
     llmStatusBlocked:    /*[[#{llm.status.blocked}]]*/ 'Blocked',
+    llmTooltip:          /*[[#{nav.llm.tooltip}]]*/ 'Local LLM concurrency only (external API providers not included)',
+    llmBlockedTooltip:   /*[[#{nav.llm.tooltip.blocked}]]*/ 'Local LLM failed to respond - retrying in {0}s. Check GET /api/v1/llm/ping',
     llmTableTotal:       /*[[#{llm.table.total}]]*/ 'Total',
     llmNoProviders:      /*[[#{llm.no.providers}]]*/ 'No providers configured.'
 };
@@ -389,19 +391,36 @@ const I18N = {
        Hidden whenever no such provider is available (never shown as a stale/meaningless 0/0).
        inUse already folds in embedding activity + fully-counts circuit-broken providers and is
        clamped to capacity server-side (OperationsController.getLlmConcurrency), so inUse ===
-       capacity here reliably means "fully saturated" — styled bold red as a busy/backpressure cue. */
+       capacity here reliably means "fully saturated" — styled bold red as a busy/backpressure cue.
+       blockedSeconds > 0 means the circuit breaker is holding the provider after a failure: shown
+       as "차단 중 4s" instead of "3/3", because "busy" and "the server just failed, waiting to
+       retry" call for different reactions (the tooltip then points at GET /api/v1/llm/ping). */
     (function () {
         const wrap  = document.getElementById('llm-concurrency');
         const value = document.getElementById('llm-concurrency-value');
+        let tooltipText = null;
+        function setTooltip(text) {
+            if (text === tooltipText) return;
+            tooltipText = text;
+            const tip = bootstrap.Tooltip.getInstance(wrap);
+            if (tip) tip.setContent({ '.tooltip-inner': text });
+        }
         function refreshLlmConcurrency() {
             fetch('/api/v1/llm/concurrency')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then(d => {
                     if (d.available) {
-                        value.textContent = d.inUse + '/' + d.capacity;
-                        const saturated = d.inUse >= d.capacity;
-                        value.classList.toggle('text-danger', saturated);
-                        value.classList.toggle('fw-bold', saturated);
+                        const blockedSeconds = d.blockedSeconds || 0;
+                        const blocked = blockedSeconds > 0;
+                        value.textContent = blocked
+                            ? I18N.llmStatusBlocked + ' ' + blockedSeconds + 's'
+                            : d.inUse + '/' + d.capacity;
+                        const alert = blocked || d.inUse >= d.capacity;
+                        value.classList.toggle('text-danger', alert);
+                        value.classList.toggle('fw-bold', alert);
+                        setTooltip(blocked
+                            ? I18N.llmBlockedTooltip.replace('{0}', blockedSeconds)
+                            : I18N.llmTooltip);
                         wrap.classList.remove('d-none');
                     } else {
                         wrap.classList.add('d-none');
@@ -411,7 +430,7 @@ const I18N = {
         }
         refreshLlmConcurrency();
         setInterval(refreshLlmConcurrency, 3000);
-        // Same fast-appearance rationale as chat.html's S/M/L tooltip init — native title's
+        // Same fast-appearance rationale as chat.html's response-mode tooltip init — native title's
         // ~1.5s browser default delay reads as unresponsive for a quick-glance header hint.
         new bootstrap.Tooltip(wrap, { delay: { show: 100, hide: 0 } });
     })();
@@ -460,6 +479,48 @@ const I18N = {
         const mode = responseMode || 'N';
         const direct = directMode === true || directMode === 'true';
         return (direct ? 'D' : 'R') + mode;
+    }
+
+    /*
+     * 채팅 버블의 시각 표기 — 오늘이면 시:분만, 아니면 그 앞에 날짜를 붙인다.
+     *
+     * 시:분만 찍던 동안 대화 하나가 여러 날에 걸치면 그 사실이 화면 어디에도 없었다. 이 앱의
+     * 대화는 사이드바에 남아 며칠 뒤 다시 열리는 것이 정상이라, 지난주 대화를 열어도 모든
+     * 버블이 오늘 것과 똑같이 보였다. 반대로 한자리에서 오간 대화에 같은 날짜를 줄마다
+     * 반복하면 그건 그것대로 잡음이라, 오늘이 아닐 때만 붙인다.
+     *
+     * 해가 바뀌면 연도까지 — 없으면 작년 9월 21일과 올해 9월 21일이 같은 문자열이 된다.
+     *
+     * 여기(base.html 전역)에 두는 이유는 bubbleModeLabel() 과 같다: 이 표기를 만드는 자리가
+     * 넷이고(복원된 turn 의 applyMsgTimes · 재사용 · HTMX 낙관적 버블 · 스트리밍) 파일이
+     * 갈라져 있어, 각자 복사하면 같은 대화의 버블끼리 다른 형식을 달게 된다. 질문 내비게이션
+     * 목록도 버블의 텍스트를 그대로 읽으므로(qnavTimeOf) 자동으로 따라온다.
+     *
+     * 로케일은 <html lang> 을 따른다 — 시:분은 hour12:false 라 어느 로케일이든 같은 모양이고,
+     * 새로 생긴 날짜 부분만 언어 전환기를 따라간다.
+     */
+    function formatBubbleTime(when) {
+        /* null/빈 문자열은 new Date() 에서 epoch(1970-01-01)라는 '유효한' 날짜가 되어 isNaN 을
+           빠져나간다 — 시각을 모르는 자리에 1970년을 찍느니 아무것도 찍지 않는다. */
+        if (when === null || when === undefined || when === '') return '';
+        const d = (when instanceof Date) ? when : new Date(when);
+        if (isNaN(d)) return '';
+        const lang = document.documentElement.lang || 'ko';
+        const time = d.toLocaleTimeString(lang, {hour: '2-digit', minute: '2-digit', hour12: false});
+        const now = new Date();
+        if (d.getFullYear() === now.getFullYear()
+            && d.getMonth() === now.getMonth()
+            && d.getDate() === now.getDate()) {
+            return time;
+        }
+        /* 날짜는 로케일 표기('2025년 9월 21일' / 'September 21, 2025') 대신 ISO 로 고정한다 —
+           시각과 한 줄에 붙여 놓으면 단위 글자가 섞인 표기는 어디까지가 날짜인지 읽기 어렵다.
+           구분자가 NBSP 두 개인 이유: HTML 은 연속 공백을 하나로 접으므로 일반 공백 두 개는
+           화면에서 한 칸이 되고(이 값은 textContent 와 innerHTML 양쪽으로 들어간다), NBSP 는
+           덤으로 날짜와 시각이 서로 다른 줄로 갈라지는 것도 막는다. */
+        const pad = function (n) { return String(n).padStart(2, '0'); };
+        const date = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        return date + '\u00A0\u00A0' + time;
     }
 
     const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
@@ -583,6 +644,56 @@ const I18N = {
         if (typeof hljs !== 'undefined') {
             container.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }
+    }
+
+    /* "빈 칸 자동 생성" — 본문에서 요약·키워드를 LLM 한 번으로 만든다.
+
+       **세 화면이 같은 함수를 쓴다**: 지식 제안 작성 폼 · 그 수정 오프캔버스 · /admin 의
+       큐레이션 Q&A 편집 패널. 셋 다 같은 두 칸을 편집하므로 규칙이 갈리면 한쪽만 고쳐진다
+       (요약/키워드 필드를 도입한 이유 자체가 그 두 칸의 단일 출처다). 그래서 여기 있다 —
+       예전에는 curated-submissions.html 안에 있었고, 관리자 패널은 그 버튼이 없어 **값이
+       비어 있는 옛 항목을 채울 방법이 관리자 쪽에 아예 없었다**.
+
+       "비어 있는 칸만 채운다"는 판정은 여기서 하지 않는다 — 현재 값을 그대로 보내고 서버가
+       정한다. 그래야 규칙의 출처가 하나다(CuratedSubmissionService.enrich). 엔드포인트를
+       관리자용으로 따로 만들지 않는 것도 같은 이유다: 저장이 없는 순수 텍스트 변환이라
+       두 벌이 될 이유가 없다. */
+    function wireEnrichButton(btnId, bodyId, summaryId, keywordsId, noteId) {
+        const btn = document.getElementById(btnId);
+        const body = document.getElementById(bodyId);
+        const summary = document.getElementById(summaryId);
+        const keywords = document.getElementById(keywordsId);
+        const note = noteId ? document.getElementById(noteId) : null;
+        if (!btn || !body || !summary || !keywords) return;
+
+        btn.addEventListener('click', () => {
+            const original = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중…';
+            if (note) note.textContent = '';
+            fetch('/curated/submissions/enrich', {
+                method: 'POST',
+                headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
+                body: JSON.stringify({
+                    body: body.value, summary: summary.value, keywords: keywords.value
+                })
+            })
+                .then(async r => {
+                    let d = {};
+                    try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+                    if (!r.ok) throw new Error(d.message || '');
+                    return d;
+                })
+                .then(d => {
+                    summary.value = d.summary || summary.value;
+                    keywords.value = d.keywords || keywords.value;
+                    if (note) {
+                        note.textContent = d.llmCalled ? '' : '두 칸이 이미 채워져 있어 그대로 두었습니다.';
+                    }
+                })
+                .catch(e => showToast(e.message || '자동 생성에 실패했습니다.', 'danger'))
+                .finally(() => { btn.disabled = false; btn.innerHTML = original; });
+        });
     }
 
     /* Global toast helper — called by child pages */

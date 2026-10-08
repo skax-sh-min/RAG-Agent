@@ -40,7 +40,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
-   - 6.7 [큐레이션 Q&A (좋아요 기반 지식 승격, §10.10)](#67-큐레이션-qa-공유-지식-축-1010--1011)
+   - 6.7 [큐레이션 Q&A (공유 지식 축, §10.10 · §10.11)](#67-큐레이션-qa-공유-지식-축-1010--1011)
    - 6.8 [문서 내보내기](#68-문서-내보내기)
    - 6.9 [지식 제안 게시판 (사용자 제안 → 관리자 임베딩)](#69-지식-제안-게시판-사용자-제안--관리자-임베딩)
    - 6.10 [청크 분할 전략 (크기 기준 병합 / 소제목 최대 분할)](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할)
@@ -110,8 +110,8 @@ rag_java/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
     │   ├── config/             # AppProperties, LlmConfig, WebConfig
-    │   ├── controller/         # ApiController (REST), WebController (HTMX), AdminController, GlobalExceptionHandler
-    │   ├── llm/                # LlmRouter, RoutingMode, CircuitBreaker
+    │   ├── controller/         # ChatController · DocumentController · OperationsController (REST + HTMX 혼재), AdminController, SettingsController, CuratedSubmissionController, ChunkReportController, AuthController, GlobalExceptionHandler
+    │   ├── llm/                # LlmRouter, RoutingMode, CircuitBreaker, 컨텍스트 창/예산(ContextWindowProbe·PromptBudget·TokenEstimator)
     │   ├── model/              # Java 21 레코드 (MetaKey 상수, ChatRequest/Response 등)
     │   ├── repository/         # SQLite CRUD (MemoryRepository, LlmUsageRepository 등)
     │   ├── security/           # FileTypeDetector (매직바이트), PromptInjectionGuard
@@ -189,7 +189,7 @@ copy .env.example .env
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
 | `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(미설정 시 내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 — 서버 `/v1/models` 의 id 를 그대로 적거나, **다른 모델과 겹치지 않는 그 일부**만 적어도 된다(예: LM Studio 가 `google/gemma-4-e4b` 로 보고하면 `gemma-4-e4b`; 대소문자 무시). G3 가 기동 시 서버의 전체 id 로 해석해 요청에 싣는다(INFO 로그 `is part of server model '…'; using the server's id`) |
 | `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). **텍스트 3종은 사다리라 `TEXT`는 채팅 답변뿐 아니라 `LIGHT_TEXT`·`MICRO_TEXT` 잡무까지 함께 받는다** — "채팅 전용으로 한정"하는 값이 아니다(§5.6 type 값 표). 이미지를 뺀 텍스트 전용 모델도 `BOTH`로 두는 것이 권장 — Vision 호출 1회만 실패한 뒤 기억되어 이후 이미지 작업에서 제외되고 텍스트 작업은 영향을 받지 않는다. 이미지 설명 자체를 끄려면 `IMAGE_DESCRIPTION_ENABLED=false`를 쓴다 |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
 | `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키. 로컬 엔드포인트는 키가 불필요 — 미설정 시 `no-key`가 치환되어 등록됨(`LOCAL_LLM_KEY`를 상속하지 않음). 모델명(`LOCAL_LLM_MODEL_2`)은 여전히 `LOCAL_LLM_MODEL`로 폴백 |
@@ -198,14 +198,14 @@ copy .env.example .env
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(`MICRO_TEXT`는 `local`이 흡수. 단 **대화 요약만은 흡수하지 않고 생략**되어 채팅이 원본 history 폴백으로 동작한다 — 부가 기능인 요약이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
-| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다 |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다(설정한 모델명이 그대로 실린다) |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
-| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 이름·모델·priority(5)가 동일한 gemma-4-31b 2대로, 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
+| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b-2, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 모델·role·priority(4)가 동일한 gemma-4-31b 2대로(이름은 `gemma-4-31b-1`/`-2` 로 **반드시 달라야** 한다 — 세마포어·서킷브레이커·토글이 이름을 키로 쓴다), 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
-| `GEMINI_MODEL` | — | provider별 상이 | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 미설정 시 각자의 기본값(`gemini-3.1-flash-lite`/`gemini-2.5-flash`) 사용. **주의**: 두 provider가 같은 변수를 참조하므로, 설정하면 둘 다 같은 모델이 되어 NORMAL 티어의 2모델 폴백이 하나로 합쳐진다 — 서로 다른 모델을 유지하려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 |
+| `GEMINI_MODEL` | — | `gemini-3.5-flash-lite` | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 두 provider는 **기본값까지 같은 모델**(`gemini-3.5-flash-lite`)을 서로 다른 키(`GEMINI_API_KEY1`/`2`)로 부르는 로드밸런싱 쌍이라(둘 다 priority 2), 이 변수 하나로 둘을 함께 바꾼다. 서로 다른 모델을 쓰려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 — 그러면 같은 priority 안에서 두 모델이 least-in-flight 로 번갈아 뽑힌다 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
@@ -238,8 +238,6 @@ copy .env.example .env
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
-
-> **검색이 0건이면 그 턴은 LLM 을 아예 부르지 않습니다.** 답변·검증 두 호출을 건너뛰고 `## 요약 / 문서에 관련 정보가 확인되지 않습니다.` 정형 응답을 그대로 내보냅니다(문구는 `chat.answer.no-documents` 메시지 키 — 번들에서 바꿀 수 있고 `## 요약` 헤더는 한/영 공통으로 두어야 합니다). 예전에는 문서 없는 프롬프트로 답변을 받아 검증이 당연히 미통과를 내고 재검색으로 되돌아가는 왕복을 `1 + MAX_RETRY_COUNT` 번 돌았습니다 — 결과가 정해져 있는 호출에 한 턴의 예산을 전부 태우고 끝에 미검증 배지가 붙었습니다. 그 턴은 **`RS` + 미검증**으로 저장되며(대화 목록·`/admin` 에서 그 표기로 보입니다), 검색 튜닝(`SEARCH_TOP_K`·`SEARCH_SIMILARITY_THRESHOLD`·태그 스코프)이 지나치게 좁은지 판단하는 신호로 쓰기 좋습니다. 임계값을 올린 뒤 이 표기가 늘었다면 되돌릴 때입니다.
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이며, 기본값은 그 절반이다(근거는 [§7.8](#78-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)). `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
@@ -247,6 +245,8 @@ copy .env.example .env
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 큐레이션 Q&A를 RRF 축에 포함할지 여부. `false`면 해당 검색(벡터·BM25 **둘 다**)을 아예 실행하지 않음(비용 절감) |
 | `SEARCH_CURATED_QA_WEIGHT` | `1.0` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치 (§10.11 에서 좋아요 축과 제안 축이 이 값 하나로 합쳐졌다 — 모든 항목이 같은 심사를 거치므로 신뢰 근거가 갈리지 않는다). 키워드축과 동일하게 그룹 정규화 없이 그대로 적용됨(벡터축 그룹은 항상 `1/축개수`). **기본 `1.0` = 정규화된 벡터 축 그룹과 동등** — 예전 기본값 `1.2`에서 질문과 크게 관련 없는 큐레이션 항목이 상위로 올라오는 것이 관측됐다. 이 축은 후보가 적어 웬만하면 자기 축에서 상위 랭크를 받는데, 거기에 가산점까지 주면 "이 축에 무엇이든 있으면 끌어올린다"에 가까워진다. **이 축은 이제 벡터와 BM25 를 함께 본다**(§6.7) — 가중치는 여전히 하나지만 후보 풀에 등장할 확률 자체가 올라갔으므로, 큐레이션이 과하게 올라온다고 느껴지면 먼저 볼 값이 이것이다 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
+
+> **검색이 0건이면 그 턴은 LLM 을 아예 부르지 않습니다.** 답변·검증 두 호출을 건너뛰고 `## 요약 / 문서에 관련 정보가 확인되지 않습니다.` 정형 응답을 그대로 내보냅니다(문구는 `chat.answer.no-documents` 메시지 키 — 번들에서 바꿀 수 있고 `## 요약` 헤더는 한/영 공통으로 두어야 합니다). 예전에는 문서 없는 프롬프트로 답변을 받아 검증이 당연히 미통과를 내고 재검색으로 되돌아가는 왕복을 `1 + MAX_RETRY_COUNT` 번 돌았습니다 — 결과가 정해져 있는 호출에 한 턴의 예산을 전부 태우고 끝에 미검증 배지가 붙었습니다. 그 턴은 **`RS` + 미검증**으로 저장되며(대화 목록·`/admin` 에서 그 표기로 보입니다), 검색 튜닝(`SEARCH_TOP_K`·`SEARCH_SIMILARITY_THRESHOLD`·태그 스코프)이 지나치게 좁은지 판단하는 신호로 쓰기 좋습니다. 임계값을 올린 뒤 이 표기가 늘었다면 되돌릴 때입니다.
 
 대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.5`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `10000 × 0.5 = 5000`자. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
 
@@ -520,6 +520,30 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > PPTX)는 재인덱싱해도 새로 번호가 붙지 않습니다. 자세한 내용은 [§7.3 주의사항](#73-주의사항)과
 > [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 
+#### LLM 교정 건너뛰기 (`skipLlmCorrection`, MD 전용)
+
+업로드 화면의 "LLM 교정 건너뛰기" 체크박스(요청 파라미터 `skipLlmCorrection=true`, REST
+`POST /api/v1/documents` 도 동일). **`.md` 파일에만 적용**되며 다른 형식에서는 무시됩니다 — DOCX/PPTX/PDF/TXT
+의 마크다운은 변환기가 만든 것이라 LLM 교정을 거쳐야 쓸 만해지지만, `.md` 는 사람이 쓴 문서라 모델이
+문장을 손대는 것을 원치 않는 경우가 있기 때문입니다. 화면에서는 선택된 파일에 `.md` 가 없으면 체크박스가
+비활성화됩니다(`syncSkipLlmCheckbox()`).
+
+켜면 **LLM 섹션 재작성만** 건너뜁니다. 결정적 정리 패스는 그대로 돕니다 — 닫는 펜스 언어 태그 제거·미닫힘
+펜스 치유(`fixClosingFences`), 코드 블록 언어 태그 추론(`normalizeCodeBlocks`), "소제목 숫자 생성"이 켜져
+있으면 번호 매기기, 빈 줄/마커 정리(`postProcessMarkdown`). "이미지 설명 추가"는 자기 체크박스를 그대로
+따릅니다(Vision 호출은 이 옵션과 별개). 교정본은 평소처럼 `converted/{docId}_corrected.md` 에 저장됩니다.
+
+> **코드 블록 문제는 인덱싱 전에 알려 줍니다** — `/admin` 재인덱싱의 사전 점검과 같은 규약. LLM 교정은
+> 작성자가 잘못 쓴 펜스를 문맥을 보고 고쳐 주는 유일한 패스라, 이를 건너뛰면 그 결함이 결정적 패스로
+> 그대로 넘어갑니다. 그래서 `.md` + 이 옵션이면 서버가 임시 저장본에서 `findFenceProblems()` 를 먼저 돌리고,
+> 문제가 하나라도 있으면 **아무것도 저장하지 않은 채** `409` 로 목록(`status=preflight_warnings`, 줄 번호 +
+> 종류 `tagged_closer`/`unclosed`/`mid_line` + 설명)을 돌려줍니다. 화면은 이를 확인 대화상자로 보여 주고
+> [확인]이면 `force=true` 로 다시 보냅니다(REST 도 같은 파라미터). 진행하면 `unclosed`·`tagged_closer` 는
+> `fixClosingFences` 가 늘 하던 대로 치유되고, `mid_line` 은 그대로 남으며 그 파일에는 언어 태그가 붙지
+> 않습니다(`normalizeCodeBlocks` 가 펜스 짝을 확정할 수 없어 전체를 건너뜀). 진행한 사실은
+> `[INDEX] {파일} — 코드 펜스 문제 N건을 안고 진행합니다` 경고 로그로 남습니다. 409 시점에는 파일이 디스크에
+> 없으므로 다음 디렉터리 동기화가 그 파일을 기본 옵션으로 몰래 인덱싱하는 일도 없습니다.
+
 #### LLM 응답 파라미터
 
 > **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). **`LLM_MAX_TOKENS`도 §6.26 A6 이후 핫 수정 대상입니다**(범위 1,000~32,000) — 단순한 출력 상한이 아니라 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약·컨텍스트 입력 예산이 전부 여기서 파생되므로, 컨텍스트 압박을 조정할 때 가장 크게 듣는 손잡이입니다. LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~0.1**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
@@ -605,8 +629,9 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `document.upload` / `.delete` / `.sync` / `.export` / `.tags_update` / `.display_name_update` | 문서 관리 |
 | `thread.delete` / `thread.routing-mode` | 사용자가 자기 대화를 삭제·라우팅 모드 변경 (삭제 시 회수된 큐레이션 수 포함) |
 | `turn.delete` / `turn.feedback` / `turn.image.exclude` / `turn.source.exclude` | 턴 단위 조작 |
-| `curated.edit` / `curated.submission.create` / `.approve` / `.reject` | 큐레이션·지식 제안 |
-| `settings.update` / `settings.reset` / `settings.provider.toggle` | `/settings` 변경 |
+| `curated.submission.create` / `.update` / `.withdraw` / `.approve` / `.reject` | 지식 제안 — 작성자의 등록·수정·철회(승인본 회수 건수 포함), 관리자의 승인·거부. §10.11 이전의 `curated.edit`(채팅 버블의 좋아요 편집)는 그 경로와 함께 사라졌다 |
+| `chunk.report` / `chunk.report.resolve` / `chunk.report.reject` | 청크 오류 신고 접수 · 관리자 처리(닫은 건수 포함, §6.12) |
+| `settings.update` / `settings.reset` / `settings.provider.toggle` / `settings.context-window.reprobe` | `/settings` 변경 · 컨텍스트 창 재탐지(§8) |
 | `llm-usage.delete-orphan` | orphan 사용 기록 삭제 |
 | **`admin.thread.delete`** | 관리자가 **다른 사용자의** 대화를 삭제 (소유자·턴 수·회수된 큐레이션 수, §7.9) |
 | **`admin.thread.read`** | 관리자가 **다른 사용자의** 답변 전문을 열람 (소유자·턴 id, §7.9) — "누가 남의 대화를 읽었는가"를 확인하는 유일한 근거입니다 |
@@ -643,7 +668,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|--------|--------------|------|
 | `spring.threads.virtual.enabled` | `true` | ⚠️ 변경 비권장 | Java 21 Virtual Thread 활성화. LLM I/O 동시성에 핵심적 |
 | `spring.datasource.hikari.maximum-pool-size` | `1` | ❌ 변경 금지 | SQLite는 동시 쓰기 불가 — 반드시 1 유지 |
-| `spring.autoconfigure.exclude` | Chroma 자동구성 제외 | ❌ 변경 금지 | `VectorStoreRegistry`가 직접 Chroma 빈을 관리. 제거 시 충돌 |
+| `spring.autoconfigure.exclude` | Chroma 자동구성 + OpenAI 모델 자동구성 6종 제외 | ❌ 변경 금지 | `ChromaConfig`/`VectorStoreRegistry`가 직접 Chroma 빈을 관리하고, 채팅·임베딩 빈은 `LlmConfig`/`EmbeddingBeanConfig`가 직접 만든다. OpenAI 자동구성을 되살리면 `LOCAL_LLM_KEY` 가 빈 로컬 전용 배포가 `OpenAI API key must be set` 로 기동 실패([§8](#8-문제-해결)) |
 
 ---
 
@@ -1358,8 +1383,8 @@ LLM 호출은 두 레이어가 담당합니다.
 
 > 임베딩과 추론은 완전히 분리되어 있습니다. 로컬 임베딩 모델(Ollama 등)과 외부 추론 모델을 독립적으로 조합할 수 있습니다.
 
-기본값으로 소형 로컬 LLM(`providers[0]`, MICRO_TEXT 전담) + 로컬 LLM 1(`providers[1]`, LOCAL) + 외부 NORMAL/PREMIUM 5종(`providers[3]`~`[7]`)이 함께 등록되어 있습니다(§5.4 예제 6 참고).  
-로컬 서버를 더 추가하거나(로컬 LLM 2, `providers[2]`) Vision 전용 모델을 쓰려면 `application.properties`에 providers 블록을 추가/수정하세요.
+기본값으로 소형 로컬 LLM(`providers[0]`, MICRO_TEXT 전담) + 로컬 LLM 1·2(`providers[1]`·`[2]`, LOCAL — 2번은 `LOCAL_LLM_URL_2` 가 있을 때만 활성) + 외부 NORMAL 3종·PREMIUM 3종(`providers[3]`~`[8]`)이 함께 등록되어 있습니다(§5.4 예제 6 참고).  
+Vision 전용 모델을 쓰려면 `application.properties`에 providers 블록(`[9]`, 주석 예시)을 추가/수정하세요.
 
 모든 프로바이더는 **OpenAI 호환 REST API**를 통해 호출됩니다.  
 Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포인트를 통해 동일한 방식으로 사용합니다.
@@ -1388,9 +1413,9 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 |---|---|---|---|
 | **G1** | 모든 역할 | `role=LOCAL`이면 `api-key`가 비어도 통과(로컬 엔드포인트는 키 불필요, `no-key`로 치환) — `NORMAL`/`PREMIUM`은 `api-key` 필수 | 시작 로그에 warn, 해당 프로바이더 미등록 |
 | **G2** | 모든 역할 | `base-url`이 비어 있지 않아야 함 | 시작 로그에 warn, 해당 프로바이더 미등록 |
-| **G3** | `role=LOCAL`만 | `GET {base-url}/v1/models` 호출 성공 + 응답에 `model` 값이 포함 | **애플리케이션 시작 자체가 실패**(Spring Boot가 비정상 종료) |
+| **G3** | `role=LOCAL`만 | `GET {base-url}/v1/models` 호출 성공 + 응답에 `model` 값이 포함(정확 일치, 또는 `model` 을 포함하는 id 가 **정확히 하나** — 그러면 그 서버 id 를 씀) | **애플리케이션 시작 자체가 실패**(Spring Boot가 비정상 종료) |
 
-G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3는 다르다** — LOCAL 프로바이더의 `base-url`이 설정돼 있는데 서버가 안 떠 있거나 모델명이 틀리면 앱이 아예 뜨지 않는다. 포트 오타나 모델명 오타를 배포 직후 채팅 중 발견하는 대신 기동 시점에 바로 잡기 위함이다. `app.llm.verify-local-models-on-startup`(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`, 기본 `true`)로 끌 수 있다 — 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있는 환경 등 예외적인 경우에만 `false`로 설정할 것. `NORMAL`/`PREMIUM`(클라우드) 프로바이더는 G3 대상이 아니다.
+G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3는 다르다** — LOCAL 프로바이더의 `base-url`이 설정돼 있는데 서버가 안 떠 있거나 모델명이 틀리면 앱이 아예 뜨지 않는다. 포트 오타나 모델명 오타를 배포 직후 채팅 중 발견하는 대신 기동 시점에 바로 잡기 위함이다. 모델명은 **서버 id 의 일부**여도 통과한다 — 같은 모델을 서버마다 다르게 부르기 때문이다(LM Studio `google/gemma-4-e4b`, llama-server 의 `-a` 별칭이나 파일명, Ollama 의 `:latest` 접미사). 그때는 설정값이 아니라 **서버의 전체 id 가 모든 요청에 실리고**, 기동 로그에 `configured model 'x' is part of server model 'y' … using the server's id` 로 남는다. 정확히 같은 id 가 있으면 언제나 그것이 이기고(다른 id 가 그 이름을 포함해도 모호해지지 않는다), 설정값이 **둘 이상의 id 에 걸리면** 없는 것과 같이 기동 실패다 — 후보를 로그에 나열하니 전체 id 로 고쳐 적으면 된다(앱이 대신 고르지 않는 이유: 어느 모델과 대화 중인지 로그를 뒤져야 알게 되면 G3 의 존재 이유가 사라진다). `app.llm.verify-local-models-on-startup`(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`, 기본 `true`)로 끌 수 있다 — 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있는 환경 등 예외적인 경우에만 `false`로 설정할 것. `NORMAL`/`PREMIUM`(클라우드) 프로바이더는 G3 대상이 아니다.
 
 #### stream 플래그
 
@@ -1408,8 +1433,8 @@ G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3
 app.llm.providers[1].stream=false
 ```
 
-> 시작 로그에서 각 프로바이더의 stream 설정을 확인할 수 있습니다:  
-> `local(LOCAL/BOTH/p1/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
+> 시작 로그에서 각 프로바이더의 stream 설정을 확인할 수 있습니다(`concurrency`·`ctx` 는 §5.7·§8 참고 — `ctx=?` 는 창을 모른다는 뜻):  
+> `local(LOCAL/BOTH/p1/stream=false/concurrency=3/ctx=8192/probed) → http://localhost:1234/v1 [google/gemma-4-e4b]`
 
 #### type 값
 
@@ -1442,7 +1467,7 @@ app.llm.providers[1].stream=false
 | ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
 | CuratedQuestionSuggester | `MICRO_TEXT` | 큐레이션 Q&A 질문 구체화 제안 — 관리자가 `/admin` 편집에서 버튼을 눌러야만 돕니다. 배경 호출이라 동시성 게이트를 타지 않고, 사용량은 `/llm-usage` 에 `question:` 범주로 잡힙니다 |
-| CuratedSubmissionService.enrich | `MICRO_TEXT` | 지식 제안의 **요약·키워드 자동 생성**(§6.9) — 작성자가 폼의 "빈 칸 자동 생성" 버튼을 눌러야만 돕니다. 인덱싱과 **같은** `KeywordExtractor` 를 쓰므로 사용량도 `context:` 범주로 함께 잡히고, TF 폴백까지 동일합니다. **비어 있는 칸이 없으면 호출 자체가 없습니다**(서버 판정). 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷(분당 120)과 `LlmRouter` 동시성 게이트를 그대로 탑니다 |
+| CuratedSubmissionService.enrich | `MICRO_TEXT` | 지식 제안의 **요약·키워드 자동 생성**(§6.9) — 작성자가 폼의 "빈 칸 자동 생성" 버튼을 누르거나, 두 칸을 비운 채 등록할 때 돕니다. 인덱싱과 **같은** `KeywordExtractor` 를 쓰므로 사용량도 `context:` 범주로 함께 잡히고, TF 폴백까지 동일합니다. **비어 있는 칸이 없으면 호출 자체가 없습니다**(서버 판정). 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷(분당 120)이 빈도를 막습니다 — 배경 호출(`executeWithTracking`)이라 §5.7 의 채팅 동시성 게이트는 **타지 않습니다** |
 | QuestionCondenser | `MICRO_TEXT` | 짧은 후속 질문의 독립화 (§10.12) — 확장이 생략되는 길이 구간에서만 돌아 한 턴의 질의 전처리 호출은 여전히 최대 1회 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
@@ -1452,7 +1477,7 @@ app.llm.providers[1].stream=false
 | KeywordExtractor | `MICRO_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — `context:` 사용량 라벨. §6.21로 MICRO_TEXT 전환 |
 | RerankerService | `TEXT` (ChatClient) | 검색 후보 LLM 리랭킹 — `SEARCH_RERANK_ENABLED=true`일 때만 동작 |
 
-> **백그라운드 서비스(AgentGraph 밖)**: `ConversationSummarizerService`(대화 요약)·`ThreadMetaService`(제목 생성)도 `MICRO_TEXT`를 사용한다. `type=MICRO_TEXT` 소형 프로바이더 등록 시 위 `MICRO_TEXT` 4개 경로(키워드·요약·제목·쿼리확장)가 소형으로 오프로딩되고, 분류·직답·답변은 큰 모델에 남는다(§5.4 예제 6, §6.21).
+> **백그라운드 서비스(AgentGraph 밖)**: `ConversationSummarizerService`(대화 요약)·`ThreadMetaService`(제목 생성)도 `MICRO_TEXT`를 사용한다. `type=MICRO_TEXT` 소형 프로바이더 등록 시 `MICRO_TEXT` 경로 전부(키워드+맥락·요약·제목·쿼리확장·질의 독립화·큐레이션 질문 제안)가 소형으로 오프로딩되고, 분류·직답·답변은 큰 모델에 남는다(§5.4 예제 6, §6.21). 단 대화 요약만은 소형이 없으면 흡수되지 않고 LLM 호출이 생략된다(LLM_ROUTING.md §9).
 
 ---
 
@@ -1465,7 +1490,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 |------|------|----------|
 | `COST_FIRST` | LOCAL → NORMAL → PREMIUM 순 시도 | **기본값**. 비용 절감 우선 |
 | `QUALITY_FIRST` | PREMIUM → NORMAL → LOCAL 순 시도 | 최고 품질 응답 필요 시 |
-| `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 품질 점수 미달 시 PREMIUM으로 재실행 | 품질·비용 균형 |
+| `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 검증 미충족(`sufficient=false`) + 재시도 소진 시 PREMIUM으로 재실행 | 품질·비용 균형 |
 | `LOCAL_ONLY` | LOCAL만 사용, 외부 API 미호출 | 오프라인 / 보안 환경 |
 
 > **PROGRESSIVE 승격 조건**: 임계값 설정은 없습니다(`app.llm.progressive-threshold` 는 2026-09-01 제거 — 값을 읽는 코드가 없어 어떤 값을 넣어도 동작이 같았습니다). **PROGRESSIVE 승격 조건** — 점수도 임계값도 없다. `AnswerService.checkSufficiencyAndMaybeUpgrade()` 의 조건 셋이 전부다: 라우팅 모드가 `PROGRESSIVE` 이고, 검증이 `sufficient=false` 를 냈고(`needsRetry`), 재시도를 이미 다 썼을 때(`retryCount >= max-retry-count`).
@@ -1497,14 +1522,15 @@ app.llm.default-routing-mode=LOCAL_ONLY
 
 #### 예제 2 — OpenAI 전용 (로컬 LLM 없음)
 
-`LOCAL_LLM_KEY`를 비워 `providers[0]`을 비활성화하고, OpenAI를 NORMAL + PREMIUM으로 등록합니다.
+로컬 LLM 없이 OpenAI를 NORMAL + PREMIUM으로 등록합니다. 아래처럼 `application.properties`의 providers 블록을 통째로 바꾸면 기본 파일의 LOCAL 프로바이더(`local-fast`/`local`/`local-2`)는 애초에 존재하지 않습니다. 기본 파일을 그대로 두는 경우에는 `LOCAL_LLM_URL`(및 `_2`, `LOCAL_FAST_LLM_URL`)을 **비워** 두면 그 프로바이더가 등록되지 않습니다(G2) — `LOCAL_LLM_KEY`를 비우는 것으로는 비활성화되지 않습니다(LOCAL 은 키 없이도 등록됩니다, G1).
 
 `.env`:
 ```env
 OPENAI_API_KEY=sk-proj-...
 EMBED_BASE_URL=https://api.openai.com
+EMBED_API_KEY=sk-proj-...
 EMBED_MODEL=text-embedding-3-large
-LOCAL_LLM_KEY=                     # 비워서 LOCAL 비활성화
+# LOCAL_LLM_URL 은 설정하지 않는다 — 기본 providers 블록을 그대로 쓸 때 LOCAL 을 빼는 스위치는 URL 이다(G2)
 ```
 
 `application.properties`:
@@ -1539,8 +1565,9 @@ COST_FIRST 흐름: `gpt-4o-mini(NORMAL)` → (429/오류 시) `gpt-4o(PREMIUM)`
 OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
 EMBED_BASE_URL=https://api.openai.com
+EMBED_API_KEY=sk-proj-...
 EMBED_MODEL=text-embedding-3-large
-LOCAL_LLM_KEY=                     # 로컬 없으면 비활성화
+# 로컬 LLM 없음 — 아래 providers 블록에 LOCAL 항목이 없고, 기본 블록을 쓴다면 LOCAL_LLM_URL 을 비워 둔다(G2)
 ```
 
 `application.properties`:
@@ -1806,7 +1833,7 @@ app.llm.providers[8].concurrency=4
 
 - `app.llm.circuit-breaker-minutes=4` — 기본 차단 시간 (분)
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
-- 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (500 응답)
+- 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (503 응답, `RAG-LLM-001` — 차단 때문이면 `Retry-After` 동반. 컨텍스트 초과로 온 하위 타입 `LlmContextOverflowException` 만 500/`RAG-LLM-003`, [ERROR_CODES.md](ERROR_CODES.md))
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
 - 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
 - API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다.
@@ -1848,13 +1875,14 @@ app.llm.providers[8].concurrency=4
 - `priority`가 다르면 부하와 무관하게 낮은 `priority`가 항상 우선합니다 — 로드밸런싱은 **동일 priority 그룹 내부에서만** 일어나고, 서로 다른 priority 간 자동 전환은 여전히 프로바이더 실패(§5.5 Circuit Breaker) 시에만 일어납니다.
 - 총 동시 처리량 = 등록 대수 × per-provider `concurrency`(예: LOCAL 2대 × 3 = 6).
 - `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
-- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아닙니다(라우팅 지점이 다른 `EmbeddingModel` 데코레이터 체인) — 향후 과제로 남아 있습니다.
+- 임베딩 엔드포인트는 이 LLM 게이트와 별개의 `EmbeddingModel` 데코레이터 체인에서 따로 로드밸런싱됩니다(§6.21 E1, `LoadBalancingEmbeddingModel` — `EMBED_ADDITIONAL_BASE_URLS`). 설정은 [§3.2 "임베딩 병렬화"](#32-환경변수-전체-목록) 참고.
 
 **헤더 LLM 동시성 표시기**: 웹 UI 우측 상단에 `LLM: {사용중}/{용량}`으로 실시간 포화도를 보여줍니다(`GET /api/v1/llm/concurrency`, ~3초마다 폴링). `사용중` 값이 `용량`에 도달하면(완전 포화) 숫자가 굵은 빨간색으로 강조됩니다 — 위 429/`[BACKPRESSURE]` 로그를 매번 찾아보지 않아도 한눈에 확인할 수 있는 보조 지표입니다.
 - `role=LOCAL, priority=1`(주 응답용 로컬 티어 — MICRO_TEXT 전용 소형 오프로딩 모델은 제외) 프로바이더들의 `concurrency` 합계가 용량이고, 실제 게이트에서 점유 중인 슬롯 수가 사용중 값입니다.
 - **임베딩 활동도 함께 반영됩니다**: 인덱싱·검색 임베딩 호출은 이 채팅 동시성 게이트를 전혀 거치지 않는 별도 `EmbeddingModel` 데코레이터 체인이라, 별도 in-flight 카운터(`EmbeddingConcurrencyTracker`)를 채팅 사용량에 합산합니다 — 그래서 임베딩만 바쁠 때도 지표가 0에 머무르지 않습니다. 합산값은 용량을 넘지 않게 잘립니다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합이 용량을 초과할 수 있기 때문).
 - **서킷브레이커로 차단된 프로바이더는 용량에는 남고 그 전체가 "사용중"으로 집계됩니다** — 제외돼서 지표 자체가 사라지는 대신, 로컬 프로바이더가 하나뿐인 배포에서 그게 차단되면 예컨대 `3/3`(완전 포화)으로 표시됩니다.
 - 로컬 티어 프로바이더가 하나도 등록/활성화돼 있지 않으면 지표 자체가 숨겨집니다.
+- **서킷 브레이커가 막고 있는 동안은 `LLM: 차단 중 4s`** 로 바뀝니다(`blockedSeconds`). 예전엔 이 상태가 `3/3`(완전 포화)으로만 보여 "바쁘다"와 "방금 실패해서 재시도를 기다린다"를 가를 수 없었습니다. 툴팁이 `GET /api/v1/llm/ping` 을 가리킵니다 — 아래 "로컬 LLM 생사 확인".
 
 ---
 
@@ -1894,7 +1922,7 @@ app.llm.providers[8].concurrency=4
   - 이전에는 양쪽 다 **무제한 원문**이었습니다. RAG 답변이 2~3천 자인데 이력 예산이 3,000자(`LLM_MAX_TOKENS/2`)라, 한 건이 예산을 독식해 `SUMMARY_RECENT_RAW_TURNS=2`가 사실상 1로 동작했습니다.
 - **싫어요 제외 범위**: 싫어요가 눌린 턴은 이 경로의 **요약과 `[Recent]` 원문 구간 양쪽**에서 빠집니다(`dedupeTurns()`). `getRecentTurns()`의 SQL에는 feedback 조건이 없으므로 — 다른 호출자는 원본 행이 필요합니다 — 이 클래스에서 그 메서드를 쓰는 곳은 반드시 `dedupeTurns()`를 거쳐야 합니다. 예전에는 `buildContext()`가 이를 건너뛰어, 싫어요 답변이 요약에서만 빠지고 `[Recent]`에는 **전문 그대로** 다시 들어갔습니다(원본 폴백 경로와도 어긋났고, RAG 답변은 2~3천 자라 그 한 건이 문자 예산을 독식해 정상 턴을 밀어냈습니다).
 - **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
-- **좋아요 처리**: LIKE 는 그 자체로는 아무것도 등록하지 않는다(§10.11) — 지식 제안 폼을 열어 줄 뿐이고, 검색 인덱스에 들어가는 것은 관리자가 승인한 뒤다. 저장된 LIKE 값을 읽는 곳은 둘: 재사용 필터(Direct 턴은 좋아요가 있어야 재사용된다)와 채팅 버튼 상태. 상세는 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
+- **좋아요 처리**: LIKE 는 그 자체로는 아무것도 등록하지 않는다(§10.11) — 지식 제안 폼을 열어 줄 뿐이고, 검색 인덱스에 들어가는 것은 관리자가 승인한 뒤다. 저장된 LIKE 값을 읽는 곳은 채팅 버튼 상태뿐이다 — 예전에는 재사용 필터도 읽었지만(Direct 턴은 좋아요면 후보) Direct 턴은 근거 청크가 없어 검증을 통과한 적이 없는 규칙이라 제거했다(§6.11). 상세는 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
 - 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
 - 요약 경로와 폴백 경로는 **동일한 문자 예산과 동일한 렌더 규칙**을 씁니다(§6.11 + §10.13, 규칙의 단일 출처는 `HistoryPolicy`) — 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트의 **양도 내용도** 달라지지 않습니다. 예전에는 폴백 경로가 답변을 전문 그대로 넣어, 캐시 TTL이 지나는 순간 같은 스레드의 맥락이 갑자기 달라졌습니다
 - **요약 대상 자체도 무제한이 아닙니다**: 요약을 만들 때 읽어오는 원문(`MemoryService.getRecentTurns()`)은 `getHistory()`와 동일하게 `MEMORY_FETCH_LIMIT_TURNS`(기본 10턴)로 상한이 걸려 있습니다. 대화가 길어져도 매번 LLM에 보내는 요약용 입력 크기가 무한정 커지지 않도록 하기 위함이며, 이 턴 수보다 오래된 내용은 이 요약에서도 함께 유실됩니다(스레드를 다시 열었을 때 전체 메시지 버블을 복원하는 `MemoryService.getTurns()`는 이 제한과 무관하게 항상 전체를 반환합니다)
@@ -1926,7 +1954,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
   -d '{"question": "...", "version": "1.0"}'
 ```
 
-- 버전별로 격리 저장 — chroma: `manual_{version}` 컬렉션 분리 (예: `manual_latest`, `manual_1_0`) / sqlite-vec: `version` 파티션 키
+- 버전별로 격리 저장 — chroma: `u_{owner}_{version}` 컬렉션 분리(`VectorStoreRegistry.collectionName()` — 문서 저장소가 공유라 owner 는 항상 `shared`, 예: `u_shared_latest`, `u_shared_1.0`; 버전의 `.`·`_`·`-` 는 그대로 두고 그 외 문자는 `_` 로 치환) / sqlite-vec: `version` 파티션 키
 - Web UI에서는 채팅 사이드바 상단의 **version** 입력창에 버전 입력
 
 ---
@@ -1939,8 +1967,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 삭제된 문서 원본 | `DATA_DIR/documents/backup/` | 문서 삭제 시 원본이 여기로 이동(즉시 삭제 아님). 저장 상한 집계에서 **제외**되며 보존 정책 3규칙으로 정리됨 — §"업로드 크기 제한" 참조. `syncDirectory()` 의 비재귀 스캔 아래라 새 파일로 재검출되지 않음 |
 | 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
-| DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
+| 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX·TXT·PPTX·PDF(비스캔)·MD 인덱싱 시 자동 생성(MD는 업로드한 파일 그대로, 스캔 PDF는 없음); 문서 삭제 시 함께 삭제 |
+| 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장("LLM 교정 건너뛰기"로 올린 MD도 결정적 정리 결과가 여기 저장됨); 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `doc_registry` 테이블 — `SQLITE_VEC_DB_PATH`를 **비웠으면** `DATA_DIR/memory.db`, **설정했으면 그 벡터 DB 파일**([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 인덱스 레지스트리와 **같은 파일** (위 행 참조 — `memory.db` 또는 벡터 DB 파일) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
@@ -2073,6 +2101,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
 | 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
 | 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
+| 청크 분할 전략(소제목 최대 분할) | `app.chunk-split-granular` (`CHUNK_SPLIT_GRANULAR`) | true/false — [§6.10](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
 | 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
 | 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 8 |
 
@@ -2170,13 +2199,13 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 >
 > 승인된 **지식 제안**(`origin='manual'`, §6.9)은 특정 대화에 속하지 않으므로 이 회수의 대상이 아닙니다 — 대화를 아무리 지워도 남습니다. 회수는 §7.5에서 강제 삭제하거나 제안 자체를 회수해야 합니다.
 
-**편집 권한**:
+**편집 권한** (§10.11 이후 — 채팅 버블에는 큐레이션 편집 UI 가 없습니다):
 | 주체 | 방법 | 범위 |
 |---|---|---|
-| 본인(좋아요를 누른 사용자) | 채팅 버블의 👍 옆 편집(연필) 아이콘 — 좋아요 상태일 때만 노출 | 본인이 좋아요한 답변만(스레드 자체가 사용자별로 격리되어 있어 타인 것은 애초에 보이지 않음) |
-| 관리자 | `/admin` **큐레이션 Q&A** 카드 (§7.5) | 전체 사용자의 큐레이션 항목 |
+| 저자(제안을 등록한 사용자) | `/curated/submissions` **내 제안** 목록의 수정·철회 — 수정은 제안을 다시 `pending` 으로 돌리되 **기존 등록본은 재승인 전까지 검색에 그대로 남고**, 철회는 등록본까지 회수한다 | 본인 제안만(작성자 `userId` 스코프) |
+| 관리자 | `/admin` **큐레이션 Q&A** 카드 (§7.5) — 질문·답변·요약·키워드를 한 번에 저장(재임베딩 1회) / 강제 삭제 | 전체 사용자의 큐레이션 항목 |
 
-두 경로 모두 저장 시 자동으로 재임베딩됩니다. 좋아요 취소는 곧 삭제와 같습니다(본인 경로) — 관리자는 좋아요 주체와 무관하게 강제 삭제할 수 있습니다(§7.5).
+좋아요 취소는 아무것도 지우지 않습니다(좋아요가 아무것도 만들지 않으므로). 승인된 지식을 내리는 것은 저자의 철회 또는 관리자의 강제 삭제뿐입니다(§7.5).
 
 **설정**: `SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`(§3.2) — 둘 다 `/settings`에서 재기동 없이 핫 수정 가능합니다(§6.5).
 
@@ -2274,7 +2303,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - **승인 시 Vision 설명이 본문에 주입됩니다.** `approve()`가 `ChunkSplitter`를 돌리기 **전에** `LazyVisionService`로 각 이미지의 설명을 만들어 `[이미지 설명: ...]` 줄을 마커 바로 뒤에 넣습니다. 순서가 중요한 이유는 두 가지입니다 — (1) 설명이 임베딩되는 텍스트의 일부여야 그림 내용으로 검색이 걸리고, (2) 나중에 주입하면 마커와 설명이 서로 다른 청크로 갈라질 수 있습니다. 주입된 본문은 `curated_submission.body`에도 되저장되어 작성자가 "실제로 색인된 내용"을 봅니다.
   - `IMAGE_DESCRIPTION_ENABLED=false`면 이 단계는 **통째로 건너뜁니다**(이미지는 표시만 되고 검색에는 기여하지 않음). Vision 호출이 실패해도 승인은 실패하지 않고 설명 없이 진행됩니다.
   - 설명은 `image_descriptions` 캐시에도 저장되고, 주입된 줄을 `RetrievalService.hasEmbeddedDescription()`이 인식하므로 **질의 시점에 다시 분석되지 않습니다**(§6.7 Lazy Vision과 중복 호출 없음).
-  - ⚠️ **승인 요청이 이미지 수만큼의 Vision 호출을 동기로 기다립니다.** 로컬 Vision 모델이 느리면 이미지 5장짜리 제안의 승인이 수십 초 걸릴 수 있습니다(관리 UI는 버튼을 잠그고 스피너를 표시). 이 호출은 §6.12 채팅 동시성 게이트를 타지 않는 `executeWithTracking()` 경로이므로 채팅 슬롯을 잠식하지는 않지만, 로컬 LLM 서버 자원은 공유합니다. 상한(10장)을 낮추려면 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION` 상수를 바꿔야 합니다 — 프로퍼티로 외부화되어 있지 않습니다.
+  - ⚠️ **승인 요청이 이미지 수만큼의 Vision 호출을 동기로 기다립니다.** 로컬 Vision 모델이 느리면 이미지 5장짜리 제안의 승인이 수십 초 걸릴 수 있습니다(관리 UI는 버튼을 잠그고 스피너를 표시). 이 호출은 §5.7 채팅 동시성 게이트를 타지 않는 `executeWithTracking()` 경로이므로 채팅 슬롯을 잠식하지는 않지만, 로컬 LLM 서버 자원은 공유합니다. 상한(10장)을 낮추려면 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION` 상수를 바꿔야 합니다 — 프로퍼티로 외부화되어 있지 않습니다.
 - **보안**: 게시판은 모든 인증 모드에서 게스트에게 열려 있어, 여기가 **미인증 사용자가 디스크에 바이너리를 쓰는 유일한 지점**입니다. 방어는 4겹입니다 — 확장자 허용목록 → 5MB 상한 → 매직바이트 검증(`FileTypeDetector`) → **내용 해시 파일명**(클라이언트가 경로의 어느 조각도 정하지 못하고, 같은 그림을 다시 올려도 바이트가 중복되지 않음). 본문에 손으로 적은 경로는 `images/{디렉터리}/{파일}.{확장자}` 형태이면서 실제로 존재할 때만 Vision 대상이 됩니다(`..` 차단이 아니라 형태 허용목록 — `LazyVisionService`는 자체 경로 봉쇄가 없습니다).
 - **정리**: 파일명이 내용 해시라 두 제안이 같은 그림을 공유할 수 있으므로, 삭제는 **참조 세기** 방식입니다. `releaseImages()`(반려·철회 시)와 `sweepOrphans()`(**기동 시 + 6시간마다**, 24시간 유예)가 살아 있는 제안(`pending`/`approved`)·활성 `curated_qa` 어디에서도 참조하지 않는 파일만 지웁니다. 유예 시간이 있는 이유는 폼이 **등록 전에** 이미지를 먼저 올리기 때문입니다(작성자가 미리보기로 확인할 수 있게) — 열어둔 작성 화면의 이미지를 발밑에서 지우지 않기 위함입니다.
 - **업로드 속도 제한**: `POST /curated/submissions/images`는 `upload` 버킷(분당 10, `RATE_LIMIT_UPLOAD_PER_MINUTE`)입니다. 인증 없이 부를 수 있는 유일한 바이너리 쓰기 경로라 문서 업로드와 같은 취급이며, 분당 10은 제안 하나에 담을 수 있는 이미지 수와 같은 값이라 정상적인 작성 한 번은 그대로 지나갑니다. 예전에는 `default`(분당 120)라 파일당 5MB × 120 = **분당 600MB**를 밀어 넣을 수 있었고, 저장 상한은 기본이 무제한입니다 — 게스트 개방 배포라면 `UPLOAD_MAX_TOTAL_SIZE`를 함께 설정하세요.
@@ -2286,7 +2315,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 | 경로 | 접근 |
 |---|---|
-| `GET/POST /curated/submissions`, `POST /{id}/withdraw`, `GET /unread-count` | 모든 인증 모드에서 열림(게스트 포함) — 등록은 검색에 즉시 영향을 주지 않는 `pending` 행 하나를 만들 뿐 |
+| `GET/POST /curated/submissions`, `GET /{id}/detail`, `POST /{id}`(저자 수정), `POST /{id}/withdraw`, `POST /enrich`(요약·키워드 자동 생성, LLM 1회), `GET /unread-count` | 모든 인증 모드에서 열림(게스트 포함) — 등록은 검색에 즉시 영향을 주지 않는 `pending` 행 하나를 만들 뿐. 수정·철회·상세는 작성자 `userId` 스코프로 걸러진다 |
 | `POST /curated/submissions/images` | 위와 동일하게 열림 — 다만 **디스크에 파일을 쓰는** 유일한 게스트 개방 쓰기 경로다. 위 "본문 이미지"의 4겹 검증 + `RATE_LIMIT_UPLOAD_PER_MINUTE`(기본 **10/분** — 문서 업로드와 같은 버킷이다. 예전엔 `default` 120/분이라 5MB × 120 = 분당 600MB였다)이 방어선이며, 외부 노출 배포라면 프록시 단에서 이 경로만 따로 조이는 것도 검토할 만하다 |
 | `GET /admin/submissions*`, `POST /admin/submissions/{id}/approve\|reject` | `/admin/**` 게이팅 상속 — 관리 전용 인증 모드(§9.4.2)에서는 `ROLE_ADMIN` 로그인 필수 |
 
@@ -2308,6 +2337,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | action | 시점 |
 |---|---|
 | `curated.submission.create` | 사용자가 제안 등록 (제목·정규화 후 글자 수 포함) |
+| `curated.submission.update` | 저자가 제안 수정(어느 상태에서든 `pending` 으로 복귀) |
+| `curated.submission.withdraw` | 저자가 철회 — 승인본이 있었으면 회수된 청크 수(`retracted`) 포함 |
 | `curated.submission.approve` | 관리자가 임베딩 실행 (생성된 `curatedId`·작성자 포함) |
 | `curated.submission.reject` | 관리자가 거부 (사유 포함) |
 
@@ -2361,15 +2392,17 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 #### 동작 요약
 
-- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리)
+- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (범위 파라미터는 받지 않는다 · 항상 shared 기준; `limit` 은 서버에서 1~20 으로 보정 — 채팅 화면은 20 을 보낸다). `q` 는 통째로 대조하지 않는다 — `QuestionKeywords` 가 의문·기능어(어떻게·왜·알려줘…)·조사(은/는/이/가/에서…)·어미(하나요/인가요…)를 걷어낸 **내용어(최대 6개)** 를 뽑고, 그 전부가 들어 있는 저장 질문을 찾는다(대소문자·어순 무관, `_`·`%` 는 문자 그대로). 예: `sqlite 연결은 어떻게 설정하나요?` → `sqlite`·`연결`·`설정`. 내용어가 하나도 안 남으면(`이거 왜 안 돼요`) 예전처럼 입력 전체 부분 일치
 - 재사용 시도: `POST /api/v1/questions/reuse`
-- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장)
+- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장). `response_mode`·`direct_mode`·`selected_tags` 는 **원본 턴의 값을 복사**한다(원본이 다시 재사용 턴이면 그 원본의 값) — 두 글자 표기·좋아요 프리필의 태그 스코프·다음 턴의 이력 렌더가 그 컬럼을 읽기 때문이다. 이전 판이 저장하던 자리표시자(`'M'`·0·빈 태그)를 든 옛 재사용 행은 조회 시 COALESCE 로 원본의 값을 내므로 백필이 필요 없다
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
 
 추천 결과 품질을 위해 다음 필터를 함께 적용합니다.
 
-- `direct_mode=1`인 질문은 `feedback='LIKE'`일 때만 추천/재사용 후보에 포함
+- `direct_mode=1`(Direct) 턴은 좋아요 여부와 무관하게 추천/재사용 후보에서 제외 — 검색을 돌리지 않아 `turn_source_ref`가 0건이고, 아래 유효성 검증이 언제나 거부하므로 후보에 올려 봐야 헛클릭이다. 판정은 원본 행 기준(`COALESCE(src.direct_mode, t.direct_mode, 0)`)이라 옛 재사용 턴도 원본이 Direct면 제외된다. 좋아요는 지식 제안(§6.9)을 여는 신호이며 재사용 자격이 아니다
 - 질문 정규화(공백/대소문자) 기반 중복 제거
+- **활성 출처(`turn_source_ref.status='active'`)가 하나도 없는 턴은 추천 SQL 이 미리 제외** — 검색을 돌리지 않은 턴(meta·검색 0건·기능 이전 기록)과 문서 삭제·재인덱싱·청크 삭제로 출처 전부가 무효화된 턴. 아래 유효성 검증이 반드시 거부하는 행이라 후보 창(`limit×4`)만 차지했다. 재사용 조회(`/reuse`)에는 걸지 않아 클릭 시 사유가 그대로 나온다
+- **검증에 떨어진 후보는 10분 부정 캐시**로 다음 입력에서 검증 없이 건너뛴다(통지 없이 바뀐 청크 — 큐레이션 편집·비활성화 — 는 해시 대조에서만 드러나므로). 영구 표시가 아니라 TTL 인 이유는 큐레이션 재승인이나 벡터 DB 복구처럼 청크가 되돌아오는 경우가 있어서다 — 그때 최악은 그 답변이 최대 10분 추천에 안 뜨는 것이며, 클릭(`/reuse`)은 캐시를 보지 않고 항상 새로 판정한다
 - **응답 모드가 `S`(간단히) 또는 `C`(응용)였던 turn은 후보에서 제외**됩니다. `C`는 "문서에서 찾아 달라"가 아니라 "만들어 달라"는 요청이라, 저장된 코드를 그대로 돌려주면 사용자가 요청한 바로 그 일을 하지 않는 셈이 됩니다(근거 청크가 그대로여도 마찬가지). 판정은 `ResponseMode.allowsReuse()`이고 기준값은 `conversation_turns.response_mode`입니다 — 값이 비어 있거나 옛 `M`/`L`이거나 알 수 없는 값이면 `N`으로 간주되어 **후보에 남습니다**
 
 #### API 오류/폴백 응답 요약
@@ -2386,7 +2419,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - 테이블: `turn_source_ref`
 - 저장 시점: 일반/스트리밍 답변이 turn으로 저장된 직후
-- 내용: `turn_id`, `chunk_id`, `chunk_hash`, `status(active|inactive)` 등
+- 내용: `turn_id`, `chunk_id`, `chunk_hash`, `answer_share`(응답 참여도, 컬럼 추가 이전 행은 NULL), `status`(`active`/`deleted`/`modified` — 옛 행의 `inactive` 는 `active` 가 아니므로 같은 무효로 읽힌다), `invalidated_at`, `hidden_at`("현재 대화에서 이 청크 제거" 표시 전용) 등
 - 목적: "당시 답변이 어떤 청크 집합을 근거로 했는지"를 고정 스냅샷으로 보존
 
 `db-reuse` 저장은 답변 본문을 중복 저장하지 않고 참조로 기록합니다.
@@ -2401,11 +2434,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 #### 유효성 검증 규칙
 
-- 추천 항목 클릭 시 즉시 반환하지 않고, **반환 직전** `chunk_fts` 기준 현재 해시와 비교
+- 추천 항목 클릭 시 즉시 반환하지 않고, **반환 직전** `chunk_fts_key` 의 현재 해시와 비교(`QuestionReuseService.validateTurn()` — 추천 목록의 비-현재-대화 항목도 같은 판정을 통과해야 오른다)
+- 대조 범위는 **응답 참여도가 있는 출처**(`answer_share > 0`)다 — 답변에 한 글자도 반영되지 않은 청크가 바뀌었다고 멀쩡한 답변을 버리지 않는다. 참여도 기록이 없는 옛 턴은 전체 출처를 대조하고, 전부 0% 로 측정된 턴은 대조할 근거가 없어 재사용 불가
 - 실패 조건:
-  - 청크가 사라짐(문서/청크 삭제, 재인덱싱 교체)
-  - 청크 텍스트 해시 불일치(내용 변경)
-- 실패하면 재사용을 중단하고 일반 질의로 전환
+  - 출처 행이 없음(검색을 돌리지 않은 턴 — Direct·meta·검색 0건)
+  - 대조 범위의 청크에 삭제·수정 표시(`status != 'active'`)가 있음(아래 전파 경로가 찍는다)
+  - 청크가 사라짐(문서/청크 삭제, 재인덱싱 교체 — 현재 해시가 없음)
+  - 청크 텍스트 해시 불일치(내용 변경 — 통지 없이 바뀐 큐레이션 청크는 여기서만 잡힌다)
+- 실패하면 재사용을 중단하고 일반 질의로 전환. 추천 목록에서는 그 턴을 10분간 기억해 다시 확인하지 않는다(위 부정 캐시)
 
 #### 무효화 전파 경로
 
@@ -2419,12 +2455,17 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - 지시어 위주 질문(예: "이거", "그거")은 추천에서 제외
 - 단, 오류코드/파일명/경로/API명 등 구체 신호가 있으면 제외하지 않음
+- 입력 쪽 의문·기능어·조사·어미 제거 목록은 `QuestionKeywords` 의 상수 하나다(형태소 분석기 없음). 절단은 항상 접두사만 남기므로 규칙이 과해도 후보가 **줄지는 않고** 정밀도만 내려간다; 한 글자 조사는 2음절 어간이 남을 때만 벗겨 `경로·결과·추가·정의` 같은 2음절 내용어를 지킨다
 
 ---
 
 ### 6.12 청크 오류 신고 처리 (사용자 신고 → 관리자 확인·수정)
 
 채팅에서 출처 원문을 연 사용자가 **그 청크의 내용이 틀렸거나 오래됐다**고 알리는 경로입니다(§10.14). §6.9 지식 제안이 "코퍼스에 **넣는** 문"이라면 이쪽은 "**고치는** 문"입니다.
+
+**요약·키워드가 비어 있는 옛 항목**은 `/admin` → 「큐레이션 Q&A」 카드에서 항목을 열고 **「빈 칸 자동 생성」**(LLM 1회, 답변 본문 기준)을 누른 뒤 저장하면 채워집니다 — 저장이 DB 기록과 재임베딩을 함께 돕니다. 이 두 칸이 생기기 전에 승인된 항목은 값이 없는 것이 정상이며, 그때 `/admin` 청크 편집기에 값이 보이더라도 **그것은 벡터 메타데이터에만 남은 사본**이라 다음 재임베딩에 사라집니다(단일 출처는 `curated_qa` 컬럼입니다). 지식 제안 작성 폼과 같은 버튼·같은 "빈 칸만 채운다" 규칙입니다.
+
+**관리자에게는 채팅에서 바로 가는 길이 있습니다.** 채팅 답변의 출처를 눌러 원문을 열면 그 자리의 버튼이 일반 사용자에게는 `내용 오류 신고`, **관리자에게는 `청크 수정`** 으로 보이고, 누르면 `/admin` 이 **새 탭**으로 열리며 그 청크의 편집 화면이 바로 뜹니다(하던 대화를 잃지 않도록 새 탭입니다). 어디로 갈지는 서버가 정합니다 — 문서 청크는 청크 편집 오프캔버스, **큐레이션 청크는 「큐레이션 Q&A」 카드**입니다(§6.7). 자기 자신에게 보낼 신고를 대기열에 쌓을 이유가 없으므로 **이 경로로는 `chunk_report` 기록이 남지 않습니다** — 기록을 남기고 싶으면 일반 사용자 화면에서 신고하거나, 처리 메모를 대신 쓰세요.
 
 **신고는 아무것도 바꾸지 않습니다.** `chunk_report` 행은 검색·재사용 판정·벡터/FTS 어디에서도 읽히지 않습니다 — 반영은 관리자가 청크를 실제로 고칠 때 일어납니다. 자동 비활성화 임계값 같은 것은 **의도적으로 없습니다**(신고가 곧 삭제 버튼이 되면 §6.9 가 지키는 "코퍼스는 사람이 지킨다"와 방향이 어긋납니다).
 
@@ -2470,7 +2511,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 청크 재인덱싱 | 편집 패널의 **이 청크만 재인덱싱** 버튼(`AdminService.reindexChunk()`) — 저장된 텍스트 기준으로 그 청크만 재임베딩 + FTS 재색인(id 보존, upsert). "키워드 재생성" 체크 시 `KeywordExtractor`를 그 청크에만 다시 실행(LLM 1회) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
-| MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
+| MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님)·MD 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원). 시작 전 사전 점검(코드 펜스 결함·편집된 청크)에 걸리면 확인 대화상자로 묻고 나서 진행 — §7.2 |
 
 > **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
 
@@ -2480,11 +2521,15 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
 2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
+2-bis. **사전 점검**(`force=false`, 읽기 전용 — 아무것도 바꾸지 않고 LLM/임베딩 호출도 없음): 서버가 두 가지를 먼저 확인하고, 하나라도 걸리면 작업을 시작하지 않은 채 `409 {status:"preflight_warnings", editedChunks, problems:[{line,kind,message}]}` 로 되돌립니다. 화면은 이를 하나의 확인 대화상자로 보여 주고([확인] → `force=true` 로 재요청 / [취소] → 중지) —
+   - **코드 펜스 결함**(`MarkdownCorrectionService.findFenceProblems()`): 닫는 펜스에 언어 태그(`tagged_closer`) · 문서 끝까지 안 닫힘(`unclosed`, 여는 줄 번호로 보고) · 줄 중간 ```(`mid_line`). 재인덱싱은 아래 3단계에서 `fixClosingFences`/`normalizeCodeBlocks` 를 **돌리지 않으므로**(§7.3) 결함이 그대로 청크에 박힙니다 — 그래서 미리 보여 주고 고칠 기회를 줍니다. 진행하면 `[REINDEX] {파일} — 코드 펜스 문제 N건을 안고 진행합니다` 경고 로그가 남습니다.
+   - **손으로 편집한 청크 수**(`MetaKey.EDITED_AT` 가 찍힌 청크, `AdminService.countEditedChunks()`): 재인덱싱은 MD 파일로 청크를 다시 만들기 때문에 §7.1 청크 편집(텍스트·키워드·요약)은 전부 사라집니다. 편집 시각은 편집이 일어나면 항상 찍히므로 본문만 고친 청크도 셉니다.
+   두 결과를 한 응답에 함께 실어 한 번만 묻습니다 — 연달아 두 번 물으면 "확인 두 번 누르기"가 습관이 돼 경고가 무의미해지기 때문입니다.
 3. 결정적(비-LLM) MD 정리 — 존재하지 않는 이미지 마커 제거 → 소제목 번호 재검증 → 마크다운 후처리 (§7.3 참고, 변경 있으면 MD 파일에도 반영)
 4. 정리된 MD 기준으로 청크 분할 → 키워드 추출(LLM) → 활성 백엔드에 재등록
 5. 신규 청크 저장이 끝난 뒤에야 기존 벡터 청크 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존, 저장 실패 시 기존 데이터 보존)
 
-> **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
+> **API 직접 호출**: `POST /admin/documents/{docId}/reindex[?force=true]` — `force` 없이 부르면 위 사전 점검이 그대로 적용돼 409 가 올 수 있습니다.
 
 ### 7.2-bis 청크 단위 재인덱싱 (`POST /admin/chunks/{chunkId}/reindex`)
 
@@ -2501,7 +2546,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 ### 7.3 주의사항
 
 - **임베딩 미갱신 (청크 편집만)**: 청크 텍스트를 편집 패널의 "저장" 버튼으로만 수정하면 벡터 임베딩과 FTS 키워드 인덱스가 재계산되지 않습니다. 검색에도 반영하려면 위 §7.2-bis "이 청크만 재인덱싱" 버튼을 사용하거나, 문서 전체를 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
-- **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
+- **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님)·MD 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
 - **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
@@ -2524,23 +2569,23 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ### 7.5 큐레이션 Q&A 관리 (§10.10)
 
-`/admin` 페이지 **최하단**에 **큐레이션 Q&A** 카드가 있습니다 — 좋아요로 승격된 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다. 페이지당 20/50/100건 중 선택, 이전/다음으로 이동합니다.
+`/admin` 페이지 하단에 **큐레이션 Q&A** 카드가 있습니다 — 승인된 지식 제안(좋아요에서 온 것과 직접 쓴 것 모두)의 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다. 페이지당 20/50/100건 중 선택, 이전/다음으로 이동합니다.
 
-카드 순서는 **지식 제안 검토(§7.6) → 큐레이션 Q&A**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
+카드 순서는 **청크 오류 신고(§6.12) → 지식 제안 검토(§7.6) → 큐레이션 Q&A → 대화 목록(§7.9) → 검색 진단 수치(§7.7)**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
 카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
 | 기능 | 방법 |
 |------|------|
-| 편집 | 행의 연필 아이콘 → 오프캔버스에서 답변 텍스트 수정 후 저장 — **저장 시 자동으로 재임베딩됨**(청크 편집과 달리 임베딩이 갱신됨에 유의) |
-| 강제 삭제 | 행의 휴지통 아이콘 → 즉시 비활성화 + 벡터 스토어에서 제거. **좋아요를 누른 사용자의 동의와 무관하게** 관리자가 제거할 수 있는 모더레이션 경로입니다 |
+| 편집 | 행의 연필 아이콘 → 오프캔버스에서 질문·답변·요약·키워드 수정 후 저장 — **저장 시 자동으로 재임베딩됨**(청크 편집과 달리 임베딩이 갱신됨에 유의). **본문으로 구체화** 버튼은 본문에서 더 구체적인 질문을 LLM 1회로 제안만 하며(`CuratedQuestionSuggester`), [적용]→[저장]을 눌러야 반영된다. **빈 칸 자동 생성** 버튼은 지식 제안 폼과 같은 규칙(빈 칸만 채움)으로 요약·키워드를 만든다 |
+| 강제 삭제 | 행의 휴지통 아이콘 → 즉시 비활성화 + 벡터 스토어에서 제거. **저자의 동의와 무관하게** 관리자가 제거할 수 있는 모더레이션 경로입니다 |
 
 편집 오프캔버스는 **넓은 화면(뷰포트 폭이 기준값의 2배 이상)에서 좌측에 라이브 미리보기 컬럼**을 함께 띄웁니다 — 청크 편집(§7.3)과 완전히 같은 조건·같은 렌더러라 표·코드블록·이미지 마커가 실제로 어떻게 보이는지 입력하는 즉시 확인할 수 있습니다. 큐레이션 답변의 마크다운은 그대로 답변 프롬프트의 검색 근거로 들어가므로, 서식이 깨진 채 저장되는 것을 막는 것이 목적입니다. 좁은 화면·모바일은 기존 단일 컬럼 그대로입니다.
 
-- API: `GET /admin/curated/{id}/detail`(조회), `POST /admin/curated/{id}`(수정, body `{"answer":"..."}`), `DELETE /admin/curated/{id}`(강제 삭제) — 접근 제어는 `/admin/**`와 동일(§7 상단 참고).
-- 강제 삭제는 좋아요 취소(사용자 경로)와 **같은 내부 매커니즘**(비활성화+de-index)을 쓰지만, 소유권 검증을 거치지 않는 별도 인가 경로입니다.
-- 동작 원리·좋아요 승격 흐름 전체는 [§6.7](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
-- 사용자가 직접 등록한 제안이 승인되면 이 카드에 **함께** 나타납니다(내부적으로 `origin='manual'`) — 편집·강제 삭제 방법은 좋아요 항목과 동일합니다. 여기서 강제 삭제하면 §7.6 목록에서는 "회수됨"으로 표시되며, 같은 제안의 나머지 청크도 함께 내려갑니다(전부/전무).
+- API: `GET /admin/curated/{id}/detail`(조회), `POST /admin/curated/{id}`(수정, body `{"question","answer","summary","keywords"}` — 전부 선택, 보낸 값만 반영), `POST /admin/curated/{id}/suggest-question`(질문 구체화 제안 — `200 {"question"}` 또는 제안 없음 `204`, 저장 안 함), `DELETE /admin/curated/{id}`(강제 삭제) — 접근 제어는 `/admin/**`와 동일(§7 상단 참고).
+- 강제 삭제는 저자의 철회(`POST /curated/submissions/{id}/withdraw`)와 **같은 내부 매커니즘**(비활성화+de-index, `forceRemoveBySubmission`)을 쓰지만, 소유권 검증을 거치지 않는 별도 인가 경로입니다.
+- 동작 원리·좋아요 → 제안 흐름 전체는 [§6.7](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
+- 손으로 쓴 제안(`origin='manual'`)과 좋아요에서 온 제안(`origin='like'`)이 이 카드에 **함께** 나타납니다 — 편집·강제 삭제 방법은 같습니다. 여기서 강제 삭제하면 §7.6 목록에서는 "회수됨"으로 표시되며, 같은 제안의 나머지 청크도 함께 내려갑니다(전부/전무).
 
 ---
 
@@ -2556,7 +2601,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 수정 후 등록 | 같은 패널에서 제목·본문을 고친 뒤 **임베딩 실행** — 고친 내용이 `curated_qa`와 게시글 양쪽에 저장되어 작성자에게도 색인된 내용이 그대로 보임 |
 | 거부 | **거부** → 사유 입력(필수, 작성자에게 전문 노출) |
 
-- API: `GET /admin/submissions?status=&offset=&limit=`(목록 프래그먼트), `GET /admin/submissions/{id}/detail`, `POST /admin/submissions/{id}/approve`(body `{"title":"...","body":"..."}`, 생략 시 작성자 원문 사용), `POST /admin/submissions/{id}/reject`(body `{"reason":"..."}`), `GET /admin/submissions/pending-count`.
+- API: `GET /admin/submissions?status=&offset=&limit=`(목록 프래그먼트), `GET /admin/submissions/{id}/detail`, `POST /admin/submissions/{id}/approve`(body `{"title":"...","body":"...","tags":"a,b"}`, 각각 생략 시 작성자 원문·저장된 태그 유지 — `tags`가 빈 문자열이면 태그 전부 해제), `POST /admin/submissions/{id}/reject`(body `{"reason":"..."}`), `GET /admin/submissions/pending-count`.
 - **임베딩 실행 성공 = "색인 항목 생성됨"까지**입니다. 실제 임베딩 호출은 백그라운드 가상 스레드에서 진행되므로 응답 시점에는 성공 여부를 알 수 없습니다 — 실패하면 목록의 제목 앞에 ⚠ 배지가 붙고, 작성자 화면에도 안내가 표시됩니다. 복구는 §7.5 큐레이션 Q&A 카드에서 본문을 줄여 저장하면 됩니다(저장 시 자동 재임베딩).
 - **예외: 본문 이미지의 Vision 설명 생성은 이 요청 안에서 동기로 끝납니다**(§6.9 "본문 이미지"). 임베딩과 달리 배경으로 미룰 수 없어서 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸립니다. 그래서 이미지가 있는 제안은 **임베딩 실행 응답 자체가 느립니다**(로컬 Vision 모델 기준 장당 수 초). 버튼이 잠기고 "등록 중..." 스피너로 바뀌며, 그동안 창을 닫아도 서버 작업은 끝나지만 결과 토스트는 못 봅니다 — 목록을 새로 고쳐 상태를 확인하세요.
 - 승인/거부는 `status='pending'`을 조건으로 하는 compare-and-set이라, 관리자 두 명이 동시에 눌러도 색인 항목은 하나만 생성됩니다(진 쪽은 409 + "이미 처리된 제안입니다" 안내, 방금 만든 항목은 자동 회수). 버튼 잠금은 같은 사람이 느린 승인 중에 두 번 눌러 이 경합을 자초하지 않게 하는 1차 방어입니다.
@@ -2616,7 +2661,7 @@ rrfScore(문서) = Σ  가중치 ÷ (그 축에서의 순위 + k)      ← k = S
 
 A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 = 의미 검색과 키워드 검색이 같은 문서를 지목했다**는 뜻이고, 반대로 **전부 11~13%대로 고르다 = 벡터 축 하나만 일하고 있다**는 신호입니다(하이브리드가 꺼졌거나, 2글자 질의라 BM25가 기여하지 못하는 경우 — §8 참고).
 
-**③ 멀티쿼리 변형 여러 개에 걸려도 배수가 되지는 않습니다.** 벡터 축은 `1/축개수`로 그룹 정규화되므로, 3개 확장 질의 모두에서 1위인 문서는 `3 × (1/3) ÷ 61 = 1/61`로 단일 축 1위와 같은 점수입니다. 이는 의도된 것으로, 그러지 않으면 멀티쿼리 축이 2~3표를 갖게 되어 BM25 축이 구조적으로 밀립니다. **가산이 실제로 일어나는 것은 서로 다른 종류의 축(벡터 그룹 / BM25 / 큐레이션 / 지식 제안) 사이에서입니다.**
+**③ 멀티쿼리 변형 여러 개에 걸려도 배수가 되지는 않습니다.** 벡터 축은 `1/축개수`로 그룹 정규화되므로, 3개 확장 질의 모두에서 1위인 문서는 `3 × (1/3) ÷ 61 = 1/61`로 단일 축 1위와 같은 점수입니다. 이는 의도된 것으로, 그러지 않으면 멀티쿼리 축이 2~3표를 갖게 되어 BM25 축이 구조적으로 밀립니다. **가산이 실제로 일어나는 것은 서로 다른 종류의 축(벡터 그룹 / BM25 / 큐레이션) 사이에서입니다** — §10.11 이후 지식 제안은 별도 축이 아니라 큐레이션 축 하나로 합쳐졌습니다.
 
 > 값이 `-`인 칸은 0이 아니라 **측정 안 됨**입니다(벡터 축에 걸리지 않은 청크, 쿼리 확장 실패로 폴백된 턴 등).
 >
@@ -2733,17 +2778,34 @@ curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 40
 # 임베딩 서버 확인
 curl ${EMBED_BASE_URL:-$LOCAL_LLM_URL}/models -H "Authorization: Bearer ${EMBED_API_KEY:-$LOCAL_LLM_KEY}"
 
-# LOCAL 프로바이더 확인
-curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
+# LOCAL 프로바이더 확인 — 앱이 실제로 쓰는 base-url·모델 id 로, 세 단계를 따로 답한다 (아래 "로컬 LLM 생사 확인")
+curl -f http://localhost:8080/api/v1/llm/ping?deep=true
 ```
+
+#### 로컬 LLM 생사 확인 — `GET /api/v1/llm/ping`
+
+"살아 있는가"의 답은 셋으로 갈립니다. 2026-09-21 의 GPU 소실(`decode() failed: vk::Queue::submit: ErrorDeviceLost`)에서 LM Studio 의 HTTP 서버는 끝까지 살아 있었고(500 과 빈 본문을 *돌려줬습니다*), 모델도 "로드됨"이었으며, 죽은 것은 추론 엔진뿐이었습니다 — `/v1/models` 로는 그 상태를 구분할 수 없습니다.
+
+| 필드 | 무엇을 물었나 | 실패하면 |
+|---|---|---|
+| `reachable` / `latencyMs` | `GET {baseUrl}/models` 가 2xx JSON 을 주는가 | 프로세스가 없거나 포트·URL 이 다르다 — `error` 에 `Connection refused` 등 |
+| `modelListed` | 설정된 모델 id 가 목록에 있는가(G3 와 같은 `ModelNameResolver` 규칙) | 모델명 오탈자, 다른 모델을 띄움. JIT 로딩이 켜진 LM Studio 는 다운로드된 모델을 전부 내므로 이것만으로 "로드됨"은 아님 |
+| `modelState` | LM Studio `GET /api/v0/models` 의 `state`(`loaded`/`not-loaded`), llama.cpp 면 `GET /health` 의 `status`, 둘 다 없으면 `unknown` | `not-loaded` 면 LM Studio 에서 모델을 Load |
+| `inference` (`?deep=true`) | `max_tokens=1` 채팅 완성 한 번 — 위 둘을 통과하고도 여기서 실패하면 **엔진이 죽은 것** | `error` 에 서버가 준 사유(`HTTP 500 ... ErrorDeviceLost`, `application/octet-stream` 파싱 실패 등). 모델 Eject → Load 또는 서버 재시작 |
+| `circuitBlockedSeconds` | 앱의 서킷 브레이커가 이 프로바이더를 막고 있는 남은 초 | 핑은 브레이커를 **우회**하므로 차단 중에도 실제 상태를 알 수 있고, 핑 결과가 차단을 풀거나 만들지도 않습니다 |
+
+- 전부 통과면 **200**, 하나라도 실패면 **503** — 모니터링 스크립트는 `curl -f` 로 씁니다. 로컬 티어(`role=LOCAL, priority=1`) 프로바이더가 없으면 `{"available": false}`(200).
+- `deep=true` 는 실제 추론 1토큰이라 비용이 있지만 관리자 전용은 아닙니다 — 채팅이 게스트에게 열린 배포에서는 누구나 이미 전체 답변 생성을 시킬 수 있어 그보다 엄격히 막을 이유가 없습니다(속도 제한은 `default` 버킷 그대로). `timeoutSeconds`(기본 15, 최대 60)는 완성 호출의 읽기 타임아웃 — JIT 로딩 서버가 첫 요청에서 모델을 올리느라 넘길 수 있고, 그것도 "지금은 못 한다"는 참인 답입니다.
+- `baseUrl` 은 내부 호스트라 `ROLE_ADMIN` 응답에만 실립니다.
+- 헤더의 `LLM: 차단 중 4s` 표시(§5.7)와 짝입니다 — 표시기는 "앱이 지금 기다리는 중"을, 핑은 "서버가 실제로 어떤 상태인가"를 답합니다.
 
 | 원인 | 조치 |
 |------|------|
 | `OPENAI_BASE_URL` 오탈자 | 끝에 `/v1` 포함 여부 확인 |
 | API 키 만료/권한 없음 | 키 재발급 후 재시작 |
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
-| 로컬 LLM 없이 실행 | `LOCAL_LLM_KEY=` (빈 값)으로 LOCAL 비활성화 후 NORMAL/PREMIUM 등록 |
-| 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; 차단은 시간이 지나면 자동 해제됩니다(폴백 있음 30초 또는 `circuit-breaker-minutes`, **폴백 없는 유일 프로바이더는 5초**). **이 메시지는 원인이 아니라 결과입니다** — LOCAL 프로바이더가 하나뿐인 배포에서는 그 하나가 한 번 실패하기만 해도 이 문구가 나옵니다. 진짜 원인은 바로 앞 로그 줄(`Provider [x] threw ...`)에 있습니다 |
+| 로컬 LLM 없이 실행 | `LOCAL_LLM_URL`(및 `LOCAL_LLM_URL_2`·`LOCAL_FAST_LLM_URL`)을 **비워** LOCAL 을 등록 자체에서 빼고(G2 — 키를 비우는 것으로는 비활성화되지 않는다, G1) NORMAL/PREMIUM 등록 |
+| 모든 프로바이더 소진 | `GET /api/v1/llm/ping?deep=true` 로 서버 상태부터(위 표); `/llm-usage`에서 차단 상태 확인; 차단은 시간이 지나면 자동 해제됩니다(폴백 있음 30초 또는 `circuit-breaker-minutes`, **폴백 없는 유일 프로바이더는 5초**). **이 메시지는 원인이 아니라 결과입니다** — LOCAL 프로바이더가 하나뿐인 배포에서는 그 하나가 한 번 실패하기만 해도 이 문구가 나옵니다. 진짜 원인은 바로 앞 로그 줄(`Provider [x] threw ...`)에 있습니다 |
 
 ---
 
@@ -2811,7 +2873,7 @@ docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | 
 | "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재검색마다 최종 컷이 `topK + 재검색횟수`로 넓어지고, 근거로 쓰이지 않은 하위 청크가 밀려나 자리를 내줍니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능. 로그의 `[RETRIEVAL] 컨텍스트 여유 부족` 이 보이면 컷 확대가 생략된 것이므로 `LLM_MAX_TOKENS`를 내리거나 서버 `--ctx-size`를 올리세요 |
 | 사유가 매번 비어 있음 | 평가 LLM이 `reason` 필드만 못 채움 (소형 모델에서 흔함) | 판정 자체는 유효하므로 답변이 막히지는 않습니다. 검증 품질이 중요하면 평가 호출이 타는 `TEXT` 프로바이더를 더 큰 모델로 |
 | **배지가 아예 없음** (검증됨/생성도, 미검증도 아님) | 평가 응답이 비었거나 JSON 파싱에 실패해 **판정 없음**으로 내려감 | 실패가 아니라 "검증을 못 했다"는 표시입니다. 아래 *검증 배지가 사라짐* 항목으로 |
-| 로그에 `[EVAL] 문서 발췌 32000자 상한으로 …` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 과도해 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
+| 로그에 `[EVAL] 발췌 한도(글자 … / 토큰 …)로 N개 중 M개만 검증에 사용 — 하위 순위 문서 제외` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 글자 상한(32,000)이나 프로바이더 창에서 파생된 토큰 예산을 넘어 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
 
 > 검증은 답변을 **버리지 않습니다** — 미검증 배지는 "직접 출처를 확인하라"는 표시이지 실패가 아닙니다. 재시도 자체를 줄이려면 `MAX_RETRY_COUNT`를 낮추세요(`0`이면 재시도 없이 첫 답변을 그대로 전달).
 
@@ -2884,13 +2946,15 @@ docker compose logs app | grep -E "판정 없음으로 기록한다" | tail -20
 - **`{"error":"terminated"}`는 차단하지 않습니다** — `NOT blocking circuit breaker; the server is usually back within seconds.` 로그가 대신 남습니다.
 - **폴백이 없는 유일 프로바이더는 일반 실패도 5초만 차단합니다**(연결 거부 등). 프로바이더가 하나면 차단은 우회가 아니라 전면 중단이기 때문입니다. 차단을 아예 없애지는 않았습니다 — 서버가 정말 죽어 있으면 모든 요청이 각자 연결 타임아웃을 무는 편이 더 나쁩니다.
 
-사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`. 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 `잠시 후 다시 시도해 주세요.` 로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다.
+사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않습니다. 20초 후 다시 시도해 주세요.`(`error.llm.exhausted.retry`, 한/영). 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 예전의 일반 문구(`error.llm.exhausted`)로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다. **같은 프로바이더가 연속 3회 실패하면 문구가 바뀝니다** — `AI 서버가 연속 3회 응답하지 않습니다. 서버(모델) 상태를 확인해 주세요. (4초 후 재시도 가능)`(`error.llm.exhausted.repeated`). 5초 차단이 반복되는 죽은 서버(GPU 소실)에서 "잠시 후 다시"는 거짓이기 때문이며, 로그에는 `[REPEATED-FAILURE]` 가 남습니다. 횟수는 성공이 한 번 있어야 0 으로 돌아갑니다(차단이 풀려도 줄지 않음). 문장은 `LlmOutageMessages` 가 고르고, 예외 자체의 한국어 메시지(`(task=TEXT)` 꼬리 포함)는 화면에 나가지 않습니다.
 
-**여전히 이 증상이 보인다면** 로그에서 실제 예외를 확인하세요:
+**여전히 이 증상이 보인다면** 먼저 서버가 실제로 어떤 상태인지 묻고(`curl -f http://localhost:8080/api/v1/llm/ping?deep=true` — "LLM 호출 오류 (500)" 의 표), 로그에서 실제 예외를 확인하세요:
 
 ```bash
-grep -E "threw |blocked for |NO-FALLBACK" logs/rag-agent.log | tail -30
+grep -E "threw |blocked for |NO-FALLBACK|REPEATED-FAILURE|LLM_PING" logs/rag-agent.log | tail -30
 ```
+
+> **"4초 후 다시 시도" 가 거짓이 되는 경우** — 유일 프로바이더는 실패해도 5초만 차단하므로(위) 사용자 문구의 초는 그 잔여 시간입니다. GPU 소실처럼 서버 프로세스는 살았는데 엔진이 죽은 경우에는 5초가 지나도 같은 실패가 반복됩니다 — 그래서 **연속 3회째부터는 문구가 "서버(모델) 상태를 확인해 주세요" 로 바뀌고** 로그에 `[REPEATED-FAILURE]` 가 찍힙니다. 이때 `ping?deep=true` 가 `reachable=true, modelState=loaded, inference.ok=false` 를 내면 앱이 아니라 LLM 서버를 고칠 차례입니다(모델 Eject → Load, 런타임 Vulkan → CUDA, 컨텍스트·GPU 오프로드 축소, 드라이버).
 
 `Provider [x] threw ...` 줄이 진짜 원인입니다. `blocked for 30s`가 보이면 폴백이 있는 구성이라는 뜻이고, `blocked for 5s`면 유일 프로바이더 경로입니다.
 
@@ -3025,7 +3089,7 @@ docker-compose logs app
 
 ### 이미지 파일이 `data/images/`에서 사라진 경우 (수동 정리·백업 복원 누락 등)
 
-MD 재인덱싱(`/admin` ↺ 버튼, `AdminController.reindex()` → `DocumentIndexer.reindexFromMd()`)은 로드 직후 `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일이 `data/images/`에 실제로 존재하는지 확인합니다. 없으면 그 마커만 제거한 뒤 청킹·인덱싱을 진행하고, 정리된 결과를 MD 파일(`{docId}[_corrected].md`)에 다시 저장합니다 — 다음 재인덱싱부터는 같은 마커를 다시 걸러낼 필요가 없습니다. 존재하는 이미지 마커는 영향받지 않습니다.
+MD 재인덱싱(`/admin` ↺ 버튼, `AdminController.reindexFromMd()` → `DocumentIndexer.reindexFromMd()`)은 로드 직후 `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일이 `data/images/`에 실제로 존재하는지 확인합니다. 없으면 그 마커만 제거한 뒤 청킹·인덱싱을 진행하고, 정리된 결과를 MD 파일(`{docId}[_corrected].md`)에 다시 저장합니다 — 다음 재인덱싱부터는 같은 마커를 다시 걸러낼 필요가 없습니다. 존재하는 이미지 마커는 영향받지 않습니다.
 
 - 일반 업로드/동기화(`index()`)는 대상이 아닙니다 — 그 경로는 변환과 이미지 추출이 같은 호출 안에서 함께 일어나므로 마커와 파일이 어긋날 여지가 없습니다.
 - 이미지가 사라진 원인 자체(디스크 정리 스크립트, 백업 복원 누락 등)는 운영자가 조사해야 합니다 — 이 동작은 인덱스가 죽은 링크로 오염되는 것만 막을 뿐, 사라진 이미지 파일을 복구하지 않습니다.
@@ -3044,7 +3108,7 @@ MD 재인덱싱(`/admin` ↺ 버튼, `AdminController.reindex()` → `DocumentIn
 | 아예 건너뛰게 하려면 | `IMAGE_DESCRIPTION_ENABLED=false` — 이미지는 표시만 되고 검색에는 기여하지 않습니다(재기동 필요) |
 | 장수를 줄이려면 | `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10) 상수 수정 — **프로퍼티로 외부화되어 있지 않습니다** |
 
-Vision 호출이 실패해도 승인은 실패하지 않고 설명 없이 진행됩니다(`[SUBMISSION] 이미지 설명 생성 실패 — 설명 없이 진행` warn). 이 호출은 §6.12 채팅 동시성 게이트를 타지 않으므로 채팅 슬롯을 잠식하지는 않지만, 로컬 LLM 서버 자원은 공유합니다.
+Vision 호출이 실패해도 승인은 실패하지 않고 설명 없이 진행됩니다(`[SUBMISSION] 이미지 설명 생성 실패 — 설명 없이 진행` warn). 이 호출은 §5.7 채팅 동시성 게이트를 타지 않으므로 채팅 슬롯을 잠식하지는 않지만, 로컬 LLM 서버 자원은 공유합니다.
 
 ---
 
@@ -3231,6 +3295,8 @@ sh scripts/install-hooks.sh
 | API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |
 | `X-Trace-Id` 요청 헤더 | 영숫자와 `_`·`-`, 최대 64자 | 거부가 아니라 **서버가 새로 발급**(요청은 정상 처리) |
 
+> **한 요청의 로그가 여러 스레드에 걸칩니다** — 채팅은 SSE 워커·사전 future·검색 축·Vision 호출이 전부 다른 (가상) 스레드인데, `MdcPropagation` 이 요청 스레드의 `traceId` 를 그 스레드들에 넘기므로 `grep <traceId> logs/rag-agent.log` 하나로 한 턴의 줄이 전부 잡힙니다(예전엔 그 줄들이 전부 `[-]` 였습니다). SSE 워커의 오류로 예외 핸들러가 다시 불릴 때(ASYNC 재디스패치)도 같은 id 입니다. 인덱싱도 같습니다 — 업로드·재인덱싱·디렉터리 동기화 요청의 id 가 파일별 작업과 그 안의 병렬 단계(키워드 추출·MD 교정·이미지 설명·임베딩 배치)까지 이어집니다. 요청 없이 스케줄러가 깨우는 SSE 하트비트만 id 가 없습니다.
+>
 > **`X-Trace-Id`를 검증하는 이유**: 이 값은 모든 로그 줄의 `[traceId]` 자리에 그대로 들어갑니다. 줄바꿈이
 > 들어가면 로그 한 줄을 두 줄로 위조할 수 있고(가짜 ERROR 줄 주입), 수 KB짜리 값은 매 줄에 반복돼 로그
 > 파일을 부풀립니다. 채팅과 지식 제안이 게스트 개방이라 누구나 보낼 수 있는 헤더입니다. UUID는

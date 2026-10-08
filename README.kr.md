@@ -113,7 +113,7 @@ container system stop
 | `AUTH_GUEST_IDENTITY` | — | `shared` | no-auth 방문자에게 `userId`를 주는 방식(`app.auth.guest-identity`): `shared`(전원 한 게스트, 기존 동작) / `ip` / `cookie` / `hybrid`(권장 — 장수 `rag_visitor` 쿠키, 없으면 IP). 알 수 없는 값·공백은 `shared`로 정규화됩니다 |
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | 없음 | `providers[1]`(`local`) 엔드포인트 (임베딩 폴백으로도 사용, 아래 G3 검증 대상 아님). **미설정·공백이면 이 provider가 통째로 비활성화됨** — 더 이상 `http://localhost:1234/v1`로 조용히 폴백하지 않음. 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증하며, 실패하면 **애플리케이션이 시작되지 않는다**(G3, [OPERATOR_MANUAL.md §5.2](documents/OPERATOR_MANUAL.md#52-프로바이더-속성) 참고) |
 | `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — `LOCAL_LLM_URL`만 설정돼 있다면 키가 비어도 LOCAL provider는 등록됨(`no-key` 치환) |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델명 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델명 — 서버 `/v1/models` 의 id, **또는 다른 모델과 겹치지 않는 그 일부**(예: LM Studio 가 `google/gemma-4-e4b` 를 보고할 때 `gemma-4-e4b`; 대소문자 무시). G3 가 기동 시 서버의 전체 id 로 해석하고, 모든 요청에는 그 id 가 실린다 |
 | `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]` 작업 유형(`app.llm.providers[1].type`): `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH`. 기본 `BOTH`(전 작업 처리); 예: 로컬 모델을 채팅 텍스트 전용으로 한정하려면 `TEXT` |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | 없음 | `providers[2]`(`local-2`) 엔드포인트 — `providers[1]`(`local`)과 동일 role·priority로 등록되는 두 번째 로컬 LLM 인스턴스로, 요청이 둘 사이에 least-in-flight로 로드밸런싱됨 — [OPERATOR_MANUAL.md §5.4 예제 5/7](documents/OPERATOR_MANUAL.md) 참고. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — 2대째가 없으면 그냥 비워두면 `local` 단독으로 동작). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — "설정은 했지만 서버가 아직 안 떠 있다"가 예전처럼 런타임 폴백으로 넘어가려면 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`가 필요함 |
 | `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키 (로컬 엔드포인트는 무시 — 비우면 `no-key` 치환, `LOCAL_LLM_KEY`를 상속하지 않음) |
@@ -122,7 +122,7 @@ container system stop
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨** — `MICRO_TEXT`는 `local`이 흡수하되, **대화 요약만은 흡수하지 않고 생략**(채팅은 원본 history 폴백). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델명 |
-| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `60` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
@@ -165,7 +165,7 @@ container system stop
 | `DOCX_WMF_CONVERT` | `false` | DOCX WMF 이미지를 LibreOffice headless로 변환 (`soffice`가 PATH에 있어야 해서 기본 off). 끄면 해당 이미지는 `[이미지(변환불가): …]` 마커로 남음 |
 | `RATE_LIMIT_ENABLED` | `true` | 사용자별 토큰 버킷 전체 스위치 (`app.rate-limit.*`) |
 | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | 사용자당 `/chat` 분당 요청 수 |
-| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기** 분당 요청 수(`POST /ui/documents/upload`, `POST /api/v1/documents`). 문서 화면 조회·목록 갱신·내보내기·태그 편집은 default 버킷을 쓴다 |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | **새 파일을 받는** 요청의 분당 수(`POST /ui/documents/upload`, `POST /api/v1/documents`, 그리고 게스트도 부를 수 있는 제안 본문 이미지 업로드 `POST /curated/submissions/images`). 문서 화면 조회·목록 갱신·내보내기·태그 편집은 default 버킷을 쓴다 |
 | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | 폴더 동기화 분당 요청 수 |
 | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 분당 요청 수 |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
@@ -431,7 +431,7 @@ rag_java/
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별). sqlite-vec에서는 토큰 서브배치가 임베딩되는 즉시 그 서브배치만 삽입하며 문서 전체 분량을 버퍼링하지 않아, 대용량 문서 인덱싱 시 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례
 - **키워드 추출 배치화** — 인덱싱 시 청크 N개(기본 2, `INDEXING_KEYWORD_BATCH_SIZE`)를 하나의 LLM 호출로 묶어 처리, 청크당 1콜이던 왕복 횟수를 대략 1/N로 절감. 배치 호출/파싱 실패 시 해당 청크는 개별 TF 키워드 추출로 폴백
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
-- **PPTX/PDF → Markdown 변환 정리** — 비스캔 PDF·PPTX는 Markdown으로 변환되며 `[페이지: N]` 마커(합성 헤딩이 아님)가 페이지/슬라이드 단위 섹션 경계 역할을 함. PPTX는 추가로 이미지 없는 중복 슬라이드, 목차/agenda 슬라이드(불릿이 다른 슬라이드 제목들과 대부분 일치), 제목만 있는 섹션 구분 슬라이드("PART 2"·"목차"·"결제 시스템" 같은 번호/키워드/짧은 명사구 제목)를 제거해 내용 없는 슬라이드가 검색 인덱스에 남지 않게 함(문장형 키 메시지 제목은 유지 — `app.pptx-remove-duplicate-slides`·`app.pptx-drop-divider-slides`, 둘 다 기본 on)
+- **PPTX/PDF → Markdown 변환 정리** — 비스캔 PDF·PPTX는 Markdown으로 변환되며 `[페이지: N]` 마커(합성 헤딩이 아님)가 페이지/슬라이드 단위 섹션 경계 역할을 함. PPTX는 추가로 이미지 없는 중복 슬라이드, 목차/agenda 슬라이드(불릿이 다른 슬라이드 제목들과 대부분 일치), 제목만 있는 섹션 구분 슬라이드("PART 2"·"목차"·"결제 시스템" 같은 번호/키워드/짧은 명사구 제목 — 문장형 키 메시지 제목은 유지), 다음 슬라이드가 그 제목을 그대로 반복하는 "예고 제목" 슬라이드, 마지막의 "끝"/"Thank you" 종료 슬라이드를 제거해 내용 없는 슬라이드가 검색 인덱스에 남지 않게 함(`app.pptx-remove-duplicate-slides`·`app.pptx-drop-divider-slides`·`app.pptx-drop-redundant-title-slides`·`app.pptx-drop-ending-slide`, 모두 기본 on)
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 
 ## 엔드포인트
@@ -446,7 +446,15 @@ rag_java/
 | `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
 | `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
+| `GET` | `/admin` | 벡터 스토어 관리 — 청크 브라우저, 큐레이션 Q&A, 제안 검토 (관리자 전용) |
+| `GET` | `/settings` | 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
+| `GET` | `/ui/documents/{docId}/export` | 인덱싱된 청크로 문서를 재조립해 내려받기 (MD/TXT/DOCX, 관리자 전용) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | 채팅 답변 썸네일에서 특정 이미지를 현재 대화 기록에서만 제외 |
+| `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | 그 턴의 출처 목록에서 청크 하나를 숨김 (표시 전용 — 재사용 검증은 계속 그 청크를 본다) |
+| `POST` | `/ui/chunk-reports` | 출처 원문 보기에서 청크를 "틀렸다/오래됐다"고 신고 (§10.14, 게스트 개방. 관리자에게는 대신 `/admin`으로 가는 "청크 수정" 바로가기가 보인다) |
+| `GET/POST` | `/login` | 로그인 페이지 (인증 모드, 또는 no-auth 의 관리 전용 서브모드) |
+| `GET/POST` | `/signup` | 회원가입 페이지 (인증 모드 전용) |
+| `GET/POST` | `/setup` | 최초 관리자 생성 — **모든** 인증 모드에서 열려 있다. `ROLE_ADMIN` 계정을 만드는 유일한 경로이고(`/signup` 은 `ROLE_USER` 만 만든다) 관리자 게이트가 걸린 화면은 그 계정 없이는 아무도 통과할 수 없기 때문이다. 관리자가 하나라도 생기면 스스로 리다이렉트로 닫힌다 |
 
 ### REST API
 
@@ -459,7 +467,12 @@ rag_java/
 | `GET` | `/api/v1/documents` | 인덱싱된 문서 목록 |
 | `DELETE` | `/api/v1/documents/{docId}` | 문서 삭제 |
 | `GET` | `/api/v1/images/{docId}/{filename}` | 추출된 이미지 파일 서빙 |
-| `GET` | `/api/v1/questions/suggest` | 입력 질문 기반 추천 목록 조회 (`scope`, `limit` 지원; 50자 초과 질문은 후보에서 제외) |
+| `GET` | `/api/v1/tags` | 사용 중인 태그 목록 (`?version`, `?excludeCommon`, `?includeCurated`) |
+| `GET` | `/api/v1/versions` | 인덱싱된 문서 버전 목록 (채팅의 버전 선택기가 읽는다) |
+| `GET` | `/api/v1/chunks/{chunkId}` | 출처 "원문 보기" 팝업이 쓰는 청크 전문(잘리지 않은 원문). 청크가 사라졌으면 404 |
+| `GET` | `/api/v1/questions/suggest` | 입력 중인 질문과 맞는 과거 질문 추천 (`?q`, `?limit`, `?threadId` — 항목마다 `origin`: `thread`/`mine`/`others`/`elsewhere`). 50자를 넘는 질문은 후보에서 제외된다 |
 | `POST` | `/api/v1/questions/reuse` | 선택한 과거 turn 재사용(출처 재검증 실패 시 일반 질의 폴백 신호 반환) |
 | `GET` | `/api/v1/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
 | `GET` | `/api/v1/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |
+| `GET` | `/api/v1/llm/concurrency` | 헤더 표시기가 읽는 LOCAL 계층 실시간 동시성 (`{"available","inUse","capacity","blockedSeconds"}`) |
+| `GET` | `/api/v1/llm/ping` | 로컬 LLM 이 살아 있는가 — LOCAL 1계층 프로바이더마다 세 답: 닿는가(`/models`), 모델이 로드됐는가(LM Studio `state` / llama.cpp `/health`), 그리고 `?deep=true` 면 실제 1토큰 완성까지. 모두 통과하면 200, 아니면 503 (`curl -f` 로 쓸 수 있다) |

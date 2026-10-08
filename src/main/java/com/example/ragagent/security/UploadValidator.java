@@ -11,8 +11,8 @@ import java.text.Normalizer;
 import java.time.Instant;
 
 /**
- * Single source of truth for upload validation.
- * Replaces duplicate sanitize/extension/magic-byte logic in ApiController and WebController.
+ * Single source of truth for upload validation — the sanitize/extension/magic-byte logic both
+ * upload paths in {@code DocumentController} (HTMX and REST) share.
  *
  * Usage:
  *   String filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());

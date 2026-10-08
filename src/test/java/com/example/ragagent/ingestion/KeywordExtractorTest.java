@@ -361,4 +361,26 @@ class KeywordExtractorTest {
         assertThat(result).hasSize(5);
         verify(router, org.mockito.Mockito.times(3)).executeWithTracking(any(), any(), any(), any());
     }
+
+    /**
+     * 인덱싱 안의 중첩 실행기도 traceId 를 잇는다 — 업로드 요청 하나의 로그(워커 → 청크별 키워드 추출)가
+     * 한 id 로 묶여야 하는데, 이 실행기가 감싸지지 않았던 동안 여기서 나가는 줄은 전부 [-] 였다.
+     */
+    @Test
+    @DisplayName("enrichParallel — 배치 작업이 호출 스레드의 MDC traceId 를 잇는다")
+    void enrichParallel_carriesTheCallersTraceId() {
+        java.util.Set<String> seen = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenAnswer(inv -> {
+            seen.add(String.valueOf(org.slf4j.MDC.get("traceId")));
+            return "키워드";
+        });
+        org.slf4j.MDC.put("traceId", "upload-42");
+        try {
+            extractor.enrichParallel(List.of(new Document("청크1"), new Document("청크2"), new Document("청크3")),
+                    new Semaphore(3), "test.txt", e -> {});
+        } finally {
+            org.slf4j.MDC.clear();
+        }
+        assertThat(seen).containsExactly("upload-42");
+    }
 }

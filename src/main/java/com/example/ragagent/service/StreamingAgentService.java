@@ -5,11 +5,13 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmContextOverflowException;
+import com.example.ragagent.exception.AsyncExceptions;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
+import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -33,6 +35,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -202,32 +206,39 @@ public class StreamingAgentService {
                         userId, history, rm, true, locale);
             } else {
                 // 일반 RAG 모드: history 로드 + (독립화 →) 분류 병렬 실행
-                try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-                    CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                            () -> resolveHistory(userId, form.threadId(), false,
-                                    form.responseModeOrDefault(), rm, form.question()), exec);
-                    // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
-                    // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
-                    // 독립화를 기다린다.
-                    CompletableFuture<QuestionCondenser.Condensed> condensedF =
-                            condenseAsync(userId, form.threadId(), form.question(), locale, exec);
-                    CompletableFuture<String> typeF = condensedF.thenApplyAsync(
-                            c -> classifierService.classifyOnly(
-                                    c == null ? form.question() : c.searchQuestion(), locale), exec);
+                // 두 가지를 같이 건다: (1) MdcPropagation — future 들이 워커의 traceId 를 잇는다;
+                // (2) CompletionException 풀기 — join() 이 감싼 소진 예외가 아래 전용 catch 에 잡히게.
+                try {
+                    try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                        Executor exec = MdcPropagation.propagating(pool);
+                        CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
+                                () -> resolveHistory(userId, form.threadId(), false,
+                                        form.responseModeOrDefault(), rm, form.question()), exec);
+                        // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
+                        // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
+                        // 독립화를 기다린다.
+                        CompletableFuture<QuestionCondenser.Condensed> condensedF =
+                                condenseAsync(userId, form.threadId(), form.question(), locale, exec);
+                        CompletableFuture<String> typeF = condensedF.thenApplyAsync(
+                                c -> classifierService.classifyOnly(
+                                        c == null ? form.question() : c.searchQuestion(), locale), exec);
 
-                    QuestionCondenser.Condensed condensed = condensedF.join();
-                    AgentState.Builder builder =
-                            AgentState.of(form.question(), form.version(), form.threadId(),
-                                            userId, historyF.join(), rm, false, locale)
-                                    .toBuilder().questionType(typeF.join());
-                    if (condensed != null) {
-                        builder.searchQuestion(condensed.searchQuestion())
-                               .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                        QuestionCondenser.Condensed condensed = condensedF.join();
+                        AgentState.Builder builder =
+                                AgentState.of(form.question(), form.version(), form.threadId(),
+                                                userId, historyF.join(), rm, false, locale)
+                                        .toBuilder().questionType(typeF.join());
+                        if (condensed != null) {
+                            builder.searchQuestion(condensed.searchQuestion())
+                                   .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                        }
+                        initial = builder.build();
                     }
-                    initial = builder.build();
+                } catch (CompletionException e) {
+                    throw AsyncExceptions.unwrap(e);
                 }
             }
-            // carry the selected search-scope tags + answer-length mode into the graph state.
+            // carry the selected search-scope tags + response mode into the graph state.
             initial = initial.toBuilder()
                     .selectedTags(form.selectedTags())
                     .responseMode(form.responseModeOrDefault())
@@ -258,9 +269,7 @@ public class StreamingAgentService {
             emitter.complete();
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
-            String msg = messageSource.getMessage("error.llm.exhausted", null,
-                    "LLM 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.", LocaleContextHolder.getLocale());
-            trySendError(emitter, msg);
+            trySendError(emitter, LlmOutageMessages.resolve(messageSource, e, LocaleContextHolder.getLocale()));
             emitter.complete();
         } catch (LlmBackpressureException e) {
             // Provider is healthy but momentarily at capacity — not an error, just backpressure.
@@ -471,10 +480,9 @@ public class StreamingAgentService {
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
         m.put("generative",        result.responseMode().generative());
-        // 이 턴에서 좋아요가 실제로 무언가를 하는가. LIKE의 유일한 소비자가 큐레이션이라
-        // S·C에서는 눌러도 curated_qa 행조차 생기지 않는데, 피드백 값은 저장돼 버튼만 눌린
-        // 채로 남는다 — 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이
-        // 아니라 성질을 내려보낸다.
+        // 이 턴에서 좋아요가 실제로 무언가를 열어 주는가. 좋아요의 값은 지식 제안 폼을 여는 것뿐인데
+        // (§10.11) S 에서는 그 폼 자체를 열 수 없다 — 그래도 버튼을 살려 두면 피드백 값만 저장되고
+        // 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이 아니라 성질을 내려보낸다.
         m.put("proposable",         result.responseMode().allowsSubmission());
         // 스트리밍 클라이언트에는 메시지 번들이 없으므로 사유 문구까지 서버가 해석해 보낸다
         // (서버 템플릿 두 곳은 키를 직접 읽는다). 사유는 모드마다 다르다 — ResponseMode 참조.

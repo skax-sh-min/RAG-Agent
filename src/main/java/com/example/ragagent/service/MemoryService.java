@@ -22,7 +22,6 @@ import java.util.Optional;
 
 /**
  * Multi-turn conversation memory keyed by userId + thread_id.
- * Equivalent to LangGraph MemorySaver in the Python version.
  * Delegates storage to MemoryRepository (default: SQLite).
  */
 @Service
@@ -43,10 +42,8 @@ public class MemoryService {
     private final LlmRouter llmRouter;
     private final ProviderContextWindows contextWindows;
 
-    // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
-    // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
-    // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
-    // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
+    // The history budget derives from the single "LLM max tokens" source (app.llm.max-tokens /
+    // LLM_MAX_TOKENS, default 10000) — see maxConversationChars() below.
     @org.springframework.beans.factory.annotation.Autowired
     public MemoryService(MemoryRepository repository, AppProperties props,
                          LlmRouter llmRouter, ProviderContextWindows contextWindows) {
@@ -79,16 +76,14 @@ public class MemoryService {
      * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
      * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
      *
-     * <p><b>매 호출 재계산한다</b> — 다만 이것은 버그 수정이 아니라 방어다. {@code app.llm.max-tokens}
-     * 는 오늘 기준 <b>핫 편집 대상이 아니다</b>({@code SettingsKeys.HOT_EDITABLE} 에 없고
-     * {@code llmSafe()} 에도 오버라이드 조회가 없다 — 프로바이더 빈 생성 시점에 구워지므로 재기동해야
-     * 바뀐다). 그래서 생성자에서 굳혀도 값이 낡지는 않았다.
+     * <p><b>매 호출 재계산한다 — 이제는 필수다.</b> {@code app.llm.max-tokens} 는 §6.26 A6 에서 핫
+     * 편집 대상이 됐으므로({@code SettingsKeys.LLM_MAX_TOKENS}) 생성자에서 굳히면 {@code /settings}
+     * 변경 뒤에도 이력 예산만 옛 값을 쓴다.
      *
-     * <p>그럼에도 매번 읽는 이유는 이 값을 파생시켜 쓰는 곳이 늘었기 때문이다 — 컨텍스트 입력 예산
-     * ({@code AnswerService.fitToBudget()})과 인덱싱 출력 상한({@code IndexingOutputCap})이 같은
-     * {@code max-tokens} 에서 나온다. 그중 하나만 생성자에 굳어 있으면, 나중에 이 값이 핫 편집으로
-     * 열리는 순간 <b>둘이 서로 다른 상한을 믿는 상태</b>가 조용히 만들어진다. 계산 비용이 없으므로
-     * 그 가능성을 미리 닫아 둔다.
+     * <p>같은 {@code max-tokens} 에서 파생되는 자리가 여럿이라는 점이 그 이유를 더한다 — 컨텍스트
+     * 입력 예산({@code AnswerService.fitToBudget()})과 인덱싱 출력 상한({@code IndexingOutputCap})이
+     * 모두 여기서 나온다. 하나만 굳어 있으면 <b>둘이 서로 다른 상한을 믿는 상태</b>가 조용히
+     * 만들어진다.
      */
     public int maxConversationChars() {
         return Math.max(1_000, props.llmSafe().maxTokens() / 2);
@@ -294,7 +289,8 @@ public class MemoryService {
         return repository.getRecentTurns(userId, threadId);
     }
 
-    /** Single turn lookup — used by {@link CuratedQaService} to snapshot question/answer on like. */
+    /** Single turn lookup — used by {@code CuratedSubmissionService} to prefill a 지식 제안 from a
+     *  좋아요한 답변, and by {@code ChunkReportService} to snapshot the question a report was filed on. */
     public Optional<MemoryRepository.Turn> getTurn(String userId, String threadId, long turnId) {
         return repository.getTurn(userId, threadId, turnId);
     }

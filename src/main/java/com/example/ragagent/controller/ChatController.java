@@ -1,6 +1,8 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.web.MdcPropagation;
+import com.example.ragagent.service.LlmOutageMessages;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
@@ -51,7 +53,7 @@ public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
     /** 입력창 아래 뜨는 이전 질문 제안 목록의 최대 개수. */
-    private static final int MAX_QUESTION_SUGGESTIONS = 12;
+    private static final int MAX_QUESTION_SUGGESTIONS = 20;
 
     private final AgentService agentService;
     private final StreamingAgentService streamingAgentService;
@@ -152,7 +154,7 @@ public class ChatController {
     public void precomputeSummary(ThreadContext ctx, @RequestParam String threadId) {
         String userId = ctx.userId();
         Locale locale = ctx.locale();
-        Thread.ofVirtual().start(() -> summarizerService.precompute(userId, threadId, locale));
+        Thread.ofVirtual().start(MdcPropagation.wrap(() -> summarizerService.precompute(userId, threadId, locale)));
     }
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -168,7 +170,9 @@ public class ChatController {
         String userId = ctx.userId();
         threadMetaService.getOrCreate(userId, normalizedForm.threadId(), normalizedForm.version());
         threadMetaService.updateTags(userId, normalizedForm.threadId(), normalizedForm.selectedTags());
-        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, normalizedForm, emitter));
+        // MdcPropagation — 워커(와 그 안의 future·검색·Vision)가 이 요청의 traceId 로 로그를 남긴다.
+        Thread worker = Thread.ofVirtual().start(
+                MdcPropagation.wrap(() -> streamingAgentService.run(userId, normalizedForm, emitter)));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
                     normalizedForm.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
@@ -267,8 +271,8 @@ public class ChatController {
             return "fragments/message-error :: message";
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
-            model.addAttribute("errorMessage", messageSource.getMessage(
-                    "error.llm.exhausted", null, LocaleContextHolder.getLocale()));
+            model.addAttribute("errorMessage",
+                    LlmOutageMessages.resolve(messageSource, e, LocaleContextHolder.getLocale()));
             return "fragments/message-error :: message";
         } catch (Exception e) {
             log.error("Chat error", e);
@@ -333,27 +337,44 @@ public class ChatController {
                 settingsService.effectiveResponseMode(request.responseMode()));
     }
 
+    /**
+     * 입력 중 추천 목록. {@code threadId} 는 화면이 폼의 hidden 값을 그대로 보낸다 — 세션의
+     * {@code ThreadContext.threadId()} 가 아니다(그 값은 어떤 컨트롤러도 읽지 않는다, CLAUDE.md).
+     * 이 값으로 항목의 {@code origin} 이 갈리고(현재 대화 = 이동, 나머지 = 재사용), 비워 보내면
+     * 전부 재사용 항목으로만 나온다.
+     *
+     * <p>범위는 {@link QuestionReuseService.Scope#SHARED} 고정이라 <b>HTTP 로 받지 않는다</b>.
+     * 예전에는 {@code scope} 파라미터를 선언해 놓고 값을 읽지 않았다 — 받되 읽지 않는 손잡이는
+     * {@code ?scope=me} 가 동작한다고 믿게 만든다. "내 질문만"이 성립하려면 화면 토글과 함께
+     * 기본 배포(no-auth {@code guest-identity=shared})의 공유 게스트 id 부터 풀어야 한다:
+     * 방문자 전원이 같은 {@code user_id} 라 그 필터가 아무것도 걸러내지 못하며,
+     * {@link QuestionReuseService#originOf} 가 같은 이유로 {@code elsewhere} 로 접는다.
+     * 출처 구분은 필터가 아니라 항목마다 붙는 {@code origin} 배지가 한다.
+     */
     @GetMapping("/api/v1/questions/suggest")
     @ResponseBody
     public List<QuestionReuseService.Suggestion> suggestQuestions(
             ThreadContext ctx,
             @RequestParam(name = "q", defaultValue = "") String q,
-            @RequestParam(name = "scope", defaultValue = "shared") String scope,
+            @RequestParam(name = "threadId", required = false) String threadId,
             @RequestParam(name = "limit", defaultValue = "12") int limit) {
         if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
-        // 이전 질문 제안은 최대 12개 (요청이 더 크게 와도 서버에서 자른다)
+        // 이전 질문 제안은 최대 20개 (요청이 더 크게 와도 서버에서 자른다; 목록 상자는 220px 에서 스크롤)
         int bounded = Math.max(1, Math.min(limit, MAX_QUESTION_SUGGESTIONS));
-        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.SHARED, q, bounded);
+        return questionReuseService.suggest(ctx.userId(), threadId, QuestionReuseService.Scope.SHARED, q, bounded);
     }
 
+    /**
+     * 추천 항목을 실제로 재사용한다. 범위는 {@code suggest} 와 같은 이유로
+     * {@link QuestionReuseService.Scope#SHARED} 고정이며 HTTP 로 받지 않는다.
+     */
     @PostMapping("/api/v1/questions/reuse")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> reuseQuestionAnswer(
             ThreadContext ctx,
             @RequestParam("turnId") long turnId,
             @RequestParam("threadId") String threadId,
-            @RequestParam(name = "version", defaultValue = "latest") String version,
-            @RequestParam(name = "scope", defaultValue = "shared") String scope) {
+            @RequestParam(name = "version", defaultValue = "latest") String version) {
         if (questionReuseService == null) {
             return ResponseEntity.ok(Map.of(
                 "reused", false,
@@ -378,14 +399,24 @@ public class ChatController {
         threadMetaService.getOrCreate(ctx.userId(), threadId, version);
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneOffset.UTC).format(Instant.now());
+        // 재사용 턴은 원본 답변을 그대로 싣는 턴이라, 그 답변이 어떻게 만들어졌는지 — 응답 모드·
+        // 검색 축(Direct 여부)·태그 스코프 — 도 원본에서 복사한다. 다른 채팅 경로가 요청 값이 아니라
+        // result.responseMode() 를 저장하는 것과 같은 규칙이다: 저장된 값이 두 글자 표기·좋아요
+        // 프리필·다음 턴의 이력 렌더를 정한다. 예전에는 자리표시자('M', direct 0, 태그 없음)를 썼고,
+        // 그래서 좋아요한 Direct 답변을 재사용한 턴이 새로고침 뒤 [RN] 으로 찍혀 출처가 없는 이유가
+        // 화면 어디에도 없었다. parse() 를 거치는 이유는 원본이 구 'M'/'L'·NULL 일 수 있어서다 —
+        // 화면이 그 값들을 N 으로 읽으므로 저장도 같은 이름으로 한다.
+        String responseMode = ResponseMode.parse(lookup.responseMode()).name();
         long savedTurnId = memoryService.addTurn(
             ctx.userId(), threadId,
             lookup.question(), "",
             askedAt, 0, 0, 0,
-            "db-reuse", 0, "M", "", lookup.sourceTurnId());
+            "db-reuse", 0, responseMode, lookup.selectedTags(), lookup.directMode(), lookup.sourceTurnId());
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
         threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
 
+        // responseMode/directMode 를 함께 내려 화면이 같은 두 글자 표기를 달게 한다 — 폼에 선택된
+        // 모드로 그리면 새로고침(서버 렌더)과 어긋난다.
         return ResponseEntity.ok(Map.of(
             "reused", true,
             "turnId", savedTurnId,
@@ -394,7 +425,9 @@ public class ChatController {
             "sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId()),
             "sourceChunkIds", lookup.sourceChunkIds(),
             "sourceTurnId", lookup.sourceTurnId(),
-            "provider", "db-reuse"));
+            "provider", "db-reuse",
+            "responseMode", responseMode,
+            "directMode", lookup.directMode()));
     }
 
     /**

@@ -32,6 +32,9 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -123,6 +126,85 @@ class DocumentControllerHtmxTest {
         // if the upload only wrote to a temp file, this file would be absent and the next sync
         // would wipe the document's embeddings.
         assertThat(tempDir.resolve("documents").resolve("keep.pdf")).exists();
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — .md + skipLlmCorrection + 펜스 문제 → 409 사전 점검, 파일은 저장되지 않고 인덱싱도 시작되지 않는다")
+    void uploadDocument_skipLlm_fenceProblems_returns409WithoutPersisting() throws Exception {
+        when(ragService.checkUploadFenceHealth(any())).thenReturn(List.of(
+                new com.example.ragagent.service.MarkdownCorrectionService.FenceProblem(
+                        5, "tagged_closer", "닫는 펜스에 언어 태그가 붙어 있습니다")));
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notes.md", "text/markdown", "# t\n\n```java\nx\n```java\n".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("skipLlmCorrection", "true")
+                        .with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value("preflight_warnings"))
+                .andExpect(jsonPath("$.problems[0].line").value(5))
+                .andExpect(jsonPath("$.problems[0].kind").value("tagged_closer"));
+
+        assertThat(tempDir.resolve("documents").resolve("notes.md")).doesNotExist();
+        verify(indexingProgressService, never()).newTaskId();
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 같은 파일에 force=true → 202, skipLlmCorrection 이 인덱서까지 전달된다")
+    void uploadDocument_skipLlm_force_proceedsWithFlag() throws Exception {
+        when(indexingProgressService.newTaskId()).thenReturn("task-md");
+        when(ragService.checkUploadFenceHealth(any())).thenReturn(List.of(
+                new com.example.ragagent.service.MarkdownCorrectionService.FenceProblem(
+                        5, "tagged_closer", "닫는 펜스에 언어 태그가 붙어 있습니다")));
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notes.md", "text/markdown", "# t\n\n```java\nx\n```java\n".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("skipLlmCorrection", "true")
+                        .param("force", "true")
+                        .with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.taskId").value("task-md"));
+
+        // force skips the pre-flight entirely — the operator already saw the list.
+        verify(ragService, never()).checkUploadFenceHealth(any());
+        verify(ragService, timeout(2000)).indexDocument(any(), any(), eq("notes.md"), any(), any(),
+                eq(false), eq(false), eq(true), any());
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — skipLlmCorrection 은 .md 가 아니면 무시된다(사전 점검 없음, 플래그 false 로 전달)")
+    void uploadDocument_skipLlm_nonMarkdown_isIgnored() throws Exception {
+        when(indexingProgressService.newTaskId()).thenReturn("task-txt");
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notes.txt", "text/plain", "plain text".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("skipLlmCorrection", "true")
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
+
+        verify(ragService, never()).checkUploadFenceHealth(any());
+        verify(ragService, timeout(2000)).indexDocument(any(), any(), eq("notes.txt"), any(), any(),
+                eq(false), eq(false), eq(false), any());
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — .md 라도 skipLlmCorrection 이 꺼져 있으면 사전 점검을 하지 않는다")
+    void uploadDocument_md_withoutSkipLlm_noPreflight() throws Exception {
+        when(indexingProgressService.newTaskId()).thenReturn("task-md2");
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notes.md", "text/markdown", "# t\n\n```java\nx\n```java\n".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
+
+        verify(ragService, never()).checkUploadFenceHealth(any());
     }
 
     @Test

@@ -141,7 +141,8 @@ public class DataSourceConfig {
      * Dedicated vector DataSource — created only when the separate-vector-DB switch is on.
      * Holds {@code vec_embeddings}/{@code vec_document_chunks}/{@code chunk_fts}. Replicates the
      * operational pool constraints (pool=1) and loads the vec0 extension here instead of on memory.db.
-     * WAL/busy_timeout PRAGMAs are applied by {@code SqliteVecSchemaInitializer} on first use.
+     * The session PRAGMAs ride on the JDBC URL like the operational DataSource's ({@link #SESSION_PRAGMAS}),
+     * since {@code connectionInitSql} is already taken by {@code load_extension()} here.
      */
     @Bean(name = "vectorDataSource")
     @ConditionalOnExpression(SEPARATE_VECTOR_DB)

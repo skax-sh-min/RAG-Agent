@@ -98,9 +98,10 @@ public final class HistoryPolicy {
      * {@code fallbackChars}(= {@code MemoryService.maxConversationChars()}) 를 그대로 돌려준다.
      * {@code ProviderContextWindows} 가 "모름"을 값으로 표현하는 이유와 같다.
      *
-     * <p><b>이 값은 넓히기만 하는 것이 아니다.</b> 창이 작은 배포에서는 오늘의 고정 5,000자보다
-     * 작게 나올 수 있고, 그때 줄이는 것이 옳다 — Direct 경로에는 지금 예산 가드가 없어서 그 5,000자가
-     * 이미 창을 넘기고 있었다. 규칙 하나를 정직하게 적용하면 확대와 축소가 같은 식에서 나온다.
+     * <p><b>이 값은 넓히기만 하는 것이 아니다.</b> 창이 작은 배포에서는 예전의 고정 5,000자보다
+     * 작게 나올 수 있고, 그때 줄이는 것이 옳다 — 그 고정값은 창을 보지 않아 이미 넘기고 있었다.
+     * 규칙 하나를 정직하게 적용하면 확대와 축소가 같은 식에서 나온다. 실제로 보내기 직전의 마지막
+     * 안전망은 {@code DirectAnswerService.withFittedHistory()} 가 따로 맡는다.
      *
      * @param contextWindow      이 호출을 받을 프로바이더의 창(토큰). {@code <= 0} 이면 모름
      * @param outputReservation  이 호출이 출력에 잡아 둘 자리

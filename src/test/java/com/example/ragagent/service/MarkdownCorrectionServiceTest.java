@@ -224,6 +224,52 @@ class MarkdownCorrectionServiceTest {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // skipLlmCorrection — LLM 재작성만 건너뛰고 결정적 패스는 그대로
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("skipLlmCorrection=true — LLM 을 한 번도 부르지 않고, 펜스 복구·소제목 번호·후처리는 그대로 적용된다")
+    void skipLlmCorrection_runsDeterministicPassesOnly(@TempDir Path dir) throws Exception {
+        // tagged closer (```java … ```java) — normally the LLM pass's typical damage; here the
+        // author's own mistake, healed by fixClosingFences without a model call.
+        String md = """
+                # 문서
+
+                ## 첫 장
+
+                ```java
+                System.out.println("x");
+                ```java
+
+                ## 둘째 장
+
+                본문
+                """;
+        Path out = dir.resolve("corrected.md");
+
+        String result = service.correct(md, "doc", out, false, true, false, true, null, null);
+
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        assertThat(result).doesNotContain("```java\n\n## 둘째");   // closer healed to bare ```
+        assertThat(countOccurrences(result, "```java")).isEqualTo(1);
+        assertThat(result).contains("## 1. 첫 장").contains("## 2. 둘째 장");
+        assertThat(out).exists();
+        assertThat(Files.readString(out)).isEqualTo(result);
+        assertThat(logAppender.list).anyMatch(e -> e.getFormattedMessage().contains("LLM 교정 건너뜀"));
+    }
+
+    @Test
+    @DisplayName("skipLlmCorrection=false — 8-arg 오버로드와 같은 LLM 경로(회귀 방지)")
+    void skipLlmCorrectionFalse_stillCallsLlm() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("## 교정됨");
+
+        String result = service.correct("## 원문\n\n내용", "doc", null, false, false, false, false, null, null);
+
+        verify(llmRouter, times(1)).executeWithTracking(any(), any(), any(), any());
+        assertThat(result).contains("교정됨");
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // splitByPages — PPTX slide bundling + oversized-slide split by shape-group blocks
     // ---------------------------------------------------------------------------------------------
 

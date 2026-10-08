@@ -974,6 +974,120 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString(">3<")));
     }
 
+    /**
+     * 값이 비어 있는 큐레이션 항목은 대개 <b>이 필드가 생기기 전에 승인된 옛 항목</b>이다 —
+     * 그런데 관리자 패널에는 「빈 칸 자동 생성」이 없어서 그걸 채울 방법이 손입력뿐이었다.
+     * 헬퍼를 {@code layout/base.html} 로 옮겨 지식 제안 폼과 한 벌을 쓰게 했고, 그래서 이
+     * 페이지에서 그 함수가 <b>닿는지</b>까지 확인한다(예전에는 curated-submissions.html 안에
+     * 있어서 이 페이지에서는 존재하지도 않았다).
+     */
+    @Test
+    @DisplayName("GET /admin — 큐레이션 편집 패널이 공유 「빈 칸 자동 생성」 버튼을 쓴다")
+    void adminPage_curatedPanelUsesTheSharedEnrichButton() throws Exception {
+        stubVectorStoreView();
+
+        String html = mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .as("헬퍼가 레이아웃에 있어야 이 페이지에서 부를 수 있다")
+                .contains("function wireEnrichButton");
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("curated-edit-enrich-btn")
+                .contains("wireEnrichButton('curated-edit-enrich-btn'");
+    }
+
+    // ── 채팅의 「청크 수정」 딥링크 (/admin?chunk=…) ──────────────────────────
+    //
+    // 어느 화면을 열지는 **서버가** 정한다 — 채팅은 청크 id 말고는 아무것도 모른다(컬렉션이
+    // 무엇인지도, 큐레이션 축인지도). 그래서 이 세 분기가 컨트롤러의 계약이다.
+
+    /** 페이지 렌더에 필요한 최소 스텁 — admin.html 이 vectorStore 를 바로 읽는다. */
+    private void stubVectorStoreView() {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
+                        "/data/memory.db", null));
+    }
+
+    private static com.example.ragagent.repository.ChunkReportRepository.ChunkLocation
+            location(String docId, String version) {
+        return new com.example.ragagent.repository.ChunkReportRepository.ChunkLocation(
+                docId, version, "manual.pdf", "본문",
+                com.example.ragagent.repository.ChunkReportRepository.ChunkLocation.SOURCE_ORIGINAL);
+    }
+
+    @Test
+    @DisplayName("GET /admin?chunk=… — 문서 청크는 컬렉션을 해석해 청크 편집기로 연다")
+    void deepLink_documentChunkOpensTheChunkEditor() throws Exception {
+        stubVectorStoreView();
+        when(chunkReportService.locate("chunk-7")).thenReturn(Optional.of(location("doc-1", "latest")));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+
+        String html = mvc.perform(get("/admin").param("chunk", "chunk-7").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("openChunkId", "chunk-7"))
+                .andExpect(model().attribute("openChunkCollection", "manual_latest"))
+                .andExpect(model().attributeDoesNotExist("openCuratedId"))
+                .andReturn().getResponse().getContentAsString();
+
+        // 모델에 실렸다고 화면이 그 값을 쓰는 것은 아니다 — 이 상수들은 th:inline="javascript" 가
+        // 붙은 블록에 있어야 한다. 없으면 Thymeleaf 가 값을 **주석 안에** 써 넣고 기본값(null)을
+        // 그대로 남기며, 문법 오류가 아니라서 딥링크가 조용히 아무 일도 하지 않는다.
+        org.assertj.core.api.Assertions.assertThat(html)
+                .containsPattern("OPEN_CHUNK_ID\s*=\s*\"chunk-7\";")
+                .containsPattern("OPEN_CHUNK_COLLECTION\s*=\s*\"manual_latest\";");
+    }
+
+    /**
+     * 큐레이션 청크를 청크 편집기로 보내면 함정이 된다: 거기서는 요약·키워드가 읽기 전용이고,
+     * 본문을 고쳐 저장해도 「이 청크만 재인덱싱」이 {@code reembedRow()} 로 가면서
+     * {@code curated_qa} 에서 다시 써 그 편집을 그 자리에서 되돌린다. 고칠 수 있는 자리는
+     * 큐레이션 Q&A 패널 하나다.
+     */
+    @Test
+    @DisplayName("GET /admin?chunk=… — 큐레이션 청크는 큐레이션 Q&A 패널로 보낸다 (편집기 아님)")
+    void deepLink_curatedChunkOpensTheCuratedPanel() throws Exception {
+        stubVectorStoreView();
+        when(chunkReportService.locate("curated-1")).thenReturn(Optional.of(
+                location("curated:1", com.example.ragagent.service.CuratedQaService.CURATED_VERSION)));
+
+        String html = mvc.perform(get("/admin").param("chunk", "curated-1").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("openCuratedId", 1L))
+                .andExpect(model().attributeDoesNotExist("openChunkId"))
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .containsPattern("OPEN_CURATED_ID\s*=\s*1;");
+    }
+
+    /** 조용히 아무 일도 없는 것이 가장 나쁘다 — 화면이 못 찾았다고 말할 수 있어야 한다. */
+    @Test
+    @DisplayName("GET /admin?chunk=… — 못 찾으면 페이지는 열리고 그 사실을 모델로 알린다")
+    void deepLink_unknownChunkIsReported() throws Exception {
+        stubVectorStoreView();
+        when(chunkReportService.locate("gone")).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin").param("chunk", "gone").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("openChunkMissing", "gone"))
+                .andExpect(model().attributeDoesNotExist("openChunkId"))
+                .andExpect(model().attributeDoesNotExist("openCuratedId"));
+    }
+
+    @Test
+    @DisplayName("GET /admin — chunk 파라미터가 없으면 아무것도 열지 않는다")
+    void plainAdminPageOpensNothing() throws Exception {
+        stubVectorStoreView();
+
+        mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attributeDoesNotExist("openChunkId"))
+                .andExpect(model().attributeDoesNotExist("openCuratedId"))
+                .andExpect(model().attributeDoesNotExist("openChunkMissing"));
+    }
+
     @Test
     @DisplayName("GET /admin/chunk-reports/chunks/{id} — 코멘트 N개를 한 화면에 + 변경 여부 배지")
     void chunkReportDetail_rendersEveryComment() throws Exception {
