@@ -12,18 +12,25 @@
      숫자는 하나도 여기서 계산하지 않는다 — ThinkingPreviewService 가 런타임과 같은 함수로 네 수준 전부를 미리 계산해 두었고,
      드롭다운은 미리 그려진 칸(data-pane)을 보이기만 한다(settings.html 의 스크립트). JS 테스트 하네스가 없어 계산을 서버에 둔다. -->
 
+<!-- 접을 수 있는 카드 — 처음에는 접혀 있다(<details> 에 open 이 없다). 펴 둔 상태는 카드가 통째로 바뀐 뒤에도 settings.html 의
+     스크립트가 이어 준다. [다시 계산] 은 본문 안에 있다 — 접힌 카드에서는 누를 이유가 없고, 머리말(summary) 안의 버튼은 누를 때
+     카드까지 접었다 폈다 할 수 있다. -->
 <div th:fragment="card" id="thinking-card" class="card mb-4"
      hx-get="/admin/settings/thinking" hx-trigger="thinking-preview-stale from:body" hx-swap="outerHTML">
-    <div class="card-header d-flex align-items-center flex-wrap gap-2">
+  <details class="thinking-card-details">
+    <summary class="card-header d-flex align-items-center flex-wrap gap-2 thinking-card-summary">
+        <i class="bi bi-chevron-right thinking-chevron"></i>
         <i class="bi bi-lightbulb"></i>
         <span class="fw-semibold" th:text="#{settings.thinking.title}">Thinking level per call site</span>
         <span class="badge bg-secondary" th:text="#{settings.thinking.admin-only}">Admin only</span>
-        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
-                hx-get="/admin/settings/thinking" hx-target="#thinking-card" hx-swap="outerHTML">
-            <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.thinking.recalc}">Recalculate</span>
-        </button>
-    </div>
+    </summary>
     <div class="card-body">
+        <div class="d-flex justify-content-end mb-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    hx-get="/admin/settings/thinking" hx-target="#thinking-card" hx-swap="outerHTML">
+                <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.thinking.recalc}">Recalculate</span>
+            </button>
+        </div>
         <p class="text-secondary small mb-2" th:text="#{settings.thinking.intro}">intro</p>
 
         <!-- 계산 기준 줄 — 이 숫자들이 서 있는 값. 추정이 얼마나 맞는지가 같은 화면에 있어야 한다. -->
@@ -58,6 +65,7 @@
             </th:block>
         </div>
     </div>
+  </details>
 </div>
 
 

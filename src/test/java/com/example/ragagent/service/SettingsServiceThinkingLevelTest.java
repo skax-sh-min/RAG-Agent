@@ -182,11 +182,15 @@ class SettingsServiceThinkingLevelTest {
         assertThat(info.auto()).as("설정에 적지 않았으니 AUTO 가 풀린 값이다").isTrue();
         assertThat(info.hasRejected()).isFalse();
         assertThat(info.supportKey()).isEqualTo("settings.thinking.support.on-off");
+        assertThat(service.providerRows().get(0).thinkingControl())
+                .as("필드를 싣는 서버 — 호출 지점별 설정이 그 서버에 적용된다").isEqualTo(SettingsView.ThinkingControl.APPLIED);
 
         harness.dialects.markRejected("local", ThinkingDialect.TEMPLATE_KWARGS_FIELD);
         SettingsView.ProviderThinking rejected = service.providerRows().get(0).thinking();
         assertThat(rejected.hasRejected()).isTrue();
         assertThat(rejected.rejected()).containsExactly(ThinkingDialect.TEMPLATE_KWARGS_FIELD);
+        assertThat(service.providerRows().get(0).thinkingControl())
+                .as("서버가 거부해 뺀 뒤에는 서버가 정한다").isEqualTo(SettingsView.ThinkingControl.SERVER);
     }
 
     @Test
@@ -201,5 +205,6 @@ class SettingsServiceThinkingLevelTest {
         assertThat(info.support()).isEqualTo(ThinkingDialect.Support.NONE);
         assertThat(info.field()).isNull();
         assertThat(info.supportKey()).isEqualTo("settings.thinking.support.none");
+        assertThat(service.providerRows().get(0).thinkingControl()).isEqualTo(SettingsView.ThinkingControl.SERVER);
     }
 }

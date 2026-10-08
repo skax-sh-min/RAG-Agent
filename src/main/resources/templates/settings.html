@@ -110,7 +110,6 @@
                 <div class="col-6 col-md-4">
                     <span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
                     <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
-                    <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
                 </div>
             </div>
         </div>
@@ -123,13 +122,23 @@
          그리고 창 재탐지가 끝났을 때(thinking-preview-stale) 다시 불러온다 — 창이 바뀌면 예산 숫자가 전부 바뀌기 때문이다. */-->
     <div th:if="${isAdmin}" id="thinking-card" class="card mb-4"
          hx-get="/admin/settings/thinking" hx-trigger="load, thinking-preview-stale from:body" hx-swap="outerHTML">
-        <div class="card-header fw-semibold" th:text="#{settings.thinking.title}">Thinking level per call site</div>
-        <div class="card-body text-secondary small" th:text="#{settings.thinking.loading}">Loading…</div>
+        <!--/* 카드는 접힌 채로 시작한다 — 자리표시자도 접힌 카드와 같은 한 줄이라, 내용이 도착해도 화면이 출렁이지 않는다. */-->
+        <div class="card-header d-flex align-items-center flex-wrap gap-2 thinking-card-summary">
+            <i class="bi bi-chevron-right thinking-chevron"></i>
+            <i class="bi bi-lightbulb"></i>
+            <span class="fw-semibold" th:text="#{settings.thinking.title}">Thinking level per call site</span>
+            <span class="text-secondary small" th:text="#{settings.thinking.loading}">Loading…</span>
+        </div>
     </div>
 
     <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
     <div class="card mb-4" th:each="group : ${settings.groups}">
-        <div class="card-header fw-semibold" th:text="#{__${group.title}__}">Group</div>
+        <div class="card-header fw-semibold">
+            <span th:text="#{__${group.title}__}">Group</span>
+            <!--/* 그룹 전체에 해당하는 말(예: 재기동 필요)은 제목 옆에 한 번만 — 항목마다 붙이지 않는다 */-->
+            <span th:if="${group.note != null}" class="badge bg-warning text-dark ms-2"
+                  th:text="#{__${group.note}__}">note</span>
+        </div>
         <div class="card-body py-2" style="font-size:.92rem;">
             <div class="row">
                 <div class="col-12 col-md-6" th:each="item : ${group.items}">
@@ -151,6 +160,25 @@
             if (e.target.name === 'chat-font-size') setChatFontSize(e.target.value);
         });
     });
+</script>
+
+<!--/* 생각 수준 카드의 접힘 — 처음에는 접혀 있고, 펴 두면 [다시 계산]·창 재탐지로 카드가 통째로 바뀐 뒤에도 펴진 채로 남는다.
+     기억은 이 화면을 연 동안만 간다(저장하지 않는다) — 새로 열면 늘 접힌 채 시작한다는 것이 요구다. toggle 은 버블링하지 않아 캡처로 듣고,
+     새 카드는 htmx:load 에서 다시 편다(HTMX 로 들어온 노드마다 그 노드에서 발화한다). 카드는 관리자에게만 그려지므로 이 스크립트도
+     관리자에게만 싣는다. */-->
+<script th:if="${isAdmin}">
+    (function () {
+        var open = false;
+        document.addEventListener('toggle', function (e) {
+            if (e.target && e.target.classList && e.target.classList.contains('thinking-card-details')) open = e.target.open;
+        }, true);
+        document.addEventListener('htmx:load', function (e) {
+            var root = (e.detail && e.detail.elt) || e.target;
+            if (!open || !root || !root.querySelector) return;
+            var details = root.matches('.thinking-card-details') ? root : root.querySelector('.thinking-card-details');
+            if (details) details.open = true;
+        });
+    })();
 </script>
 
 <!-- 생각 수준 카드 — 드롭다운을 바꾸면 서버가 미리 그려 둔 그 수준의 칸을 보이기만 한다(숫자는 하나도 계산하지 않는다).

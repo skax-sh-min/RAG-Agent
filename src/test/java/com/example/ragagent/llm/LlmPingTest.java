@@ -200,4 +200,49 @@ class LlmPingTest {
         assertThat(r.error()).startsWith("models: HTTP 502");
         assertThat(r.error().length()).isLessThanOrEqualTo("models: ".length() + LlmPing.MAX_ERROR_LEN + 1);
     }
+
+    // ── reach: 핑의 첫 단계이자 설정 화면 상태 열의 정의 ───────────────────────────────────────────
+
+    @Test
+    @DisplayName("reach — 모델 목록 API 하나만 묻는다: 닿고, 응답 시간이 있고, 설정한 모델이 목록에 있는지를 안다")
+    void reachAsksOnlyTheModelList() throws IOException {
+        String base = start(Map.of("/v1/models", Route.json(MODELS)));   // 상태·추론 경로는 없다 — 물었다면 404
+
+        LlmPing.Reach reach = LlmPing.reach(base + "/v1", null, "gemma-4-e2b", 2, 2);
+
+        assertThat(reach.reachable()).isTrue();
+        assertThat(reach.latencyMs()).isNotNull();
+        assertThat(reach.modelListed()).isTrue();
+        assertThat(reach.error()).isNull();
+    }
+
+    @Test
+    @DisplayName("reach — HTTP 오류는 닿지 못한 것이고 사유에 상태 코드가 실린다 / 목록 모양이 이상하면 닿았지만 모델 여부는 모른다")
+    void reachDistinguishesErrorsFromOddBodies() throws IOException {
+        String down = start(Map.of("/v1/models", new Route(401, "application/json", "{\"error\":\"bad key\"}")));
+        LlmPing.Reach unauthorized = LlmPing.reach(down + "/v1", "k", "gemma-4-e2b", 2, 2);
+        assertThat(unauthorized.reachable()).isFalse();
+        assertThat(unauthorized.error()).startsWith("models: HTTP 401");
+        assertThat(unauthorized.modelListed()).isNull();
+        stop();
+
+        String odd = start(Map.of("/v1/models", Route.json("{\"object\":\"list\"}")));
+        LlmPing.Reach noData = LlmPing.reach(odd + "/v1", null, "gemma-4-e2b", 2, 2);
+        assertThat(noData.reachable()).isTrue();
+        assertThat(noData.modelListed()).as("목록을 못 읽었다 = 모른다(없다가 아니다)").isNull();
+        assertThat(noData.error()).contains("unexpected body");
+    }
+
+    @Test
+    @DisplayName("reach 와 probe 의 첫 단계는 같은 답을 낸다 — 설정 화면이 '정상'이라 한 서버를 핑이 안 닿는다고 하는 일이 없다")
+    void reachAgreesWithProbe() throws IOException {
+        String base = start(Map.of("/v1/models", Route.json("{\"data\":[{\"id\":\"other-model\"}]}")));
+
+        LlmPing.Reach reach = LlmPing.reach(base + "/v1", "no-key", "gemma-4-e2b", 2, 2);
+        LlmPing.Result ping = ping(base, false, 0);
+
+        assertThat(ping.reachable()).isEqualTo(reach.reachable());
+        assertThat(ping.modelListed()).isEqualTo(reach.modelListed());
+        assertThat(ping.error()).isEqualTo(reach.error());
+    }
 }

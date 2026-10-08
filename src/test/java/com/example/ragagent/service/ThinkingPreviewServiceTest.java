@@ -178,6 +178,27 @@ class ThinkingPreviewServiceTest {
     }
 
     @Test
+    @DisplayName("답변 사이트의 계산 근거에 블로킹 응답 예산과 그 값을 정한 항이 적힌다 — 설정의 '응답 예산' 행이 하던 말")
+    void answerBasisNamesTheBlockingBudgetAndTheTermThatWon() {
+        ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().maxTokens(12_000).window(32_768).build();
+
+        // N/C: 비율항(12,000 × 0.70 = 8,400)이 이긴다. S: 비율항 1,800 이 바닥 2,000 아래라 바닥이 받친다.
+        assertThat(h.row(ThinkingSite.ANSWER_RAG_N).cell(ThinkingLevel.OFF).basis())
+                .anyMatch(line -> line.contains("응답 예산 8,400(상한의 70%)"));
+        assertThat(h.row(ThinkingSite.ANSWER_RAG_C).cell(ThinkingLevel.OFF).basis())
+                .anyMatch(line -> line.contains("응답 예산 8,400(상한의 70%)"));
+        assertThat(h.row(ThinkingSite.ANSWER_RAG_S).cell(ThinkingLevel.OFF).basis())
+                .anyMatch(line -> line.contains("응답 예산 2,000(최소 보장)"));
+        assertThat(h.row(ThinkingSite.ANSWER_DIRECT_N).cell(ThinkingLevel.OFF).basis())
+                .as("Direct 도 같은 모드 예산을 쓴다").anyMatch(line -> line.contains("응답 예산 8,400(상한의 70%)"));
+
+        // 설정 상한이 모드의 요구보다 낮으면 그 사실이 보인다(§6.24 클램프)
+        ThinkingPreviewHarness small = ThinkingPreviewHarness.builder().maxTokens(3_000).build();
+        assertThat(small.row(ThinkingSite.ANSWER_RAG_N).cell(ThinkingLevel.OFF).basis())
+                .anyMatch(line -> line.contains("응답 예산 3,000(설정 상한)"));
+    }
+
+    @Test
     @DisplayName("32k 창의 답변(N) + 낮게 — 상한 8,192 까지 남은 자리에서 1,024 를 받는다")
     void answerOn32kGetsTheHeadroom() {
         Row answer = ThinkingPreviewHarness.builder().window(32_768).build().row(ThinkingSite.ANSWER_RAG_N);

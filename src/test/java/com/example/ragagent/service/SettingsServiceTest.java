@@ -10,9 +10,12 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderConnectivity;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ProviderThinkingDialects;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,9 +25,11 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -447,5 +452,131 @@ class SettingsServiceTest {
         assertThat(item.overridden()).isTrue();
         assertThat(item.value()).isEqualTo("77");
         assertThat(item.editable()).isTrue();
+    }
+
+    // ── 프로바이더 표의 상태 열: 미설정 · 확인 중 · 접속불가 · 정상 ───────────────────────────────
+
+    private static AppProperties propsWithProviderConfigs(List<AppProperties.ProviderConfig> pcs) {
+        AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
+                pcs, 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, false);
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                llm, null, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    private static AppProperties.ProviderConfig localConfig(String name, String baseUrl) {
+        return new AppProperties.ProviderConfig(name, baseUrl, "", "model", "BOTH", "LOCAL", 1, true, null, null, null);
+    }
+
+    private SettingsService serviceWith(AppProperties props, ProviderConnectivity connectivity) {
+        return new SettingsService(repo, props, audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(),
+                quotaService(), new ProviderThinkingDialects(), connectivity);
+    }
+
+    private static ProviderConnectivity.Result checked(boolean reachable, Long latencyMs, Boolean modelListed, String error) {
+        return new ProviderConnectivity.Result(reachable, latencyMs, modelListed, error, Instant.now());
+    }
+
+    @Test
+    @DisplayName("buildView — 화면을 열 때 상태 열은 늘 '확인 중'으로 시작한다(미설정은 그대로): 마지막 확인이 있어도 새로 묻고, 열면서 서버를 부르지 않는다")
+    void buildView_providerStatusAlwaysStartsChecking() {
+        ProviderConnectivity connectivity = mock(ProviderConnectivity.class);
+        when(connectivity.last("a")).thenReturn(Optional.of(checked(true, 12L, true, null)));
+        SettingsService svc = serviceWith(propsWithProviderConfigs(List.of(
+                localConfig("a", "http://a/v1"), localConfig("b", ""))), connectivity);
+
+        List<SettingsView.ProviderRow> rows = svc.buildView().providers();
+
+        assertThat(rows).extracting(r -> r.connection().state()).containsExactly(
+                SettingsView.ProviderConnection.State.CHECKING, SettingsView.ProviderConnection.State.NOT_CONFIGURED);
+        verify(connectivity, never()).refresh(any());
+    }
+
+    @Test
+    @DisplayName("providerRows — 토글·재탐지 뒤의 표는 마지막 확인을 그대로 보여 준다(정상 · 접속불가), 한 번도 안 물었으면 확인 중, 미설정은 묻지 않는다")
+    void providerRows_showTheLastCheck() {
+        ProviderConnectivity connectivity = mock(ProviderConnectivity.class);
+        when(connectivity.last("up")).thenReturn(Optional.of(checked(true, 12L, false, null)));
+        when(connectivity.last("down")).thenReturn(Optional.of(checked(false, 3000L, null, "models: ConnectException")));
+        when(connectivity.last("never")).thenReturn(Optional.empty());
+        SettingsService svc = serviceWith(propsWithProviderConfigs(List.of(
+                localConfig("up", "http://a/v1"), localConfig("down", "http://b/v1"),
+                localConfig("never", "http://c/v1"), localConfig("unset", " "))), connectivity);
+
+        List<SettingsView.ProviderRow> rows = svc.providerRows();
+
+        SettingsView.ProviderConnection up = rows.get(0).connection();
+        assertThat(up.state()).isEqualTo(SettingsView.ProviderConnection.State.OK);
+        assertThat(up.latencyMs()).isEqualTo(12L);
+        assertThat(up.isModelMissing()).isTrue();
+        SettingsView.ProviderConnection down = rows.get(1).connection();
+        assertThat(down.state()).isEqualTo(SettingsView.ProviderConnection.State.UNREACHABLE);
+        assertThat(down.error()).isEqualTo("models: ConnectException");
+        assertThat(rows.get(2).connection().isChecking()).isTrue();
+        assertThat(rows.get(3).connection().state()).isEqualTo(SettingsView.ProviderConnection.State.NOT_CONFIGURED);
+        verify(connectivity, never()).last("unset");
+    }
+
+    @Test
+    @DisplayName("refreshProviderConnections — 설정이 갖춰진 프로바이더에게만 묻고, 결과를 반영한 행을 돌려준다")
+    void refreshProviderConnections_asksOnlyTheConfiguredProviders() {
+        ProviderConnectivity connectivity = mock(ProviderConnectivity.class);
+        when(connectivity.last("a")).thenReturn(Optional.of(checked(true, 5L, true, null)));
+        SettingsService svc = serviceWith(propsWithProviderConfigs(List.of(
+                localConfig("a", "http://a/v1"), localConfig("unset", ""))), connectivity);
+
+        List<SettingsView.ProviderRow> rows = svc.refreshProviderConnections();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AppProperties.ProviderConfig>> targets = ArgumentCaptor.forClass(List.class);
+        verify(connectivity).refresh(targets.capture());
+        assertThat(targets.getValue()).extracting(AppProperties.ProviderConfig::name).containsExactly("a");
+        assertThat(rows.get(0).connection().state()).isEqualTo(SettingsView.ProviderConnection.State.OK);
+        assertThat(rows.get(1).connection().state()).isEqualTo(SettingsView.ProviderConnection.State.NOT_CONFIGURED);
+    }
+
+    @Test
+    @DisplayName("refreshProviderConnections — LOCAL_ONLY 배포에서 화면에 없는 프로바이더는 묻지도 않는다")
+    void refreshProviderConnections_followsTheVisibilityRule() {
+        ProviderConnectivity connectivity = mock(ProviderConnectivity.class);
+        Map<String, String> nameToRole = new LinkedHashMap<>();
+        nameToRole.put("local", "LOCAL");
+        nameToRole.put("gemini-flash", "NORMAL");
+        SettingsService svc = serviceWith(propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), connectivity);
+
+        svc.refreshProviderConnections();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AppProperties.ProviderConfig>> targets = ArgumentCaptor.forClass(List.class);
+        verify(connectivity).refresh(targets.capture());
+        assertThat(targets.getValue()).extracting(AppProperties.ProviderConfig::name).containsExactly("local");
+    }
+
+    // ── 그룹 제목 옆 표시 · 사라진 응답 예산 행 ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("buildView — '재기동 필요' 는 항목마다가 아니라 그룹 제목 옆에 한 번 붙는다(조회 전용 세 그룹)")
+    void buildView_restartNoteSitsOnTheGroupTitle() {
+        SettingsView view = service.buildView();
+
+        assertThat(view.groups()).filteredOn(g -> g.note() != null).extracting(SettingsView.SettingGroup::id)
+                .containsExactlyInAnyOrder("search_fixed", "storage", "cache");
+        assertThat(view.groups()).filteredOn(g -> g.note() != null)
+                .allSatisfy(g -> assertThat(g.note()).isEqualTo("settings.note.restart"));
+        assertThat(view.groups().stream().flatMap(g -> g.items().stream()))
+                .as("항목 옆에는 더 이상 붙이지 않는다").allMatch(item -> item.note() == null);
+    }
+
+    @Test
+    @DisplayName("buildView — 'LLM 튜닝' 그룹에는 읽기 전용 '응답 예산' 파생 행이 없다(생각 수준 카드의 계산 근거로 옮겼다)")
+    void buildView_llmTuningHasNoAnswerBudgetRows() {
+        SettingsView.SettingGroup llm = service.buildView().groups().stream()
+                .filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow();
+
+        assertThat(llm.items()).as("남은 행은 전부 편집 가능한 설정이다").allMatch(SettingsView.SettingItem::editable);
+        assertThat(llm.items()).extracting(SettingsView.SettingItem::label)
+                .noneMatch(label -> label.contains("mode-budget"));
     }
 }
