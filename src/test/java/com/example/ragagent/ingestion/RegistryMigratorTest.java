@@ -1,13 +1,12 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,11 +30,7 @@ class RegistryMigratorTest {
 
     @BeforeEach
     void setUp() {
-        DriverManagerDataSource ds = new DriverManagerDataSource();
-        ds.setDriverClassName("org.sqlite.JDBC");
-        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("test.db"));
-        docRegistry = new DocRegistry(new JdbcTemplate(ds));
-        docRegistry.init();
+        docRegistry = new DocRegistry(SqliteTestDatabase.open(tmpDir.resolve("test.db")));
 
         props = mock(AppProperties.class);
         when(props.dataDir()).thenReturn(tmpDir.toString());

@@ -108,6 +108,9 @@ public class LlmRouter {
      *  BackgroundLlmConcurrencyTracker} for why the header concurrency indicator needs this. */
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
+    /** 컨텍스트 초과를 본 순간 그 프로바이더의 창을 다시 재게 하는 자리 — 기본은 no-op. */
+    private final ContextWindowRefresher contextWindowRefresher;
+
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode) {
         this(providers, usageRepo, circuitBreaker, defaultMode, 180);
@@ -151,6 +154,21 @@ public class LlmRouter {
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
+        // 기존 호출부(테스트 포함)는 아무 일도 하지 않는 재탐지기를 받는다 — ProviderToggle/
+        // BackgroundLlmConcurrencyTracker 와 같은 규약. LlmConfig 만 진짜 구현을 넘긴다.
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
+                providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, providerToggle,
+                backgroundConcurrencyTracker, ContextWindowRefresher.NOOP);
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     int readTimeoutSeconds,
+                     Map<String, Integer> providerConcurrency,
+                     int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
+                     ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
+                     ContextWindowRefresher contextWindowRefresher) {
+        this.contextWindowRefresher = contextWindowRefresher;
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
@@ -294,6 +312,33 @@ public class LlmRouter {
         if (answerText == null || answerText.isBlank()) return;
         // 스트리밍 경로는 이 라우터의 호출 메서드를 거치지 않으므로, 비어 있지 않은 답변이 여기 온
         // 것이 그 경로의 유일한 "성공" 신호다 — 연속 실패 횟수를 여기서 되돌린다.
+        //
+        // ── 결정: 스트리밍은 건강의 증인이지 판정자가 아니다 (2026-09-28) ──────────────────
+        // 여기서 성공만 보고하고 실패는 보고하지 않는 것은 비대칭이고, 의도한 것이다.
+        // 스트리밍 경로(AnswerService.streamDirect / DirectAnswerService.callOrStream)는
+        // OpenAiApi.chatCompletionStream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
+        // try/catch 를 통째로 우회하므로, 실패를 브레이커에 넣으려면 분류를 그쪽에 다시 구현해야
+        // 한다. 그러지 않기로 했다:
+        //
+        //  1) 차단하지 않는다. 이 경로의 실패는 대부분 이미 "차단하면 안 되는 넷"이거나
+        //     (읽기 타임아웃·서버가 요청을 끊음·컨텍스트 초과) 사용자가 직접 중단한 것이다.
+        //     중단은 채팅의 정상 동작인데, 그걸 실패로 세어 차단하면 사용자가 멈춤을 누를 때마다
+        //     자기 대화를 막는다. 게다가 이 경로가 채팅의 유일한 전송 경로라, 여기서의 오탐은
+        //     다른 어디서보다 비싸다.
+        //  2) 차단 없이 '세기만' 하지도 않는다. consecutiveFailures 는 LlmOutageMessages.repeated()
+        //     를 먹여 "서버(모델) 상태를 확인하라"를 띄운다 — 사용자의 중단을 세면 멀쩡한 서버에
+        //     그 문구가 뜬다. 안전하게 세려면 결국 분류가 필요하고, 그건 (1)에서 피한 그것이다.
+        //  3) 성공 보고는 유지한다. 끝까지 흘러나온 답변은 오탐이 없는 건강 증거이고, 분류·검증
+        //     호출이 남긴 연속 실패를 그사이 회복한 서버에서 지워 주는 유일한 신호다.
+        //
+        // 대가는 안다: 서버가 죽었을 때 이 경로만으로는 브레이커가 배우지 못해 빠른 실패가 없다.
+        // 다만 RAG 턴은 분류·검증이 블로킹 호출이라 그쪽이 먼저 차단을 세우고, 그 둘이 없는
+        // Direct 턴에서만 요청마다 연결 타임아웃을 무는 것이 남는다 — 한계는 그만큼이다.
+        //
+        // 임베딩이 브레이커 밖인 것은 이것과 성격이 다르다: EmbeddingBeanConfig 는 LlmProvider 를
+        // 만들지 않아 라우터에 그 프로바이더 항목 자체가 없다(차단할 대상이 없다). 그쪽 복원력은
+        // 자체 재시도·축소 사다리(MAX_EMBED_RETRY / EMBED_SHRINK_RATIO)와
+        // LoadBalancingEmbeddingModel 이 맡는다.
         circuitBreaker.recordSuccess(providerName);
         try {
             usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
@@ -640,6 +685,12 @@ public class LlmRouter {
                         + "app.search-top-k (hot, via /settings) first, then app.llm.max-tokens "
                         + "(restart required), or raise the LLM server's context size. "
                         + "See OPERATOR_MANUAL §8.", provider.name());
+                // 이 실패는 "기록된 창이 틀렸다"는 관측이기도 하다 — 서버를 다른 -c 로 재시작했거나
+                // LM Studio 가 JIT 로 다른 설정으로 올렸다면 예산이 매 요청 과대해지고 스스로 낫지
+                // 않는다. 여기가 그 사실을 아는 유일한 지점이라 재탐지를 건다(디바운스·비동기라
+                // 이 요청을 더 늦추지 않는다). 폴백이 받아 준 경우에도 걸어야 한다 — 그때는 아무도
+                // 창이 낡았다는 것을 눈치채지 못한 채 초과가 계속 반복된다.
+                contextWindowRefresher.refreshAfterOverflow(provider);
             } else if (isRequestTerminatedByServer(e)) {
                 // 서버가 내려가면서 이 요청을 끊었다. 차단하면 서버가 올라온 뒤까지 그 차단이 남아
                 // "재시작했는데도 계속 안 된다"가 된다 — isTimeoutLike 와 같은 이유로 통과시킨다.
@@ -829,7 +880,9 @@ public class LlmRouter {
             "\"error\": \"terminated\""
     );
 
-    private static boolean isVisionUnsupported(Throwable t) {
+    /** package-private — {@code isContextOverflow}/{@code isRequestTerminatedByServer} 와 같은 이유로
+     *  테스트가 마커를 직접 고정한다({@code LlmFailureClassificationTest}). */
+    static boolean isVisionUnsupported(Throwable t) {
         Throwable cur = t;
         while (cur != null) {
             String msg = cur.getMessage();

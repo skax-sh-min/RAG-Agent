@@ -99,7 +99,7 @@ class AdminControllerWebMvcTest {
     void adminPage_chroma() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
-                        "/data/memory.db", null));
+                        "/data/memory.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -118,7 +118,7 @@ class AdminControllerWebMvcTest {
     void adminPage_registryHasPageSizeControls() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
-                        "/data/memory.db", null));
+                        "/data/memory.db"));
         when(ragService.listDocuments(anyString())).thenReturn(List.of(
                 new com.example.ragagent.model.DocumentInfo(
                         "doc1", "a.md", "latest", 3, "2026-08-31T10:00:00Z", "sha1",
@@ -146,7 +146,7 @@ class AdminControllerWebMvcTest {
     void adminPage_registryControlsAbsentWhenNoDocuments() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
-                        "/data/memory.db", null));
+                        "/data/memory.db"));
         // setUp() 의 listDocuments = 빈 목록 그대로
 
         String html = mvc.perform(get("/admin").with(user(ADMIN)))
@@ -164,7 +164,7 @@ class AdminControllerWebMvcTest {
     void adminPage_doesNotEagerlyLoadThreads() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
-                        "/data/memory.db", null));
+                        "/data/memory.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN))).andExpect(status().isOk());
 
@@ -177,7 +177,7 @@ class AdminControllerWebMvcTest {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("sqlite-vec", true, 5, 42,
                         null, "v0.1.9", 768,
-                        "/data/memory.db", "/data/vector.db"));
+                        "/data/memory.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -185,6 +185,27 @@ class AdminControllerWebMvcTest {
                 .andExpect(model().attributeExists("vectorStore"))
                 .andExpect(content().string(containsString("버전 (sqlite-vec)")))
                 .andExpect(content().string(containsString("vec_version")));
+    }
+
+    /**
+     * DB 파일은 하나다 — 카드가 예전처럼 "운영 DB / 벡터 DB" 두 줄을 그리면 안 된다. 분리 배포에서 그 첫 줄의
+     * memory.db 는 아무것도 쌓이지 않는 파일이었고, 카드가 그것을 운영 DB 라고 불렀다.
+     */
+    @Test
+    @DisplayName("GET /admin — DB 파일 카드는 파일 하나(이름 + 경로·내용 팝오버)만 그린다")
+    void adminPage_dbFileCardShowsTheOneFile() throws Exception {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("sqlite-vec", true, 5, 42,
+                        null, "v0.1.9", 768,
+                        "/app/data/memory.db"));
+
+        String html = mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("DB 파일", ">memory.db<", "/app/data/memory.db&lt;br&gt;운영 데이터 + 벡터 + 키워드 색인")
+                .doesNotContain("운영 DB:", "벡터 DB:", "분리됨");
     }
 
     // ── 청크 목록 조회 — 페이지당 건수 ────────────────────────────────────────
@@ -206,7 +227,7 @@ class AdminControllerWebMvcTest {
     @DisplayName("GET /admin — 큐레이션 패널은 접혀 있고, listActive()는 호출되지 않음 (지연 로딩)")
     void adminPage_doesNotEagerlyLoadCuratedEntries() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
-                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null, "/data/memory.db", null));
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null, "/data/memory.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -1007,7 +1028,7 @@ class AdminControllerWebMvcTest {
     private void stubVectorStoreView() {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
-                        "/data/memory.db", null));
+                        "/data/memory.db"));
     }
 
     private static com.example.ragagent.repository.ChunkReportRepository.ChunkLocation

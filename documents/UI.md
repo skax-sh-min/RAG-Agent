@@ -204,7 +204,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **사용자·대화 필터는 배타다** — 대화 필터가 걸리면 사용자 select가 잠기고 해제 가능한 칩(`대화: {제목} ✕`)이 뜬다. 필터를 걸면 목록과 `전체 N턴` 배지가 **함께** 움직인다(페이지네이션 버튼은 크기 기반이라 개수만 어긋나도 아무것도 안 깨지고, 그래서 발견이 늦는다). `대화` 열을 누르면 그 대화로 좁혀지고, 반대 방향은 대화 목록의 `진단` 버튼이다.
 > - **응답 모드 `C` 턴의 `사용/검색`은 `해당 없음`이다** — 창의 평가기가 인용 문서(`usedDocs`)를 묻지 않아 응답 참여도가 구조적으로 0이라, `0/8`로 그리면 검색 실패로 오독된다.
 > - 페이지네이션·필터 JS(`loadRetrievalMetrics()`/`applyMetricsUserFilter()`/`filterMetricsByThread()`/`clearMetricsThreadFilter()`)는 큐레이션 패널과 **같은 이유로** `admin.html` 페이지 레벨에 있다 — 재조회가 plain `innerHTML` 삽입이라 프래그먼트 내장 `<script>`는 실행되지 않는다. 현재 필터 상태는 JS 변수가 아니라 **렌더된 DOM**(사용자 select 값, 칩의 `data-metrics-thread-id`)에서 읽는다 — 패널 전체가 매번 교체되므로 서버가 돌려준 마크업이 언제나 최신이다.
-> - 기록은 `conversation_turns.retrieval_metrics`(JSON blob, 방어적 `ALTER TABLE`)에서 읽으며, **수치를 가진 턴만** 목록에 오른다(meta/Direct/DB 재사용 턴은 빈 행으로 끼지 않는다). 읽기는 모르는 필드를 무시하도록 명시적으로 관대하게 파싱한다 — 이 행들은 자신을 쓴 코드보다 오래 살아남으므로, `SourceRef`에 필드가 하나 추가됐다고 과거 기록 전체가 안 읽히면 안 된다.
+> - 기록은 `conversation_turns.retrieval_metrics`(JSON blob — 컬럼은 Flyway V4)에서 읽으며, **수치를 가진 턴만** 목록에 오른다(meta/Direct/DB 재사용 턴은 빈 행으로 끼지 않는다). 읽기는 모르는 필드를 무시하도록 명시적으로 관대하게 파싱한다 — 이 행들은 자신을 쓴 코드보다 오래 살아남으므로, `SourceRef`에 필드가 하나 추가됐다고 과거 기록 전체가 안 읽히면 안 된다.
 
 > **대화 목록 카드**(`/admin`, 검색 진단 수치 카드 바로 위, §6.25): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/threads`). **전 사용자**의 대화를 한 줄씩 보여준다 — `최종 활동 · 제목 · 사용자 · 턴 · 진단 · 재사용함 · 재사용됨 · 피드백` + `상세`/`진단`/`삭제`.
 > - **재사용 열이 둘인 이유**: `재사용함`은 이 대화가 과거 답변을 재사용한 횟수, `재사용됨`은 **이 대화의 답변이** 다른 턴에서 재사용된 횟수다. 삭제 버튼 옆에서 읽어야 할 값은 후자다 — 지우면 그 턴들이 전부 `"참조 원문 삭제됨"`이 되므로 0보다 크면 ◆ 표시가 붙는다.
@@ -504,7 +504,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 출처 Hover 미리보기
 
-**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10 · §10.11, 승인된 지식 제안)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
+**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **페이지도 모르면 그 자리를 비운다**(`"파일명"`) — 예전에는 `"파일명 | p.?"` 였는데, 챕터 쪽은 이미 같은 규칙(`"ch ?"` 대신 파일명만)이라 페이지 쪽만 물음표를 찍고 있었다. 이게 드러나는 자리는 **삭제된 청크**다: 다시 연 대화의 출처는 위치를 라이브 조인으로 가져오므로 청크가 지워지면 그 조인이 비어 온다(그래서 `turn_source_ref` 가 턴 저장 시 위치를 함께 스냅샷해 두고, 조인이 비면 그 값을 쓴다 — 다만 그 컬럼이 생기기 전에 저장된 턴은 스냅샷이 없어 여전히 비어 온다). 그때 `?` 는 "페이지가 있는데 못 읽었다"처럼 보이지만 실제로는 가리킬 페이지가 더는 존재하지 않는다. **스냅샷도 없으면 파일명은 `doc_id` 에서 꺼낸다**(`DocRegistry.filenameFromDocId()`) — `doc_id` 가 `파일명_sha256앞8자리`라 파일명이 거기 들어 있고, 문서 목록도 같은 규칙으로 파일명을 얻는다. 추가 조회가 없으니 대화를 열 때 턴마다 도는 경로(SQLite pool=1)에 부담이 없고, 문서까지 지워진 출처도 같은 이름을 얻는다. 처음에는 `doc_registry` 에서 파일명을 읽으려 했는데(`DocRegistry.findFilenames()`) 그 테이블에는 파일명 컬럼이 없어, 이 경로를 타는 대화가 열리지 않았다(2026-09-28 수정). **큐레이션 Q&A**(§10.10 · §10.11, 승인된 지식 제안)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
 출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 600자 포함.
 
@@ -735,7 +735,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 >
 > **렌더러가 셋이라 규칙은 `model/VerificationSnapshot` 한 곳에 있다** — 방금 보낸 메시지를 그리는 no-JS HTMX 폴백(`fragments/message-assistant.html`), 새로고침 후의 대화 기록(`chat.html`의 자체 루프), 그리고 스트리밍(`chat-stream.js`). 서버 렌더러 둘은 그 레코드의 `verdictLabel()`/`verdictClass()`/`verdictTitle()`/`hasInventedSymbols()`를 그대로 읽고, JS는 SSE 이벤트가 템플릿을 거치지 않아 같은 규칙을 한 번 더 구현한다 — **바꾸면 양쪽을 함께 고쳐야 한다**(`SourceRef.staleBadge()`와 같은 구조).
 >
-> **배지는 새로고침 후에도 남는다**: 같은 레코드가 `conversation_turns.verification`에 JSON으로 저장된다(방어적 `ALTER TABLE`, `retrieval_metrics` 선례). 예전에는 기록 루프가 검증 배지를 아예 그리지 않아 새로고침 한 번으로 배지가 사라졌는데, C의 "문서 밖 이름"은 안전 신호라 그렇게 둘 수 없다. 컬럼이 `NULL`이면 검증 기록이 없는 턴(이 컬럼 이전의 모든 턴 + meta/Direct·S)이고 배지를 띄우지 않는 예전 동작 그대로다.
+> **배지는 새로고침 후에도 남는다**: 같은 레코드가 `conversation_turns.verification`에 JSON으로 저장된다(컬럼은 Flyway V4, `retrieval_metrics` 선례). 예전에는 기록 루프가 검증 배지를 아예 그리지 않아 새로고침 한 번으로 배지가 사라졌는데, C의 "문서 밖 이름"은 안전 신호라 그렇게 둘 수 없다. 컬럼이 `NULL`이면 검증 기록이 없는 턴(이 컬럼 이전의 모든 턴 + meta/Direct·S)이고 배지를 띄우지 않는 예전 동작 그대로다.
 
 > **검증 미통과 사유(`detail` / `evalReason`)**: `AnswerService.evaluate()`의 평가 LLM 호출이 `sufficient`/`grounded`와 함께 `reason`(한 문장)을 돌려주고, 그 값이 `AgentState.evalReason` → `GraphListener.onRetry(reason, retryCount, detail)` → `retry` 이벤트의 `detail`, 그리고 최종 `done` 이벤트의 `evalReason`으로 흐른다. 두 게이트가 모두 통과하면 `null`이라 UI가 알아서 생략한다. 표시 지점은 세 곳 — 재시도 안내 줄 아래("사유: …"), 접힌 미검증 블록의 요약줄, 그리고 재시도를 다 쓰고도 통과하지 못한 최종 답변의 메타데이터 줄(배지 `title` + 경고 한 줄). **툴팁만으로 끝내지 않는 이유**는 모바일에서 hover가 없기 때문이다. 블로킹/REST 경로도 같은 값을 `ChatResponse.grounded`/`eval_reason`으로 내보내고 `fragments/message-assistant.html`이 동일하게 렌더한다.
 

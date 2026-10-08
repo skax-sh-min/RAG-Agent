@@ -5,47 +5,38 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** /admin 상태 카드 DB 경로 표시(파일명 추출·hover 팝오버 HTML) 단위 테스트. */
+/** /admin 상태 카드 DB 파일 표시(파일명 추출·hover 팝오버 HTML) 단위 테스트. */
 class VectorStoreAdminViewTest {
 
-    private VectorStoreAdminView view(String operationalDbPath, String vectorDbPath) {
-        return new VectorStoreAdminView("sqlite-vec", true, 5, 42, null, "v0.1.9", 768,
-                operationalDbPath, vectorDbPath);
+    private VectorStoreAdminView view(String backend, String dbPath) {
+        return new VectorStoreAdminView(backend, true, 5, 42, null, "v0.1.9", 768, dbPath);
     }
 
     @Test
-    @DisplayName("operationalDbFileName/vectorDbFileName — 전체 경로에서 파일명만 추출한다")
-    void fileNames_extractBareFileNameFromFullPath() {
-        VectorStoreAdminView v = view("C:\\projects\\toy\\RAG-Agent\\data\\memory.db",
-                "C:\\projects\\toy\\RAG-Agent\\data\\vector.db");
-
-        assertThat(v.operationalDbFileName()).isEqualTo("memory.db");
-        assertThat(v.vectorDbFileName()).isEqualTo("vector.db");
+    @DisplayName("dbFileName — 전체 경로에서 파일명만 추출한다 (구분자 / 와 \\ 모두)")
+    void fileName_extractsBareFileNameFromFullPath() {
+        assertThat(view("sqlite-vec", "C:\\projects\\toy\\RAG-Agent\\data\\memory.db").dbFileName())
+                .isEqualTo("memory.db");
+        assertThat(view("sqlite-vec", "/app/data/memory.db").dbFileName()).isEqualTo("memory.db");
     }
 
     @Test
-    @DisplayName("operationalDbFileName/vectorDbFileName — 경로가 null이면 null 반환")
-    void fileNames_nullWhenPathNull() {
-        VectorStoreAdminView v = view(null, null);
-
-        assertThat(v.operationalDbFileName()).isNull();
-        assertThat(v.vectorDbFileName()).isNull();
+    @DisplayName("dbFileName — 경로가 null이면 null 반환")
+    void fileName_nullWhenPathNull() {
+        assertThat(view("sqlite-vec", null).dbFileName()).isNull();
     }
 
     @Test
-    @DisplayName("dbPathsPopoverHtml — 벡터 DB가 분리된 경우 두 경로를 <br>로 이어붙인다")
-    void popoverHtml_includesBothPathsWhenSeparated() {
-        VectorStoreAdminView v = view("/data/memory.db", "/data/vector.db");
-
-        assertThat(v.dbPathsPopoverHtml())
-                .isEqualTo("운영 DB: /data/memory.db<br>벡터 DB: /data/vector.db");
+    @DisplayName("dbPathPopoverHtml — sqlite-vec: 전체 경로 + 벡터까지 이 파일 하나에 있다")
+    void popoverHtml_sqliteVecHoldsEverything() {
+        assertThat(view("sqlite-vec", "/data/memory.db").dbPathPopoverHtml())
+                .isEqualTo("/data/memory.db<br>운영 데이터 + 벡터 + 키워드 색인");
     }
 
     @Test
-    @DisplayName("dbPathsPopoverHtml — 벡터 DB 경로가 없으면(chroma) 운영 DB 한 줄만 반환한다")
-    void popoverHtml_operationalOnlyWhenNoVectorPath() {
-        VectorStoreAdminView v = view("/data/memory.db", null);
-
-        assertThat(v.dbPathsPopoverHtml()).isEqualTo("운영 DB: /data/memory.db");
+    @DisplayName("dbPathPopoverHtml — chroma: 벡터는 이 파일이 아니라 Chroma 서버에 있다고 말한다")
+    void popoverHtml_chromaVectorsLiveOnTheServer() {
+        assertThat(view("chroma", "/data/memory.db").dbPathPopoverHtml())
+                .isEqualTo("/data/memory.db<br>운영 데이터 + 키워드 색인 (벡터는 Chroma 서버)");
     }
 }

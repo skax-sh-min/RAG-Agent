@@ -1,11 +1,11 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,10 +33,8 @@ class CuratedQaRepositoryTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-curated-", ".db");
-        DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        JdbcTemplate jdbc = new JdbcTemplate(ds);
+        JdbcTemplate jdbc = SqliteTestDatabase.open(dbFile);
         repo = new CuratedQaRepository(jdbc);
-        repo.init();
     }
 
     @AfterEach

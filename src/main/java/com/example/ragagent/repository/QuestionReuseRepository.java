@@ -1,7 +1,6 @@
 package com.example.ragagent.repository;
 
 import com.example.ragagent.model.ResponseMode;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -14,6 +13,20 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * 질문 재사용 — 추천 후보 조회, 재사용 검증 재료, 그리고 턴마다 출처 청크를 떠 두는 {@code turn_source_ref}.
+ *
+ * <p>{@code turn_source_ref} 컬럼 중 둘은 코드만 봐서는 이유가 보이지 않는다:
+ * <ul>
+ *   <li>{@code invalidated_at} — 배지에는 쓰지 않지만 "언제부터 이 답변이 낡았나"는 사후 조사에서 가장 먼저
+ *       묻는 값이고, 상태가 바뀌는 순간에만 알 수 있어 그때 남기지 않으면 복구할 수 없다.</li>
+ *   <li>{@code hidden_at} 이 {@code status} 와 따로인 이유 — {@code status}(active/deleted/modified)는
+ *       "청크가 그 뒤 바뀌었나"라는 사실 관측이고 재사용 검증이 그 값에 의존한다. "현재 대화에서 이 청크 제거"는
+ *       표시 취향이라, 같은 컬럼에 섞으면 화면에서 치웠다는 이유만으로 재사용 판정이 달라진다.</li>
+ * </ul>
+ * 위치 스냅샷({@code filename}/{@code page_or_slide}/{@code chapter_no})과 {@code answer_share} 의 규칙은 그
+ * 값을 읽는 {@link #findSourcePreviewRows} 와 {@code QuestionReuseService.validateTurn()} 에 있다.
+ */
 @Repository
 public class QuestionReuseRepository {
 
@@ -141,47 +154,11 @@ public class QuestionReuseRepository {
         this.vectorJdbc = vectorJdbc;
     }
 
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS turn_source_ref (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    turn_id     INTEGER NOT NULL,
-                    user_id     TEXT NOT NULL,
-                    thread_id   TEXT NOT NULL,
-                    chunk_id    TEXT NOT NULL,
-                    doc_id      TEXT,
-                    chunk_hash  TEXT NOT NULL,
-                    status      TEXT NOT NULL DEFAULT 'active',
-                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """);
-        // 응답 참여도(§2단계 AnswerAttribution)를 스냅샷과 함께 보관 — 기존 테이블에는 없으므로
-        // 방어적 ALTER (conversation_turns.response_mode 선례). 구 행은 NULL로 남고, 그 경우
-        // QuestionReuseService.validateTurn()이 예전처럼 전체 출처를 검증 대상으로 삼는다.
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN answer_share REAL");
-        } catch (Exception ignored) { /* already present */ }
-        // 무효화 시각 — 배지 자체에는 안 쓰지만, "언제부터 이 답변이 낡았나"는 사후 조사에서
-        // 가장 먼저 묻는 값이고 상태 전이 시점에만 알 수 있어 지금 남겨두지 않으면 복구 불가다.
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN invalidated_at TEXT");
-        } catch (Exception ignored) { /* already present */ }
-        // 사용자가 "현재 대화에서 이 청크 제거"로 직접 숨긴 시각. status와 별도 컬럼인 이유:
-        // status(active/deleted/modified)는 "청크가 그 뒤 바뀌었나"라는 사실 관측이고 재사용
-        // 검증이 그 값에 의존한다. 여기 숨김은 사실 관측이 아니라 표시 취향이라, 같은 컬럼에
-        // 섞으면 화면에서 치웠다는 이유만으로 재사용 판정이 달라진다(§ 표시 전용).
-        try {
-            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN hidden_at TEXT");
-        } catch (Exception ignored) { /* already present */ }
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_turn ON turn_source_ref(turn_id)");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_chunk ON turn_source_ref(chunk_id)");
-    }
-
     public void saveTurnSourceRefs(long turnId, String userId, String threadId, List<SourceSnapshot> refs) {
         if (refs == null || refs.isEmpty()) return;
         jdbc.batchUpdate(
-                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, "
+                + "answer_share, filename, page_or_slide, chapter_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 refs,
                 refs.size(),
                 (ps, ref) -> {
@@ -197,14 +174,22 @@ public class QuestionReuseRepository {
                     } else {
                         ps.setDouble(8, ref.answerShare());
                     }
+                    // 위치 스냅샷 — 청크가 지워진 뒤에도 "어느 문서 몇 쪽이었나"를 답할 수 있게.
+                    ps.setString(9, ref.filename());
+                    ps.setString(10, ref.pageOrSlide());
+                    ps.setString(11, ref.chapterNo());
                 }
         );
     }
 
     public void cloneTurnSourceRefs(long fromTurnId, long toTurnId, String userId, String threadId) {
+        // 위치 셋도 함께 복사한다 — 재사용 턴의 출처 미리보기는 원본 턴을 기준으로 그려지므로
+        // 여기서 빠뜨리면 재사용한 답변만 삭제된 청크의 위치를 잃는다.
         jdbc.update("""
-                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share)
-                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status, answer_share
+                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status,
+                                             answer_share, filename, page_or_slide, chapter_no)
+                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status,
+                       answer_share, filename, page_or_slide, chapter_no
                 FROM turn_source_ref
                 WHERE turn_id = ?
                 """, toTurnId, userId, threadId, fromTurnId);
@@ -349,11 +334,19 @@ public class QuestionReuseRepository {
                 SELECT r.chunk_id,
                        r.doc_id,
                        r.status,
-                  COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
-                  COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
+                  -- 라이브 조인 → 그 다음이 턴 저장 시점의 위치 스냅샷(r.*). 순서가 중요하다:
+                  -- 청크가 살아 있는데 재인덱싱으로 페이지가 바뀌었다면 **지금** 위치가 사실이고,
+                  -- 스냅샷은 청크가 사라져 조인이 비었을 때만 쓰이는 폴백이다. 구 행은 스냅샷이
+                  -- NULL 이라 예전과 똑같이 동작한다(그 경우 파일명은 서비스가 doc_id 에서 꺼낸다 —
+                  -- QuestionReuseService.toSourceRef()).
+                  COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), ''),
+                           NULLIF(TRIM(r.filename), '')) AS filename,
+                  COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), ''),
+                           NULLIF(TRIM(r.page_or_slide), '')) AS page,
                       COALESCE(
                           NULLIF(NULLIF(NULLIF(TRIM(json_extract(c.metadata, '$.chapter_no')), ''), '0'), '0.0'),
-                          NULLIF(NULLIF(NULLIF(TRIM(k.chapter), ''), '0'), '0.0')
+                          NULLIF(NULLIF(NULLIF(TRIM(k.chapter), ''), '0'), '0.0'),
+                          NULLIF(NULLIF(NULLIF(TRIM(r.chapter_no), ''), '0'), '0.0')
                       ) AS chapter,
                   -- c.content (vec_document_chunks, sqlite-vec only) is the untouched stored chunk
                   -- text — the same thing the live/in-session preview shows via Document.getText().
@@ -369,10 +362,18 @@ public class QuestionReuseRepository {
                 LEFT JOIN chunk_fts_key k ON k.spring_doc_id = r.chunk_id
                 LEFT JOIN chunk_fts f ON f.rowid = k.fts_rowid
                 %s
-                -- status 필터가 없다: 무효화된 출처를 걸러내면 대화 기록에서 배지가 아니라 출처
-                -- 자체가 조용히 사라져(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
-                -- hidden_at은 그 반대로 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
+                -- 무효화된 출처를 status 만으로 걸러내지는 않는다: 답변을 떠받친 청크가 배지가
+                -- 아니라 출처 자체로 사라지면(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
+                -- 예외가 하나 있다 — **삭제됐고 답변에 한 글자도 기여하지 않은** 청크. 그건
+                -- 근거가 아니라 top-k 에 우연히 들어온 검색 잡음이라, 사라져도 감출 근거가 없고
+                -- 남으면 읽는 사람에게는 소음이다(지울 수도 없다: 이미 없는 청크다).
+                -- COALESCE(..., -1) 이 필요한 이유: answer_share 는 NULL 일 수 있고(참여도 계산이
+                -- 실패해 degrade 됐거나 컬럼 추가 이전 턴), SQL 에서 `NULL = 0` 은 FALSE 가 아니라
+                -- NULL 이라 그대로 쓰면 NOT(...) 도 NULL 이 되어 **그 행까지 함께 빠진다**.
+                -- 가르려는 것은 "측정해서 0" 과 "측정 못 함" 이고, 후자는 남겨야 한다.
+                -- hidden_at 은 반대로 언제나 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
                 WHERE r.turn_id = ? AND r.hidden_at IS NULL
+                  AND NOT (r.status = 'deleted' AND COALESCE(r.answer_share, -1) = 0)
                 """).formatted(vecChunkJoin("r.chunk_id")),
                 (rs, n) -> new SourcePreviewRow(
                         rs.getString("chunk_id"),
@@ -547,12 +548,28 @@ public class QuestionReuseRepository {
      * @param status 스냅샷 시점 이후 이 청크가 삭제/변경 처리되었는지. {@code findSourceRefs}가
      *        돌려주는 행은 정의상 항상 {@code active}다.
      */
+    /**
+     * 한 턴이 참조한 출처 1건.
+     *
+     * <p>뒤의 <b>위치 셋</b>({@code filename}/{@code pageOrSlide}/{@code chapterNo})은 <b>쓰기 전용</b>
+     * 이다 — 턴을 저장할 때 청크 메타데이터에서 그대로 떠 두고, 청크가 지워진 뒤 대화를 다시 열면
+     * 라이브 조인이 비어 오므로 그 자리를 메운다. 재사용 판정({@code validateTurn})은 위치를 보지
+     * 않으므로 읽기 매퍼는 채우지 않고 {@code null}로 둔다. {@code SourceRef}가 컴포넌트마다
+     * "측정 안 됨"을 {@code null}로 표현하고 부분 생성자를 두는 것과 같은 규약이다.
+     */
     public record SourceSnapshot(String chunkId, String docId, String chunkHash,
-                                 Double answerShare, String status) {
+                                 Double answerShare, String status,
+                                 String filename, String pageOrSlide, String chapterNo) {
 
         /** 하위 호환 — 응답 참여도를 모르는 호출부(테스트, 구 경로)용. */
         public SourceSnapshot(String chunkId, String docId, String chunkHash) {
-            this(chunkId, docId, chunkHash, null, "active");
+            this(chunkId, docId, chunkHash, null, "active", null, null, null);
+        }
+
+        /** 위치를 모르거나 쓸 일이 없는 호출부용 — 읽기 매퍼(검증 경로)와 기존 테스트가 쓴다. */
+        public SourceSnapshot(String chunkId, String docId, String chunkHash,
+                              Double answerShare, String status) {
+            this(chunkId, docId, chunkHash, answerShare, status, null, null, null);
         }
 
         /** 답변에 실제로 지분이 있었던 출처인가. */

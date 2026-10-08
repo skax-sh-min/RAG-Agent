@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -262,6 +263,64 @@ class QuestionReuseServiceTest {
 
                 assertThat(refs).hasSize(1);
                 assertThat(refs.get(0).label()).isEqualTo("manual.docx");
+        }
+
+        @Test
+        @DisplayName("삭제된 청크(스냅샷 없는 구 턴): 파일명은 docId 에서 꺼내고 페이지 자리는 비운다")
+        void sourceRefsForTurn_deletedChunk_recoversFilenameAndDropsThePagePlaceholder() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+                when(repo.findReusedFromTurnId(9L)).thenReturn(null);
+                // 청크가 지워지면 chunk_fts_key/vec_document_chunks 조인이 비고, 위치 스냅샷 이전에 저장된
+                // 턴이면 스냅샷도 없어 파일명·페이지가 null 로 온다.
+                when(repo.findSourcePreviewRows(9L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "설계문서.pdf_ab12cd34", null, null, null, "", "deleted")));
+
+                var refs = service.sourceRefsForTurn(9L);
+
+                assertThat(refs).hasSize(1);
+                // 예전에는 "설계문서.pdf_ab12cd34 | p.?" 였다 — 해시가 붙은 docId 와, 더는 존재하지 않는
+                // 페이지를 가리키는 물음표.
+                assertThat(refs.get(0).label()).isEqualTo("설계문서.pdf");
+                assertThat(refs.get(0).staleBadge()).isEqualTo("삭제됨");
+        }
+
+        @Test
+        @DisplayName("docId 에 파일명 부분이 없으면 docId 그대로, 'p.?' 는 붙지 않는다")
+        void sourceRefsForTurn_docIdWithoutFilenamePart_fallsBackToDocIdWithoutPagePlaceholder() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+                when(repo.findReusedFromTurnId(10L)).thenReturn(null);
+                when(repo.findSourcePreviewRows(10L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "d1", null, null, null, "", "deleted")));
+
+                var refs = service.sourceRefsForTurn(10L);
+
+                assertThat(refs.get(0).label()).isEqualTo("d1");
+        }
+
+        @Test
+        @DisplayName("청크가 지워진 턴도 doc_registry 는 표시 이름 한 번만 읽는다 (턴마다 도는 경로, pool=1)")
+        void sourceRefsForTurn_deletedChunk_readsTheRegistryOnlyForDisplayNames() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                DocRegistry registry = mock(DocRegistry.class);
+                QuestionReuseService service = new QuestionReuseService(repo, registry);
+
+                when(repo.findReusedFromTurnId(11L)).thenReturn(null);
+                when(repo.findSourcePreviewRows(11L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "manual.docx_0badc0de", null, null, null, "", "deleted"),
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c2", "manual.docx_0badc0de", "manual.docx", "12", "1.2", "chunk")));
+
+                service.sourceRefsForTurn(11L);
+
+                org.mockito.Mockito.verify(registry).findDisplayNames(anyList());
+                org.mockito.Mockito.verifyNoMoreInteractions(registry);
         }
 
         @Test

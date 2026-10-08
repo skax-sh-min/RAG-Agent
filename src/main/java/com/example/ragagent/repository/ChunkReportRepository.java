@@ -1,6 +1,5 @@
 package com.example.ragagent.repository;
 
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,8 +22,9 @@ import java.util.Optional;
  * <p>순수 대기열이다: 여기 쓰인 값은 검색·재사용·벡터 스토어 어디에도 영향을 주지 않는다. 실제
  * 반영은 관리자가 기존 청크 편집 경로로 청크를 고칠 때 비로소 일어난다.
  *
- * <p><b>두 JdbcTemplate 을 든다</b>({@link QuestionReuseRepository} 선례): 신고 행 자체는 운영
- * DB(memory.db)에 살고, 신고 시점의 청크 위치·원문 스냅샷은 벡터/FTS DB 에서 읽어야 한다.
+ * <p><b>두 JdbcTemplate 을 든다</b>({@link QuestionReuseRepository} 선례): 신고 행 자체는 운영 테이블이고,
+ * 신고 시점의 청크 위치·원문 스냅샷은 벡터/FTS 테이블에서 읽는다. 둘은 같은 SQLite 파일·같은 DataSource 다
+ * ({@code DataSourceConfig}) — 한정자는 어느 쪽 테이블을 만지는지 표시할 뿐이다.
  */
 @Repository
 public class ChunkReportRepository {
@@ -101,48 +101,16 @@ public class ChunkReportRepository {
                 rs.getString("reviewed_at"));
     };
 
-    @PostConstruct
-    void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS chunk_report (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    chunk_id         TEXT NOT NULL,
-                    doc_id           TEXT,
-                    version          TEXT,
-                    filename         TEXT,
-                    reporter_user_id TEXT NOT NULL,
-                    thread_id        TEXT,
-                    turn_id          INTEGER,
-                    question         TEXT,
-                    reason_code      TEXT NOT NULL,
-                    comment          TEXT NOT NULL,
-                    chunk_hash       TEXT,
-                    chunk_snapshot   TEXT,
-                    status           TEXT NOT NULL DEFAULT 'open',
-                    reviewer_user_id TEXT,
-                    review_note      TEXT,
-                    created_at       TEXT NOT NULL,
-                    reviewed_at      TEXT
-                )
-                """);
-        // 대기열 조회(열린 신고를 청크로 묶기)와 청크별 상세가 각각 타는 인덱스.
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chunk_report_open "
-                + "ON chunk_report(status, chunk_id)");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chunk_report_chunk "
-                + "ON chunk_report(chunk_id, id DESC)");
-        // 중복 방지 — 키가 (청크, 신고자, 대화)인 이유는 no-auth 기본값에서 게스트의 userId 가
-        // 상수일 수 있기 때문이다(app.auth.guest-identity=shared → 전 방문자가 GUEST_ID 하나).
-        // (청크, 신고자)로 잠그면 그 배포에서는 청크당 단 한 명만 신고할 수 있게 되어, 이 기능의
-        // 전제("여러 명이 같은 청크를 신고한다")가 조용히 무너진다. thread_id 는 방문자·대화
-        // 단위로 갈라지므로 남의 신고를 막지 않으면서 같은 대화의 중복 클릭만 막는다.
-        // 부분 인덱스라 처리 완료된 신고는 재신고를 막지 않는다(고쳤는데 또 틀렸을 수 있다).
-        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_report_dup "
-                + "ON chunk_report(chunk_id, reporter_user_id, thread_id) WHERE status = 'open'");
-    }
-
     // ── 쓰기 ────────────────────────────────────────────────────────────
 
-    /** 새 신고. 항상 {@code open} 으로 시작한다. 반환값은 새 행의 id. */
+    /**
+     * 새 신고. 항상 {@code open} 으로 시작한다. 반환값은 새 행의 id.
+     *
+     * <p>같은 (청크, 신고자, 대화)의 열린 신고가 이미 있으면 부분 UNIQUE 인덱스 {@code idx_chunk_report_dup} 이
+     * 막는다(호출자가 409 로 돌려준다). 키에 대화가 들어가는 이유: 공유 게스트 전략({@code guest-identity=shared})
+     * 에서는 모든 방문자의 userId 가 같아서, (청크, 신고자)로 잠그면 그 배포에서는 청크당 한 명만 신고할 수 있게 된다.
+     * 처리가 끝난 신고는 막지 않는다 — 고쳤는데 또 틀렸을 수 있다.
+     */
     public long insert(String chunkId, String docId, String version, String filename,
                        String reporterUserId, String threadId, Long turnId, String question,
                        String reasonCode, String comment, String chunkHash, String chunkSnapshot) {

@@ -1,11 +1,11 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.SqliteTestDatabase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,17 +29,10 @@ class QuestionReuseSourceHideTest {
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-source-hide-", ".db");
-        DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        jdbc = new JdbcTemplate(ds);
-        // findSourcePreviewRows()가 조인하는 최소 스키마 — 청크 본문은 이 테스트의 관심사가 아니다.
-        jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT)");
-        jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
-        jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
-                + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
-        jdbc.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT, content TEXT, metadata TEXT)");
-        jdbc.update("INSERT INTO conversation_turns (id, user_id) VALUES (7, 'u1')");
+        jdbc = SqliteTestDatabase.open(dbFile);
+        SqliteTestDatabase.createSearchIndexTables(jdbc);
+        jdbc.update("INSERT INTO conversation_turns (id, user_id, thread_id, question, answer) VALUES (7, 'u1', 't1', 'q', 'a')");
         repo = new QuestionReuseRepository(jdbc, jdbc);
-        repo.init();
         repo.saveTurnSourceRefs(7L, "u1", "t1", List.of(
                 new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1", 0.62, "active"),
                 new QuestionReuseRepository.SourceSnapshot("c2", "d1", "h2", null, "active")));

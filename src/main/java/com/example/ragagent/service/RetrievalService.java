@@ -784,6 +784,13 @@ public class RetrievalService {
         * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명" only.
      * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
      *
+     * <p><b>페이지를 모르면 그 자리를 아예 비운다</b> — 예전에는 {@code "파일명 | p.?"} 였다.
+     * 챕터 쪽은 이미 같은 규칙이었다({@code "ch ?"} 대신 파일명만), 페이지 쪽만 물음표를 찍고
+     * 있었다. 이게 드러나는 자리는 <b>삭제된 청크</b>다: 다시 연 대화에서 출처를 그릴 때
+     * {@code turn_source_ref} 는 페이지를 스냅샷하지 않고 라이브 조인으로 가져오는데, 청크가
+     * 지워졌으면 그 조인이 비어 모든 삭제 청크가 {@code p.?} 로 찍혔다. {@code ?} 는 "페이지가
+     * 있는데 못 읽었다"처럼 보이지만 실제로는 <b>가리킬 페이지가 더는 존재하지 않는다</b>.
+     *
      * @param displayNames docId → display-name override (§ 표시 이름), from {@link RagService#findDisplayNames};
      *                     the label shows the override when present, but the <b>real</b> filename still
      *                     drives {@link #isChapterStructuredFilename} — a display name is cosmetic and
@@ -805,8 +812,19 @@ public class RetrievalService {
         if (isChapterStructuredFilename(realFilename)) {
             return filename;
         }
-        Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
+        String page = normalizePage(meta.get(MetaKey.PAGE_OR_SLIDE));
+        if (page == null) {
+            return filename;
+        }
         return "%s | p.%s".formatted(filename, page);
+    }
+
+    /** 표시할 만한 페이지 값이면 그 문자열, 아니면 {@code null}(비었거나 {@code "?"} 자리표시자). */
+    private static String normalizePage(Object pageOrSlide) {
+        if (pageOrSlide == null) return null;
+        String raw = pageOrSlide.toString().trim();
+        if (raw.isEmpty() || "?".equals(raw) || "null".equalsIgnoreCase(raw)) return null;
+        return raw;
     }
 
     private static String normalizeChapterNo(Object chapterNo) {

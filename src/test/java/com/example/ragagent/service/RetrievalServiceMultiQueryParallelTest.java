@@ -23,7 +23,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,14 +38,18 @@ import static org.mockito.Mockito.when;
 
 /**
  * §10.8.1 — the original-query vector search must overlap the MultiQuery expansion LLM
- * round-trip instead of waiting behind it. Confirms via timing that
- * {@code ragService.search()} (original query) starts well before an artificially slow
- * expansion call returns, and that {@code ragService.searchBatch()} only receives the
+ * round-trip instead of waiting behind it. The expansion call waits for the original-query
+ * {@code ragService.search()} to start: when the two overlap, the wait ends at once; when the
+ * search is serialized behind the expansion, it can only start after the expansion returns, so
+ * the wait times out. Also confirms that {@code ragService.searchBatch()} only receives the
  * variant queries (original excluded, since it was already searched separately).
+ *
+ * <p>This used to be a stopwatch check: the expansion slept 300ms and the search had to start
+ * within 300ms. Under the full parallel test run, overhead alone can reach a bound like that —
+ * {@code AgentServiceTest.chat_runsHistoryAndClassifyInParallel} had the same shape and failed at
+ * exactly its bound.
  */
 class RetrievalServiceMultiQueryParallelTest {
-
-    private static final long EXPANSION_DELAY_MS = 300;
 
     private static ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
@@ -56,18 +62,19 @@ class RetrievalServiceMultiQueryParallelTest {
     @Test
     @DisplayName("원본 질의 검색이 확장 LLM 호출 완료 전에 시작됨 (병렬 실행)")
     void originalQuerySearchOverlapsExpansion() {
-        AtomicLong testStartNanos = new AtomicLong(System.nanoTime());
-        AtomicLong searchInvokedAtNanos = new AtomicLong(-1);
+        CountDownLatch originalSearchStarted = new CountDownLatch(1);
+        AtomicBoolean startedDuringExpansion = new AtomicBoolean();
 
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.call(any(Prompt.class))).thenAnswer(inv -> {
-            Thread.sleep(EXPANSION_DELAY_MS);
+            startedDuringExpansion.set(originalSearchStarted.await(5, TimeUnit.SECONDS));
             return chatResponse("변형질문1\n변형질문2");
         });
 
         RagService ragService = mock(RagService.class);
-        when(ragService.search(anyString(), anyString(), anyString(), anyInt())).thenAnswer(inv -> {
-            searchInvokedAtNanos.set(System.nanoTime());
+        // 버전으로 원본 질의 검색만 집는다 — 큐레이션 축도 ragService.search() 를 부른다(예약 버전 "curated").
+        when(ragService.search(anyString(), anyString(), eq("latest"), anyInt())).thenAnswer(inv -> {
+            originalSearchStarted.countDown();
             return List.of(doc("original"));
         });
         when(ragService.searchBatch(anyString(), any(), anyString(), anyInt()))
@@ -93,14 +100,13 @@ class RetrievalServiceMultiQueryParallelTest {
         RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
                 Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
 
-        testStartNanos.set(System.nanoTime());
         AgentState result = svc.execute(
                 AgentState.of("이것은 확장 대상이 되는 충분히 긴 질문입니다", "latest", "t1", "", RoutingMode.COST_FIRST));
 
-        long elapsedToSearchMs = (searchInvokedAtNanos.get() - testStartNanos.get()) / 1_000_000;
-        assertThat(elapsedToSearchMs)
-                .as("original-query search should start immediately, not after the expansion delay")
-                .isLessThan(EXPANSION_DELAY_MS);
+        assertThat(startedDuringExpansion.get())
+                .as("original-query search should start while the expansion call is still in flight "
+                        + "(serialized behind it, it starts only after the expansion's 5s wait)")
+                .isTrue();
 
         verify(ragService).searchBatch(eq("anonymous"), eq(List.of("변형질문1", "변형질문2")), eq("latest"), anyInt());
         assertThat(result.retrievedDocs()).isNotEmpty();

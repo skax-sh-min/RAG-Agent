@@ -14,6 +14,8 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -128,26 +130,31 @@ class AgentServiceTest {
     }
 
     @Test
-    @DisplayName("memory 와 classifier 가 진짜 병렬 실행 (각각 200ms sleep 도 총 시간 ~200ms)")
+    @DisplayName("memory 와 classifier 가 진짜 병렬 실행 — 두 호출이 동시에 떠 있어야만 서로를 만난다")
     void chat_runsHistoryAndClassifyInParallel() {
+        // 각 호출이 상대를 기다린다: 병렬이면 곧바로 만나고, 직렬이면 먼저 불린 쪽이 상대 없이
+        // 타임아웃으로 끝난다. 예전에는 둘을 300ms 씩 재우고 벽시계(520ms 미만)로 판정했는데,
+        // 테스트 클래스가 병렬로 도는 전체 실행에서 CPU 가 붐비면 병렬인데도 오버헤드만으로 경계를
+        // 넘었다(정확히 520ms 로 실패한 적이 있다).
+        CountDownLatch bothInFlight = new CountDownLatch(2);
+        AtomicInteger metTheOther = new AtomicInteger();
         when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenAnswer(inv -> {
-            Thread.sleep(300);
+            bothInFlight.countDown();
+            if (bothInFlight.await(5, TimeUnit.SECONDS)) metTheOther.incrementAndGet();
             return "";
         });
         when(classifierService.classifyOnly(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(300);
+            bothInFlight.countDown();
+            if (bothInFlight.await(5, TimeUnit.SECONDS)) metTheOther.incrementAndGet();
             return "manual";
         });
         when(agentGraph.run(any())).thenReturn(fullResult());
 
-        long start = System.nanoTime();
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
-        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-        // 직렬이면 ~600ms+, 병렬이면 ~300-450ms. 520ms 미만이면 병렬 실행으로 본다.
-        assertThat(elapsedMs)
-                .as("history + classify 병렬 실행 (직렬이었다면 600ms 초과)")
-                .isLessThan(520);
+        assertThat(metTheOther.get())
+                .as("history 와 classify 가 동시에 떠 있었다 (직렬이면 먼저 불린 쪽이 5초 뒤 상대 없이 끝난다)")
+                .isEqualTo(2);
     }
 
     @Test

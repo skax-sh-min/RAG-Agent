@@ -111,10 +111,28 @@ public class QuestionReuseService {
             String docId = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.DOC_ID, ""));
             String hash = hashes.getOrDefault(chunkId, "");
             if (hash.isBlank()) continue;
+            // 위치 스냅샷 — 청크가 지워지면 chunk_fts_key/vec_document_chunks 조인이 비어 이
+            // 값들을 다시 알아낼 방법이 없다. 해시를 "그때 그 청크였나"를 위해 떠 두는 것과
+            // 같은 이유이고, 재료는 이미 손에 있는 이 Document 의 메타데이터가 전부다.
             rows.add(new QuestionReuseRepository.SourceSnapshot(
-                    chunkId, docId, hash, sharesByChunkId.get(chunkId), "active"));
+                    chunkId, docId, hash, sharesByChunkId.get(chunkId), "active",
+                    metaString(doc, MetaKey.FILENAME),
+                    metaString(doc, MetaKey.PAGE_OR_SLIDE),
+                    metaString(doc, MetaKey.CHAPTER_NO)));
         }
         repository.saveTurnSourceRefs(turnId, userId, threadId, rows);
+    }
+
+    /**
+     * 메타데이터 값을 스냅샷용 문자열로. 비었거나 문자열 {@code "null"} 이면 {@code null} —
+     * 그래야 조회 쪽 {@code COALESCE} 가 그 자리를 "모름"으로 보고 다음 폴백으로 넘어간다.
+     * (벡터 스토어를 왕복한 메타데이터에는 문자열 {@code "null"} 이 실제로 섞여 들어온다.)
+     */
+    private static String metaString(Document doc, String key) {
+        Object raw = doc.getMetadata().get(key);
+        if (raw == null) return null;
+        String s = raw.toString().trim();
+        return (s.isEmpty() || "null".equalsIgnoreCase(s)) ? null : s;
     }
 
     private static Map<String, Double> sharesByChunkId(List<SourceRef> sources) {
@@ -397,19 +415,31 @@ public class QuestionReuseService {
                 .toLowerCase(Locale.ROOT);
     }
 
-    private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row, Map<String, String> displayNames) {
+    private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row,
+                                  Map<String, String> displayNames) {
         // CuratedQaService.buildDocument() always sets MetaKey.DOC_ID to "curated:<id>", regardless
         // of chunk index — the one stable signal this SQL-sourced row has for "this chunk came from
         // a curated Q&A entry, not a document" (no DOC_TYPE column here, unlike the live Document
         // metadata RetrievalService reads from).
         boolean curated = row.docId() != null && row.docId().startsWith("curated:");
-        String filename = (row.filename() == null || row.filename().isBlank())
-                ? (row.docId() == null ? "source" : row.docId())
+        // 파일명 폴백 순서: 라이브 조인 → 턴 저장 시점 스냅샷(여기까지가 row.filename(), 리포지토리의
+        // COALESCE) → docId 의 파일명 부분 → "source". 셋째는 스냅샷 컬럼이 생기기 전에 저장된 턴이
+        // 청크를 잃었을 때다. docId 는 `파일명_sha256앞8자리`(DocumentIndexer)라 파일명이 거기 있고,
+        // 문서 목록(RagService)도 같은 규칙으로 파일명을 얻는다. doc_registry 를 읽지 않는 이유: 그
+        // 테이블에는 파일명 컬럼이 없다 — 예전 DocRegistry.findFilenames() 가 없는 컬럼을 조회해 이
+        // 경로를 타는 대화는 열리지 않았다(서비스 테스트가 그 메서드를 목으로 대신해 SQL 이 한 번도
+        // 실행되지 않았다). 레지스트리를 거치지 않으니 문서까지 지워진 출처도 같은 이름을 얻는다.
+        String filename = isBlank(row.filename())
+                ? (isBlank(row.docId()) ? "source" : DocRegistry.filenameFromDocId(row.docId()))
                 : row.filename();
-        String page = (row.pageOrSlide() == null || row.pageOrSlide().isBlank()) ? "?" : row.pageOrSlide();
+        // 페이지를 모르면 넣지 않는다 — "?" 를 채우면 formatSource 가 "p.?" 를 찍는다.
+        // 그 자리표시자가 가리키는 페이지는 (청크가 지워졌으므로) 더는 존재하지 않는다.
+        String page = isBlank(row.pageOrSlide()) ? null : row.pageOrSlide();
         Map<String, Object> meta = new java.util.HashMap<>();
         meta.put(MetaKey.FILENAME, filename);
-        meta.put(MetaKey.PAGE_OR_SLIDE, page);
+        if (page != null) {
+            meta.put(MetaKey.PAGE_OR_SLIDE, page);
+        }
         if (row.docId() != null) {
             meta.put(MetaKey.DOC_ID, row.docId());
         }
@@ -434,6 +464,10 @@ public class QuestionReuseService {
         }
         return new SourceRef(label, preview, row.chunkId(), row.docId(), page,
                 null, null, null, null, stale, false);
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     private static String truncate(String text, int maxLen) {

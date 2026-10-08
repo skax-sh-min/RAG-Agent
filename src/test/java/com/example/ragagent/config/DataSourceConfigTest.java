@@ -1,12 +1,14 @@
 package com.example.ragagent.config;
 
 import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import com.example.ragagent.ingestion.KeywordSearchRepository;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -17,8 +19,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link DataSourceConfig#configureSqliteVec} 단위 테스트.
- * 실제 커넥션을 열지 않고 HikariConfig 결과만 검증한다 (네이티브 바이너리 불필요).
+ * {@link DataSourceConfig} 단위 테스트 — vec0 로딩 설정({@link DataSourceConfig#configureSqliteVec}), 세션 PRAGMA,
+ * 그리고 <b>DB 파일은 하나</b>라는 규칙(경로 결정·배선). 네이티브 바이너리는 필요 없다 — sqlite-vec 모드에서
+ * 실제로 vec0 를 싣고 여는 배선은 {@code -Dsqlitevec.path} 로 게이트된 {@code DataSourceJdbcTemplateWiringTest} 가 본다.
  */
 class DataSourceConfigTest {
 
@@ -149,6 +152,13 @@ class DataSourceConfigTest {
             assertThat(pragma(st, "synchronous"))
                     .as("1 = NORMAL (WAL 권장). 기본값 FULL(2) 이면 커밋마다 fsync 한다")
                     .isEqualTo("1");
+            assertThat(pragma(st, "cache_size"))
+                    .as("음수는 KiB. 드라이버 기본값 -2000(2MB)이면 코퍼스가 커질 때 페이지 캐시를 포기한다")
+                    .isEqualTo("-32768");
+            assertThat(pragma(st, "mmap_size"))
+                    .as("기본값 0 = mmap 꺼짐. 읽기마다 OS 캐시 → SQLite 버퍼 복사가 일어나는데, "
+                        + "ANN 인덱스 없는 vec0 KNN 이 이 앱에서 그 복사가 가장 비싼 자리다")
+                    .isEqualTo("268435456");
         }
     }
 
@@ -162,6 +172,8 @@ class DataSourceConfigTest {
              java.sql.Statement st = c.createStatement()) {
             assertThat(pragma(st, "busy_timeout")).isEqualTo("5000");
             assertThat(pragma(st, "synchronous")).isEqualTo("1");
+            assertThat(pragma(st, "cache_size")).isEqualTo("-32768");
+            assertThat(pragma(st, "mmap_size")).isEqualTo("268435456");
         }
     }
 
@@ -197,39 +209,105 @@ class DataSourceConfigTest {
         }
     }
 
-    // ── separate vector DB ─────────────────────────────────────────
+    // ── 파일은 하나 — 경로 규칙 ─────────────────────────────────────
 
     @Test
-    @DisplayName("buildVectorHikariConfig: vector.db URL + pool=1 + vec0 load_extension")
-    void vectorHikari_pointsAtVectorDbWithPoolAndExtension(@TempDir Path dir) {
-        Path vectorDb = dir.resolve("vector.db");
-        HikariConfig c = DataSourceConfig.buildVectorHikariConfig(
-                vectorDb, 1, "sqlite-vec", "/opt/sqlite-vec/vec0", "");
+    @DisplayName("resolveDbPath: 기본은 {data-dir}/memory.db (옛 db-path 가 비었거나 공백이면)")
+    void resolveDbPath_defaultsToMemoryDbInDataDir(@TempDir Path dir) {
+        Path expected = dir.toAbsolutePath().normalize().resolve("memory.db");
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "sqlite-vec", "")).isEqualTo(expected);
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "sqlite-vec", "   ")).isEqualTo(expected);
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "sqlite-vec", null)).isEqualTo(expected);
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "chroma", null)).isEqualTo(expected);
+    }
 
-        assertThat(c.getJdbcUrl()).isEqualTo(DataSourceConfig.sqliteUrl(vectorDb));
+    /**
+     * <b>이 규칙이 지키는 것</b>: 옛 분리 스위치를 켰던 배포는 운영 테이블까지 전부 그 파일에 있다
+     * ({@code DataSourceJdbcTemplateWiringTest} 가 기록한 배선 사고). 이 값을 무시하고 memory.db 를 열면
+     * 재기동 한 번에 계정·대화·설정·문서 목록이 사라진 것처럼 보인다 — 데이터는 그대로인데 다른 파일을 본다.
+     */
+    @Test
+    @DisplayName("resolveDbPath: sqlite-vec + 옛 db-path → 그 파일이 유일한 DB (그 배포의 데이터가 전부 거기 있다)")
+    void resolveDbPath_sqliteVecOpensTheLegacyFile(@TempDir Path dir) {
+        Path legacy = dir.resolve("elsewhere").resolve("vector.db");
+        Path expected = legacy.toAbsolutePath().normalize();
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "sqlite-vec", "  " + legacy + "  "))
+                .isEqualTo(expected);
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), " SQLite-Vec ", legacy.toString()))
+                .isEqualTo(expected);
+    }
+
+    /** chroma 에서는 그 스위치가 원래 무시됐다 — 따르면 설정에 남은 한 줄이 빈 파일을 열게 만든다. */
+    @Test
+    @DisplayName("resolveDbPath: chroma 는 옛 db-path 를 무시한다 (예전에도 무시했다)")
+    void resolveDbPath_chromaIgnoresTheLegacyPath(@TempDir Path dir) {
+        assertThat(DataSourceConfig.resolveDbPath(dir.toString(), "chroma", dir.resolve("vector.db").toString()))
+                .isEqualTo(dir.toAbsolutePath().normalize().resolve("memory.db"));
+    }
+
+    @Test
+    @DisplayName("resolveDbPath: 옛 db-path 의 상대 경로는 예전처럼 작업 디렉터리 기준 (같은 파일이 열려야 한다)")
+    void resolveDbPath_relativeLegacyPathStaysWorkingDirRelative() {
+        assertThat(DataSourceConfig.resolveDbPath("./somewhere-else", "sqlite-vec", "./data/vector.db"))
+                .isEqualTo(Path.of("./data/vector.db").toAbsolutePath().normalize());
+    }
+
+    @Test
+    @DisplayName("buildHikariConfig: 세션 PRAGMA URL + pool=1 + (sqlite-vec) 커넥션마다 vec0 load_extension")
+    void hikariConfig_urlPoolAndExtension(@TempDir Path dir) {
+        Path db = dir.resolve("memory.db");
+        HikariConfig c = DataSourceConfig.buildHikariConfig(db, 1, "sqlite-vec", "/opt/sqlite-vec/vec0", "");
+
+        assertThat(c.getJdbcUrl()).isEqualTo(DataSourceConfig.sqliteUrl(db));
         assertThat(c.getMaximumPoolSize()).isEqualTo(1);
-        assertThat(c.getPoolName()).isEqualTo("vector-db");
         assertThat(c.getDataSourceProperties().getProperty("enable_load_extension")).isEqualTo("true");
         assertThat(c.getConnectionInitSql())
                 .startsWith("SELECT load_extension('")
                 .contains("/opt/sqlite-vec/vec0");
     }
 
+    /** /admin 이 표시하는 경로의 출처 — 설정에서 다시 유도하지 않고 DataSource 가 실제로 연 파일을 읽는다. */
+    @Test
+    @DisplayName("sqliteFilePath: sqliteUrl 의 역 — Hikari 가 아니면 null")
+    void sqliteFilePath_invertsSqliteUrl(@TempDir Path dir) {
+        Path db = dir.resolve("memory.db");
+        try (HikariDataSource hikari = new HikariDataSource()) {   // 인자 없는 생성자: 풀을 시작하지 않는다
+            hikari.setJdbcUrl(DataSourceConfig.sqliteUrl(db));
+            assertThat(DataSourceConfig.sqliteFilePath(hikari)).isEqualTo(db.toString());
+        }
+        assertThat(DataSourceConfig.sqliteFilePath(null)).isNull();
+        assertThat(DataSourceConfig.sqliteFilePath(new DriverManagerDataSource("jdbc:sqlite:" + db))).isNull();
+    }
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(DataSourceConfig.class);
 
     @Test
-    @DisplayName("기본(chroma): vectorJdbcTemplate 는 운영 DataSource 별칭 — 별도 vectorDataSource 없음(회귀 가드)")
-    void defaultMode_vectorTemplateAliasesPrimary(@TempDir Path dir) {
+    @DisplayName("기본(chroma): DataSource 하나 · JdbcTemplate 하나 — vectorJdbcTemplate 가 그 DataSource 를 감싼다")
+    void defaultMode_oneDataSourceOneTemplate(@TempDir Path dir) {
         runner.withPropertyValues("app.data-dir=" + dir)
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean("vectorDataSource");
-                    assertThat(ctx).hasBean("vectorJdbcTemplate");
-                    // exactly one DataSource, and the vector template is backed by it (chunk_fts stays in memory.db)
-                    assertThat(ctx.getBeanNamesForType(DataSource.class)).hasSize(1);
+                    assertThat(ctx.getBeanNamesForType(DataSource.class)).containsExactly("dataSource");
+                    assertThat(ctx.getBeanNamesForType(JdbcTemplate.class)).containsExactly("vectorJdbcTemplate");
                     JdbcTemplate vectorTpl = (JdbcTemplate) ctx.getBean("vectorJdbcTemplate");
                     assertThat(vectorTpl.getDataSource()).isSameAs(ctx.getBean("dataSource", DataSource.class));
+                    assertThat(DataSourceConfig.sqliteFilePath(vectorTpl.getDataSource()))
+                            .isEqualTo(dir.toAbsolutePath().normalize().resolve("memory.db").toString());
+                });
+    }
+
+    @Test
+    @DisplayName("chroma + 옛 db-path: 여전히 memory.db 하나 — 그 경로에는 파일을 만들지 않는다")
+    void chromaMode_legacyPathLeavesNoSecondFile(@TempDir Path dir) {
+        Path legacy = dir.resolve("vector.db");
+        runner.withPropertyValues("app.data-dir=" + dir, "app.vectorstore.sqlite-vec.db-path=" + legacy)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBeanNamesForType(DataSource.class)).containsExactly("dataSource");
+                    assertThat(DataSourceConfig.sqliteFilePath(ctx.getBean(DataSource.class)))
+                            .isEqualTo(dir.toAbsolutePath().normalize().resolve("memory.db").toString());
+                    assertThat(legacy).doesNotExist();
                 });
     }
 
