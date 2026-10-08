@@ -278,7 +278,8 @@ rag_java/
     │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine 유저별 토큰버킷; 429 + RAG-RATE-001
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode; executeGated()/acquirePermit() — 채팅/질의 경로 프로바이더별 동시성 게이트 + 429 백프레셔
-    │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel 데코레이터 — executeGated()를 우회하는 프레임워크 내부 호출자(MultiQueryExpander)에 동시성 게이트 적용
+    │   │   ├── StreamFailover.java        # 채팅 답변 스트리밍: 프로바이더 선택 → 퍼밋 → 스트림. 첫 토큰 전 서버 장애(연결 거부·연결 타임아웃·5xx·429/503)면 차단하고 다음 프로바이더로 다시 연다
+    │   │   ├── RoutedChatModel.java       # 호출마다 라우팅하는 ChatModel (LlmRouter.executeGatedWithUsage) — 모델을 오래 쥐는 프레임워크 호출자(MultiQueryExpander)용
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed)

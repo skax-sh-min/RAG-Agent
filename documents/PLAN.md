@@ -252,7 +252,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.12 다중 사용자 동시 LLM 요청 처리 — 동시성 제어 + 처리량 확장 ✅ 완료
 
-채팅 경로에 동시성 제한이 전혀 없어(세마포어는 인덱싱 경로에만 존재) 여러 사용자가 겹치면 폴백 없는 유일 프로바이더가 서킷브레이커로 전면 차단되던 문제를 5단계로 해결: ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, `app.llm.providers[].concurrency`) ② 대기상한 초과 시 429 백프레셔(`LlmBackpressureException`, 서킷브레이커 없음) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 중복요청 병합) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(30초) ⑤ 동일 role·priority 프로바이더 간 least-in-flight 로드밸런싱. 인덱싱/백그라운드 경로는 기존 세마포어를 유지하며 미적용.
+채팅 경로에 동시성 제한이 전혀 없어(세마포어는 인덱싱 경로에만 존재) 여러 사용자가 겹치면 폴백 없는 유일 프로바이더가 서킷브레이커로 전면 차단되던 문제를 5단계로 해결: ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, `app.llm.providers[].concurrency`) ② 대기상한 초과 시 429 백프레셔(`LlmBackpressureException`, 서킷브레이커 없음) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 중복요청 병합) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(30초) ⑤ 동일 role·priority 프로바이더 간 least-in-flight 로드밸런싱. 인덱싱/백그라운드 경로는 기존 세마포어를 유지하며 미적용. **⑥ 장애 전환 범위 확장(2026-10-08)** — 같은 로컬 서버 두 대(`LOCAL_LLM_URL`·`LOCAL_LLM_URL_2`) 중 먼저 등록된 쪽이 죽어도 채팅만 다른 서버로 넘어가지 못하던 문제: 연결 타임아웃은 이제 차단 + 같은 호출 안에서 전환(읽기 타임아웃은 그대로), 채팅 답변 스트리밍은 첫 토큰 전 서버 장애에 한해 `StreamFailover`/`LlmRouter.failOver()` 로 다음 서버에 다시 연다, 질의 확장은 `RoutedChatModel` 로 호출마다 라우팅한다. 남는 한계(멈춘 서버·기동 검증·임베딩)와 근거는 PITFALLS `llm/StreamFailover.java`.
 
 ---
 
@@ -264,7 +264,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료
 
-`AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않아 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던 문제(사용자 실사용 중 보고)를 발견·수정 — 블로킹 호출은 `executeWithTracking()`으로, 스트리밍은 `LlmRouter.recordApproxUsage()`로, 프레임워크가 내부에서 자체 `ChatClient`를 구성해 가로챌 수 없는 `MultiQueryExpander`는 신규 `TrackingChatModel` 데코레이터로 해결.
+`AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않아 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던 문제(사용자 실사용 중 보고)를 발견·수정 — 블로킹 호출은 `executeWithTracking()`으로, 스트리밍은 `LlmRouter.recordApproxUsage()`로, 프레임워크가 내부에서 자체 `ChatClient`를 구성해 가로챌 수 없는 `MultiQueryExpander`는 신규 `TrackingChatModel` 데코레이터로 해결(2026-10-08 이후에는 호출마다 라우터를 지나는 `RoutedChatModel` 로 대체되어 그 데코레이터와 `ConcurrencyLimitingChatModel` 은 삭제 — §6.12 ⑥).
 
 ---
 

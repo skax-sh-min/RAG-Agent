@@ -286,8 +286,8 @@ copy .env.example .env
 |------|--------|----------|------|
 | `SSE_IDLE_TIMEOUT_SECONDS` | `300` | 30 ~ 1800 | 에이전트 그래프의 진행 신호(노드 전환·토큰·소스 준비)가 이 시간만큼 전혀 없으면 중단 (`app.sse-idle-timeout-seconds`). 매 신호마다 리셋되므로 느리지만 계속 응답 중인 로컬 LLM은 끊기지 않음 — 실제로 "멈춘" 요청을 감지하는 주 타임아웃 |
 | `SSE_TIMEOUT_SECONDS` | `7200` | 600 ~ 14400 | 브라우저 ↔ 서버 SSE 연결의 절대 상한(활동 여부 무관, `app.sse-timeout-seconds`) — 응답이 영원히 끝나지 않는 극단적 상황에 대한 안전장치일 뿐, 평소엔 `SSE_IDLE_TIMEOUT_SECONDS`가 먼저 작동함 |
-| `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`) |
-| `LLM_READ_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`). 이 시간 안에 TCP 연결을 못 맺으면 서버가 떠 있지 않은 것으로 보고 **그 프로바이더를 차단하고 다음 서버(예: `LOCAL_LLM_URL_2`)로 넘어간다**(블로킹 호출은 같은 호출 안에서, 채팅 답변 스트리밍은 첫 토큰 전이면). 꺼진 호스트를 빨리 포기하려면 LAN 서버 기준 3~5초로 낮춘다 |
+| `LLM_READ_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`). 읽기 타임아웃은 서버가 연결을 받았다는 뜻이라 **차단도 전환도 없이** 오류로 끝난다(느린 생성을 기다리다 끊은 서버를 막지 않으려는 의도) — 멈춘 서버가 있으면 이 값만큼 기다린다 |
 | `EMBED_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | 임베딩 API 연결 타임아웃 (`app.embedding.connect-timeout-seconds`) |
 | `EMBED_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
@@ -1709,6 +1709,7 @@ app.llm.providers[1].concurrency=4
 - `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
 - 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
 - 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
+- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 또 기동 시에는 두 서버가 모두 떠 있어야 합니다(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=true` 일 때 — 한 대라도 안 닿으면 앱이 시작되지 않습니다). **임베딩은 이 전환의 대상이 아닙니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)로만 가므로, 죽은 서버가 거기라면 채팅 모델이 다른 서버로 넘어가도 RAG 질문은 **검색 단계에서** 오류가 납니다. `EMBED_ADDITIONAL_BASE_URLS` 는 부하 분산(least-in-flight)이지 장애 전환이 아니라서 죽은 엔드포인트로 간 호출은 그대로 실패합니다. 임베딩 서버는 항상 떠 있는 곳을 `EMBED_BASE_URL` 로 지정하세요.
 
 COST_FIRST 흐름:
 ```
@@ -2934,7 +2935,9 @@ time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: applic
 | 첫 요청만 매우 느리고 이후 정상 | 최초 요청이 모델 로딩(JIT)을 유발 | 기동 후 워밍업 요청을 한 번 보내두기 |
 | 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 모드를 S(간단히)로, 또는 더 빠른 모델 사용 |
 | 로그에 `[TIMEOUT:SSE_IDLE]` | 300초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
-| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
+| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음(다른 서버로 넘기지도 않음) |
+| 로그에 `[CONNECT-TIMEOUT]` | `LLM_CONNECT_TIMEOUT_SECONDS`(기본 10초) 안에 연결을 못 맺음 — 호스트가 꺼졌거나 방화벽/네트워크 문제 | 그 서버를 차단하고 같은 호출 안에서 다음 서버로 넘어간 것이다. 서버 상태·주소(`LOCAL_LLM_URL`)를 확인 |
+| 로그에 `[STREAM-FAILOVER]` | 채팅 답변 스트리밍이 첫 토큰 전에 서버 장애(연결 거부·연결 타임아웃·5xx·429/503)를 만나 다음 서버로 다시 열었다 | 사용자에게는 보이지 않는다. 반복되면 해당 서버(`provider=`)를 확인 |
 
 ---
 

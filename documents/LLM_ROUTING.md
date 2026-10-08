@@ -350,8 +350,9 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
   — 폴백이 있으면 30초, 없으면 **5초**다. 프로바이더가 하나뿐이면 차단은 우회가 아니라 **전면 중단**이고, 로컬 LLM 재시작은 보통 몇 초로
   끝나므로 30초는 서버가 이미 올라온 뒤까지 남아 "재시작했는데도 계속 안 된다"가 된다. **차단을 없애지는 않는다** — 정말 죽어 있으면
   모든 요청이 각자 연결 타임아웃을 무는 편이 더 나쁘다.
+- **연결 타임아웃은 차단하고 넘긴다**(`isConnectTimeout`) — 호스트 다운·방화벽 DROP 으로 TCP 연결을 못 맺고 `LLM_CONNECT_TIMEOUT_SECONDS`(기본 10초)가 지난 경우다. 응답을 기다리다 끊은 것이 아니라 서버에 **닿지도 못한** 것이라 읽기 타임아웃과 결론이 반대다 — 예전에는 둘 다 `SocketTimeoutException` 이라 "서버는 멀쩡하다"로 묶여, `LOCAL_LLM_URL_2` 가 살아 있어도 죽은 `LOCAL_LLM_URL` 로 매 요청이 가서 같은 오류로 끝났다. 클래스로는 못 가르고 메시지(JDK `Connect timed out` ↔ `Read timed out`)와 다른 HTTP 클라이언트의 전용 타입(`*ConnectTimeoutException`)으로 가른다(`LlmFailureClassificationTest`).
 - **차단하지 않는 실패가 넷 있다** — 넷 다 "프로바이더가 아픈 게 아니다"라는 같은 이유다:
-  - 클라이언트 측 타임아웃/인터럽트(`isTimeoutLike`) — 서버는 멀쩡하다. 예외를 그대로 던진다.
+  - 클라이언트 측 **읽기** 타임아웃/인터럽트(`isTimeoutLike` 에서 연결 타임아웃을 뺀 것) — 연결은 됐으니 서버는 멀쩡할 수 있다. 예외를 그대로 던진다(다른 프로바이더로 넘기지도 않는다).
   - 이미지 입력 미지원(`isVisionUnsupported`, mmproj 부재) — 그 프로바이더의 **영구적** 한계라
     기억해 두고 이후 VISION/LIGHT_BOTH 를 건너뛴다. 텍스트 작업은 계속 그 프로바이더로 간다.
   - **컨텍스트 윈도우 초과**(`isContextOverflow`) — **이 요청 하나의 크기** 문제라 기억할 것이
@@ -372,6 +373,14 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
     서버가 **내려가는 순간**에만 나오는데 차단은 **이미 올라온 뒤**까지 남기 때문이다 — 실제로 차단 1회에 그 30초 창 안의
     재시도 3번이 전부 `All providers exhausted` 로 죽었다. 판정은 JSON 조각(`"error":"terminated"`)으로 하며 `terminated`
     라는 단어만으로는 통과시키지 않는다(`connection terminated by peer` 는 진짜 네트워크 장애라 차단해야 한다).
+- **장애 전환이 닿는 범위** — 같은 로컬 서버 두 대(`LOCAL_LLM_URL`·`LOCAL_LLM_URL_2`) 중 한 대가 죽었을 때:
+
+  | 경로 | 연결 거부·DNS·5xx·429/503 | 연결 타임아웃 | 읽기 타임아웃 |
+  |---|---|---|---|
+  | 블로킹 호출(분류·독립화·재순위·검증·요약·제목·인덱싱 chore, **질의 확장**) | 차단 + 같은 호출 안에서 다음 서버 | 같음 | 전환 없음, 예외 |
+  | 채팅 답변 스트리밍(RAG·Direct·PROGRESSIVE 2차) | **첫 토큰 전이면** 차단 + 다음 서버로 스트림을 다시 연다(`StreamFailover`) | 같음 | 전환 없음 |
+
+  스트리밍은 `executeGated` 의 순회를 우회하므로 `StreamFailover` 가 같은 규칙을 따로 건다(판정·차단은 `LlmRouter.failOver()` — 블로킹 경로와 같은 함수). **첫 토큰이 나간 뒤**·사용자 중단·컨텍스트 초과(축소 재시도 몫)·4xx·알 수 없는 오류는 어느 쪽에서도 차단·전환하지 않는다. 질의 확장은 `RoutedChatModel` 이 호출마다 라우터를 지나 블로킹 열과 같다(예전에는 기동 때 고른 프로바이더에 고정). **남는 한계**: 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝난다 — 느린 생성과 구분할 수 없다. 기동 시 검증(G3)은 한 대라도 안 떠 있으면 앱이 시작되지 않는다(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false` 로 우회). 임베딩도 이 경로 밖이다 — `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)이 죽은 서버를 향하면 채팅 모델이 전환돼도 질문 임베딩에서 검색이 실패한다.
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - **차단으로 요청이 막히면 사용자에게 남은 초를 말한다** — `LlmProviderExhaustedException.retryAfterSeconds()` 로 실리고, REST 에는 예외 메시지
   (`AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`)와 같은 값의 `Retry-After` 헤더가 나간다. 채팅 화면(SSE·HTMX)은
@@ -421,7 +430,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | `ImageTypeClassifier` |
-| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
+| `RetrievalService`의 MultiQuery 확장 모델(`RoutedChatModel` — 호출마다 `executeGatedWithUsage` 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
 | `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
