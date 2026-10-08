@@ -279,7 +279,8 @@ rag_java/
     │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine per-user token-bucket; 429 + RAG-RATE-001
     │   ├── llm/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode; executeGated()/acquirePermit() — per-provider concurrency gate + 429 backpressure for the chat/query path
-    │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel decorator — applies the concurrency gate to framework-internal callers (MultiQueryExpander) that bypass executeGated()
+    │   │   ├── StreamFailover.java    # Chat-answer stream: pick provider -> permit -> stream; before the first token a server failure (refused/connect timeout/5xx/429/503) blocks it and re-opens on the next provider
+    │   │   ├── RoutedChatModel.java   # ChatModel that routes on every call (LlmRouter.executeGatedWithUsage) — for framework callers (MultiQueryExpander) that hold one model
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed)
