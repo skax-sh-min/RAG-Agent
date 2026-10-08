@@ -679,6 +679,31 @@ class ChatControllerHtmxTest {
     }
 
     /**
+     * LaTeX 기호 확장(static/js/markdown-tex-symbols.js)은 전역 marked 에 자신을 등록하므로 marked 보다 뒤에
+     * 실려야 한다 — 앞에 오면 marked 가 없어 조용히 아무 일도 하지 않고, 답변에는 다시 $\rightarrow$ 가
+     * 글자 그대로 나온다. 그 확장은 base.html 에서만 실리므로 base.html 을 decorate 하는 채팅 페이지로 본다.
+     */
+    @Test
+    @DisplayName("채팅 페이지는 LaTeX 기호 확장을 marked 보다 뒤에 싣는다")
+    void chatPageLoadsTexSymbolExtensionAfterMarked() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of());
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        java.util.regex.Matcher marked = java.util.regex.Pattern.compile("<script[^>]+marked\\.min\\.js").matcher(html);
+        java.util.regex.Matcher tex = java.util.regex.Pattern.compile("<script[^>]+markdown-tex-symbols").matcher(html);
+        assertThat(marked.find()).as("marked 를 싣는 script 태그").isTrue();
+        assertThat(tex.find()).as("LaTeX 기호 확장을 싣는 script 태그").isTrue();
+        assertThat(tex.start()).as("확장은 marked 보다 뒤에 실려야 한다").isGreaterThan(marked.start());
+    }
+
+    /**
      * 재사용 턴이 새 대화의 첫 메시지일 때의 회귀. 예전에는 thread_meta 행 없이 턴만 저장해서 —
      * HTMX/SSE 경로와 달리 getOrCreate 를 부르지 않았다 — 사이드바에 안 뜨고 새로고침하면
      * 대화가 비어 보였다(일반 메시지를 한 번 보내야 나타났다).
@@ -710,6 +735,39 @@ class ChatControllerHtmxTest {
                 org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
                 any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), eq(42L));
         verify(threadMetaService).generateTitleAsync(any(), eq("t-new"), eq("latest"), eq("sqlite 연결 설정 방법"));
+        // 재사용 턴의 질문은 이미 다듬은 문장이다 — 같은 값을 다듬은 질문으로도 적어 한 줄로 보이게 하고,
+        // 이 턴을 다시 다듬으려는 시도(백필)를 막는다.
+        verify(memoryService).saveClarifiedQuestion(99L, "sqlite 연결 설정 방법");
+    }
+
+    /**
+     * 답변 뒤에 다듬은 질문은 원문과 다를 때만 원문 아래 괄호 줄로 보이고, 질문 내비게이션이 읽을
+     * data-clarified-question 도 그때만 심긴다(같은지 판정은 컨트롤러 한 곳 — PostAnswerService.differs).
+     */
+    @Test
+    @DisplayName("대화 기록 — 다듬은 질문이 원문과 다른 턴에만 '(다듬은 질문)' 줄과 data-clarified-question 이 붙는다")
+    void chatPageShowsTheClarifiedQuestionOnlyWhenItDiffers() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "그거 어떻게 설정해?", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false),
+                new MemoryRepository.Turn(2L, "SSE 타임아웃?", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+        when(memoryService.getClarifiedQuestions(any())).thenReturn(java.util.Map.of(
+                1L, "MCI 연동 타임아웃은 어떻게 설정하나요?",
+                2L, "SSE 타임아웃"));   // 끝 문장부호만 다르다 — 같은 질문
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("data-clarified-question=\"MCI 연동 타임아웃은 어떻게 설정하나요?\"");
+        assertThat(html).contains("(MCI 연동 타임아웃은 어떻게 설정하나요?)");
+        assertThat(html).doesNotContain("data-clarified-question=\"SSE 타임아웃\"");
+        assertThat(html).doesNotContain("(SSE 타임아웃)");
+        // 원문은 그대로 — data-question 에는 다듬은 질문을 섞지 않는다.
+        assertThat(html).contains("data-question=\"그거 어떻게 설정해?\"");
     }
 
     /**

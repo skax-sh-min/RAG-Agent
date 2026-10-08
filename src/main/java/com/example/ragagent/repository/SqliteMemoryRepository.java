@@ -251,6 +251,15 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public List<String> findQuestionsBefore(String userId, String threadId, long turnId, int limit) {
+        List<String> newestFirst = jdbc.queryForList(
+                "SELECT question FROM conversation_turns " +
+                "WHERE user_id = ? AND thread_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+                String.class, userId, threadId, turnId, Math.max(0, limit));
+        return newestFirst.reversed();
+    }
+
+    @Override
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
@@ -346,6 +355,25 @@ public class SqliteMemoryRepository implements MemoryRepository {
         jdbc.query("SELECT id, verification FROM conversation_turns " +
                    "WHERE verification IS NOT NULL AND id IN (" + placeholders + ")",
                 rs -> { out.put(rs.getLong("id"), rs.getString("verification")); },
+                turnIds.toArray());
+        return out;
+    }
+
+    @Override
+    public void saveClarifiedQuestion(long turnId, String clarifiedQuestion) {
+        if (clarifiedQuestion == null || clarifiedQuestion.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET clarified_question = ? WHERE id = ?",
+                clarifiedQuestion, turnId);
+    }
+
+    @Override
+    public Map<Long, String> findClarifiedQuestionsByTurnIds(List<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        Map<Long, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT id, clarified_question FROM conversation_turns " +
+                   "WHERE clarified_question IS NOT NULL AND id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getLong("id"), rs.getString("clarified_question")); },
                 turnIds.toArray());
         return out;
     }

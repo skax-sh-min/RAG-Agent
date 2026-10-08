@@ -16,6 +16,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.List;
 
@@ -122,6 +123,22 @@ class LoggingChatModelTest {
         model.call(prompt());
 
         assertThat(logAppender.list).noneMatch(event -> event.getLevel() == Level.TRACE);
+    }
+
+    @Test
+    @DisplayName("표준 밖 필드(chat_template_kwargs)도 본문 최상위에 찍힌다 — 빠지면 그 curl 로 재현한 요청만 생각을 켠 채 돈다")
+    void logsExtraBodyFieldsAtTopLevel() {
+        when(delegate.call(any(Prompt.class))).thenReturn(response());
+        var model = new LoggingChatModel(delegate, "local", "http://localhost:1234/v1", "key", "llama");
+        Prompt prompt = new Prompt(List.of(new UserMessage("질문")),
+                ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder().maxTokens(256)).build());
+
+        model.call(prompt);
+
+        assertThat(logAppender.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("\"max_tokens\" : 256")
+                .contains("\"chat_template_kwargs\" : {")
+                .contains("\"enable_thinking\" : false"));
     }
 
     @Test

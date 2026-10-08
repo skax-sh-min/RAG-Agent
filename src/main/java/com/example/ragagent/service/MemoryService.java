@@ -235,6 +235,23 @@ public class MemoryService {
         return out;
     }
 
+    /**
+     * 답변 뒤에 다듬은 질문을 저장한다(PostAnswerService). {@code saveVerification} 과 같이 <b>실패해도
+     * 삼킨다</b> — 이미 저장된 턴에 덧붙이는 표시·재사용 보조 값이라, 쓰기 사고가 답변을 되돌릴 일이 아니다.
+     */
+    public void saveClarifiedQuestion(long turnId, String clarifiedQuestion) {
+        try {
+            repository.saveClarifiedQuestion(turnId, clarifiedQuestion);
+        } catch (Exception e) {
+            log.warn("[CLARIFY] 다듬은 질문 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
+    /** 대화 기록 화면이 질문 아래 줄을 되살리는 데 쓰는 조회 — 값이 있는 턴만 담긴다. */
+    public Map<Long, String> getClarifiedQuestions(List<Long> turnIds) {
+        return repository.findClarifiedQuestionsByTurnIds(turnIds);
+    }
+
     /** 관대한 파서 — 위 javadoc 의 이유로 알 수 없는 필드를 무시한다. */
     private ObjectMapper lenientMapper() {
         return objectMapper.copy()
@@ -287,6 +304,11 @@ public class MemoryService {
      */
     public List<MemoryRepository.Turn> getRecentTurns(String userId, String threadId) {
         return repository.getRecentTurns(userId, threadId);
+    }
+
+    /** 이 턴 앞의 질문들(최근 {@code limit} 개, 오래된 것부터) — {@link MemoryRepository#findQuestionsBefore} 참고. */
+    public List<String> getQuestionsBefore(String userId, String threadId, long turnId, int limit) {
+        return repository.findQuestionsBefore(userId, threadId, turnId, limit);
     }
 
     /** Single turn lookup — used by {@code CuratedSubmissionService} to prefill a 지식 제안 from a

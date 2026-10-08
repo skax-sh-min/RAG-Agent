@@ -9,7 +9,8 @@ import java.util.Locale;
 
 /**
  * 한 턴이 끝났을 때 저장되는 것 전부 — 대화 기록, 이미지 참조, 검색 진단, 검증 스냅샷,
- * 재사용 출처, 요약 선계산. <b>여섯 가지가 이 순서로</b> 일어난다.
+ * 재사용 출처, 요약 선계산, 답변 뒤 보강 — 다듬은 질문·추가 질문({@link PostAnswerService}, 비동기). <b>일곱 가지가
+ * 이 순서로</b> 일어난다.
  *
  * <p><b>왜 클래스로 뺐는가.</b> 채팅에는 진입점이 둘이고({@link AgentService} 블로킹,
  * {@link StreamingAgentService} SSE) 두 곳이 이 여섯 줄을 그대로 복제하고 있었다. 다른 것은
@@ -21,11 +22,11 @@ import java.util.Locale;
  * 양쪽에 똑같이 해야 했고, 한쪽만 고쳤다면 스트리밍으로 온 턴만 조용히 옛 값으로 저장됐을
  * 것이다. 화면에는 아무 차이도 안 보인다.
  *
- * <p><b>왜 스프링 빈이 아닌가.</b> 두 서비스가 이미 세 협력자를 필드로 들고 있어서, 그것으로
- * 직접 만들면 생성자 시그니처가 그대로다 — 두 클래스가 각각 테스트용 하위호환 생성자를 여럿
+ * <p><b>왜 스프링 빈이 아닌가.</b> 두 서비스가 이미 협력자들을 필드로 들고 있어서, 그것으로
+ * 직접 만들면 하위호환 생성자들이 그대로다 — 두 클래스가 각각 테스트용 하위호환 생성자를 여럿
  * 들고 있어, 빈으로 만들면 그 전부와 테스트의 구성 지점까지 함께 흔들린다. 이 클래스가 하는
- * 일은 협력자를 새로 들이는 것이 아니라 <b>이미 있는 것들 위의 절차 하나</b>를 한곳에 두는
- * 것뿐이라, 배선을 늘릴 이유가 없다.
+ * 일은 <b>있는 것들 위의 절차 하나</b>를 한곳에 두는 것이다. 넷째 협력자({@link PostAnswerService})는
+ * 두 서비스의 주 생성자만 받고 하위호환 생성자는 {@code null} 을 넘긴다 — 그 단계만 빠진다.
  */
 final class TurnPersistence {
 
@@ -42,13 +43,17 @@ final class TurnPersistence {
     private final ConversationSummarizerService summarizerService;
     /** 없을 수 있다 — 질문 재사용을 배선하지 않은 구성/테스트에서는 그 단계만 빠진다. */
     private final QuestionReuseService questionReuseService;
+    /** 없을 수 있다 — 답변 뒤 보강을 배선하지 않은 구성/테스트에서는 그 단계만 빠진다. */
+    private final PostAnswerService postAnswerService;
 
     TurnPersistence(MemoryService memoryService,
                     ConversationSummarizerService summarizerService,
-                    QuestionReuseService questionReuseService) {
+                    QuestionReuseService questionReuseService,
+                    PostAnswerService postAnswerService) {
         this.memoryService = memoryService;
         this.summarizerService = summarizerService;
         this.questionReuseService = questionReuseService;
+        this.postAnswerService = postAnswerService;
     }
 
     /**
@@ -83,6 +88,12 @@ final class TurnPersistence {
                     result.retrievedDocs(), result.sources());
         }
         summarizerService.precomputeAfterTurn(turn.userId(), turn.threadId(), turnId, turn.locale());
+        if (postAnswerService != null) {
+            // 다듬은 질문·추가 질문 — 가상 스레드에서 돌아 이 저장을 기다리게 하지 않는다. 화면이 done 직후
+            // 결과를 물으므로 기다림은 이 호출 안에서(= done 보다 먼저) 등록된다.
+            postAnswerService.afterTurn(turnId, turn.userId(), turn.threadId(), turn.question(),
+                    turn.directMode(), turn.locale(), result);
+        }
         return turnId;
     }
 }

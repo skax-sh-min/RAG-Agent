@@ -4,6 +4,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingOffChatModel;
 import com.example.ragagent.repository.MemoryRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,7 +14,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
+import org.springframework.context.support.ResourceBundleMessageSource;
 
 import java.util.List;
 import java.util.Locale;
@@ -139,6 +142,9 @@ class QuestionCondenserTest {
         assertThat(sent)
                 .as("Direct 답변이 지어낸 이름이 검색어의 재료가 되는 경로 자체가 없어야 한다")
                 .doesNotContain(inventedTerm);
+        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getExtraBody())
+                .as("생각을 끄고 부른다 — 켠 채로는 256 토큰 상한을 생각에 다 써서 빈 응답이 된다")
+                .containsKey(ThinkingOffChatModel.TEMPLATE_KWARGS);
     }
 
     @Test
@@ -221,5 +227,27 @@ class QuestionCondenserTest {
         assertThat(QuestionCondenser.parse("가".repeat(QuestionCondenser.MAX_CONDENSED_CHARS + 1))).isNull();
         assertThat(QuestionCondenser.parse("")).isNull();
         assertThat(QuestionCondenser.parse(null)).isNull();
+    }
+
+    // ── 실제 번들 ─────────────────────────────────────────────────────────────
+
+    /**
+     * 실제 번들의 프롬프트가 통째로 읽히는가 — 이 클래스의 다른 테스트는 {@code MessageSource} 를 목으로 바꿔 의도한
+     * 문장을 넣으므로, 번들 값의 줄 끝 {@code \n\} 가 빠져 첫 문장만 남았던 동안에도 전부 통과했다. 그동안 모델은
+     * 규칙도 이전 질문도 없이 "당신은 … 전문가입니다" 한 줄과 질문만 받았다.
+     */
+    @Test
+    @DisplayName("실제 번들의 프롬프트는 한/영 모두 자리표시자 둘을 담고 끝까지 읽힌다")
+    void realPromptLoadsWholeInBothBundles() {
+        ResourceBundleMessageSource messages = new ResourceBundleMessageSource();
+        messages.setBasename("messages");
+        messages.setDefaultEncoding("UTF-8");
+        messages.setFallbackToSystemLocale(false);
+        for (Locale locale : new Locale[]{Locale.KOREAN, Locale.ENGLISH}) {
+            String prompt = messages.getMessage("prompt.retrieval.condense", null, locale);
+            assertThat(prompt).as("%s", locale)
+                    .contains("{history}", "{query}", "[PREVIOUS_QUESTIONS]", "[/PREVIOUS_QUESTIONS]");
+            assertThat(prompt.lines().count()).as("%s 줄 수", locale).isGreaterThan(10);
+        }
     }
 }

@@ -12,6 +12,7 @@ import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.PostAnswerService;
 import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.SettingsService;
@@ -121,6 +122,15 @@ public class ChatController {
             // 아예 없고, 그게 곧 "배지 없음"이다(이 컬럼 이전의 모든 턴 + meta/Direct·S 턴).
             model.addAttribute("verificationByTurnId",
                     memoryService.getVerifications(turns.stream().map(t -> t.id()).toList()));
+            // 답변 뒤에 다듬은 질문 — 원문과 다른 턴만 담는다. 버블과 "전체 질문 보기"가 원문 아래 괄호 줄로
+            // 보여 주므로, 같은지 다른지의 판정은 여기(PostAnswerService.differs) 한 곳에서 한다.
+            Map<Long, String> clarified = memoryService.getClarifiedQuestions(turns.stream().map(t -> t.id()).toList());
+            Map<Long, String> shownClarified = new java.util.HashMap<>();
+            turns.forEach(t -> {
+                String c = clarified.get(t.id());
+                if (PostAnswerService.differs(t.question(), c)) shownClarified.put(t.id(), c);
+            });
+            model.addAttribute("clarifiedQuestionByTurnId", shownClarified);
                 if (questionReuseService != null) {
                 // 저장해 둔 검색 진단 수치를 다시 붙인다 — 목록 자체는 현재 청크 기준으로
                 // 재구성된 쪽이 권위이고(라벨·미리보기·삭제 placeholder), 수치만 chunkId로 병합된다.
@@ -412,6 +422,9 @@ public class ChatController {
             lookup.question(), "",
             askedAt, 0, 0, 0,
             "db-reuse", 0, responseMode, lookup.selectedTags(), lookup.directMode(), lookup.sourceTurnId());
+        // 새 턴의 질문은 이미 다듬은 문장이다(QuestionReuseService.reuseLookup) — 같은 값을 다듬은 질문으로도
+        // 적어 두면 화면엔 한 줄로 보이고, 이 턴을 다시 다듬으려는 시도(백필)도 생기지 않는다.
+        memoryService.saveClarifiedQuestion(savedTurnId, lookup.question());
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
         threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
 

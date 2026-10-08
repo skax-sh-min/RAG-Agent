@@ -56,7 +56,11 @@
 │    ImageTypeClassifier      → LIGHT_BOTH  (멀티모달: LIGHT_BOTH/BOTH) │
 │    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
 │    CuratedQuestionSuggester → MICRO_TEXT  (/admin 큐레이션 편집의 "본문으로 구체화", 배경 호출) │
+│    PostAnswerService        → MICRO_TEXT  (답변 뒤 질문 다듬기·추가 질문, 턴마다 배경 호출) │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
+│                                                                      │
+│  ※ 독립화·질문 다듬기·"본문으로 구체화"는 생각(thinking)을 끄고 부른다 │
+│    (ThinkingOffChatModel — LOCAL 프로바이더에만 chat_template_kwargs)  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -414,6 +418,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 | | `CuratedQuestionSuggester.suggest()` (`/admin` 큐레이션 편집의 "본문으로 구체화" — 관리자가 버튼을 눌러야만 도는 `MICRO_TEXT` 1콜, 사용량은 `question:` 라벨) |
+| | `PostAnswerService.afterTurn()` (답변 뒤 질문 다듬기 + 추가 질문 — 턴이 저장된 뒤 가상 스레드에서 `MICRO_TEXT` 1콜(둘이 켜져 있으면 한 번에), 사용량은 `postanswer:` 라벨, `/settings` 의 `llm.clarified-question-enabled`·`llm.follow-up-questions-enabled` 로 끈다) |
 | | `CuratedSubmissionService.enrich()` → `KeywordExtractor.enrichSingle()` (지식 제안 폼의 "빈 칸 자동 생성" + 등록 시 자동 채움 — 게스트도 부를 수 있지만 `executeWithTracking()` 경로라 이 게이트는 타지 않는다, 아래 §6 참고) |
 
 인덱싱 경로는 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)로 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없으므로 이중 게이팅을 피하기 위해 의도적으로 제외했다 — `LlmRouter.executeWithTracking()`(게이트 미적용, 기존 동작 그대로)을 그대로 사용한다.

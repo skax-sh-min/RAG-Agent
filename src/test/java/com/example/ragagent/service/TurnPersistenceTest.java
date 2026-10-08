@@ -28,7 +28,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 턴이 끝났을 때 저장되는 여섯 가지 — 채팅 진입점 <b>둘</b>이 공유하는 절차.
+ * 턴이 끝났을 때 저장되는 일곱 가지 — 채팅 진입점 <b>둘</b>이 공유하는 절차(일곱째인 답변 뒤 질문 다듬기는
+ * {@link PostAnswerService} 가 비동기로 한다).
  *
  * <p>이 클래스가 생기기 전에는 {@code AgentService} 와 {@code StreamingAgentService} 가 같은
  * 여섯 줄을 복제하고 있었고, 그 대가는 이미 치렀다: 저장할 응답 모드를 요청의 것에서 결과의
@@ -40,6 +41,7 @@ class TurnPersistenceTest {
     private MemoryService memoryService;
     private ConversationSummarizerService summarizer;
     private QuestionReuseService questionReuse;
+    private PostAnswerService postAnswer;
     private TurnPersistence persistence;
 
     @BeforeEach
@@ -47,10 +49,11 @@ class TurnPersistenceTest {
         memoryService = mock(MemoryService.class);
         summarizer = mock(ConversationSummarizerService.class);
         questionReuse = mock(QuestionReuseService.class);
+        postAnswer = mock(PostAnswerService.class);
         when(memoryService.addTurn(anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyInt(), anyInt(), anyInt(), any(), anyInt(), anyString(), any(), anyBoolean()))
                 .thenReturn(42L);
-        persistence = new TurnPersistence(memoryService, summarizer, questionReuse);
+        persistence = new TurnPersistence(memoryService, summarizer, questionReuse, postAnswer);
     }
 
     private static TurnPersistence.Turn turn() {
@@ -64,12 +67,13 @@ class TurnPersistenceTest {
     }
 
     @Test
-    @DisplayName("여섯 가지가 이 순서로 저장된다 — 기록 → 이미지 → 진단 → 검증 → 재사용 출처 → 요약")
-    void save_writesTheSixThingsInOrder() {
-        Long turnId = persistence.save(turn(), answered(ResponseMode.N));
+    @DisplayName("일곱 가지가 이 순서로 저장된다 — 기록 → 이미지 → 진단 → 검증 → 재사용 출처 → 요약 → 질문 다듬기")
+    void save_writesTheSevenThingsInOrder() {
+        AgentState result = answered(ResponseMode.N);
+        Long turnId = persistence.save(turn(), result);
 
         assertThat(turnId).isEqualTo(42L);
-        InOrder order = inOrder(memoryService, questionReuse, summarizer);
+        InOrder order = inOrder(memoryService, questionReuse, summarizer, postAnswer);
         order.verify(memoryService).addTurn(anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyInt(), anyInt(), anyInt(), any(), anyInt(), anyString(), any(),
                 anyBoolean());
@@ -78,6 +82,8 @@ class TurnPersistenceTest {
         order.verify(memoryService).saveVerification(eq(42L), any());
         order.verify(questionReuse).recordTurnSources(eq(42L), eq("u1"), eq("t1"), any(), any());
         order.verify(summarizer).precomputeAfterTurn("u1", "t1", 42L, Locale.KOREAN);
+        // 저장된 turn id 와 요청의 질문·Direct 여부·로케일, 그리고 결과 그대로 — 대상 판정은 서비스가 한다.
+        order.verify(postAnswer).afterTurn(42L, "u1", "t1", "질문", false, Locale.KOREAN, result);
     }
 
     /**
@@ -109,14 +115,14 @@ class TurnPersistenceTest {
 
         assertThat(persistence.save(turn(), empty)).isNull();
 
-        verifyNoInteractions(memoryService, summarizer, questionReuse);
+        verifyNoInteractions(memoryService, summarizer, questionReuse, postAnswer);
     }
 
-    /** 질문 재사용을 배선하지 않은 구성에서는 그 단계만 빠지고 나머지는 그대로 저장된다. */
+    /** 질문 재사용·질문 다듬기를 배선하지 않은 구성에서는 그 단계만 빠지고 나머지는 그대로 저장된다. */
     @Test
-    @DisplayName("questionReuseService 가 없어도 나머지 다섯 가지는 저장된다")
+    @DisplayName("questionReuseService·postAnswerService 가 없어도 나머지는 저장된다")
     void save_withoutQuestionReuse_stillPersistsTheRest() {
-        TurnPersistence noReuse = new TurnPersistence(memoryService, summarizer, null);
+        TurnPersistence noReuse = new TurnPersistence(memoryService, summarizer, null, null);
 
         assertThat(noReuse.save(turn(), answered(ResponseMode.N))).isEqualTo(42L);
 

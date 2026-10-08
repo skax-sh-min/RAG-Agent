@@ -217,6 +217,8 @@
 <script th:src="@{/webjars/bootstrap/js/bootstrap.bundle.min.js}"></script>
 <script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
 <script th:src="@{/webjars/marked/marked.min.js}"></script>
+<!-- marked 바로 뒤 — LaTeX 기호 표기($\rightarrow$)를 문자로 그리는 확장을 전역 marked 에 등록한다(앞에 오면 아무 일도 안 한다) -->
+<script th:src="@{/js/markdown-tex-symbols.js}"></script>
 <script th:src="@{/webjars/dompurify/dist/purify.min.js}"></script>
 <script th:src="@{/js/vendor/highlight.min.js}"></script>
 

@@ -26,7 +26,12 @@ import java.util.regex.Pattern;
 @Service
 public class QuestionReuseService {
 
-    private static final int MAX_SUGGESTION_QUESTION_LENGTH = 50;
+    /**
+     * 추천 목록에 띄울 질문의 길이 상한 — 표시되는 문장(다듬은 질문이 있으면 그것) 기준이다. 50자에서 100자로
+     * 올린 것은 다듬은 질문 때문이다: 지시어를 구체 이름으로 풀면 문장이 길어지는 것이 정상이고, 50자에서는
+     * 바로 그 질문들이 다시 추천에서 빠졌다. 다듬기(PostAnswerService)도 같은 상한으로 만든다.
+     */
+    static final int MAX_SUGGESTION_QUESTION_LENGTH = 100;
     private static final String DELETED_REFERENCE_LABEL = "참조 원문 삭제됨";
     private static final String DELETED_REFERENCE_PREVIEW = "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.";
     private static final String DELETED_CHUNK_PREVIEW = "이 출처 청크는 삭제되어 원문을 표시할 수 없습니다.";
@@ -235,8 +240,11 @@ public class QuestionReuseService {
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();
         for (QuestionReuseRepository.CandidateTurn c : candidates) {
-            if (isTooLongForSuggestion(c.question())) continue;
-            if (isDirectiveOnlyQuestion(c.question())) continue;
+            // 판정과 표시는 전부 "보여줄 문장" 기준 — 다듬은 질문이 있으면 그것이다. 지시어뿐이라 빠지던
+            // 원문도 다듬은 질문으로는 추천에 뜬다.
+            String shown = c.displayQuestion();
+            if (isTooLongForSuggestion(shown)) continue;
+            if (isDirectiveOnlyQuestion(shown)) continue;
             Origin origin = originOf(c, userId, threadId);
             if (origin != Origin.THREAD) {
                 if (isRecentlyInvalid(c.turnId())) continue;
@@ -246,9 +254,9 @@ public class QuestionReuseService {
                     continue;
                 }
             }
-            String key = normalizeQuestionKey(c.question());
+            String key = normalizeQuestionKey(shown);
             if (!seenQuestions.add(key)) continue;
-            out.add(new Suggestion(c.turnId(), c.question(), summarize(c.answer()),
+            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()),
                     scope == Scope.ME ? "me" : "shared", origin));
             if (out.size() >= limit) break;
         }
@@ -279,10 +287,14 @@ public class QuestionReuseService {
         if (turn == null) {
             return ReuseLookup.notReusable("선택한 항목을 찾을 수 없거나 접근 권한이 없습니다.", null);
         }
+        // 새 턴의 질문은 추천 목록에 보였던 문장(다듬은 질문이 있으면 그것)이다. 원문을 복사하면 "그거 어떻게
+        // 설정해?"가 새 대화에 그대로 박혀 그 대화의 기록이 의미를 잃는다 — 다른 대화에서는 지시 대상이 없다.
+        // 재사용이 안 돼 일반 질의로 떨어질 때도 같은 문장을 보낸다(사용자가 고른 것이 그 문장이다).
+        String question = turn.displayQuestion();
         ValidationResult valid = validateTurn(turn.turnId());
         if (!valid.reusable()) {
             recentlyInvalidTurns.put(turn.turnId(), Boolean.TRUE);
-            return ReuseLookup.notReusable(valid.reason(), turn.question());
+            return ReuseLookup.notReusable(valid.reason(), question);
         }
         recentlyInvalidTurns.invalidate(turn.turnId());
         List<String> chunkIds = repository.findSourceRefs(turn.turnId()).stream()
@@ -290,7 +302,7 @@ public class QuestionReuseService {
             .filter(v -> v != null && !v.isBlank())
             .distinct()
             .toList();
-        return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId(), chunkIds,
+        return ReuseLookup.reusable(turn.turnId(), question, turn.answer(), turn.threadId(), chunkIds,
                 turn.responseMode(), turn.directMode(), turn.selectedTags());
     }
 

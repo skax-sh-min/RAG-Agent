@@ -89,6 +89,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
             new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
+            new Spec(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, Kind.BOOL,   0,   0,    0,    "settings.item.clarified-question-enabled"),
+            new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED, Kind.BOOL,  0,   0,    0,    "settings.item.follow-up-questions-enabled"),
             new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
                     AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
@@ -648,6 +650,28 @@ public class SettingsService implements AppProperties.OverrideSource {
         return o != null && o;
     }
 
+    /**
+     * 답변 뒤에 질문을 다듬어 저장하는가(PostAnswerService) — 턴마다 LLM 을 한 번 더 부르는 기능이라
+     * 운영자가 끌 수 있어야 한다. Default <b>ON</b> when unset. 다음 턴부터 적용된다(매 턴 다시 읽는다).
+     * {@code AppProperties} 에 필드를 두지 않고 UI 토글들처럼 이 캐시만 읽는다 — 배포 설정으로 정할 값이
+     * 아니라 화면에서 켜고 끄는 운영 스위치이고, {@code LlmConfig} 레코드에 필드를 더하면 그 레코드를 위치
+     * 인자로 만드는 수십 곳이 함께 흔들린다.
+     */
+    public boolean clarifiedQuestionEnabled() {
+        Boolean o = parseBool(cache.get(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED));
+        return o == null || o;
+    }
+
+    /**
+     * 답변 아래에 이어서 물어볼 만한 질문을 제안하는가(PostAnswerService) — 위와 같은 운영 스위치이고 같은
+     * 이유로 이 캐시만 읽는다. Default <b>ON</b> when unset. 둘 다 켜져 있으면 LLM 호출은 턴당 한 번이다
+     * (다듬은 질문과 추가 질문을 한 번에 받는다).
+     */
+    public boolean followUpQuestionsEnabled() {
+        Boolean o = parseBool(cache.get(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED));
+        return o == null || o;
+    }
+
     private static Boolean parseBool(String value) {
         if (value == null || value.isBlank()) return null;
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
@@ -729,6 +753,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_SHRINK_STEP                 -> Integer.toString(props.llmSafe().shrinkStep());
             case SettingsKeys.LLM_MAX_TOKENS                  -> Integer.toString(props.llmSafe().maxTokens());
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
+            case SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED  -> Boolean.toString(clarifiedQuestionEnabled());
+            case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED -> Boolean.toString(followUpQuestionsEnabled());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> "";

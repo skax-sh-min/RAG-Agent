@@ -116,6 +116,14 @@ PLAN §6.19.3 — the single place deciding "this request's client IP" for `Rate
 
 프로바이더별 `max-tokens` 상한을 호출자 옵션 위에 씌우는 데코레이터. **이게 없으면 프로바이더별 설정이 채팅 경로에서 무효다** — 빈의 `defaultOptions` 는 호출자가 옵션을 안 줬을 때만 쓰이는데, 블로킹 호출부(`AnswerService.answerOptions`/`evalOptions`, `DirectAnswerService`)는 매번 자기 `maxTokens` 를 실어 보낸다. 호출부를 고쳐 프로바이더를 알게 하는 방법은 안 된다: 누가 받을지는 `LlmRouter` 가 나중에 정하므로(역할·우선순위·차단·최소 부하) 미리 물어본 답은 낡을 수 있다. **내리기만 한다** — 더 작은 값은 그대로 두고(검증 호출의 2,048), 없던 상한을 만들지 않으며, 호출자의 옵션 객체를 복사해 쓴다. **상한은 `int` 가 아니라 `IntSupplier` 로 받아 호출마다 다시 계산한다**(§6.26 A6) — `app.llm.max-tokens` 가 핫 편집 대상이고 그 상한의 다른 입력인 컨텍스트 창도 `/settings` 재탐지(§6.26 A5)로 바뀌므로, 생성자에서 값을 받아 두면 둘 다 재기동 전까지 반영되지 않는다. 스트리밍은 `OpenAiApi.chatCompletionStream()` 직행이라 여기를 지나가지 않는다
 
+### `llm/ThinkingOffChatModel.java`
+
+호출부가 "생각하지 말고 바로 답하라"고 표시한 요청(`requestOff()`)을, 받는 프로바이더가 그 표시를 받을 수 있을 때만 실어 보내는 데코레이터. 표시는 요청 본문 최상위의 `chat_template_kwargs: {"enable_thinking": false}` 로, llama.cpp `llama-server`·vLLM·SGLang 이 채팅 템플릿에 그대로 넘기고 그 변수를 보는 템플릿(gemma-4·Qwen3 계열)이 생각을 끈다. 쓰는 곳은 한 줄짜리 짧은 호출 셋 — 독립화(대화형 경로)·답변 뒤 질문 다듬기·큐레이션 질문 제안. 실측(2026-10-01, llama.cpp + gemma-4-E2B): 켠 채로는 독립화가 상한 256 을 생각에 다 써서 매번 6~8초 뒤 빈 응답, 질문 다듬기가 400~711 토큰·10~17초였고, 끄자 각각 0.7~0.9초·~1초에 제대로 된 한 줄이 나왔다.
+
+**왜 호출부가 직접 본문에 넣지 않는가.** OpenAI 표준 필드가 아니라서 원격 프로바이더(OpenAI·Gemini 호환 엔드포인트)는 모르는 필드를 **400 으로 거부**할 수 있고, `LlmRouter` 는 4xx 를 프로바이더 실패로 보고 차단한다(폴백 있으면 30초, 없으면 5초) — 백그라운드 호출 하나가 그동안 채팅까지 멈춘다. 그런데 어느 프로바이더가 받을지는 라우터가 **나중에** 정하므로 호출부는 모른다. `MaxTokensCappingChatModel` 과 같은 이유로, 호출부는 의도만 표시하고 실을지는 프로바이더가 정해진 뒤 여기서 정한다: **LOCAL 역할에만 싣고** 나머지에는 걷어낸다. LOCAL 서버가 그래도 거부하면(오류 문구에 필드 이름이 나온다) 그 프로바이더는 받지 않는다고 기억하고 **표시 없이 한 번 다시 보낸다** — 실패가 라우터에 닿지 않으므로 차단도 연속 실패 계수도 없다(`ThinkingOffWireTest` 가 진짜 체인 + 내장 HTTP 서버로 고정). 판정이 문구의 부분 문자열이라, 다른 오류가 우연히 요청 본문을 되읊으며 그 이름을 담으면 그 프로바이더에서 생각 끄기가 꺼질 뿐이다(그 경우에도 요청은 다시 나간다).
+
+**LM Studio 는 이 스위치를 문서화하지 않는다** — OpenAI 호환 경로의 지원 파라미터 목록에 없고, 네이티브 `/api/v1/chat` 에만 `reasoning: off` 가 있다. 거부하지 않고 흘려 넘기면 효과 없이 모델이 계속 생각할 수 있으므로, 호출부의 출력 상한은 **스위치가 안 먹는 경우를 위해** 정한다(질문 다듬기 2,048 · 독립화 256 은 빈 응답 → 원문 검색으로 수렴). **체인의 가장 바깥**에 두는 이유는 curl 로그(`LoggingChatModel`)가 실제로 나간 본문을 찍게 하기 위해서이고, 그 로그는 `extraBody` 항목도 본문 최상위에 찍는다 — 빠지면 그 curl 로 재현한 요청만 생각을 켠 채 돌아 다른 결과가 나온다. Spring AI 1.1.8 의 `OpenAiChatOptions.extraBody` 는 기본 옵션과 병합되고(`mergeExtraBody`) `copy()` 에도 실려, 프로바이더별 max-tokens 상한이 옵션을 복사해 낮춰도 표시가 남는다(같은 테스트가 확인한다)
+
 ### `llm/LlmRouter.java`
 
 Provider selection by TaskType × RoutingMode; `route()`, `executeWithTracking()` (ungated, indexing/background), `executeGated()`/`acquirePermit()` (§6.12 — per-provider `Semaphore` concurrency gate for the interactive chat/query path; `tryAcquire` up to `app.llm.permit-wait-timeout-seconds` then throws `LlmBackpressureException`, HTTP 429, no circuit-breaker block); `executeGatedWithUsage()` — same gating, additionally returns `LlmResult(text, inputTokens, outputTokens)` read from `ChatResponse.getMetadata().getUsage()` so blocking per-turn callers (`AnswerService`, `ClassifierService.execute()`, `DirectAnswerService.execute()`) can accumulate real token counts into `AgentState` instead of `accumulateTokens(0, 0)`; streaming callers still can't read real usage and instead fold `LlmRouter.approxTokens()` (chars/4, same estimate `recordApproxUsage()` writes to `/llm-usage`) into the per-turn total; `localTier1Concurrency()` — summed in-use/capacity (`ConcurrencySnapshot`) across every `role=LOCAL, priority=1` provider not runtime-disabled via `/settings` — the "main" answer-serving local tier, excluding the `priority=0` MICRO_TEXT offload model (e.g. `local-fast`); `Optional.empty()` only when none are registered/enabled at all. A circuit-broken provider still contributes its full `concurrency` to `capacity` but that whole amount counts as in-use (not accepting anything right now) rather than being excluded — so a lone blocked LOCAL provider shows fully-saturated (e.g. `3/3`) instead of making the indicator vanish. Otherwise in-use is `capacity - Semaphore.availablePermits()` against a fixed `providerCapacity` map recorded at construction (concurrency is restart-required, never changes at runtime). Backs the header's `GET /api/v1/llm/concurrency` indicator (`OperationsController.getLlmConcurrency()`), which additionally folds in `EmbeddingConcurrencyTracker.get()` — embedding calls never acquire this gate at all (separate `EmbeddingModel` decorator chain), so without that the indicator would sit at 0 during indexing/search embedding regardless of load — and clamps the combined total to `capacity` (embedding concurrency is governed by separate limits, e.g. `EMBED_MAX_CONCURRENT_BATCHES`, that don't share this budget, so an unclamped sum could otherwise exceed it). The header JS bold-reds the number once in-use reaches capacity
@@ -223,6 +231,40 @@ Batch MultiQuery search → RRF fusion; **retry escalation은 두 축이며 `app
 **확장 게이트는 반드시 *원문* 길이로 잰다**(`shouldExpand(state.question())`). 독립화된 질의는 원문보다 길어지는 것이 정상이라 재작성 결과로 재면 확장까지 함께 돌아 **한 턴에 질의 전처리 LLM 호출이 둘**이 된다 — 이 항목이 "호출 순증 0"으로 성립하는 이유가 두 게이트가 정확한 여집합이라는 것 하나뿐이다.
 
 on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 공유한다(길이 임계값도 `app.search-multiquery-min-length` 를 그대로 쓴다) — 둘은 같은 성질의 호출이고 임계값은 이미 그 쌍의 경계다. 별도 임계값이 필요한지는 오탐 빈도를 본 뒤 판단한다(§10.12 열린 항목 (a)). 출력은 `MAX_OUTPUT_TOKENS`(256)로 따로 조인다 — 한 줄짜리 응답에 프로바이더의 `app.llm.max-tokens` 전체를 예약하면 좁은 창에서 `n_ctx` 를 넘기는 것은 프롬프트가 아니라 그 예약이다(§6.26, `AnswerService.MAX_EVAL_OUTPUT_TOKENS` 와 같은 이유). 응답이 상한(`MAX_CONDENSED_CHARS` 400자)을 넘으면 **잘라 쓰지 않고 버린다** — 그 길이는 모델이 질문 한 줄이 아니라 설명·목록을 냈다는 뜻이고, 앞부분만 잘라 쓰면 원문보다 나쁜 질의가 된다. 재료가 없거나·모델이 원문을 그대로 돌려주거나·호출이 실패하면 **원문으로 검색한다**(`withoutVerdict()`·`ProviderContextWindows` 와 같은 "모르면 아무것도 하지 않는다").
+
+**2026-10-01 까지 이 기능은 실제로는 한 번도 동작하지 않았다 — 원인이 둘 겹쳐 있었다.** ① 번들 값 `prompt.retrieval.condense` 의 줄 끝 `\n\` 가 빠져 값이 첫 문장뿐이었다. 모델은 규칙도 `[PREVIOUS_QUESTIONS]` 도 없이 "당신은 … 전문가입니다" 한 줄과 질문만 받았다(자리표시자 치환은 아무 일도 하지 않았다). 테스트는 `MessageSource` 를 목으로 바꿔 의도한 문장을 넣고 있어 몰랐다 — 지금은 `QuestionCondenserTest` 가 실제 번들을 읽고, 번들 전체는 `MessageBundleConventionTest` 가 지킨다([규약](#메시지-번들의-여러-줄-값)). ② **추론 모델은 출력 상한 256 을 생각에 다 쓴다.** 실측(llama.cpp + gemma-4-E2B, 서버 기본값 thinking 켬): 고친 프롬프트로도 4건 모두 6~8초 뒤 본문이 빈 채 `finish_reason=length` — 짧은 후속 질문마다 검색이 그만큼 늦어지고 얻는 것은 원문 검색뿐이었다. 상한을 올리면 그 생각을 매번 기다려야 하므로, 대신 **생각을 끄고** 부른다(`ThinkingOffChatModel`): 같은 4건이 0.7~0.9초·11~15토큰에 끝났다("그거 어디야?" → "SSE 타임아웃 설정은 어디에 있나요?", "그럼 운영은?" → "운영 환경에서 로그 레벨을 어떻게 설정해야 하나요?"). 스위치를 받지 않는 서버에서는 지금도 ② 그대로다(빈 응답 → 원문 검색). 같은 정리에서 한국어 프롬프트의 `[이전 질문들]` 지칭을 실제 블록 이름 `[PREVIOUS_QUESTIONS]` 로 맞췄다 — 소형 모델에게 이름이 다른 두 블록처럼 보인다.
+
+### `service/PostAnswerService.java`
+
+답변 뒤 질문 다듬기 — 재사용 추천용 `clarified_question`(V6). 질문 재사용은 과거 질문의 원문만 봐서, 지시어뿐인 질문은 추천에서 빠지고(`isDirectiveOnlyQuestion`) 모호한 질문은 엉뚱한 입력마다 뜨며, 재사용하면 그 원문이 새 대화에 박혀 그 대화의 기록이 의미를 잃었다.
+
+**재료에 답변 요약을 넣는다 — `QuestionCondenser` 와 반대 결정이고, 서로를 근거로 되돌리면 안 된다.** 독립화가 만드는 것은 검색어라 답변을 넣으면 검색이 자기 답변을 다시 찾는 순환이 생긴다. 이 문장은 검색어가 아니라 남이 추천 목록에서 고르는 "이 답변이 답하는 질문"이라 답변이 실제로 다룬 범위를 말해야 맞다. 대신 **검색 경로에는 넣지 않는다** — `AgentState.searchQuestion`·MultiQuery·답변 프롬프트·이력 렌더 어디로든 이 값이 흘러가면 독립화가 막아 둔 순환이 다른 문으로 열린다.
+
+**생각을 끄고 부른다 — 그래도 출력 예약은 2,048(`MAX_OUTPUT_TOKENS`)이다.** 실측(2026-10-01, llama.cpp + gemma-4-E2B-it Q4_K_M, 서버 기본 thinking): 켠 채로는 이 프롬프트에서 모델이 매번 먼저 생각했고(`reasoning_content` 1.2~2.5천 자, 400~711 토큰, 9.5~17초), 처음 둔 256 에서는 8건 모두 본문이 빈 채 `finish_reason=length` 였다 — 기능이 조용히 아무것도 안 하는 상태다. 그래서 `ThinkingOffChatModel.requestOff()` 로 끄고 부르며, 앱의 실제 체인으로 llama.cpp 에 대 보면 1초 안팎이다. 예약을 그대로 둔 이유는 그 스위치를 **받지 않는 서버**(LM Studio 의 OpenAI 호환 경로, 원격 프로바이더)에서는 모델이 여전히 생각하기 때문이다 — 쓰지 않는 예약은 비용이 없다. 생각을 끄면 소형 모델이 조금 더 답변 쪽으로 기운다: 자립적 질문을 답변의 용어로 다시 쓰는 일이 늘었다("SQLite WAL 모드는 어떻게 켜나요?" → "JDBC URL의 어떤 파라미터로 SQLite WAL 모드를 켤 수 있나요?" — 재료의 낱말을 들여오므로 아래 규칙을 통과한다).
+
+**빈 응답은 저장하지 않는다(NULL).** 원문을 "시도함"으로 적으면 예산을 생각에 다 쓴 모델이 모든 턴을 다시는 시도하지 않을 턴으로 만든다 — 다시 시도하는 쪽(백필)은 NULL 만 본다.
+
+**받아들이는 규칙 — 원문에 없던 내용어 가운데 재료에서 온 것이 하나는 있어야 한다**(`accept()`). 프롬프트에 "이미 혼자서 뜻이 통하면 원문을 그대로"가 있어도 소형 모델은 자립적 질문 5건 중 3건을 말만 바꿔 썼다("SQLite WAL 모드는 어떻게 켜나요?" → "…켜는 방법은 무엇인가요?", "LLM 동시 요청 수는 어디서 바꿔?" → "…어디서 변경할 수 있나요?"). 받아 주면 거의 모든 질문 버블에 같은 말이 한 줄 더 붙는다. 이 규칙이 그 3건을 걸렀고 지시어·생략을 푼 5건은 전부 통과했다. 일부러 남긴 것 둘: 자립적 질문을 답변 쪽 용어로 좁혀 쓴 출력("임베딩 서버가 죽으면 어떻게 돼?" → "임베딩 서버에 연결할 수 없을 때 인덱싱과 검색은 어떻게 동작하나요?")은 재료의 낱말을 들여오므로 통과한다 — "답변이 다룬 범위를 말하는 문장"이라는 목적과 맞다. 질문과 답변이 어긋난 턴에서는 질문이 답변 쪽으로 끌려간다("갱신은 누가 해?" + 주기만 말한 답변 → "인증서 갱신 주기는 어떻게 되나요?") — 재사용에는 그쪽이 정확하고(그 답변이 실제로 답하는 질문이다), 원래 대화의 버블에서는 "이렇게 해석됐다"로 읽힌다. 내용어는 `QuestionKeywords` 의 규칙이되 **개수 상한 없이** 뽑는다 — 추천 검색의 상한(6)을 재료(이전 질문 셋 + 요약)에 걸면 앞의 이전 질문들이 자리를 다 차지해, 요약에만 있는 이름으로 지시어를 푼 문장을 재료와 무관하다고 버린다.
+
+**대상은 설정 둘과 턴의 성격으로 갈린다**(`afterTurn()`). 추가 질문이 켜져 있으면 근거 있는 턴(출처가 있거나 Direct) 전부에서 **한 번의 호출로** 다듬은 질문과 추가 질문을 함께 받는다 — 그래서 S·C·Direct 턴도 다듬은 질문이 저장되는데, 재사용 후보 판정은 모드·출처 술어가 하므로 이 값으로 후보가 되지는 않는다(화면 표시용). 추가 질문이 꺼져 있으면 예전대로 재사용 후보(N·RAG·출처 있음)만 한 줄을 받는다. RAG 인데 출처가 없는 턴(검색 0건 정형 답변·인사)은 둘 다 부르지 않는다. 화면의 둘째 줄은 원문과 다를 때만 붙고 그 판정은 `differs()` 하나다(컨트롤러가 그것으로 거른 맵만 템플릿에 넘기고, 화면 갱신용 응답도 받아들인 — 곧 원문과 다른 — 문장만 싣는다).
+
+**추가 질문은 저장하지 않는다 — 그래서 전달이 기다림이다.** 사용자의 처음 요청이 "DB 에는 저장 x" 였고, 가장 최근 답변 아래에만 보이는 일회성 제안이라 둘 곳이 메모리면 된다(Caffeine, 10분 — 대화를 잠시 떠났다 돌아오는 정도만 덮는다). 결과는 SSE 스트림이 닫힌 **뒤에** 나오므로 스트림에 실을 수 없고, 화면이 `done` 의 턴 id 로 `GET /ui/threads/{threadId}/turns/{turnId}/extras` 를 한 번 부르면 서버가 최대 25초 기다렸다 돌려준다(가상 스레드라 요청 스레드를 쥐고 기다려도 싸다). 지켜야 할 것 셋: ① **기다림은 턴 저장 안에서 먼저 등록한다**(`TurnPersistence.save()` → `afterTurn()` 이 `done` 이벤트보다 앞이다) — 화면의 요청이 호출 시작보다 먼저 와도 결과를 놓치지 않는다. ② **소유자 확인은 등록 때 적어 둔 (사용자, 대화)로 한다** — DB 를 보지 않으며, 남의 턴·없는 턴·끝나지 않은 턴·빈 결과를 전부 204 로 뭉갠다(구분해 주면 턴 id 를 훑어볼 이유가 생긴다). ③ **늦게 온 결과가 엉뚱한 답변 아래에 붙으면 안 된다** — 화면은 새 질문을 보내거나 재사용 답변이 붙는 순간 칩을 치우고 기다리던 요청을 `AbortController` 로 끊는다. 칩을 누르면 입력창에 넣을 뿐 보내지 않는다(사용자의 결정 — 고쳐서 보낼 수 있어야 한다).
+
+**합친 호출은 JSON 이다**(`BeanOutputConverter`, 스키마는 사용자 메시지로 덧붙인다 — 검증 호출과 같은 방식). 실측(llama.cpp + gemma-4-E2B, 생각 끔): 3~4초에 매번 올바른 JSON 이었고, 출처 발췌를 재료로 주자(`[SOURCES]`, 넷 × 150자) 발췌에만 있던 오류 코드·설정 이름이 추가 질문에 나왔다 — 답변 요약만 주면 답변을 되묻는 질문이 많았다. 읽지 못하면 그 턴은 **아무것도 저장하지 않는다**(다듬은 질문 NULL → 다시 시도 가능); 그때 Spring AI 가 ERROR 한 줄을 남기는 것은 정상이다. 추가 질문은 서버가 다시 정리한다(`cleanFollowUps()` — 목록 기호·따옴표 제거, 지금·이전 질문과 같거나 서로 겹치는 것·100자 넘는 것 버림, 셋까지). 잘라 쓰지 않는 이유는 입력창에 그대로 들어가 보내질 문장이기 때문이다. 소형 모델은 "이미 답한 것을 다시 묻지 말 것"을 자주 어긴다(답변 요약을 그대로 되묻는 칩) — 프롬프트 밖에서 거를 확실한 규칙이 없어 남겨 둔다.
+
+**재료(이전 질문)는 그 턴 시점의 것이다**(`MemoryRepository.findQuestionsBefore`). 처음에는 `getRecentTurns()` 에서 지금 턴을 빼 썼는데, 방금 끝난 턴에는 맞지만 과거 턴을 다듬는 백필에서는 대화의 **마지막** 턴들이 나와 그 턴 **뒤에** 나온 질문이 재료가 된다 — 대화 중간의 "그거 기본값은 얼마야?" 를 그 뒤 질문의 주제로 풀어 버린다. 두 경로가 같은 조회를 쓴다.
+
+### `service/ClarifiedQuestionBackfill.java`
+
+`/admin` 의 "과거 질문 다듬기" — 이 기능 이전에 쌓인 재사용 후보 턴(`clarified_question` NULL)을 최신순으로 한 건씩 다듬는다(턴마다 LLM 한 번, 호출·판정·저장은 `PostAnswerService.backfill()` — 라이브 경로의 한 줄 다듬기와 같다). 사용자 요청의 "턴마다 LLM 호출"이 이것이다. 대상 술어는 추천 SQL 의 재사용 술어와 같고(싫어요 아님 · 재사용 허용 모드 · Direct 아님 · 활성 출처) 재사용 턴은 뺀다 — 원본을 다듬으면 `CLARIFIED_COLUMN` 이 그 값으로 떨어진다.
+
+**진행 상태를 저장하지 않는 것이 재개 방식이다.** 다듬은 턴은 값이 채워져 대상에서 빠지므로 다시 시작하면 남은 것만 집는다. 대신 한 실행 안에서는 **id 커서로 내려간다**(`findClarifyBackfillTargets(beforeId, …)`) — "아직 NULL 인 것 중 최신"을 매번 다시 물으면 호출이 실패해 NULL 로 남은 턴을 끝없이 다시 집는다. 실패한 턴은 다음 실행이 다시 시도한다. 상태(진행 수치)는 메모리에만 있고, 앱이 다시 뜨면 멈춘 상태다.
+
+**채팅에 양보한다.** 이 호출은 동시성 게이트 밖(배경 호출)이라 확인 없이 돌면 사용자의 답변 생성과 같은 서버를 나눠 쓴다. 매 호출 전에 `LlmRouter.localTier1Concurrency()` 의 `inUse` 를 보고, 마지막으로 바빴던 때에서 2초(`QUIET`)가 지나야 보낸다 — 지금 비어 있는 것만 보면 한 턴 안의 호출 사이 빈틈(검색 중, 답변과 검증 사이)에 끼어든다. 차단된 프로바이더는 게이트가 "꽉 참"으로 보고하므로 차단이 풀릴 때까지도 기다린다. 시작 시점의 "마지막으로 바빴던 때"는 조용한 시간만큼 과거로 둔다(채팅이 비어 있으면 바로 시작). 실측: 임시 DB 의 5턴이 5초(llama.cpp + gemma-4-E2B, 생각 끔), 대화 중간의 지시어 질문이 그 앞 질문의 주제로 풀렸다.
+
+**스스로 멈추는 경우 셋**: 멈춤 요청(지금 한 건은 끝까지 — 호출을 중간에 끊지 않는다), 질문 다듬기 설정이 꺼짐(매 턴 다시 읽는다; 꺼진 채로는 시작하지 않는다), LLM 호출 연속 5회 실패(LLM 이 죽어 있으면 남은 턴을 실패로 훑을 뿐이다 — 그 턴들은 NULL 로 남는다).
+
+**생성자가 둘이라 스프링용에 `@Autowired` 가 있다 — 빼면 앱이 뜨지 않는다.** 테스트용 생성자(양보 시간을 줄인다)를 더했더니 스프링이 생성자를 고르지 못하고 기본 생성자를 찾다 기동이 실패했는데, 단위 테스트는 생성자를 직접 불러 **전부 통과했다**(전체 컨텍스트를 띄우는 테스트는 vec0 확장이 있어야 돌아 평소에는 건너뛴다). 브라우저 검증용으로 서버를 띄우다 발견했다. 그래서 `ClarifiedQuestionBackfillTest.springCanConstructIt()` 가 스프링의 진짜 생성자 선택을 거쳐 만들어 본다. 컨트롤러를 `AdminController` 와 따로 둔 것은 그쪽 생성자에 협력자를 하나 더 얹으면 그 슬라이스 테스트 전부가 무관하게 흔들리기 때문이다.
 
 ### `service/RetrievalEviction.java`
 
@@ -345,6 +387,8 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 
 **제안만 하고 저장하지 않는다.** 서버는 문자열을 돌려줄 뿐이고(`POST /admin/curated/{id}/suggest-question`, 제안 없으면 204), 화면도 입력란을 건드리지 않는다 — 관리자가 [적용]을 눌러야 입력란에 들어가고, 그다음 [저장]을 눌러야 DB·임베딩에 반영된다. **검토 단계가 둘인 것이 요점**이다: 자동 반영하면 그 항목이 어떤 질의에 걸릴지가 사람 몰래 바뀌고, 큐레이션은 사람의 검토가 유일한 관문이라는 §10.11 의 전제와도 어긋난다. 배경 호출이라 동시성 게이트를 타지 않으며(`executeWithTracking`, `AdminService.reindexChunk` 의 키워드 재생성과 같은 성격) 사용량은 `BackgroundUsage.QUESTION_PREFIX` 로 따로 잡힌다. 질문·답변은 **한 번의 저장으로 함께** 반영된다(`CuratedQaService.updateEntry`) — 따로 저장하면 같은 항목을 두 번 임베딩하고 그 사이 벡터가 질문만 바뀐 중간 상태로 남는다.
 
+**이 버튼은 2026-10-01 까지 프롬프트 없이 돌았다.** 번들 값 `prompt.curated.question` 의 줄 끝 `\n\` 가 빠져 있어 값이 첫 문장("당신은 검색용 질문 문장을 다듬는 전문가입니다.")뿐이었고, 모델은 현재 질문도 본문도 규칙도 없이 그 한 줄과 "질문을 다시 써 주세요." 만 받았다. 테스트는 `MessageSource` 를 목으로 바꿔 의도한 문장을 넣고 있어 아무것도 몰랐다 — 지금은 `CuratedQuestionSuggesterTest` 가 실제 번들을 읽고 `MessageBundleConventionTest` 가 그 종류의 실수를 번들 전체에서 잡는다([규약](#메시지-번들의-여러-줄-값)). 같은 날부터 **생각을 끄고** 부른다(`ThinkingOffChatModel`) — 출력 상한이 256 이라 추론 모델은 켠 채로 생각만 하다 빈 응답을 낸다(독립화에서 실측).
+
 ### `/admin` 청크 재인덱싱과 큐레이션 축
 
 `/admin/chunks` 는 `docId` 없이도 컬렉션 전체를 훑으므로 **큐레이션 청크도 그 표에 나온다**. 거기 달린 ↺ 재인덱싱 버튼은 오랫동안 그것들에도 눌렸는데, `AdminService.reindexChunk()` 는 `SearchTextBuilder.precompute()` 로 **문서 청크의 규칙**(`chunk_context` + 본문)에 따라 검색 텍스트를 다시 만든다. 이 축의 검색 텍스트는 `질문 + 본문`이고 **질문은 벡터 메타데이터에 실려 있지 않다**(`curated_qa.question` 컬럼에만 있다). 즉 한 번 누르면 그 청크만 조용히 질문을 잃고 — 질문은 모든 청크에 반복 부여되는, 이 축의 검색 품질을 사실상 혼자 정하는 값이다 — 질문형 질의와의 매칭이 무너졌다. 덤으로 `indexChunks()` 가 그 청크에만 FTS 행을 만들어 축 구성까지 어긋났다. 아무것도 실패하지 않고 로그도 남지 않는다.
@@ -370,6 +414,10 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 ---
 
 ## 규약·제약의 배경
+
+### 메시지 번들의 여러 줄 값
+
+`.properties` 는 줄 끝에 `\` 가 없으면 거기서 값을 끝낸다 — 그러면 **첫 줄만 값**이 되고, 그 아래 줄들은 첫 낱말을 키로 삼은 엉뚱한 항목이 된다. 오류도 경고도 없다. 2026-10-01 에 세 값이 그렇게 깨져 있는 것이 발견됐다(한·영 번들 모두): 독립화 프롬프트(`prompt.retrieval.condense` — 규칙·이전 질문·`{query}` 없이 첫 문장만 나갔다), 큐레이션 질문 제안 프롬프트(`prompt.curated.question` — 현재 질문도 본문도 없이), 검색 0건 정형 답변(`chat.answer.no-documents` — "## 요약" 제목만 보였다). 셋 다 그 값을 쓰는 서비스의 테스트가 `MessageSource` 를 목으로 바꿔 **의도한 문장을** 넣고 있어서 아무도 몰랐다. 그래서 검사를 둘로 둔다: **번들 전체**는 `MessageBundleConventionTest` 가 키 모양으로 잡고(깨진 값의 꼬리는 한국어 낱말·`[블록]`·`{자리표시자}`·`-` 가 키가 된다 — 점으로 이은 식별자가 아닌 키가 하나라도 있으면 실패, 한/영 키 집합이 다르면 실패), **값의 내용**은 그 값을 쓰는 서비스 테스트가 실제 번들을 읽어 자리표시자가 있는지 본다(`PostAnswerServiceTest`·`QuestionCondenserTest`·`CuratedQuestionSuggesterTest`·`AnswerNoDocumentsTest`). 여러 줄 값은 줄 끝마다 `\n\` 로 잇고, 값 안의 빈 줄도 `\n\` 한 줄로 쓴다.
 
 ### `/api/**` 에 CORS 매핑을 두지 않는다
 

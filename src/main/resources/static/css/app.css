@@ -68,12 +68,14 @@
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 .current-question-float:hover { opacity: 1; }
+/* 원문 다음 줄에 "(다듬은 질문)"이 올 수 있어(답변 뒤 질문 다듬기) 줄바꿈을 살리고 세 줄까지 보인다. */
 .current-question-float .cq-text {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
+    white-space: pre-line;
 }
 @media (max-width: 575.98px) {
     .current-question-float { max-width: 72%; right: 0.75rem; }
@@ -118,13 +120,22 @@
     line-height: 1.35;
     text-align: left;
 }
+/* 원문(.qn-q)과 그 아래 "(다듬은 질문)"(.qn-clarified)을 쌓고, 각각 두 줄까지 — 한 묶음으로 자르면 긴 원문이
+   다듬은 질문을 밀어내 정작 맥락 없이도 읽히는 쪽이 사라진다. */
 .question-nav-item .qn-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.question-nav-item .qn-q,
+.question-nav-item .qn-clarified {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
 }
+.question-nav-item .qn-clarified { opacity: 0.8; }
 
 /* 목록/배지에서 이동했을 때 어느 질문으로 왔는지 알려주는 짧은 강조. */
 .question-flash { animation: question-flash 1.4s ease-out; }
@@ -230,6 +241,30 @@
     font-size: 0.85em;
     font-family: var(--bs-font-monospace, monospace);
     white-space: nowrap;
+}
+
+/* 원문 아래 "(다듬은 질문)" — 답변 뒤에 이 대화를 모르는 사람도 읽을 수 있게 다듬은 문장(PostAnswerService).
+   원문과 다를 때만 붙는다. 사용자가 쓴 문장이 주인공이라 한 단계 흐리게 둔다. */
+.bubble-user-clarified {
+    margin-top: 0.2rem;
+    opacity: 0.85;
+}
+
+/* 답변 아래 "이어서 물어보기" 칩(PostAnswerService) — 가장 최근 답변 아래에만 붙고(chat-stream.js) 누르면 입력창에
+   들어갈 뿐 보내지 않는다. 크기는 채팅 글자 크기의 비율이다(인라인 크기 금지 — ChatFontSizeConventionTest).
+   칩 안의 질문은 한 문장이 길 수 있어 줄바꿈을 허용하고 왼쪽 정렬한다. */
+.follow-up-questions { padding-left: 0.25rem; }
+.follow-up-questions .follow-up-label {
+    font-size: max(0.75em, var(--chat-font-floor));
+    margin-bottom: 0.35rem;
+}
+.follow-up-chip {
+    font-size: 0.875em;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.35;
+    border-radius: 1rem;
+    max-width: 100%;
 }
 
 /* ── Superseded (unverified) retry answers ───────────────────────────────

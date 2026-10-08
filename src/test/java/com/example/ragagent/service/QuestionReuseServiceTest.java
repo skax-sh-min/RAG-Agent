@@ -118,12 +118,14 @@ class QuestionReuseServiceTest {
     }
 
     @Test
-    @DisplayName("추천 목록에는 50자를 초과하는 질문이 포함되지 않는다")
-    void suggest_excludesQuestionsOver50Chars() {
+    @DisplayName("추천 목록에는 100자를 초과하는 질문이 포함되지 않는다")
+    void suggest_excludesQuestionsOver100Chars() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        String longQuestion = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차를 알려주세요";
+        String longQuestion = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차를 알려주세요 — "
+                + "특히 인증서 갱신, 비밀값 교체, 감사 로그 보존 기간까지 운영자가 매달 확인해야 할 항목을 빠짐없이 정리해 주세요";
+        assertThat(longQuestion.length()).isGreaterThan(QuestionReuseService.MAX_SUGGESTION_QUESTION_LENGTH);
 
         when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
@@ -142,6 +144,70 @@ class QuestionReuseServiceTest {
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
+    }
+
+    /** 다듬은 질문은 지시어를 풀어 길어지는 것이 정상이라 상한을 50자에서 100자로 올렸다 — 그 사이가 이제 뜬다. */
+    @Test
+    @DisplayName("50자를 넘어도 100자 이내면 추천에 뜬다")
+    void suggest_admitsQuestionsBetween51And100Chars() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        String question = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차와 확인 항목을 알려주세요";
+        assertThat(question.length()).isBetween(51, 100);
+        stubReusable(repo, 21L);
+        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
+                        21L, "u1", "t1", question, "a1", "2026-08-05 10:00:00")));
+
+        assertThat(service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "보안 설정", 10))
+                .extracting(QuestionReuseService.Suggestion::question).containsExactly(question);
+    }
+
+    /**
+     * 추천 목록이 보여주는 문장은 다듬은 질문이다 — 지시어뿐이라 원문으로는 빠지던 질문도 다듬은 질문으로는
+     * 뜬다(이 기능을 만든 이유). 같은지 판정·길이 판정도 그 문장 기준이다.
+     */
+    @Test
+    @DisplayName("추천은 다듬은 질문을 보여주고, 지시어뿐이라 빠지던 원문도 다듬은 질문으로 뜬다")
+    void suggest_showsTheClarifiedQuestion() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        stubReusable(repo, 22L);
+        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
+                        22L, "u1", "t1", "그거 왜 안 돼?", "a1", "2026-08-05 10:00:00",
+                        "N", false, "", "MCI 연동 타임아웃 오류는 왜 발생하나요?")));
+
+        assertThat(QuestionReuseService.isDirectiveOnlyQuestion("그거 왜 안 돼?"))
+                .as("원문만으로는 지시어뿐이라 추천에서 빠지던 질문").isTrue();
+        assertThat(service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "타임아웃", 10))
+                .extracting(QuestionReuseService.Suggestion::question)
+                .containsExactly("MCI 연동 타임아웃 오류는 왜 발생하나요?");
+    }
+
+    /** 재사용된 새 턴의 질문은 다듬은 질문이다 — 원문 "그거 …"는 다른 대화에서 지시 대상이 없다. */
+    @Test
+    @DisplayName("재사용 조회는 다듬은 질문을 새 턴의 질문으로 돌려준다")
+    void reuseLookup_returnsTheClarifiedQuestion() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        stubReusable(repo, 23L);
+        when(repo.findTurnForReuse(23L, false, "u1")).thenReturn(new QuestionReuseRepository.CandidateTurn(
+                23L, "u1", "t1", "그거 어떻게 설정해?", "답변", "2026-08-05 10:00:00",
+                "N", false, "", "MCI 연동 타임아웃은 어떻게 설정하나요?"));
+
+        QuestionReuseService.ReuseLookup lookup = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 23L);
+
+        assertThat(lookup.reusable()).isTrue();
+        assertThat(lookup.question()).isEqualTo("MCI 연동 타임아웃은 어떻게 설정하나요?");
+    }
+
+    private static void stubReusable(QuestionReuseRepository repo, long turnId) {
+        when(repo.findSourceRefs(turnId))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(turnId))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
     }
 
     @Test

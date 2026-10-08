@@ -53,12 +53,12 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
 - Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 옛 런타임 DDL로 만들어진 파일을 버전 3으로 baseline한 뒤 V4 부터 적용합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
-- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V5)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
+- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V6)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
 
 ### 2.2 외래 키가 없다
 
@@ -146,6 +146,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `direct_mode` | INTEGER | NOT NULL, 0 | 1 = Direct 턴 (검색 없음) |
 | `retrieval_metrics` | TEXT | | 출처별 검색 진단 JSON 배열 — `label`, `preview`, `chunk_id`, `doc_id`, `page_or_slide`, `similarity`, `retrieval_share`, `axis_ranks`, `answer_share`, `stale`, `prompt_excluded`. `/admin` 검색 진단 패널이 읽습니다 |
 | `verification` | TEXT | | 답변 검증 스냅샷 JSON — `grounded`, `generative`, `evalReason`, `envNote`, `inventedSymbols`, `budgetNote`, `condensedQuestion`, `empty`. 다시 연 대화의 검증 배지 재료입니다. NULL = 검증 기록 없음(컬럼 이전 턴, meta·Direct·`S` 턴) |
+| `clarified_question` | TEXT | | (V6) 답변 뒤에 다듬은 질문 — 이 대화를 모르는 사람도 읽을 수 있고 그 답변이 다룬 범위를 말하는 한 문장(`PostAnswerService`). 질문 추천·재사용이 이 문장으로 맞추고 보여 주며, 대화 화면은 원문과 다를 때 원문 아래 `(…)` 줄로 보여 줍니다. `question`(원문)은 덮어쓰지 않습니다. 값: 다듬은 질문 / 원문과 같은 값(시도했고 원문으로 충분했거나 결과를 버렸다) / NULL(아직 안 함·대상 아님·호출 실패·빈 응답·읽을 수 없는 응답 — 다시 시도할 수 있다). 대상은 재사용 후보 턴(N·RAG·출처 있음)이고, 답변 아래 추가 질문(`llm.follow-up-questions-enabled`)이 켜져 있으면 같은 호출로 S·C·Direct 턴에도 적힌다 — 그 값은 화면 표시용일 뿐 재사용 후보 판정(모드·출처 술어)을 바꾸지 않는다. 재사용 턴은 고른 문장을 질문과 이 칸에 함께 적습니다. 이 기능 이전의 재사용 후보 턴(NULL)은 `/admin` 의 과거 질문 다듬기(`ClarifiedQuestionBackfill`)가 최신순으로 채운다 — 실패한 턴은 NULL 로 남아 다음 실행이 다시 집는다. 추가 질문 자체는 저장하지 않는다(서버 메모리 10분) |
 
 인덱스: `idx_thread_id(thread_id)`, `idx_turns_user_thread(user_id, thread_id)`, `idx_turns_reused_from(reused_from_turn_id)`
 
@@ -333,6 +334,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `title:` | 대화 제목 생성 |
 | `image:` | 인덱싱 시점 이미지 설명 (검색 시점 Vision은 접두사 없이 프로바이더 이름으로 기록) |
 | `question:` | 큐레이션 질문 구체화 제안 |
+| `postanswer:` | 답변 뒤 질문 다듬기(`PostAnswerService`) — 재사용 추천용 `clarified_question` |
 
 접두사 목록의 출처는 `BackgroundUsage`입니다(`embed` 만 `TrackingEmbeddingModel`).
 
@@ -378,7 +380,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 6.5 `flyway_schema_history`
 
-Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V5 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
+Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V6 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
 
 ---
 

@@ -76,6 +76,44 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("다듬은 질문(V6)은 사후 UPDATE 로 저장되고 값이 있는 턴만 조회된다")
+    void clarifiedQuestionRoundTrips() {
+        long first = repo.addTurn(UID, "t1", "그거 어떻게 설정해?", "A1", null, 0, 0, 0, null, 0, "N", null);
+        long second = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "N", null);
+
+        repo.saveClarifiedQuestion(first, "MCI 연동 타임아웃은 어떻게 설정하나요?");
+        repo.saveClarifiedQuestion(second, "  ");   // 빈 값은 저장하지 않는다 — NULL 이 "아직 안 함"이다
+
+        assertThat(repo.findClarifiedQuestionsByTurnIds(List.of(first, second)))
+                .containsExactly(java.util.Map.entry(first, "MCI 연동 타임아웃은 어떻게 설정하나요?"));
+        assertThat(repo.findClarifiedQuestionsByTurnIds(List.of())).isEmpty();
+        // 원문은 그대로다 — 다듬은 질문은 옆에 둘 뿐 덮어쓰지 않는다.
+        assertThat(repo.getTurn(UID, "t1", first)).get()
+                .extracting(MemoryRepository.Turn::question).isEqualTo("그거 어떻게 설정해?");
+    }
+
+    /**
+     * 다듬기의 재료는 그 턴 <b>시점</b>의 이전 질문이다 — 대화 중간의 턴을 다듬는 백필에서 {@code getRecentTurns} 를
+     * 쓰면 그 턴 뒤에 나온 질문이 재료로 들어간다.
+     */
+    @Test
+    @DisplayName("findQuestionsBefore — 같은 대화에서 그 턴 앞의 질문만, 최근 N개를 오래된 것부터")
+    void questionsBeforeATurn() {
+        long q1 = repo.addTurn(UID, "t1", "Q1", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q2 = repo.addTurn(UID, "t1", "Q2", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.addTurn(UID, "t2", "다른 대화", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q3 = repo.addTurn(UID, "t1", "Q3", "A", null, 0, 0, 0, null, 0, "N", null);
+        long q4 = repo.addTurn(UID, "t1", "Q4", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.addTurn(UID, "t1", "Q5 — 뒤에 나온 질문", "A", null, 0, 0, 0, null, 0, "N", null);
+
+        assertThat(repo.findQuestionsBefore(UID, "t1", q4, 2)).containsExactly("Q2", "Q3");
+        assertThat(repo.findQuestionsBefore(UID, "t1", q4, 10)).containsExactly("Q1", "Q2", "Q3");
+        assertThat(repo.findQuestionsBefore(UID, "t1", q1, 3)).isEmpty();
+        assertThat(repo.findQuestionsBefore("someone-else", "t1", q3, 3)).isEmpty();
+        assertThat(q2).isLessThan(q3);
+    }
+
+    @Test
     @DisplayName("addTurn 의 response_mode 가 getTurn(s)/getRecentTurns 모두에서 그대로 되돌아온다")
     void responseModeRoundTrips() {
         long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "L", null);

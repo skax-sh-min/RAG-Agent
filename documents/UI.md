@@ -13,6 +13,7 @@
 | 아이콘 | Bootstrap Icons (WebJars 1.13.1) | |
 | 동적 갱신 | HTMX 2.0.10 (WebJars) | JS 없이 서버 fragment 교체 |
 | 마크다운 | marked.js 9.1.4 + DOMPurify 3.4.7 (WebJars) | XSS sanitize 후 렌더 — **둘 다 있을 때만** 렌더하고 아니면 평문(CLAUDE.md 규약) |
+| LaTeX 기호 | `static/js/markdown-tex-symbols.js` (marked 인라인 확장) | 모델이 쓴 `$\rightarrow$`·`$\le$` 같은 기호 표기를 →·≤ 문자로 그린다. 수식 렌더러(KaTeX 등)는 없다 — 구간 안의 명령이 **전부** 알려진 기호일 때만 바꾸고, 분수·중괄호 같은 구조가 있으면 원문 그대로. 코드 안은 건드리지 않는다. `base.html` 이 marked 바로 뒤에 실어 모든 렌더 지점에 걸리며, 저장된 원문은 바꾸지 않는다 |
 | 코드 하이라이트 | highlight.js 11.11.1 | 스크립트는 `static/js/vendor/highlight.min.js` 로컬 번들, CSS 테마만 WebJar — `sanitize → hljs.highlightElement()` |
 | 차트 | Chart.js 4.5.1 (WebJars) | LLM 사용량 일별 히스토리 stacked bar |
 
@@ -126,6 +127,7 @@ src/main/resources/
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(제목 `embed`, `EMBEDDING` 배지, 모델명은 본문 — 표·차트도 같은 이름) + orphan(설정에 없는 채팅 프로바이더 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 | GET | `/api/v1/llm/ping` | JSON `{"available","ok","deep","checkedAt","providers":[{"name","model","reachable","latencyMs","modelListed","modelState","circuitBlockedSeconds","inference","error","ok"}]}` — 전부 통과면 200, 하나라도 실패면 503 | 로컬 LLM 생사 확인. `?deep=true` 면 `max_tokens=1` 완성을 실제로 보낸다(서버는 살았는데 엔진이 죽은 경우를 잡는 유일한 검사). 라우터·브레이커를 우회하는 날것의 HTTP 라 결과가 상태를 바꾸지 않는다. `baseUrl` 은 관리자 응답에만 실린다 |
+| GET | `/ui/threads/{threadId}/turns/{turnId}/extras` | JSON `{"clarifiedQuestion","followUps":[…]}` 또는 204 | 답변 뒤 보강(다듬은 질문·추가 질문)을 `?waitMs`(기본 20000, 서버 상한 25초) 동안 기다렸다 돌려준다(`PostAnswerService.awaitExtras`). 대상이 아니던 턴·설정 꺼짐·아직 없음·메모리에서 지남(10분)·남의 턴은 전부 204 — 화면이 하는 일이 같고, 남의 턴이라고 알려 주지 않는다. 대화를 다시 열 때는 `waitMs=0` |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N,"blockedSeconds":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
@@ -177,6 +179,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
 | GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속). §6.25로 `userId`·`threadId` 필터가 추가됐다 — 둘은 **배타**라 `threadId`가 오면 서버가 `userId`를 떨군다(한 대화는 소유자가 한 명이므로 둘을 함께 들면 원인이 화면에 없는 빈 목록이 나온다) |
 | GET | `/admin/retrieval-metrics/turns/{turnId}/sources` | `fragments/admin-source-table :: standalone` | §6.25 — 한 턴의 출처별 진단 표. 대화 목록 패널의 드릴다운이 지연 로딩하며, 진단 패널의 **상세**와 같은 프래그먼트를 쓴다 |
+| GET · POST | `/admin/clarify-backfill` · `/admin/clarify-backfill/start` · `/admin/clarify-backfill/stop` | JSON `{"state","running","remaining","processed","clarified","keptOriginal","failed","startedAt","finishedAt","message"}` | 과거 질문 다듬기 일괄 처리(`ClarifyBackfillController` → `ClarifiedQuestionBackfill`, `AdminController` 와 별도 컨트롤러). 카드가 진행 중에는 2초마다 GET 을 다시 부르고, 페이지를 열 때 한 번 물어 진행 중이면 카드 머리에 "진행 중" 배지를 단다. 시작·멈춤은 감사 로그에 남는다 |
 | GET | `/admin/threads` | `fragments/admin-threads :: panel` | §6.25 — 전 사용자 대화 목록 지연 로딩. `userId`(소유자 필터)·`sort`(`RECENT`/`TURNS`/`REUSED`)·`offset`·`limit`. `sort`는 닫힌 enum으로 파싱된다(`ORDER BY`는 바인드 파라미터가 될 수 없어 알 수 없는 값은 `RECENT`로 떨어진다) |
 | GET | `/admin/threads/{threadId}/turns` | `fragments/admin-threads :: turns` | §6.25 — 그 대화의 턴 목록(드릴다운). **답변 전문은 실리지 않는다** — 응답 레코드에 `answer` 필드 자체가 없다 |
 | GET | `/admin/threads/{threadId}/delete-preview` | JSON | §6.25 — 삭제 확인 대화상자의 숫자(제목·소유자·턴 수·재사용됨·진단 수·큐레이션 수). 렌더된 행이 아니라 **클릭 시점**에 다시 읽는다 |
@@ -215,7 +218,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
 > - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
 
-> **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 과거 질문 다듬기 → 검색 진단 수치** 순이다(과거 질문 다듬기는 같은 대화 기록을 다루는 한 번 돌리면 끝나는 운영 도구라 대화 목록 바로 아래). 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
 > **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-지식-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
@@ -485,10 +488,21 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 | 요소 | 위치 | 동작 |
 |------|------|------|
-| `#current-question-float` | 대화 영역 **우측 상단** (`.chat-messages-wrap` 기준 absolute) | 지금 읽고 있는 턴의 질문을 사용자 버블과 같은 색 풍선으로 최대 2줄까지 표시. 클릭(또는 Enter/Space)하면 그 질문 위치로 이동 |
-| `#question-nav-btn` / `#question-nav-panel` | **'맨 아래로' 버튼 바로 위** | 이 대화의 질문 전체 목록(번호 · 질문 2줄 · 시각)을 카드 풍선으로 열고, 항목을 누르면 그 질문으로 이동 후 닫힘. 바깥 클릭 · `Esc` · X 로도 닫힌다 |
+| `#current-question-float` | 대화 영역 **우측 상단** (`.chat-messages-wrap` 기준 absolute) | 지금 읽고 있는 턴의 질문을 사용자 버블과 같은 색 풍선으로 최대 3줄까지 표시(원문 + 다음 줄 `(다듬은 질문)`). 클릭(또는 Enter/Space)하면 그 질문 위치로 이동 |
+| `#question-nav-btn` / `#question-nav-panel` | **'맨 아래로' 버튼 바로 위** | 이 대화의 질문 전체 목록(번호 · 질문 2줄 · 그 아래 `(다듬은 질문)` 2줄 · 시각)을 카드 풍선으로 열고, 항목을 누르면 그 질문으로 이동 후 닫힘. 바깥 클릭 · `Esc` · X 로도 닫힌다 |
 
 - **질문 원본은 `.user-turn[data-question]` 하나에서만 읽는다.** 서버 렌더 경로(`chat.html`의 `turns` 루프)와 스트리밍 경로(`chat-stream.js`의 `appendUserBubble()`)가 같은 표식을 심는다 — 한쪽만 고치면 새로 보낸 질문이 목록에서 빠진다.
+- **답변 뒤에 다듬은 질문**(`PostAnswerService`, `conversation_turns.clarified_question`)은 원문과 **다를 때만** 질문 버블 아래 `(다듬은 질문)` 줄과 `data-clarified-question` 속성으로 붙는다. 같은지 판정은 서버 한 곳(`PostAnswerService.differs()` — 공백·끝 문장부호·대소문자만 다르면 같다)이고, 목록·풍선(`qnavClarifiedOf()`)은 그 속성을 그대로 보여줄 뿐이다. `data-question`에는 섞지 않는다. 다듬기는 턴 저장 뒤 비동기로 끝나므로 방금 보낸 질문에는 **답변이 끝난 뒤 몇 초 안에** 붙는다(`chat-stream.js` 의 `loadTurnExtras()` → `applyClarifiedQuestion()` 이 서버 렌더와 같은 자리·같은 표식으로 넣는다 — 아래 "이어서 물어보기"와 같은 응답이다).
+
+### 이어서 물어보기 (답변 아래 추가 질문 칩)
+
+답변이 끝나면 서버가 LLM 을 한 번 더 불러 **이어서 물어볼 만한 질문 셋**을 만든다(`PostAnswerService`, 질문 다듬기와 한 번의 호출). 저장하지 않는 일회성 제안이다.
+
+- **가장 최근 답변 아래에만** 붙는다 — `onDone` 이 턴 id 를 받으면 `GET /ui/threads/{threadId}/turns/{turnId}/extras` 를 한 번 기다리고(20초), 결과의 칩을 그 답변 버블 바로 뒤(`.follow-up-questions`)에 넣는다. 새 질문을 보내는 순간(`submit`)·재사용 답변이 붙는 순간(`appendReusedTurn()` → `window.clearChatFollowUps()`) 칩을 치우고 기다리던 요청도 끊는다(`AbortController`) — 늦게 온 결과가 엉뚱한 답변 아래에 붙지 않는다.
+- **누르면 입력창에 넣을 뿐 보내지 않는다** — 비었으면 그 질문으로, 쓰던 글이 있으면 다음 줄에 덧붙인다(같은 질문이 이미 한 줄로 있으면 다시 넣지 않는다). 포커스·커서 끝 이동 후 `input` 이벤트를 쏴서 높이 맞춤·질문 추천이 사람이 친 것과 똑같이 돈다. 사용자가 고쳐서 직접 보낸다.
+- **대화를 다시 열 때**는 마지막 턴에 대해 `waitMs=0` 으로 한 번 묻는다 — 서버 메모리에 남아 있으면(10분) 칩이 다시 붙는다. 그 뒤로는 없다(DB 에 저장하지 않는다).
+- 응답이 204 면(대상이 아니었거나 설정이 꺼졌다) 아무것도 붙이지 않는다. 검색 0건 정형 답변·인사처럼 근거 없는 답변 뒤에는 처음부터 만들지 않는다.
+- 크기는 채팅 글자 크기의 비율(`.follow-up-chip` 0.875em, 라벨 메타 단계) — 인라인 크기를 쓰지 않는다(`ChatFontSizeConventionTest`).
 - 풍선 표시 규칙은 `qnavUpdateFloat()` 하나에 있다: 목록 상단에서 `QNAV_ANCHOR_PX`(48px) 아래를 기준선으로 잡아 그 위로 시작점이 올라간 **마지막** 턴이 "지금 읽는 턴"이고, 그 질문 버블이 아직 화면에 남아 있으면 풍선은 숨는다(같은 문구를 두 번 보여줄 이유가 없다). 기준선을 상단 딱 그 지점이 아니라 조금 아래로 잡는 이유는 목록에서 이동했을 때 질문이 상단 12px 아래에 놓이기 때문 — 상단 기준이면 방금 이동해 온 질문이 '다음 턴'으로 분류돼 풍선이 바로 앞 질문을 가리킨다.
 - 목록은 **열 때마다 DOM에서 다시 만든다**(별도 상태 없음). 버블 추가는 `#chat-messages`의 `MutationObserver`(`childList`, `subtree` 없음 — 스트리밍 토큰은 답변 버블 *안*에서 일어나므로 잡히지 않는다)로 감지해 버튼 노출/목록을 갱신한다.
 - `.chat-messages-wrap`은 순전히 위치 기준용 래퍼다. 풍선을 스크롤 컨테이너(`#chat-messages`) 안에 두면 내용과 함께 흘러가고, 바깥 채팅 영역에 두면 상단바·이어가기 배너 위에 얹힌다.

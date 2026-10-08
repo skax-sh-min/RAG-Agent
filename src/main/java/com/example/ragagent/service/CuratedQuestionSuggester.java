@@ -5,6 +5,7 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingOffChatModel;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,7 +55,11 @@ public class CuratedQuestionSuggester {
      *  앞부분만 잘라 쓰면 원래 질문보다 나쁜 검색어가 된다({@code QuestionCondenser} 와 같은 규칙). */
     static final int MAX_QUESTION_CHARS = 300;
 
-    /** 한 줄짜리 응답에 프로바이더의 {@code max-tokens} 전체를 예약하지 않는다(§6.26). */
+    /**
+     * 한 줄짜리 응답에 프로바이더의 {@code max-tokens} 전체를 예약하지 않는다(§6.26). 생각을 끄고 부르기 때문에
+     * 성립하는 값이다 — 추론 모델은 켠 채로 이 상한을 생각에 다 쓰고 빈 응답을 낸다({@code QuestionCondenser} 의
+     * 같은 상수 주석에 실측이 있다).
+     */
     static final int MAX_OUTPUT_TOKENS = 256;
 
     private final LlmRouter llmRouter;
@@ -120,10 +125,13 @@ public class CuratedQuestionSuggester {
         return line;
     }
 
-    /** 인덱싱/백그라운드 온도 — 추출 성격의 작업이라 결정적으로 유지한다. 핫이라 매 호출 다시 읽는다. */
+    /**
+     * 인덱싱/백그라운드 온도 — 추출 성격의 작업이라 결정적으로 유지한다. 핫이라 매 호출 다시 읽는다.
+     * 생각은 끈다({@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는 프로바이더가 정한다({@code ThinkingOffChatModel}).
+     */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()));
         int configured = props.llmSafe().maxTokens();
         if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
         return builder.build();
