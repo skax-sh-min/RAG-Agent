@@ -11,8 +11,8 @@ import reactor.core.publisher.Flux;
  *
  * <p>쓰는 곳은 {@code RetrievalService} 의 {@code MultiQueryExpander} 하나다. 그 확장기는 받은 모델로 자기
  * {@code ChatClient} 를 만들어 프롬프트를 직접 조립하므로, 호출부가 {@link ThinkingControl#mark} 로 옵션에 표시할
- * 자리가 없다. 그래서 그 모델 앞에 이것을 끼운다 — {@code ConcurrencyLimitingChatModel}·{@code TrackingChatModel}
- * 과 같은 감싸기다. 표시는 그 아래 프로바이더 체인의 {@link ThinkingControlChatModel} 이 읽고 걷어낸다.
+ * 자리가 없다. 그래서 그 모델({@link RoutedChatModel}) 앞에 이것을 끼운다. 표시는 라우터가 고른 프로바이더 체인의
+ * {@link ThinkingControlChatModel} 이 읽고 걷어낸다.
  */
 public class ThinkingSiteChatModel implements ChatModel {
 

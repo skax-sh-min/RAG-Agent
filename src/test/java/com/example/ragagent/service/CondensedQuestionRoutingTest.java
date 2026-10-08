@@ -8,7 +8,6 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -174,12 +173,12 @@ class CondensedQuestionRoutingTest {
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true,
                 expansionModel, null);
-        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        RouterTestSupport.executeOn(llmRouter, expansionProvider);
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
-        return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
+        return new RetrievalService(llmRouter, ragService, props,
                 Optional.empty(), Optional.empty(), messageSource,
                 new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
                 com.example.ragagent.llm.ThinkingBudget.none());

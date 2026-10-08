@@ -24,8 +24,8 @@ import reactor.core.publisher.Flux;
  * <p>호출부를 고쳐 프로바이더를 알게 하는 방법은 쓰지 않았다 — 어느 프로바이더가 이 요청을 받을지는
  * {@code LlmRouter} 가 <b>나중에</b> 정하고(역할·우선순위·차단 상태·최소 부하 분산), 호출부가 미리
  * 물어보면 그 사이에 답이 달라질 수 있는 경쟁 상태가 된다. 반대로 이 데코레이터는 프로바이더가
- * 이미 정해진 뒤에 돌기 때문에 항상 맞는 값을 본다. {@code TrackingChatModel} ·
- * {@code ConcurrencyLimitingChatModel} 과 같은 자리, 같은 관례다.
+ * 이미 정해진 뒤에 돌기 때문에 항상 맞는 값을 본다. {@code ThinkingControlChatModel} ·
+ * {@code LoggingChatModel} 과 같은 자리, 같은 관례다.
  *
  * <p><b>내리기만 하고 올리지 않는다.</b> 검증 호출이 스스로 2,048 로 조인 것처럼 호출자가 더 작은
  * 값을 골랐다면 그 의도가 이긴다. 그리고 <b>없던 상한을 새로 만들지도 않는다</b> — 옵션에
