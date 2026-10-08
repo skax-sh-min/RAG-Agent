@@ -293,8 +293,7 @@ public class LlmConfig {
      * 상태이므로, {@code SettingsService.warnOnDivergingOverrides()} 와 같은 이유로 알려야 한다.
      * 창을 모르면({@code null}) 아무것도 하지 않는다: 모르는 값으로 남의 설정을 깎을 수는 없다.
      *
-     * <p>package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
-     * ({@code SettingsService.formatModeBudgetForTest} 와 같은 선례).
+     * <p>package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다.
      */
     static int capMaxTokensToContext(String providerName, int requested, Integer contextTokens) {
         int capped = ProviderContextWindows.cappedMaxTokens(requested, contextTokens);

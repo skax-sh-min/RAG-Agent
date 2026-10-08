@@ -602,3 +602,16 @@
 .thinking-col-selected { background-color: var(--bs-primary-bg-subtle); }
 .thinking-details > summary { cursor: pointer; }
 .thinking-basis-line > div { line-height: 1.55; }
+/* 카드를 접을 수 있다 — <details> 의 기본 삼각형 대신 chevron 을 쓰고, 접힌 카드는 머리말 한 줄(아래 선 없음)이다.
+   <details> 안의 머리말은 .card 의 첫 자식이 아니라 Bootstrap 의 모서리 규칙을 받지 못하므로 여기서 맞춘다. 자리표시자(.card 의
+   유일한 자식인 머리말)도 같은 모양이다. */
+.thinking-card-summary { cursor: pointer; list-style: none; }
+.thinking-card-summary::-webkit-details-marker { display: none; }
+.thinking-card-summary:last-child { border-bottom: 0; }
+.thinking-chevron { display: inline-block; transition: transform .15s; }
+.thinking-card-details > .thinking-card-summary { border-radius: var(--bs-card-inner-border-radius); }
+.thinking-card-details[open] > .thinking-card-summary {
+    border-radius: var(--bs-card-inner-border-radius) var(--bs-card-inner-border-radius) 0 0;
+}
+.thinking-card-details:not([open]) > .thinking-card-summary { border-bottom: 0; }
+.thinking-card-details[open] > .thinking-card-summary .thinking-chevron { transform: rotate(90deg); }

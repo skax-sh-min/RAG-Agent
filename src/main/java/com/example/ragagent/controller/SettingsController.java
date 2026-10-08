@@ -84,6 +84,20 @@ public class SettingsController {
     }
 
     /**
+     * 프로바이더 표의 <b>상태 칸</b>을 서버에 실제로 접속해 본 결과로 채운다 — {@code /settings} 가 "확인 중" 으로 그려 둔 칸을
+     * 이 응답이 같은 id 로 통째로 바꿔 끼운다(HTMX out-of-band). 페이지 안에서 직접 접속하지 않는 이유: 죽은 서버의 연결
+     * 타임아웃이 설정 화면 전체를 몇 초씩 붙잡기 때문이다.
+     *
+     * <p>{@code /settings} 와 같은 권한이다(게스트 개방 모드에서는 게스트도 본다) — 보이는 것은 상태 배지와 사유 한 줄뿐이고,
+     * 접속 주소는 표가 이미 같은 사람에게 보여 준다. 대상은 설정에 적힌 서버뿐이라 요청이 접속 대상을 정하지 못한다.
+     */
+    @GetMapping("/settings/llm-status")
+    public String providerStatus(Model model) {
+        model.addAttribute("providers", settingsService.refreshProviderConnections());
+        return "fragments/settings-providers :: statuses";
+    }
+
+    /**
      * Enable/disable a registered LLM provider at runtime (§A, in-memory — resets on restart).
      * Unknown name / disabling the last enabled provider → IllegalArgumentException → 400. Returns the
      * refreshed providers table so the whole block (incl. any name-shared load-balanced pair) stays in sync.

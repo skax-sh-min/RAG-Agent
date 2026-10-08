@@ -349,6 +349,10 @@ class SettingsControllerRenderTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(forAdmin).contains("id=\"thinking-card\"", "hx-get=\"/admin/settings/thinking\"",
                 "hx-trigger=\"load, thinking-preview-stale from:body\"");
+        // 자리표시자는 접힌 카드와 같은 한 줄(chevron + 제목)이다 — <details> 는 내용이 도착한 뒤의 카드에만 있다.
+        assertThat(forAdmin).contains("thinking-chevron").doesNotContain("<details class=\"thinking-card-details\"");
+        // 펴 둔 상태를 이어 주는 스크립트는 카드와 함께 관리자에게만 간다
+        assertThat(forAdmin).contains("thinking-card-details");
 
         // 관리 전용 인증의 비관리자 — 읽기까지 막는다. 화면에 자리표시자조차 없다(서버의 /admin 게이트가 진짜 방어선이다).
         when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
@@ -371,23 +375,209 @@ class SettingsControllerRenderTest {
                         .header().string("HX-Trigger", "thinking-preview-stale"));
     }
 
+    // ── 프로바이더 표: 생각 제어 · 상태 · 열 순서 ─────────────────────────────────────────────────
+
+    private static ProviderRow providerRow(String name, SettingsView.ProviderThinking thinking) {
+        return new ProviderRow(name, "LOCAL", 1, "qwen", "http://localhost:1234/v1", true, false, null, true,
+                "16,384 (탐지됨)", thinking);
+    }
+
+    private static ProviderRow providerRow(String name, boolean configured, boolean blocked,
+                                           SettingsView.ProviderConnection connection) {
+        return new ProviderRow(name, "LOCAL", 1, "qwen", "http://localhost:1234/v1", configured, blocked,
+                blocked ? "2026-10-08T00:00:30Z" : null, true, "-", null, connection);
+    }
+
+    private String providersFragment(Locale locale) throws Exception {
+        return mvc.perform(post("/admin/settings/provider/toggle")
+                        .param("name", "local").param("enabled", "true").locale(locale).with(csrf()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+    }
+
     @Test
-    @DisplayName("프로바이더 표 — 관리자에게만 '생각 제어' 열이 있고, 켬/끔 서버는 필드 이름과 AUTO 를 함께 적는다")
+    @DisplayName("프로바이더 표 — 관리자에게만 '생각 제어' 열이 있고, 값은 사용자 설정 적용 · 서버 설정 사용 · Unknown 셋뿐이다")
     void providerTableShowsTheThinkingControlColumnToAdmins() throws Exception {
-        SettingsView.ProviderThinking info = new SettingsView.ProviderThinking(
-                com.example.ragagent.llm.ThinkingDialect.AUTO, com.example.ragagent.llm.ThinkingDialect.TEMPLATE_KWARGS,
+        var auto = com.example.ragagent.llm.ThinkingDialect.AUTO;
+        var kwargs = com.example.ragagent.llm.ThinkingDialect.TEMPLATE_KWARGS;
+        var none = com.example.ragagent.llm.ThinkingDialect.NONE;
+        SettingsView.ProviderThinking sends = new SettingsView.ProviderThinking(auto, kwargs,
+                com.example.ragagent.llm.ThinkingDialect.Support.ON_OFF, "chat_template_kwargs.enable_thinking", java.util.Set.of());
+        SettingsView.ProviderThinking rejected = new SettingsView.ProviderThinking(auto, kwargs,
                 com.example.ragagent.llm.ThinkingDialect.Support.ON_OFF, "chat_template_kwargs.enable_thinking",
                 java.util.Set.of("chat_template_kwargs"));
+        SettingsView.ProviderThinking nothing = new SettingsView.ProviderThinking(auto, none,
+                com.example.ragagent.llm.ThinkingDialect.Support.NONE, null, java.util.Set.of());
         when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
-                new ProviderRow("local", "LOCAL", 1, "qwen", "http://localhost:1234/v1", true, false, null, true,
-                        "16,384 (탐지됨)", info)));
+                providerRow("sends", sends), providerRow("rejected", rejected), providerRow("nothing", nothing),
+                providerRow("unregistered", null)));
 
-        String html = mvc.perform(post("/admin/settings/provider/toggle")
-                        .param("name", "local").param("enabled", "true").locale(Locale.KOREAN).with(csrf()))
+        String html = providersFragment(Locale.KOREAN);
+
+        assertThat(html).contains("생각 제어");
+        assertThat(count(html, ">사용자 설정 적용<")).as("필드를 싣는 서버").isEqualTo(1);
+        assertThat(count(html, ">서버 설정 사용<")).as("거부해서 뺀 서버 + 아무것도 싣지 않는 서버").isEqualTo(2);
+        assertThat(count(html, ">Unknown<")).as("등록되지 않아 알 수 없는 서버").isEqualTo(1);
+        // 예전에 칸을 채우던 필드 이름·방식은 말풍선(title)으로 내려갔다
+        assertThat(html).contains("chat_template_kwargs.enable_thinking", "자동(AUTO → template-kwargs)", "켬/끔");
+        assertThat(count(html, "거부됨 · 재시작 시 초기화")).as("거부 표시는 거부한 서버에만").isEqualTo(1);
+        assertThat(html).contains("providers[N].thinking-dialect");   // 서버 설정 사용 — 싣게 하는 방법
+        assertThat(html).doesNotContain("??");
+    }
+
+    @Test
+    @DisplayName("프로바이더 표 — 열 순서는 상태 → 활성화 → 생각 제어(관리자)이고, 비관리자에게는 생각 제어가 없다")
+    void providerTableColumnOrder() throws Exception {
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(providerRow("local", null)));
+
+        String admin = providersFragment(Locale.KOREAN);
+
+        int status = admin.indexOf(">상태</th>");
+        int enabled = admin.indexOf(">활성화</th>");
+        int thinking = admin.indexOf(">생각 제어</th>");
+        assertThat(status).isPositive();
+        assertThat(enabled).as("활성화가 생각 제어보다 앞이다").isGreaterThan(status);
+        assertThat(thinking).isGreaterThan(enabled);
+        // 활성화 칸의 오른쪽 여백(pe-3)은 마지막 열이 아니게 되면 필요 없다 — 마지막이 된 생각 제어가 받는다
+        assertThat(admin).contains("<th class=\"pe-3\">생각 제어</th>").doesNotContain("<th class=\"pe-3\">활성화</th>");
+
+        // 비관리자(관리 전용 인증)에게는 생각 제어 열이 없고, 활성화가 마지막 열이라 여백을 받는다
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(providerRow("local", null)),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)))));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+        String guest = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(guest).doesNotContain(">생각 제어<").contains("<th class=\"pe-3\">활성화</th>");
+    }
+
+    @Test
+    @DisplayName("프로바이더 표 — 상태 칸은 미설정 · 확인 중 · 접속불가 · 정상이고, 사유는 말풍선에 있으며, 차단 중은 덧붙는 표시다")
+    void providerStatusCellShowsTheStates() throws Exception {
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
+                providerRow("unset", false, false, SettingsView.ProviderConnection.notConfigured()),
+                providerRow("checking", true, false, SettingsView.ProviderConnection.pending()),
+                providerRow("down", true, true,
+                        SettingsView.ProviderConnection.unreachable("models: ConnectException: Connection refused")),
+                providerRow("up", true, false, SettingsView.ProviderConnection.reachable(12L, true)),
+                providerRow("nomodel", true, false, SettingsView.ProviderConnection.reachable(30L, false))));
+
+        String html = providersFragment(Locale.KOREAN);
+
+        assertThat(count(html, ">미설정<")).isEqualTo(1);
+        assertThat(count(html, ">접속불가<")).isEqualTo(1);
+        assertThat(count(html, ">정상<")).as("정상 둘 — 모델 목록에 설정한 모델이 없어도 접속은 접속이다").isEqualTo(2);
+        assertThat(count(html, ">확인 중<")).isEqualTo(1);
+        assertThat(count(html, "class=\"spinner-border ")).as("스피너는 확인 중 칸에만").isEqualTo(1);
+        assertThat(count(html, ">차단 중<")).as("접속 여부와 별개로 라우터가 건너뛰는 중이면 덧붙는다").isEqualTo(1);
+        assertThat(html).contains("Connection refused", "12ms 만에 응답", "설정한 모델(qwen)이 없습니다");
+        for (int i = 0; i < 5; i++) assertThat(html).contains("id=\"prov-status-" + i + "\"");
+        assertThat(html).as("표 자체는 out-of-band 교체 속성을 갖지 않는다").doesNotContain("hx-swap-oob");
+        assertThat(html).doesNotContain("??");
+    }
+
+    @Test
+    @DisplayName("프로바이더 표 — 확인 중인 칸이 있을 때만 접속 확인 요청이 붙는다(swap 없이 — 응답이 칸을 직접 바꿔 끼운다)")
+    void statusLoaderIsOnlyThereWhileSomethingIsChecking() throws Exception {
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
+                providerRow("checking", true, false, SettingsView.ProviderConnection.pending())));
+        String checking = providersFragment(Locale.KOREAN);
+        assertThat(checking).contains("hx-get=\"/settings/llm-status\"", "hx-trigger=\"load\"", "hx-swap=\"none\"");
+
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
+                providerRow("up", true, false, SettingsView.ProviderConnection.reachable(5L, true)),
+                providerRow("unset", false, false, SettingsView.ProviderConnection.notConfigured())));
+        String settled = providersFragment(Locale.KOREAN);
+        assertThat(settled).doesNotContain("hx-get=\"/settings/llm-status\"");
+    }
+
+    @Test
+    @DisplayName("GET /settings/llm-status — 상태 칸 조각들이 id 로 칸을 통째로 바꿔 끼우는 형태(out-of-band)로 돌아온다 — 표 전체가 아니다")
+    void statusEndpointReturnsOutOfBandCells() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of(
+                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true)),
+                providerRow("b", true, false,
+                        SettingsView.ProviderConnection.unreachable("models: ConnectException: Connection refused"))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains("생각 제어", "켬/끔", "chat_template_kwargs.enable_thinking",
-                "자동(AUTO → template-kwargs)", "거부됨 · 재시작 시 초기화");
-        assertThat(html).doesNotContain("??");
+        assertThat(count(html, "hx-swap-oob=\"true\"")).isEqualTo(2);
+        assertThat(html).contains("id=\"prov-status-0\"", "id=\"prov-status-1\"", ">정상<", ">접속불가<",
+                "Connection refused");
+        assertThat(html).doesNotContain("id=\"llm-providers\"", "<table", "hx-get=", "??");
+        verify(settingsService).refreshProviderConnections();
+    }
+
+    @Test
+    @DisplayName("GET /settings — 처음에는 상태 칸이 '확인 중'이고, 접속 확인 요청이 붙는다(페이지는 서버를 기다리지 않는다)")
+    void settingsPageStartsWithCheckingCells() throws Exception {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(providerRow("local", true, false, SettingsView.ProviderConnection.pending())),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)))));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains(">확인 중<", "hx-get=\"/settings/llm-status\"", "id=\"prov-status-0\"");
+    }
+
+    // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /settings — '재기동 필요' 는 그룹 제목 옆에 한 번 붙고, 제목에서 중복 문구가 빠졌으며, 임베딩 차원 옆에는 없다")
+    void restartBadgeSitsOnTheGroupTitle() throws Exception {
+        SettingItem fixed = new SettingItem(null, "settings.item.rerank-enabled", "false",
+                "text", false, false, null, null, null, null);
+        SettingsView withNote = new SettingsView(
+                List.of(providerRow("local", true, false, SettingsView.ProviderConnection.pending())),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed), "settings.note.restart")));
+        when(settingsService.buildView()).thenReturn(withNote);
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(count(html, "재기동 필요")).as("그룹 제목 옆에 한 번 — 항목 옆·제목 문구·임베딩 차원 옆 어디에도 더 없다").isEqualTo(1);
+        assertThat(html).contains("검색 (조회 전용)");
+        assertThat(html.indexOf("검색 (조회 전용)")).isLessThan(html.indexOf("재기동 필요"));
+        assertThat(html).containsPattern("1024</span>\\s*</div>");   // 임베딩 차원 값 바로 뒤에 배지가 없다
+
+        // note 가 없는 그룹에는 배지가 없다
+        SettingsView without = new SettingsView(withNote.providers(), "COST_FIRST", "0.0", "6000", "bge-m3",
+                "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
+        when(settingsService.buildView()).thenReturn(without);
+        String plain = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(plain).doesNotContain("재기동 필요");
+    }
+
+    @Test
+    @DisplayName("GET /admin/settings/thinking — 카드는 접힌 채(<details> 에 open 이 없다)로 오고, [다시 계산] 은 접힌 머리말 밖(본문)에 있다")
+    void thinkingCardIsCollapsedByDefault() throws Exception {
+        com.example.ragagent.model.ThinkingPreview preview = previewIn(Locale.KOREAN);
+        when(thinkingPreview.preview()).thenReturn(preview);
+
+        String html = mvc.perform(get("/admin/settings/thinking").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("<details class=\"thinking-card-details\">");
+        assertThat(html).as("처음에는 접혀 있다").doesNotContain("<details class=\"thinking-card-details\" open");
+        int summaryEnd = html.indexOf("</summary>");
+        assertThat(summaryEnd).isPositive();
+        assertThat(html.substring(0, summaryEnd)).contains("thinking-chevron", "생각(추론) 수준 — 호출 지점별", "관리자 전용")
+                .as("머리말 안에는 버튼이 없다 — 누를 때 카드까지 접었다 폈다 하지 않게")
+                .doesNotContain("<button");
+        assertThat(html.indexOf("hx-target=\"#thinking-card\"")).isGreaterThan(summaryEnd);
+        assertThat(html).contains("다시 계산");
     }
 }
