@@ -14,6 +14,7 @@ import com.example.ragagent.llm.PromptSizeLog;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.StreamFailover;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingLevel;
@@ -36,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
@@ -502,12 +504,15 @@ public class AnswerService {
 
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        LlmProvider provider = llmRouter.routeProvider(answerSite(state).taskType(),
-                answerSite(state).routingMode(state.routingMode()));
-        Shrunk<Streamed> attempt;
-        try (var permit = llmRouter.acquirePermit(provider)) {
-            attempt = streamAnswer(provider, state, systemPrompt, listener);
-        }
+        final AgentState requested = state;   // 아래에서 state 를 다시 대입하므로 람다는 이쪽을 본다
+        AtomicBoolean emitted = new AtomicBoolean();
+        // 프로바이더 선택·퍼밋·장애 전환을 한 곳에서 한다 — 첫 토큰 전의 연결 거부·연결 타임아웃·5xx 는 그 프로바이더를
+        // 차단하고 다음 프로바이더로 스트림을 다시 연다(StreamFailover). 블로킹 호출이 라우터에서 받던 보호를 채팅 화면도 받는다.
+        StreamFailover.Served<Shrunk<Streamed>> served = StreamFailover.run(llmRouter,
+                answerSite(requested).taskType(), answerSite(requested).routingMode(requested.routingMode()),
+                emitted::get, p -> streamAnswer(p, requested, systemPrompt, listener, emitted));
+        LlmProvider provider = served.provider();   // 전환이 있었다면 처음 고른 프로바이더가 아니다
+        Shrunk<Streamed> attempt = served.value();
         state = withBudgetNote(state, attempt.level());
         String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
@@ -548,23 +553,29 @@ public class AnswerService {
     private AgentState progressiveUpgrade(AgentState state, AgentState resultState, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         // PROGRESSIVE 의 2차 — 대화의 모드가 아니라 품질 우선으로 간다(그래서 사이트의 모드를 쓰지 않는다).
-        LlmProvider premiumProvider = llmRouter.routeProvider(answerSite(state).taskType(), RoutingMode.QUALITY_FIRST);
-        if (listener != null) listener.onUpgrade(premiumProvider.name());
+        String premiumName;
         String premiumAnswer;
         int inputTokens, outputTokens;
         int shrinkLevel;
         if (listener != null) {
-            Shrunk<Streamed> attempt;
-            try (var permit = llmRouter.acquirePermit(premiumProvider)) {
-                attempt = streamAnswer(premiumProvider, state, systemPrompt, listener);
-            }
+            AtomicBoolean emitted = new AtomicBoolean();
+            // 일반 스트리밍과 같은 장애 전환 — 업그레이드 안내는 시도마다 그 프로바이더 이름으로 다시 나간다.
+            StreamFailover.Served<Shrunk<Streamed>> served = StreamFailover.run(llmRouter,
+                    answerSite(state).taskType(), RoutingMode.QUALITY_FIRST, emitted::get, p -> {
+                        listener.onUpgrade(p.name());
+                        return streamAnswer(p, state, systemPrompt, listener, emitted);
+                    });
+            premiumName = served.provider().name();
+            Shrunk<Streamed> attempt = served.value();
             premiumAnswer = attempt.value().answer();
             shrinkLevel = attempt.level();
             String promptText = systemPrompt + attempt.value().userPrompt();
-            llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
+            llmRouter.recordApproxUsage(premiumName, promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
         } else {
+            LlmProvider premiumProvider = llmRouter.routeProvider(answerSite(state).taskType(), RoutingMode.QUALITY_FIRST);
+            premiumName = premiumProvider.name();
             Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(state, "ANSWER-PREMIUM", level -> {
                 String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false, level);
                 return llmRouter.executeGatedWithUsage(
@@ -583,8 +594,8 @@ public class AnswerService {
         }
         return resultState.toBuilder()
                           .answer(truncate(premiumAnswer))
-                          .usedProvider(premiumProvider.name())
-                          .premiumUpgraded(premiumProvider.name())
+                          .usedProvider(premiumName)
+                          .premiumUpgraded(premiumName)
                           .accumulateTokens(inputTokens, outputTokens)
                           .needsRetry(false)
                           .build();
@@ -740,20 +751,23 @@ public class AnswerService {
      * 컨텍스트 초과는 생성이 시작되기 전에 거절되므로 실제로 그런 일은 없지만, 그 가정이 깨졌을 때
      * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
      * 있어 되감을 것이 없다.
+     *
+     * <p>{@code emitted} 는 호출부({@link StreamFailover})와 <b>공유</b>한다 — 같은 규칙("토큰이 하나라도 나갔으면 다시 열지
+     * 않는다")을 프로바이더 장애 전환에도 적용하기 위해서다. 첫 토큰을 리스너에 넘기기 <b>전에</b> 세운다: 넘기는 도중 연결이
+     * 끊겨 예외가 나도 "이미 나갔다"로 읽혀야 한다.
      */
     private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
-                                          String systemPrompt, GraphListener listener) {
+                                          String systemPrompt, GraphListener listener, AtomicBoolean emitted) {
         StringBuilder full = new StringBuilder();
-        boolean[] emitted = {false};
         String[] sent = {""};
-        Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted[0], level -> {
+        Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted.get(), level -> {
             // 조립은 여기서 한 번만 한다. 축소 재시도가 돌면 마지막 시도의 프롬프트가 남고,
             // 그것이 실제로 나간 값이다. 호출 전에 담아 두므로 호출이 실패해도 값이 비지 않는다.
             String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
             sent[0] = userPrompt;
             // 생각 델타는 "나간 토큰"이 아니다 — 화면에 아무것도 찍히지 않았으므로 축소 재시도를 막지 않는다.
             callOrStream(provider, state, systemPrompt, userPrompt,
-                    t -> { emitted[0] = true; listener.onToken(t); full.append(t); }, listener::onThinking);
+                    t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
             return null;
         });
         return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());

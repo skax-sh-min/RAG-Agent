@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.StreamFailover;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ThinkingBudget;
@@ -21,6 +22,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
 
 /**
@@ -93,13 +95,18 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
 
         double directTemp = props.llmSafe().directTemperature();
-        LlmProvider provider = llmRouter.routeProvider(site(state).taskType(), site(state).routingMode(state.routingMode()));
+        final AgentState fitted = state;   // 위에서 state 를 다시 대입했으므로 람다는 이쪽을 본다
 
         StringBuilder full = new StringBuilder();
-        try (var permit = llmRouter.acquirePermit(provider)) {
-            callOrStream(provider, state, systemPrompt, directTemp,
-                    t -> { listener.onToken(t); full.append(t); }, listener::onThinking);
-        }
+        AtomicBoolean emitted = new AtomicBoolean();
+        // 프로바이더 선택·퍼밋·장애 전환을 한 곳에서 한다 — 첫 토큰 전의 연결 거부·연결 타임아웃·5xx 는 그 프로바이더를 차단하고
+        // 다음 프로바이더로 다시 연다(StreamFailover). 분류가 없는 Direct 턴은 앞단의 블로킹 호출이 대신 차단해 주지도 못한다.
+        LlmProvider provider = StreamFailover.run(llmRouter, site(fitted).taskType(),
+                site(fitted).routingMode(fitted.routingMode()), emitted::get, p -> {
+                    callOrStream(p, fitted, systemPrompt, directTemp,
+                            t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
+                    return null;
+                }).provider();
 
         String answer = full.toString();
         answer = enforceSummaryOnly(answer, state.responseMode());

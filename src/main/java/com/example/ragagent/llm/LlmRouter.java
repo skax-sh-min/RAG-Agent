@@ -9,6 +9,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -230,10 +233,55 @@ public class LlmRouter {
     }
 
     /**
-     * Tries each {@link TaskType} in order and returns the first provider found — for singleton
-     * default-model resolution (e.g. {@code LlmConfig.primaryChatModel()}, the LLM behind
-     * {@code MultiQueryExpander}) where a plain {@link #routeProvider} would fail on a
-     * LIGHT_BOTH-only (local, no cloud key) setup that doesn't register a TEXT/BOTH provider.
+     * 채팅 답변 스트리밍이 <b>첫 토큰이 나가기 전에</b> 실패했을 때 — 그 실패가 "이 프로바이더가 지금 응답하지 못한다"는 뜻이면
+     * 프로바이더를 차단하고 {@code true} 를 돌려준다. 호출부는 {@link #routeProvider} 를 다시 불러(차단된 쪽은 건너뛴다)
+     * 다음 프로바이더로 스트림을 다시 연다 — 그 순회는 {@link StreamFailover} 가 한다.
+     *
+     * <p><b>왜 필요한가.</b> 스트리밍은 {@code OpenAiApi.chatCompletionStream()} 을 직접 불러 {@link #executeWithTracking} 의
+     * try/catch 를 통째로 우회한다. 그래서 {@code routeProvider} 가 고른 프로바이더가 죽어 있어도 다른 곳으로 넘어가지 못했고,
+     * 실패를 차단기에 알리지도 않아 매 요청이 같은 죽은 서버를 먼저 불렀다(같은 priority 의 둘이 한가하면 먼저 등록된 쪽이
+     * 이긴다). 같은 로컬 서버 두 대를 두는 이유가 한 대가 죽었을 때를 위한 것인데 채팅 화면은 그 보호를 못 받았다.
+     *
+     * <p><b>블로킹 경로와 같은 분류, 더 좁은 범위.</b> 스트리밍은 채팅의 유일한 전송 경로라 오탐이 가장 비싸다 — 사용자가
+     * 중지를 누른 것을 실패로 세어 차단하면 자기 대화를 막는다. 그래서 <b>서버 쪽 장애라고 확실한 것만</b> 다룬다:
+     * <ul>
+     *   <li>연결 계열 — 연결 거부·DNS·경로 없음·연결 타임아웃·응답 전 연결 끊김({@link #isConnectionFailure})</li>
+     *   <li>HTTP 5xx, 그리고 429·402·503 은 {@code Retry-After} 를 존중해 차단({@link #blockForOverload})</li>
+     * </ul>
+     * 그 밖의 것은 건드리지 않고 {@code false} 다 — 사용자 중단·인터럽트, 읽기 타임아웃(서버는 멀쩡한데 클라이언트가
+     * 끊었다), 컨텍스트 초과(요청 크기 문제 — 호출부의 축소 재시도 몫), 4xx(요청 문제), 알 수 없는 오류.
+     *
+     * @param failure 스트림에서 올라온 예외 그대로(원인 사슬을 탄다)
+     * @return 차단했고 다른 프로바이더로 다시 시도해도 되면 {@code true}. {@code false} 면 호출부가 예외를 그대로 올린다
+     */
+    public boolean failOver(LlmProvider provider, TaskType taskType, RoutingMode mode, Throwable failure) {
+        if (Thread.currentThread().isInterrupted()) return false;              // 사용자 중단·유휴 타임아웃
+        boolean connectTimedOut = isConnectTimeout(failure);
+        if (isTimeoutLike(failure) && !connectTimedOut) return false;          // 읽기 타임아웃 포함 — 서버 탓이 아니다
+        if (isContextOverflow(failure)) return false;                          // 요청 크기 — 축소 재시도가 맡는다
+        List<ProviderRole> roleOrder = roleOrder(mode);
+        Set<String> tried = Set.of(provider.name());
+        int status = httpStatusOf(failure);
+        if (status == 429 || status == 402 || status == 503) {
+            blockForOverload(provider, taskType, roleOrder, tried, retryAfterOf(failure));
+        } else if (status >= 500 || connectTimedOut || isConnectionFailure(failure)) {
+            blockForFailure(provider, taskType, roleOrder, tried);
+        } else {
+            return false;                                                      // 4xx·알 수 없는 오류 — 건드리지 않는다
+        }
+        log.warn("[STREAM-FAILOVER] provider={} failed before the first token ({}: {}) — blocked, trying the next provider",
+                provider.name(), failure.getClass().getSimpleName(), failure.getMessage());
+        return true;
+    }
+
+    /**
+     * Tries each {@link TaskType} in order and returns the first provider found — for a caller that
+     * must pick ONE provider up front and a plain {@link #routeProvider} would fail on a LIGHT_BOTH-only
+     * (local, no cloud key) setup that doesn't register a TEXT/BOTH provider.
+     *
+     * <p>No production caller today: query expansion used to pin its model at startup through this and
+     * now routes on every call ({@link RoutedChatModel}), where {@link LlmProvider#supports} already
+     * makes the single {@code taskType()} cover the smaller task types.
      */
     public LlmProvider routeProviderWithFallback(List<TaskType> taskTypeOrder, RoutingMode mode) {
         for (TaskType t : taskTypeOrder) {
@@ -313,8 +361,13 @@ public class LlmRouter {
         // 스트리밍 경로는 이 라우터의 호출 메서드를 거치지 않으므로, 비어 있지 않은 답변이 여기 온
         // 것이 그 경로의 유일한 "성공" 신호다 — 연속 실패 횟수를 여기서 되돌린다.
         //
-        // ── 결정: 스트리밍은 건강의 증인이지 판정자가 아니다 (2026-09-28) ──────────────────
-        // 여기서 성공만 보고하고 실패는 보고하지 않는 것은 비대칭이고, 의도한 것이다.
+        // ── 결정: 스트리밍은 건강의 증인이다 — 판정자는 '연결 계열 실패'에 한해서만 (2026-09-28, 개정) ──
+        // 이 메서드는 성공만 보고한다. 실패는 failOver()/StreamFailover 가 따로 보고하되, 첫 토큰이 나가기 전의
+        // 서버 장애(연결 거부·연결 타임아웃·5xx·429/503)만이다 — 아래 (1)~(2)의 이유는 그 밖의 실패에 그대로 유효하다.
+        // (개정 전에는 실패를 전혀 보고하지 않아, 같은 로컬 서버 두 대 중 먼저 등록된 쪽이 죽어도 채팅 화면은
+        //  다른 서버로 넘어가지 못하고 매 요청이 죽은 서버를 먼저 불렀다. 분류를 새로 구현하지 않고 블로킹 경로와
+        //  같은 판정 함수를 쓰므로 아래 우려 — 중단을 실패로 세는 오탐 — 는 failOver 의 앞 세 줄이 막는다.)
+        // 성공만 보고하는 비대칭은 그대로이고, 의도한 것이다.
         // 스트리밍 경로(AnswerService / DirectAnswerService → AnswerStreamer)는
         // OpenAiApi.chatCompletionStream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
         // try/catch 를 통째로 우회하므로, 실패를 브레이커에 넣으려면 분류를 그쪽에 다시 구현해야
@@ -688,8 +741,10 @@ public class LlmRouter {
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
         } catch (Exception e) {
-            if (isTimeoutLike(e)) {
-                // Client-side interrupt — provider is healthy; block would cascade into "All providers exhausted"
+            // 연결 타임아웃은 isTimeoutLike 의 한 갈래이지만 결론이 반대다 — 서버가 떠 있지 않다는 뜻이라 차단하고 넘긴다.
+            boolean connectTimedOut = isConnectTimeout(e) && !Thread.currentThread().isInterrupted();
+            if (isTimeoutLike(e) && !connectTimedOut) {
+                // Client-side interrupt / read timeout — provider is healthy; block would cascade into "All providers exhausted"
                 log.warn("[TIMEOUT:LLM_HTTP] provider={} client-timeout (app.llm.read-timeout-seconds={}s), "
                         + "NOT blocking circuit breaker", provider.name(), readTimeoutSeconds);
                 throw e;
@@ -728,6 +783,11 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
+                if (connectTimedOut) {
+                    log.warn("[CONNECT-TIMEOUT] provider={} accepted no connection within app.llm.connect-timeout-seconds "
+                            + "— the server is down or unreachable; blocking it and trying the next provider",
+                            provider.name());
+                }
                 blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
@@ -805,6 +865,76 @@ public class LlmRouter {
             cur = cur.getCause();
         }
         return false;
+    }
+
+    /**
+     * TCP 연결을 맺지 못한 채 연결 타임아웃({@code app.llm.connect-timeout-seconds}, 기본 10초)이 지났다 — 호스트가 꺼졌거나
+     * 네트워크가 끊겼거나 방화벽이 패킷을 버리는 것이다. 즉 서버가 <b>떠 있지 않다</b>.
+     *
+     * <p>{@link #isTimeoutLike} 의 한 갈래이지만 <b>결론이 반대</b>다. 읽기 타임아웃은 "연결은 됐고 서버는 일하는 중인데
+     * 클라이언트가 먼저 끊었다"라 차단하면 멀쩡한 서버를 막는다. 연결 타임아웃은 응답을 기다리다 끊은 것이 아니라 서버에 닿지도
+     * 못한 것이라, 이것까지 "서버는 멀쩡하다"로 읽으면 {@code LOCAL_LLM_URL_2} 가 살아 있어도 죽은 {@code LOCAL_LLM_URL}
+     * 로 매 요청이 가서 같은 오류로 끝난다(차단되지 않으니 다음 요청도 그쪽이다).
+     *
+     * <p>둘 다 {@code SocketTimeoutException} 이라 클래스로는 못 가르고 <b>메시지</b>로 가른다(JDK: {@code "Connect timed out"}
+     * ↔ {@code "Read timed out"}). 다른 HTTP 클라이언트는 전용 타입이 있다 — JDK HttpClient 의
+     * {@code HttpConnectTimeoutException}, Netty·Apache 의 {@code ConnectTimeoutException}(클래스 이름 끝으로 알아본다).
+     * 판정은 {@code LlmFailureClassificationTest} 가 고정한다.
+     */
+    static boolean isConnectTimeout(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur.getClass().getName().endsWith("ConnectTimeoutException")) return true;
+            if (cur instanceof java.net.SocketTimeoutException) {
+                String msg = cur.getMessage();
+                if (msg != null && msg.toLowerCase(Locale.ROOT).contains("connect")) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 서버에 <b>닿지 못했다</b>(또는 응답을 시작하기 전에 연결이 끊겼다) — 연결 거부·DNS 실패·경로 없음·연결 타임아웃, WebClient 가
+     * 요청을 보내다 난 I/O 오류({@code WebClientRequestException}), Reactor Netty 의 응답 전 연결 끊김
+     * ({@code PrematureCloseException}). 스트리밍의 {@link #failOver} 가 "이 서버는 지금 안 된다"의 근거로 쓴다.
+     *
+     * <p>블로킹 경로는 이 판정이 필요 없다 — 거기서는 읽기 타임아웃과 중단만 빼고 모든 실패가 차단 대상이라 연결 계열이 그 안에
+     * 이미 들어 있다. 스트리밍은 알 수 없는 예외까지 차단하면 안 돼서 근거가 되는 모양을 하나씩 세어야 한다.
+     */
+    static boolean isConnectionFailure(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof java.net.ConnectException
+                    || cur instanceof java.net.UnknownHostException
+                    || cur instanceof java.net.NoRouteToHostException
+                    || cur instanceof java.net.PortUnreachableException
+                    || cur instanceof WebClientRequestException
+                    || cur.getClass().getName().endsWith("PrematureCloseException")) {
+                return true;
+            }
+        }
+        return isConnectTimeout(t);
+    }
+
+    /** 원인 사슬에서 처음 만나는 HTTP 오류 응답의 상태 코드 — RestClient·WebClient 둘 다. 없으면 0. */
+    private static int httpStatusOf(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof WebClientResponseException w) return w.getStatusCode().value();
+            if (cur instanceof RestClientResponseException r) return r.getStatusCode().value();
+        }
+        return 0;
+    }
+
+    /** 오류 응답의 {@code Retry-After} 헤더 값 — 없으면 {@code null}. */
+    private static String retryAfterOf(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            String value = null;
+            if (cur instanceof WebClientResponseException w) {
+                value = w.getHeaders().getFirst("Retry-After");
+            } else if (cur instanceof RestClientResponseException r && r.getResponseHeaders() != null) {
+                value = r.getResponseHeaders().getFirst("Retry-After");
+            }
+            if (value != null) return value;
+        }
+        return null;
     }
 
     /**

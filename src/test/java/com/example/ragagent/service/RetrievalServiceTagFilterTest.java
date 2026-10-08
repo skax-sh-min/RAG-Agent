@@ -9,7 +9,6 @@ import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
-import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,10 +50,10 @@ class RetrievalServiceTagFilterTest {
         LlmRouter llmRouter = mock(LlmRouter.class);
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
-        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        RouterTestSupport.executeOn(llmRouter, expansionProvider);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
-        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+        svc = new RetrievalService(llmRouter, rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
                 com.example.ragagent.llm.ThinkingBudget.none());
     }
 

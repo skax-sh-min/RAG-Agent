@@ -3,13 +3,11 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.ConcurrencyLimitingChatModel;
-import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.RoutedChatModel;
 import com.example.ragagent.llm.TokenEstimator;
-import com.example.ragagent.llm.TrackingChatModel;
 import com.example.ragagent.llm.ThinkingBudget;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingSiteChatModel;
@@ -17,12 +15,10 @@ import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.CuratedQaRepository;
-import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
@@ -65,7 +61,7 @@ public class RetrievalService {
     /** 재시도 컨텍스트 여유 판단의 검증 예약에 생각 여유를 더한다(§6.29 ④). */
     private final ThinkingBudget thinkingBudget;
 
-    public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
+    public RetrievalService(LlmRouter llmRouter, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt, MessageSource messageSource,
                             ChatImageAnalysisSkipRegistry imageSkipRegistry,
@@ -79,21 +75,15 @@ public class RetrievalService {
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
         this.imageSkipRegistry = imageSkipRegistry;
-        // MultiQueryExpander builds its own ChatClient around the model it's given, so the
-        // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
-        // TrackingEmbeddingModel's decorator for embeddings). §6.21 (작업2) — query expansion is a
-        // reasoning-free chore, so prefer MICRO_TEXT (the dedicated small model when a type=MICRO_TEXT
-        // provider is registered) → LIGHT_TEXT → TEXT. Without a small model, MICRO_TEXT/LIGHT_TEXT
-        // resolve to the local BOTH model (unchanged); TEXT is the final fallback for cloud-only
-        // (TEXT-typed providers, no LOCAL) setups so construction never fails.
-        LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
-                ThinkingSite.QUERY_EXPANSION.taskTypes(), ThinkingSite.QUERY_EXPANSION.fixedRoutingMode());
-        // Gate this persistent model too: MultiQueryExpander calls it internally at a
-        // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
-        ChatModel gatedExpansionModel =
-                new ConcurrencyLimitingChatModel(expansionProvider.chatModel(), expansionProvider, llmRouter);
-        ChatModel trackedExpansionModel =
-                new TrackingChatModel(gatedExpansionModel, expansionProvider.name(), usageRepo);
+        // MultiQueryExpander builds its own ChatClient around the model it's given and calls it at a
+        // point RetrievalService doesn't control, so executeGated() can't wrap the call site. §6.21 (작업2) —
+        // query expansion is a reasoning-free chore, so it routes as MICRO_TEXT (the dedicated small model
+        // when a type=MICRO_TEXT provider is registered; every larger type absorbs it, LlmProvider.supports).
+        //
+        // 모델은 기동 때 프로바이더를 골라 쥐지 않는다 — 호출마다 라우터가 고른다(RoutedChatModel). 예전에는 여기서 한 번
+        // 고른 프로바이더(같은 priority 의 둘이 한가하면 먼저 등록된 LOCAL_LLM_URL 쪽)를 평생 쥐고 게이트·사용량
+        // 데코레이터만 감쌌다. 그래서 그 서버가 죽어도 확장은 계속 거기로 갔고, 차단도 전환도 없이 질문마다 타임아웃만큼
+        // 느려졌다. 게이트·사용량 기록·차단·다음 프로바이더로의 전환은 이제 라우터의 블로킹 경로가 그대로 한다.
         // Swap Spring AI's default (English, diversity-only) expansion prompt for a Korean one that
         // also asks the model to normalize the question toward embedding-search-friendly phrasing
         // (strip filler/honorifics, resolve pronouns) — not just paraphrase it. The app has no
@@ -106,7 +96,8 @@ public class RetrievalService {
         // 그래서 모델 앞에서 지나가는 프롬프트마다 표시한다(app.llm.thinking.query-expansion).
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(
-                        new ThinkingSiteChatModel(trackedExpansionModel, ThinkingSite.QUERY_EXPANSION)))
+                        new ThinkingSiteChatModel(new RoutedChatModel(llmRouter, ThinkingSite.QUERY_EXPANSION),
+                                ThinkingSite.QUERY_EXPANSION)))
                 .promptTemplate(expansionPromptTemplate)
                 .includeOriginal(true)
                 .numberOfQueries(2)

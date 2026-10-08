@@ -8,7 +8,6 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -44,7 +43,7 @@ class RetrievalServiceEscalationTest {
         LlmRouter llmRouter = mock(LlmRouter.class);
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
-        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        RouterTestSupport.executeOn(llmRouter, expansionProvider);
         return llmRouter;
     }
 
@@ -69,7 +68,7 @@ class RetrievalServiceEscalationTest {
         when(ragService.searchBatch(anyString(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
-        return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
+        return new RetrievalService(stubLlmRouter(), ragService, props,
                 Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
                 com.example.ragagent.llm.ThinkingBudget.none());
     }
@@ -149,7 +148,7 @@ class RetrievalServiceEscalationTest {
         when(rs.searchBatch(anyString(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(bigList));
 
-        return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
+        return new RetrievalService(stubLlmRouter(), rs, props,
                 Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
                 com.example.ragagent.llm.ThinkingBudget.none());
     }
