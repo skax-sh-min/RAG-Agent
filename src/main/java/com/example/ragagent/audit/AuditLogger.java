@@ -1,6 +1,7 @@
 package com.example.ragagent.audit;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,11 +28,14 @@ public class AuditLogger {
     private final ObjectMapper mapper;
     private final AppProperties props;
     private final CurrentUser currentUser;
+    private final ClientIpResolver clientIpResolver;
 
-    public AuditLogger(ObjectMapper mapper, AppProperties props, CurrentUser currentUser) {
+    public AuditLogger(ObjectMapper mapper, AppProperties props, CurrentUser currentUser,
+                       ClientIpResolver clientIpResolver) {
         this.mapper = mapper;
         this.props = props;
         this.currentUser = currentUser;
+        this.clientIpResolver = clientIpResolver;
     }
 
     public void log(String action, String resource) {
@@ -57,17 +61,22 @@ public class AuditLogger {
         }
     }
 
-    // IP는 HTTP 요청 스레드에서만 추출 가능 — virtual thread 내부에서 호출 시 null 반환
+    /**
+     * IP는 HTTP 요청 스레드에서만 추출 가능 — virtual thread 내부에서 호출 시 null 반환.
+     *
+     * <p><b>{@link ClientIpResolver} 를 쓴다.</b> 예전에는 여기서 {@code X-Forwarded-For} 를
+     * <b>무조건</b> 신뢰했다 — {@code app.trust-forwarded-for} 가 있는데도 보지 않았으므로,
+     * 프록시 없는 배포(그 값이 {@code false} 인 정상 설정)에서 감사 기록의 IP 가 곧 공격자가 적어
+     * 보낸 문자열이었다. 같은 요청에서 레이트리밋과 게스트 식별은 실제 remote address 를 쓰고
+     * 있었으니, 셋 중 감사 로그만 다른 값을 믿고 있던 셈이다 — "누가 무엇을 했는가"를 남기는 것이
+     * 목적인 로그에서 그 필드가 가장 위조하기 쉬웠다.
+     */
     private String extractIp() {
         try {
             var attrs = RequestContextHolder.getRequestAttributes();
             if (attrs instanceof ServletRequestAttributes sra) {
                 HttpServletRequest req = sra.getRequest();
-                String forwarded = req.getHeader("X-Forwarded-For");
-                if (forwarded != null && !forwarded.isBlank()) {
-                    return forwarded.split(",")[0].trim();
-                }
-                return req.getRemoteAddr();
+                return clientIpResolver.resolve(req);
             }
         } catch (Exception ignored) {}
         return null;

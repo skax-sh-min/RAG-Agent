@@ -82,6 +82,8 @@ class ChatControllerHtmxTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    /** 컨트롤러는 ObjectProvider 로 받으므로 이 빈이 있어야 재사용 경로가 폴백이 아니라 실제로 돈다. */
+    @MockitoBean com.example.ragagent.service.QuestionReuseService questionReuseService;
 
     /**
      * 모킹된 {@code SettingsService} 는 boolean 에 false, 객체에 null 을 준다 — 그대로 두면 C 모드가
@@ -93,6 +95,10 @@ class ChatControllerHtmxTest {
     void openCreativeModeByDefault() {
         when(settingsService.creativeModeEnabled()).thenReturn(true);
         when(settingsService.effectiveResponseMode(any())).thenAnswer(inv -> inv.getArgument(0));
+        // /chat/{threadId} 는 턴마다 출처를 Collectors.toMap 으로 모은다 — 목의 기본값 null 은 거기서
+        // NPE 가 되므로, 실제 빈처럼 빈 목록을 돌려준다.
+        when(questionReuseService.sourceRefsForTurn(org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(List.of());
     }
 
     private ChatResponse sampleResponse() {
@@ -104,7 +110,8 @@ class ChatControllerHtmxTest {
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,
                 true, null, null, null,    // 검증 통과 → 사유·환경 안내·축소 안내 모두 없음
-                false, java.util.List.of()); // 생성 모드 아님 → 발명된 심볼도 없음
+                false, java.util.List.of(), // 생성 모드 아님 → 발명된 심볼도 없음
+                null);                      // 짧은 후속 질문이 아니었다 → 검색어 재작성 없음
     }
 
     @Test
@@ -200,6 +207,30 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-assistant :: message"));
+    }
+
+    /**
+     * 출처 배지가 <b>원문 보기 모달을 열 수 있는 형태</b>로 렌더되는지. 모달을 여는 클릭 위임은
+     * {@code badge.dataset.chunkId} 가 없으면 그대로 빠져나가므로, 이 프래그먼트에만
+     * {@code data-chunk-id} 가 빠져 있던 동안 논스트리밍 폴백 경로에서는 출처를 눌러도 아무 일도
+     * 일어나지 않았다(§10.14 0단계). 제거·신고 버튼도 전부 그 모달 안에 있다.
+     */
+    @Test
+    @DisplayName("POST /ui/chat — 출처가 .source-item + data-chunk-id/turn-id 로 렌더된다 (렌더러 넷 통일)")
+    void postChat_sourcesCarryModalAttributes() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("source-item");
+        assertThat(html).contains("data-chunk-id=\"chunk-1\"");
+        assertThat(html).contains("data-turn-id=");
     }
 
     @Test
@@ -380,27 +411,6 @@ class ChatControllerHtmxTest {
                 .run(any(), argThat(form -> form.responseModeOrDefault() == com.example.ragagent.model.ResponseMode.S), any());
     }
 
-    @Test
-    @DisplayName("GET /chat/{threadId} — 히스토리 turn id들로 curatedQaService.findFailedTurnIds를 호출해 모델에 노출")
-    void chat_existingThread_exposesCuratedEmbedFailedTurnIds() throws Exception {
-        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
-                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
-        List<MemoryRepository.Turn> turns = List.of(
-                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null, false),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null, false));
-        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
-        when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
-
-        // base.html reads principal.displayName — needs a real AppUserDetails, not @WithMockUser's default.
-        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
-
-        mvc.perform(get("/chat/thread-01").with(user(principal)))
-                .andExpect(status().isOk())
-                .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
-
-        verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
-    }
-
     /**
      * 회귀 — 8자보다 짧은 thread id 로 채팅 페이지가 500 이 되던 사고.
      *
@@ -435,7 +445,7 @@ class ChatControllerHtmxTest {
                 120, 80, 2, 0.42,
                 null, "local", 1L,
                 true, null, "포트는 환경마다 다릅니다", null,
-                true, List.of("parseDateEx"));
+                true, List.of("parseDateEx"), null);
     }
 
     @Test
@@ -449,7 +459,7 @@ class ChatControllerHtmxTest {
                 "## 요약\n답변", "manual", List.of(), List.of(),
                 120, 80, 2, 0.42, null, "local", 1L,
                 true, null, null, note,
-                false, List.of()));
+                false, List.of(), null));
         String justSent = mvc.perform(post("/ui/chat")
                         .param("question", "질문")
                         .param("threadId", "thread-01")
@@ -472,6 +482,47 @@ class ChatControllerHtmxTest {
 
         assertThat(justSent).as("방금 보낸 응답에 축소 안내가 없다").contains(note);
         assertThat(afterReload).as("새로고침 후 축소 안내가 사라졌다").contains(note);
+    }
+
+    @Test
+    @DisplayName("검색어 재작성 안내는 새로고침 전후가 같다 — 질문 버블에는 원문이 그대로 남는다 (§10.12)")
+    void condensedQuestion_survivesPageReload() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        String condensed = "SSE 타임아웃 설정은 어디에 있어?";
+
+        // ① 방금 보낸 메시지 (HTMX 폴백 프래그먼트)
+        when(agentService.chat(any(), any())).thenReturn(new ChatResponse(
+                "## 요약\n답변", "usage", List.of(), List.of(),
+                120, 80, 2, 0.42, null, "local", 1L,
+                true, null, null, null,
+                false, List.of(), condensed));
+        String justSent = mvc.perform(post("/ui/chat")
+                        .param("question", "그거 어디야?")
+                        .param("threadId", "thread-01")
+                        .param("version", "latest")
+                        .with(user(principal)).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // ② 새로고침 후 (chat.html 의 기록 루프 — 저장해 둔 스냅샷으로 되살린다)
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "그거 어디야?", "## 요약\n답변",
+                        null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
+        when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
+                1L, new VerificationSnapshot(true, false, null, null, List.of(), null, condensed)));
+        String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 잘못된 재작성은 화면에 "나쁜 검색어"가 아니라 "엉뚱한 답변"으로만 보인다 — 이 줄이
+        // 사라지면 새로고침 뒤에는 원인을 짚을 방법이 아예 없다.
+        assertThat(justSent).as("방금 보낸 응답에 재작성된 검색어가 없다").contains(condensed);
+        assertThat(afterReload).as("새로고침 후 재작성된 검색어가 사라졌다").contains(condensed);
+        // 진단값이라 기본 숨김이고, ui.retrieval-metrics-enabled 가 켜졌을 때만 스크립트가 벗긴다.
+        assertThat(justSent).contains("condensed-question small text-muted mt-2 d-none");
+        assertThat(afterReload).contains("condensed-question small text-muted mt-2 d-none");
     }
 
     @Test
@@ -573,13 +624,13 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("좋아요가 무동작인 모드(S·C)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
-    void likeButtonIsDisabledWithReason_whenModeIsNotCuratable() throws Exception {
+    @DisplayName("좋아요가 무동작인 모드(S)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
+    void likeButtonIsDisabledWithReason_whenModeIsNotProposable() throws Exception {
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null, false),
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "S", null, false),
                 new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
 
@@ -587,15 +638,73 @@ class ChatControllerHtmxTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        // 사유 문구가 실제로 해석돼야 한다 — 템플릿이 #{${turn.curationBlockedMessageKey}} 로
+        // 사유 문구가 실제로 해석돼야 한다 — 템플릿이 #{${turn.submissionBlockedMessageKey}} 로
         // 키를 변수에서 읽으므로, 이 표기가 깨지면 예외가 아니라 ??key_ko?? 가 화면에 찍힌다.
-        assertThat(html).contains("공유 지식으로 등록되지 않습니다");
+        assertThat(html).contains("지식 제안으로 등록할 수 없습니다");
         assertThat(html).doesNotContain("??feedback.like.disabled");
-        // C 턴의 👍 는 disabled 로, N 턴의 👍 는 평소대로.
+        // S 턴의 👍 는 disabled 로, N 턴의 👍 는 평소대로.
         assertThat(html).contains("feedback-btn opacity-50");
         assertThat(html).contains("data-feedback=\"LIKE\"");
         // 싫어요는 모드와 무관하게 살아 있어야 한다 — 이 수정이 건드리는 것은 좋아요뿐이다.
         assertThat(html).contains("data-feedback=\"DISLIKE\"");
+    }
+
+    @Test
+    @DisplayName("§10.11 — 채팅에는 큐레이션 상태가 없다(연필·임베딩 실패 배지 제거), 대신 등록 확인 문구가 실린다")
+    void chatShowsNoCurationState_andCarriesTheProposeConfirm() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, "LIKE", "N", null, false)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 등록·수정·철회는 전부 지식 제안 페이지에서 일어난다 — 좋아요한 턴에도 연필이 없다.
+        assertThat(html).doesNotContain("curated-edit-btn");
+        assertThat(html).doesNotContain("curatedEditOffcanvas");
+        // 좋아요 클릭이 먼저 묻는 문구가 I18N 으로 실렸는지. base.html 의 JS 인라이닝이 죽으면
+        // (th:inline 누락 등) 예외가 아니라 하드코딩된 영어 기본값이 조용히 그대로 남는다 —
+        // 그래서 "번역이 들어왔다"가 아니라 "기본값이 치환됐다"를 본다(CLAUDE.md 의 그 함정).
+        assertThat(html).contains("proposeConfirm:");
+        assertThat(html).doesNotContain("Submit this answer as a knowledge proposal?");
+        assertThat(html).doesNotContain("??confirm.propose");
+    }
+
+    /**
+     * 재사용 턴이 새 대화의 첫 메시지일 때의 회귀. 예전에는 thread_meta 행 없이 턴만 저장해서 —
+     * HTMX/SSE 경로와 달리 getOrCreate 를 부르지 않았다 — 사이드바에 안 뜨고 새로고침하면
+     * 대화가 비어 보였다(일반 메시지를 한 번 보내야 나타났다).
+     */
+    @Test
+    @DisplayName("POST /api/v1/questions/reuse — 턴을 저장하기 전에 thread_meta 를 먼저 보장한다")
+    void reuse_createsThreadMetaBeforeSavingTurn() throws Exception {
+        when(questionReuseService.reuseLookup(any(), any(), eq(42L)))
+                .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
+                        true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1")));
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), any())).thenReturn(99L);
+
+        mvc.perform(post("/api/v1/questions/reuse")
+                        .param("turnId", "42")
+                        .param("threadId", "t-new")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"reused\":true")));
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(threadMetaService, memoryService);
+        inOrder.verify(threadMetaService).getOrCreate(any(), eq("t-new"), eq("latest"));
+        inOrder.verify(memoryService).addTurn(any(), eq("t-new"), eq("sqlite 연결 설정 방법"), eq(""), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), eq(42L));
+        verify(threadMetaService).generateTitleAsync(any(), eq("t-new"), eq("latest"), eq("sqlite 연결 설정 방법"));
     }
 
     @Test

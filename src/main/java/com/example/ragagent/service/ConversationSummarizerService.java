@@ -54,17 +54,6 @@ public class ConversationSummarizerService {
      */
     private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
-    /**
-     * Per-answer cap for a Direct/meta answer kept verbatim in {@link #buildContext}'s
-     * {@code [Recent]} block — see {@link #renderRecentAnswer}. Deliberately far larger than
-     * {@link #UNSUMMARIZED_ANSWER_CAP}: that one packs many turns into a 2,000-char summary, this
-     * one holds the last couple of turns at full fidelity so a follow-up's pronouns
-     * ("그거", "위에서 두 번째") still have something to resolve against. Sized so that
-     * {@code app.summary.recent-raw-turns}=2 actually fits two turns inside the history budget
-     * (LLM_MAX_TOKENS/2, 3,000 chars by default) instead of the first one crowding out the second.
-     */
-    private static final int RECENT_DIRECT_ANSWER_CAP = 1_200;
-
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -73,6 +62,9 @@ public class ConversationSummarizerService {
     // §6.11: previously hardcoded constants, now sourced from app.summary.* (null-safe defaults).
     private final int maxSummaryChars;
     private final int recentRawTurns;
+    /** 프롬프트에 싣는 턴 수 상한 — 기동 시 1회(`app.memory.fetch-limit-turns` 는 핫 편집 대상이
+     *  아니고, 저장소도 같은 값을 생성자에서 읽는다). */
+    private final int promptTurnCap;
     private final long precomputeTtlMillis;
 
     // Bounded to the most recently used threads — access-order LinkedHashMap evicts the
@@ -91,6 +83,7 @@ public class ConversationSummarizerService {
         int maxCachedThreads = cfg.maxCachedThreads();
         this.maxSummaryChars = cfg.maxSummaryChars();
         this.recentRawTurns = cfg.recentRawTurns();
+        this.promptTurnCap = HistoryPolicy.promptTurnCap(props.memorySafe().fetchLimitTurns());
         this.precomputeTtlMillis = cfg.precomputeTtlSeconds() * 1_000L;
         this.summaryCache = Collections.synchronizedMap(
                 new LinkedHashMap<>(maxCachedThreads + 1, 0.75f, true) {
@@ -157,8 +150,13 @@ public class ConversationSummarizerService {
             if (older.isEmpty()) {
                 // 요약할 이전 턴이 없다 — 실패가 아니라 "최근 창이 곧 대화 전체"인 상태다.
                 // 빈 문자열을 캐시해 buildContext() 가 [Recent] 만으로 문맥을 만들게 한다.
-                // 여기서 캐시를 비워 두면 원본 폴백(getHistory())으로 떨어져, 방금 요약/절단으로
-                // 줄인 답변 전문이 그대로 되돌아온다.
+                //
+                // 캐시를 비워 두면 buildContext() 가 null 을 돌려 원본 폴백(getHistory())으로
+                // 떨어지는데, 그쪽은 **더 많은 턴**을 싣는다(HistoryPolicy.promptTurnCap(), 기본 5턴
+                // vs 여기 recentRawTurns 기본 2턴). 답변을 렌더하는 규칙 자체는 §10.13 이후 양쪽이
+                // 같으므로(둘 다 HistoryPolicy.renderAnswer) 답변 전문이 되살아나지는 않지만,
+                // 같은 스레드가 요약 캐시 유무에 따라 다른 분량의 맥락을 보게 된다 — 그 흔들림을
+                // 없애려고 "요약할 것이 없음"도 값으로 캐시한다.
                 summary = "";
             } else {
                 summary = summarize(older, threadId, locale);
@@ -266,34 +264,6 @@ public class ConversationSummarizerService {
         return new SummaryInput(sb.toString().strip(), fullyPreSummarized);
     }
 
-    /**
-     * How a turn's answer is rendered inside {@link #buildContext}'s verbatim {@code [Recent]}
-     * block. The two answer kinds are worth different amounts here:
-     *
-     * <ul>
-     *   <li><b>RAG answer</b> (has a {@code ## 요약} section) → the 요약 only. Its full text is a
-     *       restatement of document chunks that the <em>next</em> turn re-retrieves anyway — every
-     *       turn runs its own search — so feeding the whole thing back duplicates
-     *       {@code [검색된 문서]} at several thousand chars, and does it with the model's own
-     *       unverified prose rather than the source. A 2,700-char answer collapses to ~250.</li>
-     *   <li><b>Direct/meta answer</b> (no such section) → the answer, capped at
-     *       {@link #RECENT_DIRECT_ANSWER_CAP}. There is no retrieval behind it, so this text is the
-     *       only record of what was said; dropping it would lose the exchange entirely. Capping
-     *       bounds the cost without erasing it.</li>
-     * </ul>
-     *
-     * <p>The discriminator is "does the answer carry a {@code ## 요약} heading", not a persisted
-     * direct-mode flag ({@code conversation_turns} has none) — the same proxy
-     * {@link #buildSummaryInput} already relies on, and accurate because
-     * {@code prompt.answer.system.*} mandates that section while {@code prompt.direct.system.n} never
-     * asks for it. A RAG answer where the model ignored the format degrades to the capped branch,
-     * which is the safe direction.
-     */
-    private static String renderRecentAnswer(String answer) {
-        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
-        return ownSummary.isBlank() ? capAnswer(answer, RECENT_DIRECT_ANSWER_CAP) : ownSummary;
-    }
-
     private static String capAnswer(String answer, int cap) {
         if (answer == null) return "";
         if (cap <= 0 || answer.length() <= cap) return answer;
@@ -318,6 +288,18 @@ public class ConversationSummarizerService {
      * larger context to the LLM than the fallback path.
      */
     public String buildContext(String userId, String threadId) {
+        return buildContext(userId, threadId, memoryService.maxConversationChars(), false);
+    }
+
+    /**
+     * §10.13 — 예산과 "지금 묻는 턴이 Direct 인가"를 호출부가 정해 주는 형태.
+     *
+     * <p>Direct 턴에는 {@code [검색된 문서]} 블록이 통째로 없으므로 그 자리를 이력에 돌려준다
+     * ({@code budgetChars}), 그리고 이전 턴의 답변도 다르게 렌더된다 —
+     * {@link HistoryPolicy#renderAnswer} 참고. 폴백 경로({@code MemoryRepository.getHistory})가
+     * 같은 두 값을 같은 규칙으로 쓴다.
+     */
+    public String buildContext(String userId, String threadId, int budgetChars, boolean askingDirect) {
         String summary = summaryCache.get(threadId);
         if (summary == null) return null;
 
@@ -329,26 +311,47 @@ public class ConversationSummarizerService {
         List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return null;
 
-        int budget = memoryService.maxConversationChars();
+        int budget = budgetChars;
         // 빈 요약 = 요약할 이전 턴이 없음(precompute 참고). 헤더만 남기면 LLM 에게 빈 섹션을
         // 보여주는 꼴이라 통째로 생략한다.
         String summaryBlock = summary.isEmpty() ? "" : "[Conversation Summary]\n" + summary;
 
+        // §10.13 — Direct 턴에서 [Recent] 의 상한은 `recent-raw-turns` 가 아니라 **예산**이다.
+        //
+        // 그 값(기본 2)은 문서와 이력이 같은 창을 다툴 때 "원문으로 남길 최근 창"을 정하는 값인데,
+        // Direct 에는 다툴 문서가 없다. 턴당 캡만 없애고 이 개수를 그대로 두면 예산을 30,000자로
+        // 넓혀도 실제로 들어가는 것은 요약 2,000 + 최근 2턴 ≈ 5,500자에 머문다 — 넓힌 자리를
+        // 아무도 쓰지 않는다. 들어갈 수 있으면 압축본보다 원문이 낫고, 예산이 그 경계를 정한다.
+        //
+        // 다만 예산만으로 두지는 않는다 — HistoryPolicy.promptTurnCap() 이 양쪽 모드에 같은 턴 수
+        // 상한을 건다(창이 넉넉해도 열 턴 전 이야기가 원문으로 들어오면 지금 질문의 맥락이 흐려진다).
+        // RAG 는 recentRawTurns(기본 2)가 이미 그보다 작아 사실상 그대로다.
+        int recentCount = askingDirect ? promptTurnCap : Math.min(recentRawTurns, promptTurnCap);
         List<MemoryRepository.Turn> recent =
-                turns.subList(Math.max(0, turns.size() - recentRawTurns), turns.size());
+                turns.subList(Math.max(0, turns.size() - recentCount), turns.size());
 
         // Reserve the "[Recent]" header up front so the budget check stays honest even before we
         // know whether any recent turn fits; unused reservation is harmless (conservative).
         String recentHeader = "\n\n[Recent]\n";
         int used = summaryBlock.length() + recentHeader.length();
         StringBuilder recentSb = new StringBuilder();
+        int rawTurns = 0;
         for (int i = recent.size() - 1; i >= 0; i--) {
             MemoryRepository.Turn t = recent.get(i);
-            String entry = "Q: " + t.question() + "\nA: " + renderRecentAnswer(t.answer()) + "\n\n";
+            String entry = "Q: " + t.question() + "\nA: "
+                    + HistoryPolicy.renderAnswer(t.answer(), t.responseMode(), askingDirect,
+                                                 t.directMode()) + "\n\n";
             if (used + entry.length() > budget) break;
             recentSb.insert(0, entry);
             used += entry.length();
+            rawTurns++;
         }
+
+        // 원문이 가져온 턴 전부를 담았으면 요약은 순수한 중복이다 — 같은 대화를 압축본과 원문으로
+        // 두 번 싣게 된다. 빼면 예산이 남을 뿐이라 위 계산을 다시 할 필요도 없다.
+        // (일부만 담긴 경우의 겹침은 요약 상한 `SUMMARY_MAX_SUMMARY_CHARS` 만큼으로 묶여 있어,
+        //  넓어진 예산 안에서는 무시할 만한 크기다.)
+        if (rawTurns == turns.size()) summaryBlock = "";
 
         StringBuilder sb = new StringBuilder(summaryBlock);
         if (recentSb.length() > 0) sb.append(recentHeader).append(recentSb);

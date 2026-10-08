@@ -7,9 +7,9 @@ import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
-import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -50,6 +50,10 @@ public class StreamingAgentService {
 
     private static final Logger log = LoggerFactory.getLogger(StreamingAgentService.class);
 
+    // 단일 스레드로 충분하다 — 여기 얹히는 태스크는 둘 다 순수 계산이다. 하트비트는
+    // SseHeartbeat 가 실제 쓰기를 가상 스레드로 넘기고(스케줄러 스레드는 깨우기만 한다),
+    // 유휴 워치독은 나노시간 비교와 interrupt 뿐이라 I/O 가 없다. 이 성질이 깨지는 태스크를
+    // 여기에 새로 얹으면 느린 클라이언트 하나가 이 배포의 모든 대화를 밀리게 만든다.
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sse-heartbeat");
         t.setDaemon(true);
@@ -66,6 +70,10 @@ public class StreamingAgentService {
     private final AppProperties props;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     private final QuestionReuseService questionReuseService;
+    /** 턴 저장 절차 — 블로킹·스트리밍 두 진입점이 공유한다(TurnPersistence). */
+    private final TurnPersistence turnPersistence;
+    /** §10.12 — 짧은 후속 질문의 독립화. null 이면 이 단계 없이 원문으로 검색한다(테스트 편의). */
+    private final QuestionCondenser questionCondenser;
 
     /**
      * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
@@ -89,13 +97,15 @@ public class StreamingAgentService {
                                  ConversationSummarizerService summarizerService,
                                  AppProperties props,
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
-                                 QuestionReuseService questionReuseService) {
+                                 QuestionReuseService questionReuseService,
+                                 QuestionCondenser questionCondenser) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
                 messageSource, summarizerService, props, imageSkipRegistry, questionReuseService,
-                System::nanoTime);
+                questionCondenser, System::nanoTime);
     }
 
-    // Backward-compatible constructor for tests that don't care about question reuse.
+    // Backward-compatible constructor for tests that care about neither question reuse nor
+    // §10.12 condensing (both degrade to "not wired" — the turn simply searches the raw question).
     public StreamingAgentService(AgentGraph agentGraph,
                                  MemoryService memoryService,
                                  ClassifierService classifierService,
@@ -107,7 +117,7 @@ public class StreamingAgentService {
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
                                  LongSupplier nanoTimeSource) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, imageSkipRegistry, null, nanoTimeSource);
+                messageSource, summarizerService, props, imageSkipRegistry, null, null, nanoTimeSource);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -121,6 +131,7 @@ public class StreamingAgentService {
                           AppProperties props,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
                           QuestionReuseService questionReuseService,
+                          QuestionCondenser questionCondenser,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -132,6 +143,10 @@ public class StreamingAgentService {
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService;
+        // 블로킹 경로(AgentService)와 공유하는 턴 저장 절차. 이미 가진 셋 위의 절차라
+        // 빈으로 만들지 않는다 — 그러면 이 클래스의 하위호환 생성자 전부가 함께 흔들린다.
+        this.turnPersistence = new TurnPersistence(memoryService, summarizerService, questionReuseService);
+        this.questionCondenser = questionCondenser;
         this.nanoTimeSource = nanoTimeSource;
     }
 
@@ -156,10 +171,9 @@ public class StreamingAgentService {
         // click from turn N harmless to turn N+1.
         imageSkipRegistry.begin(form.threadId());
 
-        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
-            try { emitter.send(SseEmitter.event().comment("heartbeat")); }
-            catch (Exception ignored) {}
-        }, 15, 15, TimeUnit.SECONDS);
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
+                new SseHeartbeat(() -> emitter.send(SseEmitter.event().comment("heartbeat"))),
+                15, 15, TimeUnit.SECONDS);
         // Idle watchdog: aborts only when the graph makes NO forward progress (no node
         // transition, token, or sources-ready event) for sseIdleTimeoutMs — a slow-but-actively-
         // generating local LLM response is never cut off. SseEmitter's own timeout
@@ -182,20 +196,35 @@ public class StreamingAgentService {
 
             if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
-                String history = resolveHistory(userId, form.threadId());
+                String history = resolveHistory(userId, form.threadId(), true,
+                        form.responseModeOrDefault(), rm, form.question());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
                         userId, history, rm, true, locale);
             } else {
-                // 일반 RAG 모드: history 로드 + 분류 병렬 실행
+                // 일반 RAG 모드: history 로드 + (독립화 →) 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                            () -> resolveHistory(userId, form.threadId()), exec);
-                    CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                            () -> classifierService.classifyOnly(form.question(), locale), exec);
+                            () -> resolveHistory(userId, form.threadId(), false,
+                                    form.responseModeOrDefault(), rm, form.question()), exec);
+                    // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
+                    // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
+                    // 독립화를 기다린다.
+                    CompletableFuture<QuestionCondenser.Condensed> condensedF =
+                            condenseAsync(userId, form.threadId(), form.question(), locale, exec);
+                    CompletableFuture<String> typeF = condensedF.thenApplyAsync(
+                            c -> classifierService.classifyOnly(
+                                    c == null ? form.question() : c.searchQuestion(), locale), exec);
 
-                    initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                                    userId, historyF.join(), rm, false, locale)
-                            .toBuilder().questionType(typeF.join()).build();
+                    QuestionCondenser.Condensed condensed = condensedF.join();
+                    AgentState.Builder builder =
+                            AgentState.of(form.question(), form.version(), form.threadId(),
+                                            userId, historyF.join(), rm, false, locale)
+                                    .toBuilder().questionType(typeF.join());
+                    if (condensed != null) {
+                        builder.searchQuestion(condensed.searchQuestion())
+                               .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                    }
+                    initial = builder.build();
                 }
             }
             // carry the selected search-scope tags + answer-length mode into the graph state.
@@ -209,25 +238,9 @@ public class StreamingAgentService {
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 
-            Long turnId = null;
-            if (result.answer() != null && !result.answer().isBlank()) {
-                turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
-                        askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                        (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()),
-                    form.isDirectMode());
-                memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
-                memoryService.saveRetrievalMetrics(turnId, result.sources());
-                memoryService.saveVerification(turnId, new VerificationSnapshot(
-                        result.grounded(), result.responseMode().generative(),
-                        result.evalReason(), result.envNote(), result.inventedSymbols(),
-                        result.budgetNote()));
-                if (questionReuseService != null) {
-                    questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
-                            result.retrievedDocs(), result.sources());
-                }
-                summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
-            }
+            Long turnId = turnPersistence.save(new TurnPersistence.Turn(
+                    userId, form.threadId(), form.question(), form.selectedTags(),
+                    form.isDirectMode(), locale, askedAt, elapsedMs), result);
 
             sendEvent(emitter, "done",
                     buildDonePayload(result, elapsedMs, turnId, listener.getAccumulatedAnswer()));
@@ -450,6 +463,10 @@ public class StreamingAgentService {
         m.put("envNote",           result.envNote());
         // 축소 안내도 통과한 답변에 실린다(envNote 와 같은 규칙) — 판정이 아니라 안내다.
         m.put("budgetNote",        result.budgetNote());
+        // §10.12 — 검색에 실제로 쓰인 질의가 원문과 다르면 알린다. 잘못된 재작성은 화면에
+        // "엉뚱한 답변"으로만 보이므로, 이 값이 없으면 사용자가 원인을 짚을 수 없다. 진단값이라
+        // 클라이언트가 ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다.
+        if (result.wasCondensed()) m.put("condensedQuestion", result.searchQuestion());
         // 통과 배지를 '검증됨'(초록)이 아니라 '생성'(파랑)으로 바꿔야 하는가 — 서버가 성질로
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
@@ -458,10 +475,10 @@ public class StreamingAgentService {
         // S·C에서는 눌러도 curated_qa 행조차 생기지 않는데, 피드백 값은 저장돼 버튼만 눌린
         // 채로 남는다 — 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이
         // 아니라 성질을 내려보낸다.
-        m.put("curatable",         result.responseMode().allowsCuration());
+        m.put("proposable",         result.responseMode().allowsSubmission());
         // 스트리밍 클라이언트에는 메시지 번들이 없으므로 사유 문구까지 서버가 해석해 보낸다
         // (서버 템플릿 두 곳은 키를 직접 읽는다). 사유는 모드마다 다르다 — ResponseMode 참조.
-        String blockedKey = result.responseMode().curationBlockedMessageKey();
+        String blockedKey = result.responseMode().submissionBlockedMessageKey();
         if (blockedKey != null) {
             m.put("likeDisabledReason", messageSource.getMessage(blockedKey, null, result.locale()));
         }
@@ -489,10 +506,32 @@ public class StreamingAgentService {
         return m;
     }
 
-    // §6.10: use the precomputed summary + recent turns when available, else full raw history.
-    private String resolveHistory(String userId, String threadId) {
-        String precomputed = summarizerService.buildContext(userId, threadId);
-        return precomputed != null ? precomputed : memoryService.getHistory(userId, threadId);
+    /**
+     * §10.12 — 게이트가 닫혀 있으면 <b>LLM 을 부르지 않고</b> 이미 완료된 future 를 돌려준다
+     * ({@code AgentService.condenseAsync} 와 같은 규칙). 값이 {@code null} 이면 재작성 없음이다.
+     */
+    private CompletableFuture<QuestionCondenser.Condensed> condenseAsync(
+            String userId, String threadId, String question, Locale locale,
+            java.util.concurrent.Executor exec) {
+        if (questionCondenser == null || !questionCondenser.gateOpen(question)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(
+                () -> questionCondenser.condense(userId, threadId, question, locale).orElse(null), exec);
+    }
+
+    /**
+     * §6.10: use the precomputed summary + recent turns when available, else full raw history.
+     *
+     * <p>§10.13 — {@code AgentService.resolveHistory} 와 같은 규칙이되 {@code streaming=true} 다:
+     * 스트리밍은 {@code maxTokens} 를 보내지 않으므로 출력 예약이 작고, 그만큼 이력에 줄 자리가 넓다.
+     */
+    private String resolveHistory(String userId, String threadId, boolean askingDirect,
+                                  ResponseMode mode, RoutingMode routingMode, String question) {
+        int budget = memoryService.maxConversationChars(askingDirect, mode, routingMode, true, question);
+        String precomputed = summarizerService.buildContext(userId, threadId, budget, askingDirect);
+        return precomputed != null ? precomputed
+                : memoryService.getHistory(userId, threadId, budget, askingDirect);
     }
 
     private static RoutingMode parseRoutingMode(String value) {

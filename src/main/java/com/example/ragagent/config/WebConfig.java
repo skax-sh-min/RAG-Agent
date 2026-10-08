@@ -12,7 +12,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.LocaleResolver;
 import org.springframework.web.servlet.ModelAndView;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.i18n.CookieLocaleResolver;
@@ -74,11 +73,17 @@ public class WebConfig implements WebMvcConfigurer {
         });
     }
 
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/**")
-                .allowedOrigins("*")
-                .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
-                .allowedHeaders("*");
-    }
+    /*
+     * CORS 매핑은 <b>일부러 없다</b> — 예전에는 {@code /api/**} 이 모든 origin 에 열려 있었다.
+     *
+     * <p>이 앱의 API 소비자는 전부 같은 오리진이다(채팅·문서·설정 화면의 fetch). 반면 인증 없는 두
+     * 모드에서 {@code /api/v1/**} 은 permitAll + CSRF 예외라, 크로스 오리진 허용은 곧 "방문자가 연
+     * 아무 페이지나 그 브라우저를 통해 코퍼스를 읽는다"가 된다 — {@code POST /api/v1/chat} 으로
+     * 검색 답변을, {@code GET /api/v1/documents}·{@code /api/v1/chunks/{id}} 로 문서와 청크 본문을
+     * 읽고 응답까지 그대로 가져갈 수 있었다. 폐쇄망이라도 내부 위키·CI 화면 하나의 XSS 면 충분하다.
+     *
+     * <p>스크립트 자동화(curl 등)는 브라우저가 아니므로 CORS 와 무관하다 — 이 매핑을 지워도 영향이
+     * 없다. 다시 필요해지면 {@code allowedOrigins("*")} 가 아니라 <b>구체적인 오리진 목록</b>으로
+     * 되살릴 것.
+     */
 }

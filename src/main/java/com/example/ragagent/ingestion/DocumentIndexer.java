@@ -333,6 +333,11 @@ public class DocumentIndexer {
                 sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of(),
                 usedOverlap, preservedDisplayName);
         docRegistry.put(docId, DocRegistry.SHARED, entry);
+        // put() 의 UPSERT 는 tags 를 건드리지 않는다(재인덱싱이 태그를 보존하는 이유). 그래서
+        // 이 문서의 태그는 여기서 명시적으로 기록해야 한다 — 빼먹으면 새 문서의 tags 가 NULL 로
+        // 남아 DocTagsBackfill 이 "옛 행"으로 오인한다.
+        docRegistry.updateTags(docId, DocRegistry.SHARED,
+                com.example.ragagent.model.TagUtils.toMetaValue(effectiveTags));
 
         if (req.staleDocId() != null) {
             log.debug("[INDEX] {} 구버전 삭제: {}", req.filename(), req.staleDocId());
@@ -473,6 +478,8 @@ public class DocumentIndexer {
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
                 sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of(),
                 usedOverlap, existing.displayName()));
+        docRegistry.updateTags(docId, DocRegistry.SHARED,
+                com.example.ragagent.model.TagUtils.toMetaValue(preservedTags));
         docRegistry.save();
 
         log.info("[REINDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);
@@ -642,10 +649,9 @@ public class DocumentIndexer {
     }
 
     /**
-     * Recovers a document's search-scope tags from the FTS index ({@code chunk_fts.doc_tags}) so
-     * operator re-index / directory-sync paths — which carry no tag input — do not silently drop
-     * tags set at original upload. Returns an empty list when FTS is unavailable or no prior rows
-     * exist for {@code priorDocId}. Never throws.
+     * Recovers a document's search-scope tags from {@code doc_registry} so operator re-index /
+     * directory-sync paths — which carry no tag input — do not silently drop tags set at original
+     * upload. Returns an empty list when the document has no recorded tags.
      */
     /**
      * Reports Vision image-description progress ("이미지 분석 중 (N/M)") for the given request —
@@ -661,7 +667,7 @@ public class DocumentIndexer {
 
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
-        return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
+        return docRegistry.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
     }
 
     /**

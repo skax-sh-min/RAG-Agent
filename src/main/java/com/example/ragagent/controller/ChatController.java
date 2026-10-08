@@ -9,7 +9,6 @@ import com.example.ragagent.model.*;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
-import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.RetrievalMetricsService;
@@ -59,7 +58,6 @@ public class ChatController {
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
     private final ConversationSummarizerService summarizerService;
-    private final CuratedQaService curatedQaService;
     private final AppProperties props;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -74,7 +72,6 @@ public class ChatController {
                           ThreadMetaService threadMetaService,
                           MemoryService memoryService,
                           ConversationSummarizerService summarizerService,
-                          CuratedQaService curatedQaService,
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource,
@@ -87,7 +84,6 @@ public class ChatController {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.summarizerService = summarizerService;
-        this.curatedQaService = curatedQaService;
         this.props = props;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
@@ -132,12 +128,6 @@ public class ChatController {
                             t -> t.id(),
                             t -> questionReuseService.sourceRefsForTurn(t.id())))));
                 }
-            // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
-            // managed to embed (surfaced here since it can only be known after the fact; the
-            // background embed attempt runs seconds after the like, long past this page's
-            // original response).
-            model.addAttribute("curatedEmbedFailedTurnIds",
-                    curatedQaService.findFailedTurnIds(turns.stream().map(t -> t.id()).toList()));
         }
         return "chat";
     }
@@ -262,13 +252,13 @@ public class ChatController {
             // 두 렌더러가 갈라지고, 갈라진 것은 화면에서 보이지 않는다.
             model.addAttribute("verification", new VerificationSnapshot(
                     resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
-                    resp.inventedSymbols(), resp.budgetNote()));
+                    resp.inventedSymbols(), resp.budgetNote(), resp.condensedQuestion()));
             model.addAttribute("usedProvider", resp.usedProvider());
             // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
-            // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).
-            model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
+            // (SSE done 의 "proposable", 대화 기록의 Turn.proposable() 과 같은 값).
+            model.addAttribute("proposable", form.responseModeOrDefault().allowsSubmission());
             model.addAttribute("curationBlockedKey",
-                    form.responseModeOrDefault().curationBlockedMessageKey());
+                    form.responseModeOrDefault().submissionBlockedMessageKey());
         } catch (LlmContextOverflowException e) {
             // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
             log.warn("LLM context window exceeded: {}", e.getMessage());
@@ -381,6 +371,11 @@ public class ChatController {
                 "message", lookup.reason() == null ? "검증에 실패하여 일반 질의로 전환합니다." : lookup.reason()));
         }
 
+        // 재사용 턴이 그 대화의 첫 메시지일 수 있다 — HTMX/SSE 경로처럼 thread_meta 행을 먼저 보장한다.
+        // 없으면 사이드바 목록에 안 뜨고, /chat/{threadId} 를 다시 열면 meta 가 null 이라 턴을 싣지
+        // 않아 대화가 사라진 것처럼 보인다(일반 메시지를 한 번 보내야 비로소 나타났다). 제목 생성도
+        // 이 행이 있어야 돈다(generateTitleAsync 는 meta 가 없으면 그냥 돌아간다).
+        threadMetaService.getOrCreate(ctx.userId(), threadId, version);
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneOffset.UTC).format(Instant.now());
         long savedTurnId = memoryService.addTurn(

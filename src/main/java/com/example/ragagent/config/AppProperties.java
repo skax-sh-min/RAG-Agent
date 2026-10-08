@@ -47,11 +47,10 @@ public record AppProperties(
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
         Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
-        Double searchCuratedQaWeight,            // §10.10 — 좋아요 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). 지식 제안은 searchSubmissionWeight 로 별도. 핫에디터블
+        Double searchCuratedQaWeight,            // §10.10 — 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). §10.11 에서 지식 제안 축과 합쳐져 이 값 하나가 큐레이션 전체를 다룬다. 핫에디터블
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
-        Double searchSubmissionWeight,           // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.0). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
         UploadConfig upload                      // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
 ) {
     public record LlmConfig(
@@ -67,7 +66,7 @@ public record AppProperties(
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
-            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
+            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 10000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
             Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
@@ -445,18 +444,6 @@ public record AppProperties(
         Boolean o = overrideBool(SettingsKeys.CHUNK_SPLIT_GRANULAR);
         if (o != null) return o;
         return chunkSplitGranular != null && chunkSplitGranular;
-    }
-
-    /**
-     * RRF weight of the 지식 제안 axis — approved user submissions ({@code origin='manual'}), split
-     * out from the 👍-promoted axis ({@link #searchCuratedQaWeightSafe()}) so the two can be tuned
-     * against each other. Both live in the same {@code "curated"} vector namespace; what separates
-     * them at search time is {@code MetaKey.CURATED_ORIGIN}. Hot-editable, clamped to {@code >= 0}.
-     */
-    public double searchSubmissionWeightSafe() {
-        Double o = overrideDouble(SettingsKeys.SEARCH_SUBMISSION_WEIGHT);
-        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.0);
-        return v >= 0 ? v : 1.0;
     }
 
     /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */

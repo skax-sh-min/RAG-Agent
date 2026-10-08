@@ -46,9 +46,19 @@ public class AuthController {
 
     // ── First-run setup (no-auth mode only) ─────────────────────────────
 
+    /**
+     * 최초 관리자 계정 생성 — <b>모든 모드</b>에서 열린다(관리자가 아직 없을 때만).
+     *
+     * <p>예전에는 no-auth 계열에서만 열렸는데, {@link SqliteUserDetailsService#createAdminUser} 를
+     * 부르는 곳이 이 컨트롤러뿐이고 {@code /signup} 은 {@code ROLE_USER} 만 만든다. 그래서
+     * full-auth 모드에는 관리자를 만들 방법이 아예 없었고, {@code /admin/**} 은 <b>아무도</b> 통과할
+     * 수 없는 문이었다(문서 관리까지 {@code ROLE_ADMIN} 으로 묶은 지금은 그쪽도 함께 막힌다).
+     *
+     * <p>스스로 닫히는 문이다 — 관리자가 하나라도 있으면 리다이렉트다. 즉 열려 있는 창은 배포
+     * 최초 1회뿐이고, 그 사이의 신뢰 모델은 no-auth 모드가 이미 쓰던 것과 같다.
+     */
     @GetMapping("/setup")
     public String setupPage() {
-        if (props.authSafe().enabled()) return "redirect:/";
         if (userDetailsService.findFirstAdmin().isPresent()) return "redirect:/";
         return "auth/setup";
     }
@@ -59,7 +69,7 @@ public class AuthController {
                         @RequestParam String password,
                         @RequestParam String passwordConfirm,
                         RedirectAttributes redirectAttributes) {
-        if (props.authSafe().enabled()) return "redirect:/";
+        // GET 과 같은 가드 하나 — "관리자가 이미 있으면 닫힌다"(위 setupPage javadoc).
         if (userDetailsService.findFirstAdmin().isPresent()) return "redirect:/";
 
         String trimmedEmail   = email.trim();

@@ -33,7 +33,7 @@ class DocumentBackupCleanerTest {
                 dataDir.toString(), 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 new AppProperties.UploadConfig(DataSize.ofBytes(0), retentionDays,
                         backupMaxBytes == null ? null : DataSize.ofBytes(backupMaxBytes)));
     }

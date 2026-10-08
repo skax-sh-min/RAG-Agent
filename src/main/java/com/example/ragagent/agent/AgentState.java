@@ -54,9 +54,13 @@ public record AgentState(
                                      // grounded 실패 재시도가 검색을 건너뛰고 ANSWER 로 바로 가기
                                      // 때문이다 — 검색 escalation(후보 풀·최종 컷)의 입력은 "몇 번
                                      // 재시도했나"가 아니라 "검색을 몇 번 다시 했나"여야 한다
-        List<String> excludedDocIds  // 이번 턴에서 근거로 쓰이지 않아 밀어낸 청크 id (누적).
+        List<String> excludedDocIds, // 이번 턴에서 근거로 쓰이지 않아 밀어낸 청크 id (누적).
                                      // 재시도마다 새로 계산하면 직전에 뺀 청크가 다음 검색에서 다시
                                      // 올라와 자리를 차지한다 — 턴 단위로 기억해야 교체가 전진한다
+        String searchQuestion        // §10.12 — 짧은 후속 질문을 자립적으로 다시 쓴 것. null = 재작성
+                                     // 하지 않았음(원문으로 검색). 검색·분류만 이 값을 쓰고 답변
+                                     // 프롬프트의 [현재 질문] 은 언제나 question() 이다 —
+                                     // effectiveSearchQuestion() 참고
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -103,12 +107,29 @@ public record AgentState(
                 0, 0, 0,
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
-                0, List.of());
+                0, List.of(), null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     public boolean wasUpgraded() { return premiumUpgraded != null; }
+
+    /**
+     * §10.12 — <b>검색 축과 분류기가 실제로 써야 할 질의</b>. 독립화가 없었으면 원문 그대로다.
+     *
+     * <p>답변 프롬프트의 {@code [현재 질문]} 은 이 값을 쓰지 않는다. 사용자가 실제로 쓴 말이
+     * 답변의 어조와 초점을 정하고, 재작성이 빗나가도 <b>검색만 틀리고 답변까지 함께 틀어지지는
+     * 않도록</b> 하는 격리이기도 하다.
+     */
+    public String effectiveSearchQuestion() {
+        return (searchQuestion == null || searchQuestion.isBlank()) ? question : searchQuestion;
+    }
+
+    /** 이 턴에서 질의가 실제로 다시 쓰였는가 — 진단 표시가 읽는 값. */
+    public boolean wasCondensed() {
+        return searchQuestion != null && !searchQuestion.isBlank()
+                && !searchQuestion.equals(question);
+    }
 
     // ── Builder factory ───────────────────────────────────────────────────────
 
@@ -149,6 +170,7 @@ public record AgentState(
         private List<String> inventedSymbols     = List.of();
         private int retrievalRetries             = 0;
         private List<String> excludedDocIds      = List.of();
+        private String searchQuestion;
 
         Builder() {}
 
@@ -184,6 +206,7 @@ public record AgentState(
             this.inventedSymbols    = s.inventedSymbols;
             this.retrievalRetries   = s.retrievalRetries;
             this.excludedDocIds     = s.excludedDocIds;
+            this.searchQuestion     = s.searchQuestion;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -214,6 +237,7 @@ public record AgentState(
         public Builder usedDocIndices(List<Integer> v)     { this.usedDocIndices = v;     return this; }
         public Builder inventedSymbols(List<String> v)     { this.inventedSymbols = v;    return this; }
         public Builder excludedDocIds(List<String> v)      { this.excludedDocIds = v;     return this; }
+        public Builder searchQuestion(String v)            { this.searchQuestion = v;     return this; }
         /** RETRIEVAL 을 다시 도는 분기에서만 호출한다 — {@code incrementRetry()} 와 짝이 아니라 별개다. */
         public Builder incrementRetrievalRetry()           { this.retrievalRetries++;     return this; }
 
@@ -232,7 +256,7 @@ public record AgentState(
                     totalInputTokens, totalOutputTokens, llmCallCount,
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
-                    retrievalRetries, excludedDocIds);
+                    retrievalRetries, excludedDocIds, searchQuestion);
         }
     }
 }

@@ -11,6 +11,7 @@ import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.PromptSizeLog;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
@@ -37,6 +38,8 @@ import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -154,6 +157,13 @@ public class AnswerService {
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
     private final int maxRetryCount;
+    /**
+     * {@code "usedDocs": [ … ]} 한 덩어리. 중첩 대괄호를 허용하지 않아 배열 끝에서 반드시 멈춘다 —
+     * 값이 정수 목록이라 중첩이 나올 자리가 없고, 그 덕에 뒤따르는 필드를 삼킬 수 없다.
+     */
+    private static final Pattern USED_DOCS_ARRAY =
+            Pattern.compile("(\"usedDocs\"\\s*:\\s*)\\[[^\\[\\]]*\\]");
+
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
     private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
@@ -216,11 +226,59 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
+        AgentState noDocs = answerWithoutDocuments(state, GraphListener.NOOP);
+        if (noDocs != null) return noDocs;
         return executeBlocking(withBudgetNote(state));
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
+        AgentState noDocs = answerWithoutDocuments(state, listener);
+        if (noDocs != null) return noDocs;
         return executeStreamingNormal(withBudgetNote(state), listener);
+    }
+
+    /**
+     * 검색이 아무것도 돌려주지 않았을 때의 답변 — <b>LLM 을 부르지 않는다</b>.
+     * 해당 없으면 {@code null} 을 돌려주고 평소 경로가 이어진다.
+     *
+     * <p><b>왜 부르지 않는가.</b> 문서가 없는 프롬프트로 답변을 받아 봐야 그 답변은 정의상
+     * 근거가 없다. 그래서 검증이 {@code sufficient=false} 를 내고, 그래프는 재검색으로 되돌아가고,
+     * 검색은 같은 이유로 다시 비어서 돌아온다 — 한 턴에 답변·검증 두 호출을
+     * {@code 1 + maxRetryCount} 번 태우고 끝에 미검증 배지가 붙는다. 결과가 정해져 있는 왕복이다.
+     * 게다가 그 사이 모델이 문서 없이 무언가를 지어낼 여지가 있는데, 이 앱에서 그것은 가장 비싼
+     * 오답이다(사용자는 문서에 근거한 답으로 읽는다).
+     *
+     * <p><b>왜 {@code S} 로 남기는가.</b> 실제로 만들어진 것이 {@code ## 요약} 한 줄짜리 답변이라
+     * 성격이 곧 S 다. 대화 버블의 두 글자 표기가 {@code RS} 가 되고(검색 축 R + 성격 S),
+     * {@code S.skipsVerification()} 이 참이라 그래프가 CRITIC 도 건너뛴다 — 판정할 재료가
+     * 애초에 없으므로 맞는 동작이다. 부수 효과로 {@code S.allowsSubmission()} 이 거짓이라
+     * 좋아요로 지식 제안을 열 수 없는데, 이 문장이 공유 지식이 될 이유는 없으니 그대로 둔다.
+     *
+     * <p><b>왜 {@code grounded=false} 인가.</b> 이 앱의 규칙은 "판정을 읽지 못하면 통과가 아니라
+     * 판정 없음"이고({@link #withoutVerdict}) 그때는 배지를 띄우지 않는다. 여기는 다르다 —
+     * 검증을 <b>하지 못한</b> 것이 아니라 <b>할 근거 자체가 없는</b> 답변이고, 배지가 없으면
+     * 화면에서 평범한 답변과 구분되지 않는다. 미검증 배지를 달고 사유를 툴팁으로 말한다
+     * ({@code VerificationSnapshot.verdictTitle()} 이 {@code evalReason} 을 보여준다).
+     */
+    private AgentState answerWithoutDocuments(AgentState state, GraphListener listener) {
+        if (!state.retrievedDocs().isEmpty()) return null;
+        String answer = messageSource.getMessage("chat.answer.no-documents", null, state.locale());
+        log.info("[ANSWER] 검색 결과 0건 — LLM 호출 없이 정형 응답 thread={} mode={}->S",
+                state.threadId(), state.responseMode());
+        // 스트리밍 클라이언트는 answer 노드 진입에서 단계 표시를 바꾸고 토큰으로 말풍선을 채운다.
+        // 두 이벤트를 그대로 보내면 전송 경로가 평소와 같아져 클라이언트에 분기가 필요 없다.
+        listener.onNodeEnter("answer");
+        listener.onToken(answer);
+        return state.toBuilder()
+                .answer(answer)
+                .responseMode(ResponseMode.S)
+                .needsRetry(false)
+                .grounded(false)
+                .evalReason(messageSource.getMessage("chat.answer.no-documents.reason", null, state.locale()))
+                .envNote(null)
+                .usedDocIndices(List.of())
+                .inventedSymbols(List.of())
+                .build();
     }
 
     /**
@@ -303,16 +361,18 @@ public class AnswerService {
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
-        Shrunk<String> attempt;
+        Shrunk<Streamed> attempt;
         try (var permit = llmRouter.acquirePermit(provider)) {
             attempt = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
         state = withBudgetNote(state, attempt.level());
-        String answer = truncate(enforceSummaryOnly(attempt.value(), state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true, attempt.level());
+        // 프롬프트는 **보낸 것을 그대로** 쓴다 — 다시 조립하면 fitToBudget 이 한 번 더 돌고, 그
+        // 재현이 실제로 나간 값과 어긋날 여지도 남는다(Streamed 참고).
+        String promptText = systemPrompt + attempt.value().userPrompt();
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -350,14 +410,13 @@ public class AnswerService {
         int inputTokens, outputTokens;
         int shrinkLevel;
         if (listener != null) {
-            Shrunk<String> attempt;
+            Shrunk<Streamed> attempt;
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
                 attempt = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            premiumAnswer = attempt.value();
+            premiumAnswer = attempt.value().answer();
             shrinkLevel = attempt.level();
-            String promptText = systemPrompt
-                    + buildAnswerPrompt(state, premiumProvider.name(), true, shrinkLevel);
+            String promptText = systemPrompt + attempt.value().userPrompt();
             llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
@@ -525,25 +584,46 @@ public class AnswerService {
      * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
      * 있어 되감을 것이 없다.
      */
-    private Shrunk<String> streamAnswer(LlmProvider provider, AgentState state,
-                                        String systemPrompt, Consumer<String> tokenSink) {
+    /**
+     * 스트리밍 한 번의 결과 — 답변과 <b>실제로 보낸</b> 사용자 프롬프트.
+     *
+     * <p>프롬프트를 함께 돌려주는 이유: 스트리밍에는 사용량을 읽을 {@code ChatResponse} 가 없어
+     * 호출부가 프롬프트 길이로 입력 토큰을 추정해야 하는데, 예전에는 그러려고 <b>같은 프롬프트를
+     * 한 번 더 조립했다</b>. 그 재조립은 {@code fitToBudget()} 까지 다시 돌리는 데다(문서 토큰
+     * 추정이 청크 수만큼 반복된다) 재현이지 사실이 아니다 — 실제로 보낸 것과 어긋날 여지를 남기느니
+     * 보낸 값을 그대로 들고 나오는 편이 싸고 정확하다.
+     */
+    private record Streamed(String answer, String userPrompt) {}
+
+    private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
+                                          String systemPrompt, Consumer<String> tokenSink) {
         StringBuilder full = new StringBuilder();
         boolean[] emitted = {false};
+        String[] sent = {""};
         Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted[0], level -> {
-            callOrStream(provider, state, systemPrompt, level,
+            // 조립은 여기서 한 번만 한다. 축소 재시도가 돌면 마지막 시도의 프롬프트가 남고,
+            // 그것이 실제로 나간 값이다. 호출 전에 담아 두므로 호출이 실패해도 값이 비지 않는다.
+            String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
+            sent[0] = userPrompt;
+            callOrStream(provider, state, systemPrompt, userPrompt,
                     t -> { emitted[0] = true; tokenSink.accept(t); full.append(t); });
             return null;
         });
-        return new Shrunk<>(full.toString(), attempt.level());
+        return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());
     }
 
+    /**
+     * @param userPrompt 이미 조립된 사용자 메시지 — {@link #streamAnswer} 가 만들어 넘긴다.
+     *                   여기서 다시 만들지 않는 이유는 그 조립이 <b>보낸 값</b>이어야 하기 때문이다
+     *                   ({@link Streamed} 참고). {@code provider.stream()} 갈래에 따라 예산 계산의
+     *                   {@code streaming} 플래그가 갈리므로, 호출부도 같은 조건으로 조립한다.
+     */
     private void callOrStream(LlmProvider provider, AgentState state, String systemPrompt,
-                              int shrinkLevel, Consumer<String> tokenSink) {
+                              String userPrompt, Consumer<String> tokenSink) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt,
-                    buildAnswerPrompt(state, provider.name(), true, shrinkLevel), tokenSink,
+            streamDirect(provider, systemPrompt, userPrompt, tokenSink,
                     state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
@@ -554,8 +634,9 @@ public class AnswerService {
             if (options != null) spec = spec.options(options);
             spec
                     .system(systemPrompt)
-                    // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다.
-                    .user(buildAnswerPrompt(state, provider.name(), false, shrinkLevel))
+                    // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다
+                    // (프롬프트도 그 전제로 조립돼 넘어온다 — streamAnswer 참고).
+                    .user(userPrompt)
                     .stream()
                     .content()
                     .doOnNext(buf::append)
@@ -643,6 +724,8 @@ public class AnswerService {
             return evaluateCreative(state, answer, locale);
         }
         boolean docsPresent = !state.retrievedDocs().isEmpty();
+        // 호출이 끝난 뒤 판정을 못 읽어도 토큰은 이미 썼다 — catch 에서 집계하려면 try 밖에 있어야 한다.
+        LlmRouter.LlmResult[] spent = new LlmRouter.LlmResult[1];
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             EvalExcerpts[] used = new EvalExcerpts[1];
@@ -651,16 +734,20 @@ public class AnswerService {
                         evalConverter.getFormat(), level);
                 used[0] = excerpts;
                 String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), evalConverter.getFormat());
+                if (log.isDebugEnabled()) {
+                    logPromptSize(evalPromptSize(state, "검증", systemPrompt, answer, excerpts,
+                            evalConverter.getFormat(), level));
+                }
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
+            spent[0] = result;
             EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL", state, result);
-                return withoutVerdict(state.toBuilder()
-                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+                return withoutVerdict(withTokensOf(state, result));
             }
-            EvalOutput out = evalConverter.convert(result.text());
+            EvalOutput out = convertEvalOutput(result.text());
             boolean grounded = !docsPresent || out.grounded();
             // 근거 판정만 비운다 — sufficient("요청에 답했는가")는 발췌 완전성에 거의 의존하지 않고,
             // 그것까지 버리면 정당한 재시도·PROGRESSIVE 업그레이드 신호가 함께 사라진다.
@@ -688,8 +775,50 @@ public class AnswerService {
         } catch (Exception e) {
             log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
                     e.getMessage());
-            return withoutVerdict(state);
+            return withoutVerdict(withTokensOf(state, spent[0]));
         }
+    }
+
+    /**
+     * 검증 JSON 을 읽되, <b>advisory 필드 하나가 판정을 데려가지 못하게</b> 한 번 더 시도한다.
+     *
+     * <p>실제로 관찰된 사고: 모델이 {@code "usedDocs": [1, D1, 도형 그룹, D2, …]} 를 냈다. 따옴표
+     * 없는 맨 토큰은 JSON 값이 아니라 파서가 <b>문서 전체</b>를 실패로 처리하고, 바로 위에 멀쩡히
+     * 들어 있던 {@code sufficient}/{@code grounded} 까지 함께 사라졌다 — 아무것도 게이팅하지 않는
+     * 필드가 게이팅하는 두 필드를 죽인 셈이다({@code usedDocs} 는 코드 주석도 프롬프트도 advisory
+     * 라고 못 박은 값이다).
+     *
+     * <p><b>타입을 바꾸는 것으로는 못 고친다</b> — {@code List<String>} 이어도 맨 토큰은 JSON 문법
+     * 자체가 아니라서 파서가 먼저 죽는다. 그래서 <b>텍스트에서 그 배열만 비우고</b> 다시 읽는다.
+     * 중첩 대괄호를 허용하지 않으므로({@code [^\[\]]*}) 배열 끝을 넘어가 다른 필드를 삼킬 수 없고,
+     * 모양이 안 맞으면 원래 예외를 그대로 다시 던져 예전처럼 "판정 없음"으로 간다.
+     *
+     * <p>C(응용) 경로의 {@code inventedSymbols} 도 같은 성격의 advisory 지만 {@code List<String>}
+     * 이라 모델이 따옴표를 붙이는 것이 자연스럽고, 아직 같은 사고가 관찰되지 않았다 — 관찰되면 같은
+     * 방식으로 필드 이름만 바꿔 붙이면 된다.
+     */
+    private EvalOutput convertEvalOutput(String text) {
+        try {
+            return evalConverter.convert(text);
+        } catch (Exception malformed) {
+            Matcher m = USED_DOCS_ARRAY.matcher(text);
+            if (!m.find()) throw malformed;
+            EvalOutput salvaged = evalConverter.convert(m.replaceFirst("$1[]"));
+            log.warn("[EVAL] usedDocs 가 깨져 그 값만 버리고 판정을 살렸다 — 모델이 [Dn] 라벨을 "
+                     + "정수 대신 넣었을 가능성이 높다(응답 참여도는 어휘 매칭으로 degrade): {}",
+                    malformed.getMessage());
+            return salvaged;
+        }
+    }
+
+    /**
+     * 판정을 못 읽었어도 <b>토큰은 이미 썼다</b>. 예전에는 빈 응답 경로만 집계하고 파싱 실패 경로는
+     * 원본 state 를 그대로 돌려줘, 같은 사고인데 한쪽만 {@code llm_usage} 와 턴 기록이 어긋났다.
+     */
+    private static AgentState withTokensOf(AgentState state, LlmRouter.LlmResult result) {
+        return result == null ? state : state.toBuilder()
+                .accumulateTokens(result.inputTokens(), result.outputTokens())
+                .build();
     }
 
     /**
@@ -708,6 +837,8 @@ public class AnswerService {
      * 답변에 통과 배지를 달아 줘서도 안 된다.
      */
     private AgentState evaluateCreative(AgentState state, String answer, Locale locale) {
+        // evaluate() 와 같은 이유로 try 밖에 둔다 — 판정을 못 읽어도 토큰은 집계돼야 한다.
+        LlmRouter.LlmResult[] spent = new LlmRouter.LlmResult[1];
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
@@ -718,14 +849,18 @@ public class AnswerService {
                 used[0] = excerpts;
                 String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(),
                         creativeEvalConverter.getFormat());
+                if (log.isDebugEnabled()) {
+                    logPromptSize(evalPromptSize(state, "검증(C)", systemPrompt, answer, excerpts,
+                            creativeEvalConverter.getFormat(), level));
+                }
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
+            spent[0] = result;
             EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL-C", state, result);
-                return withoutVerdict(state.toBuilder()
-                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+                return withoutVerdict(withTokensOf(state, result));
             }
             CreativeEvalOutput out = creativeEvalConverter.convert(result.text());
             boolean apiGrounded = !docsPresent || out.apiGrounded();
@@ -761,7 +896,7 @@ public class AnswerService {
         } catch (Exception e) {
             log.warn("[EVAL-C] 창의 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다"
                      + "(재시도 없음, 배지 없음): {}", e.getMessage());
-            return withoutVerdict(state);
+            return withoutVerdict(withTokensOf(state, spent[0]));
         }
     }
 
@@ -1098,12 +1233,8 @@ public class AnswerService {
      *                     예산을 잡아 <b>업그레이드 답변이 필요 없이 적은 문서로 만들어졌다</b>.
      *                     그래서 이 메서드는 호출마다 예산을 다시 계산한다 — 중복 계산이 아니라
      *                     호출부마다 답이 달라야 하는 값이다.
+     * @param shrinkLevel  컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조.
      */
-    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming) {
-        return buildAnswerPrompt(state, providerName, streaming, 0);
-    }
-
-    /** @param shrinkLevel 컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조. */
     private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
                                      int shrinkLevel) {
         StringBuilder sb = new StringBuilder();
@@ -1144,8 +1275,80 @@ public class AnswerService {
 
         appendRetryFeedback(sb, state);
 
-        sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
+        String question = PromptInjectionGuard.wrap(state.question());
+        sb.append("[질문]\n").append(question);
+
+        if (log.isDebugEnabled()) {
+            logPromptSize(answerPromptSize(state, providerName, streaming, fitted, docsContext, question));
+        }
         return sb.toString();
+    }
+
+    /**
+     * 답변 프롬프트가 무엇으로 얼마나 채워졌는지 — 구성 요소별 토큰·바이트.
+     *
+     * <p><b>합계 하나로는 아무것도 못 고친다.</b> 창을 넘겼을 때 실제로 필요한 질문은 "무엇이
+     * 부풀렸는가"이고, 그 답에 따라 손댈 설정이 다르다(문서 → {@code app.search-top-k}/
+     * {@code app.chunk-size}, 이력 → {@code app.summary.recent-raw-turns}/
+     * {@code app.memory.fetch-limit-turns}, 시스템 프롬프트 → 응답 모드). `[BUDGET]` 경고는 이미
+     * 줄인 뒤의 결과만 말하므로, 줄이지 않아도 되는 평상시에 무엇이 얼마를 차지하는지는 여기서만
+     * 보인다.
+     *
+     * <p>시스템 프롬프트를 여기서 다시 읽는 이유: {@code buildAnswerPrompt()} 는 사용자 메시지만
+     * 만들고 시스템 프롬프트는 호출부 6곳이 각자 붙인다. 그 6곳에 로그를 흩는 대신 조립이 한 번
+     * 일어나는 이 자리에서 같은 값을 다시 조회한다(MessageSource 조회 1회, 디버그일 때만).
+     */
+    private String answerPromptSize(AgentState state, String providerName, boolean streaming,
+                                    Fitted fitted, String docsContext, String question) {
+        PromptBudget budget = budgetFor(state, providerName, streaming);
+        PromptSizeLog size = PromptSizeLog.of("답변")
+                .add("시스템", answerSystemPrompt(state.locale(), state.responseMode()))
+                .add("이력", HistoryPolicy.countTurns(fitted.history()) + "턴", fitted.history())
+                .add("문서", fitted.docs().size() + "청크", docsContext)
+                .add("경고", String.join("\n", state.retrievalWarnings()))
+                .add("질문", question);
+        String tail = size.budgetTail(providerName,
+                budget == null ? 0 : budget.contextWindow(),
+                budget == null ? 0 : budget.inputBudget());
+        return size.render("%s | thread=%s mode=%s%s%s".formatted(tail, state.threadId(),
+                state.responseMode().name() + (state.directMode() ? "(Direct)" : ""),
+                state.retryCount() > 0 ? " retry=" + state.retryCount() : "",
+                fitted.note() != null ? " [축소됨]" : ""));
+    }
+
+    /**
+     * 검증 프롬프트의 구성 요소별 크기 — 답변 프롬프트와 <b>따로</b> 찍어야 한다.
+     *
+     * <p>모양이 다르기 때문이다: 검색 문서는 같지만 거기에 <b>답변 전문</b>과 응답 스키마가 더
+     * 얹히고 대화 이력은 빠진다({@link #buildEvalPrompt}). 이 앱에서 가장 큰 단일 요청이 답변이
+     * 아니라 이쪽인 이유가 그것이고(§6.26 산정표), 창을 넘겼을 때 어느 호출이 넘겼는지는 두 줄을
+     * 나란히 봐야 알 수 있다.
+     *
+     * <p>발췌가 답변보다 <b>적은</b> 문서를 보고 있으면({@code trimmed()}) 그 사실도 함께 찍는다 —
+     * 그 상태의 {@code grounded=false} 는 판정으로 삼지 않는다는 규칙(§ 검증 판정의 신뢰도)이
+     * 로그만 보고도 확인되어야 한다.
+     */
+    private String evalPromptSize(AgentState state, String kind, String systemPrompt, String answer,
+                                  EvalExcerpts excerpts, String schema, int level) {
+        String provider = likelyProvider(state);
+        int window = contextWindows.tokensOrZero(provider);
+        long inputBudget = window <= 0 ? 0 : new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        PromptSizeLog size = PromptSizeLog.of(kind)
+                .add("시스템", systemPrompt)
+                .add("질문", PromptInjectionGuard.wrap(state.question()))
+                .add("답변", answer)
+                .add("발췌", excerpts.included() + "/" + excerpts.total() + "청크", excerpts.text())
+                .add("스키마", schema);
+        return size.render("%s | thread=%s mode=%s%s%s".formatted(
+                size.budgetTail(provider, window, inputBudget), state.threadId(),
+                state.responseMode().name(),
+                level > 0 ? " 축소단계=" + level : "",
+                excerpts.trimmed() ? " [발췌 축소 — grounded=false 를 판정으로 쓰지 않음]" : ""));
+    }
+
+    /** 프롬프트 크기 로그의 단일 출구 — 태그를 한 곳에서 붙인다(검증 경로도 같은 태그를 쓴다). */
+    private void logPromptSize(String rendered) {
+        log.debug("[PROMPT] {}", rendered);
     }
 
     /**
@@ -1278,51 +1481,11 @@ public class AnswerService {
     }
 
     /**
-     * 오래된 쪽부터 버려 예산에 맞춘다 — 가능하면 <b>턴 경계</b>(빈 줄 + {@code "Q: "})에서.
-     *
-     * <p>이력은 {@code MemoryService} 의 폴백 경로에서 {@code "Q: …\nA: …"} 를 빈 줄로 이어 붙여
-     * 만들어지므로 그 경계가 존재한다. 다만 <b>항상 그 모양인 것은 아니다</b>: §6.10 요약 경로
-     * ({@code ConversationSummarizerService.buildContext()})는 요약문 + 최근 턴을 섞어 주고, 답변
-     * 본문 안에 빈 줄 다음 {@code "Q: "} 로 시작하는 줄이 있으면(FAQ 형식 답변) 경계가 더 잘게 잡힌다.
-     *
-     * <p>그래서 경계를 <b>찾지 못했을 때 전부 버리지 않는다</b>. 예전 구현은 분할 결과가 한 덩어리면
-     * 그 하나를 지우고 빈 문자열을 반환했다 — 요약 경로의 이력이 통째로 사라지는 것이 정확히 그
-     * 경우였고, 예산이 조금 모자랄 뿐인데 대화 맥락 전체를 잃었다. 이제는 줄 경계에서 앞을 잘라
-     * <b>가능한 만큼 남긴다</b>. 경계가 잘게 잡히는 쪽(FAQ 답변)은 필요보다 조금 더 버리는 것뿐이라
-     * 안전한 방향이다.
+     * 오래된 쪽부터 버려 예산에 맞춘다 — 규칙과 그 근거는 {@link HistoryPolicy#trimToBudget}.
+     * §10.13 에서 Direct 경로({@code DirectAnswerService})도 같은 절단을 쓰게 되면서 그쪽으로 옮겼다.
      */
     private static String trimHistory(String history, long budget) {
-        if (history == null || history.isBlank()) return "";
-        if (budget <= 0) return "";
-        if (TokenEstimator.estimate(history) <= budget) return history;
-
-        List<String> turns = new ArrayList<>(List.of(history.split("\n\n(?=Q: )")));
-        if (turns.size() > 1) {
-            while (turns.size() > 1) {
-                turns.removeFirst();   // 가장 오래된 턴
-                String candidate = String.join("\n\n", turns);
-                if (TokenEstimator.estimate(candidate) <= budget) return candidate;
-            }
-            // 마지막 한 턴만 남았는데도 넘친다 — 아래 줄 단위 절단으로 넘긴다.
-            history = turns.getFirst();
-        }
-        return trimLeadingLines(history, budget);
-    }
-
-    /**
-     * 턴 경계를 쓸 수 없을 때의 폴백 — 앞에서부터 <b>줄 단위</b>로 덜어낸다.
-     *
-     * <p>문자 인덱스로 자르지 않는 이유는 문장·코드가 반 토막 나면 남은 이력이 오히려 모델을
-     * 헷갈리게 하기 때문이다. 한 줄도 못 남기면 빈 문자열이다(그 한 줄조차 예산을 넘는 경우).
-     */
-    private static String trimLeadingLines(String text, long budget) {
-        List<String> lines = new ArrayList<>(List.of(text.split("\n")));
-        while (!lines.isEmpty()) {
-            lines.removeFirst();
-            String candidate = String.join("\n", lines);
-            if (TokenEstimator.estimate(candidate) <= budget) return candidate.strip();
-        }
-        return "";
+        return HistoryPolicy.trimToBudget(history, budget);
     }
 
     /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */

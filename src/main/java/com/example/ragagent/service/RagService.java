@@ -161,7 +161,10 @@ public class RagService {
         List<Map.Entry<String, DocRegistry.DocRegistryEntry>> entries = docRegistry.entries(DocRegistry.SHARED).stream()
             .toList();
         List<String> docIds = entries.stream().map(Map.Entry::getKey).toList();
-        Map<String, List<String>> tagsByDocId = keywordRepo.tagsByDocIds(docIds);
+        // 태그의 출처는 doc_registry 다 — 예전에는 chunk_fts.doc_tags 를 읽었는데, 그 컬럼은
+        // FTS5 의 UNINDEXED 라 WHERE doc_id IN (...) 이 코퍼스 전체 스캔이었다(본문까지 읽는다).
+        // 이 메서드는 문서 목록·관리자 화면·/admin/chunks 페이지 넘김마다 도는 자리다.
+        Map<String, List<String>> tagsByDocId = docRegistry.tagsByDocIds(docIds);
 
         return entries.stream()
                 .map(e -> {
@@ -179,7 +182,7 @@ public class RagService {
     /** Single-document lookup (current tags included) — powers the tag-edit UI. Empty if not found. */
     public Optional<DocumentInfo> findDocument(String userId, String docId) {
         return docRegistry.findByDocId(docId, DocRegistry.SHARED).map(r -> {
-            List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
+            List<String> tags = docRegistry.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
             return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), r.displayName(), r.version(),
                     r.chunks(), r.indexedAt(), r.sha256(), tags, r.errors());
         });
@@ -218,7 +221,7 @@ public class RagService {
         DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 
-        List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
+        List<String> tags = docRegistry.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
         return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.displayName(), entry.version(),
                 entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
     }
@@ -243,6 +246,9 @@ public class RagService {
 
         String tagsCsv = TagUtils.toMetaValue(tags);
         vectorStore.updateTags(DocRegistry.SHARED, entry.version(), entry.springDocIds(), tagsCsv);
+        // 목록·제안 UI 가 읽는 권위 있는 출처. 아래 chunk_fts 쓰기는 검색 결과에 태그를 동행시키는
+        // 사본이며, 셋이 함께 갱신돼야 화면과 검색 필터가 어긋나지 않는다.
+        docRegistry.updateTags(docId, DocRegistry.SHARED, tagsCsv);
         int updatedRows = keywordRepo.updateDocTags(docId, tagsCsv);
         if (updatedRows == 0) {
             throw new DocumentIndexingException(
@@ -265,16 +271,16 @@ public class RagService {
     /** BM25 keyword (FTS5) search axis for hybrid retrieval. */
     /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
     public List<String> listTags(String version) {
-        return keywordRepo.distinctTags(version);
+        return docRegistry.distinctTags(version);
     }
 
     /**
      * Same as {@link #listTags(String)}, but drops tags common to every document in scope —
      * used by the chat search-scope chip list, where such a tag is a no-op filter and just
-     * adds clutter (see {@link com.example.ragagent.ingestion.KeywordSearchRepository#distinctTagsExcludingCommon}).
+     * adds clutter (see {@link com.example.ragagent.ingestion.DocRegistry#distinctTagsExcludingCommon}).
      */
     public List<String> listTagsExcludingCommon(String version) {
-        return keywordRepo.distinctTagsExcludingCommon(version);
+        return docRegistry.distinctTagsExcludingCommon(version);
     }
 
     /** Distinct versions in use for version-selector UI. */

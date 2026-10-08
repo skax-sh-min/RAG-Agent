@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -58,6 +59,27 @@ class SecurityHeadersTest {
     void response_hasXFrameOptions() throws Exception {
         mvc.perform(get("/api/v1/health"))
                 .andExpect(header().exists("X-Frame-Options"));
+    }
+
+    /**
+     * {@code /api/**} 이 크로스 오리진에 열려 있으면, 인증 없는 두 모드에서 그 경로는 permitAll +
+     * CSRF 예외이므로 방문자가 연 아무 페이지나 그 브라우저를 통해 코퍼스를 읽을 수 있다. 이 앱의
+     * API 소비자는 전부 같은 오리진이라 허용할 이유가 없다 — 되살릴 일이 있어도 오리진 목록으로.
+     */
+    @Test
+    @DisplayName("/api/** 는 크로스 오리진 요청에 CORS 허용 헤더를 주지 않는다")
+    void api_doesNotAllowCrossOrigin() throws Exception {
+        mvc.perform(get("/api/v1/health").header("Origin", "http://evil.example"))
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    @DisplayName("/api/** 프리플라이트(OPTIONS)도 허용되지 않는다")
+    void api_preflightIsNotAllowed() throws Exception {
+        mvc.perform(options("/api/v1/documents/doc-1")
+                        .header("Origin", "http://evil.example")
+                        .header("Access-Control-Request-Method", "DELETE"))
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
     }
 
     @Test

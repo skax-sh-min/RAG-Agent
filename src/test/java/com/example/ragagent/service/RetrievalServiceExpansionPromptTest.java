@@ -56,6 +56,36 @@ class RetrievalServiceExpansionPromptTest {
         assertThat(rendered).contains("테스트 질문").doesNotContain("{query}").doesNotContain("{number}");
     }
 
+    /**
+     * <b>줄 수가 정확히 맞지 않으면 확장 결과가 통째로 버려진다.</b> Spring AI 의
+     * {@code MultiQueryExpander.expand()} 는 응답을 {@code split("\n")} 한 뒤
+     * {@code numberOfQueries != 조각수} 면 경고 한 줄만 남기고 {@code List.of(원본질문)} 을 돌려준다
+     * (1.1.8 기준). 판정이 <b>정확 일치</b>인 데다 빈 줄을 걸러내는 필터가 그 판정 <b>뒤</b>에 있어서,
+     * 안내 문장 한 줄이나 변형 사이의 빈 줄 하나만으로도 실패한다 — 그러면 벡터 축이 원본 질문
+     * 한 번으로 줄고, 이 프롬프트가 요구하는 영문 표기 변형·약어 정규화가 전부 사라진다.
+     * 오류가 아니라 로그 한 줄이라 화면에서는 검색이 조용히 나빠질 뿐이다.
+     *
+     * <p>그래서 줄 수 제약은 프롬프트에만 있고 코드로는 아무도 눈치채지 못한다. 여기서 고정한다.
+     * 숫자를 {@code 3} 으로 렌더하는 이유는 <b>{@code {number}} 로 박혀 있는지</b>를 보기 위해서다 —
+     * "2줄" 처럼 손으로 적어 두면 {@code numberOfQueries} 를 바꾸는 순간 프롬프트가 거짓말을 한다.
+     */
+    @Test
+    @DisplayName("두 번들 모두 '정확히 {number}줄' 제약을 담고, 그 숫자가 하드코딩이 아니다")
+    void realBundle_pinsTheExactLineCountContract() {
+        for (Locale locale : new Locale[] { Locale.KOREAN, Locale.ENGLISH }) {
+            String template = realMessageSource().getMessage("prompt.retrieval.expansion", null, locale);
+            String rendered = PromptTemplate.builder().template(template).build()
+                    .render(Map.of("query", "[USER_QUESTION]\n질문\n[/USER_QUESTION]", "number", 3));
+
+            assertThat(rendered)
+                    .as("locale=%s — 줄 수 제약이 렌더된 숫자와 함께 있어야 한다", locale)
+                    .containsAnyOf("정확히 3줄", "Exactly 3 lines");
+            assertThat(rendered)
+                    .as("locale=%s — 빈 줄 금지(빈 줄도 개수에 포함된다)", locale)
+                    .containsAnyOf("빈 줄", "blank line");
+        }
+    }
+
     @Test
     @DisplayName("실제 메시지 번들로 RetrievalService 생성(MultiQueryExpander 빌드)이 예외 없이 성공한다")
     void retrievalService_constructsWithRealBundle() {

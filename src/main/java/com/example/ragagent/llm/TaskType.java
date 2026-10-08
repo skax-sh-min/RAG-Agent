@@ -1,7 +1,8 @@
 package com.example.ragagent.llm;
 
 public enum TaskType {
-    MICRO_TEXT, // §6.21 — reasoning-free chores (keyword+context, summary, title, query expansion): smallest model
+    MICRO_TEXT, // §6.21 — reasoning-free chores (keyword+context, summary, title, query expansion,
+                // §10.12 follow-up condense): smallest model
     LIGHT_TEXT, // lightweight text-only — currently only the document-conversion background callers
                 // (MarkdownCorrectionService, TextToMarkdownService)
     TEXT,       // standard text generation — answer + combined eval + rerank, AND the

@@ -2,14 +2,20 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.CuratedTextUtils;
+import com.example.ragagent.ingestion.KeywordExtractor;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.repository.CuratedSubmissionRepository.Submission;
+import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,22 +39,132 @@ public class CuratedSubmissionService {
     /** Anti-flood: a user can queue this many unreviewed submissions at once. */
     public static final int MAX_PENDING_PER_USER = 20;
 
+    /**
+     * 요약은 문서 청크의 {@code chunk_context} 와 같은 자리에 실린다 — 1~2문장이라는 그 형식이
+     * 곧 상한의 근거다. 넘치면 BM25 입력에서 본문보다 요약이 더 무거워진다.
+     */
+    public static final int MAX_SUMMARY_LEN = 500;
+
+    /** 키워드는 쉼표로 구분된 2~5개를 기대한다({@code KeywordExtractor} 프롬프트와 같은 형식). */
+    public static final int MAX_KEYWORDS_LEN = 300;
+
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
     private final CuratedImageStore imageStore;
+    private final MemoryService memoryService;
     private final AppProperties props;
     private final AuditLogger auditLogger;
+    /**
+     * "빈 칸 자동 생성" 버튼이 쓰는 LLM 한 번. 인덱싱이 쓰는 것과 <b>같은</b> 추출기다 —
+     * 요약·키워드가 결국 문서 청크와 같은 메타데이터 키에 실리므로, 두 축이 다른 프롬프트로
+     * 만든 값을 같은 칸에 넣으면 형식이 서서히 갈린다(쉼표 구분 여부, 문장 수).
+     */
+    private final KeywordExtractor keywordExtractor;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
                                     CuratedImageStore imageStore,
+                                    MemoryService memoryService,
                                     AppProperties props,
-                                    AuditLogger auditLogger) {
+                                    AuditLogger auditLogger,
+                                    KeywordExtractor keywordExtractor) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
         this.imageStore = imageStore;
+        this.memoryService = memoryService;
         this.props = props;
         this.auditLogger = auditLogger;
+        this.keywordExtractor = keywordExtractor;
+    }
+
+    /**
+     * 본문에서 요약·키워드를 LLM 한 번으로 만든다 — 제안 폼의 "빈 칸 자동 생성" 버튼.
+     *
+     * <p><b>이미 채워진 칸은 덮지 않는다.</b> 판정은 서버가 한다: 사람이 쓴 문장을 버튼 한 번이
+     * 조용히 갈아엎는 일이 없어야 하고, 그 규칙이 클라이언트에만 있으면 다른 호출자가 생기는
+     * 순간 사라진다. 둘 다 이미 있으면 LLM 을 부르지 않고 그대로 돌려준다(호출 0회).
+     *
+     * <p>{@code KeywordExtractor} 는 실패해도 예외를 던지지 않고 TF 폴백으로 떨어지므로, 이
+     * 메서드도 항상 무언가를 돌려준다 — 버튼이 오류로 끝나는 경우는 사실상 없다.
+     */
+    public Enrichment enrich(String body, String currentSummary, String currentKeywords) {
+        String summary  = currentSummary  == null ? "" : currentSummary.strip();
+        String keywords = currentKeywords == null ? "" : currentKeywords.strip();
+        if (!summary.isEmpty() && !keywords.isEmpty()) return new Enrichment(summary, keywords, false);
+        if (body == null || body.isBlank()) {
+            throw new IllegalArgumentException("본문을 먼저 입력해 주세요.");
+        }
+        Document enriched = keywordExtractor.enrichSingle(new Document(enrichmentInput(body), new HashMap<>()));
+        Object ctx = enriched.getMetadata().get(MetaKey.CHUNK_CONTEXT);
+        Object kw  = enriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS);
+        if (summary.isEmpty() && ctx != null)  summary  = clamp(ctx.toString().strip(), MAX_SUMMARY_LEN);
+        if (keywords.isEmpty() && kw != null)  keywords = clamp(kw.toString().strip(), MAX_KEYWORDS_LEN);
+        return new Enrichment(summary, keywords, true);
+    }
+
+    /**
+     * {@link KeywordExtractor#enrichSingle} 에 넘길 조각 — <b>본문 전체가 아니라 첫 청크</b>다.
+     *
+     * <p>그 메서드의 계약은 "이미 인덱싱된 <b>청크</b> 하나"이고, 인덱싱 경로가 안전한 이유가
+     * 정확히 그것이다: 호출자가 언제나 {@code chunk-size}(기본 1,500자)로 잘린 조각을 넘긴다.
+     * 입력에는 상한이 없다 — {@code IndexingOutputCap} 은 <b>출력</b>만 제한한다. 반면 지식 제안의
+     * 본문은 <b>길이 제한이 없고</b>(§6.9 — 승인 시 분할로 흡수하므로 일부러 두지 않았다) 이 경로는
+     * 게스트가 부를 수 있다({@code POST /curated/submissions/enrich}, 그리고 키워드를 비운 모든 등록).
+     * 그대로 넘기면 200KB 본문 하나가 200KB 프롬프트가 되어 컨텍스트 초과이거나 수십 초짜리 호출이다.
+     *
+     * <p><b>왜 단순 자르기가 아니라 첫 청크인가.</b> 승인 시 본문을 나눌 {@link #splitBody} 와
+     * 같은 기계를 쓰므로 표·코드 블록 경계가 보존된다 — 문자 수로 자르면 반쪽 표가 프롬프트에
+     * 들어가고, 그 조각으로 만든 요약은 본문이 아니라 잘린 자국을 설명하게 된다.
+     *
+     * <p>여기서 창 기반 예산({@code PromptBudget.rewriteInputChars})까지 겹치지 않는 이유는,
+     * 인덱싱 경로도 그러지 않기 때문이다. 이 상한의 목적은 새 예산 층을 만드는 것이 아니라
+     * <b>깨진 계약을 되돌리는 것</b>이다 — 이 호출을 인덱싱의 한 청크와 정확히 같은 크기로 만든다.
+     */
+    private String enrichmentInput(String body) {
+        String trimmed = body.strip();
+        List<String> chunks = splitBody(trimmed);
+        if (!chunks.isEmpty()) return chunks.get(0);
+        // 분할기가 아무것도 내지 못하는 본문(사실상 잡음뿐)도 상한은 지켜야 한다.
+        int cap = Math.max(1, chunkSizeForBody());
+        return trimmed.length() <= cap ? trimmed : trimmed.substring(0, cap);
+    }
+
+    /** @param llmCalled false when both fields were already filled — the button made no LLM call. */
+    public record Enrichment(String summary, String keywords, boolean llmCalled) {}
+
+    /**
+     * 등록 경로에서 쓰는 {@link #enrich} — <b>실패해도 등록을 막지 않는다</b>.
+     *
+     * <p>버튼은 사용자가 결과를 보려고 누른 것이라 실패가 오류로 보여야 맞지만, 여기서는 사용자가
+     * 요청한 일이 "제안 등록"이다. 요약·키워드는 그 제안의 부속값이므로, 추출이 실패했다고 등록
+     * 자체를 실패시키면 그 사용자는 자기가 부르지도 않은 기능 때문에 글을 잃는다. 비워 둔 채로
+     * 등록되고, 나중에 폼에서 버튼으로 채우거나 관리자가 채우면 된다.
+     */
+    private Enrichment enrichQuietly(String body, String summary, String keywords) {
+        try {
+            return enrich(body, summary, keywords);
+        } catch (Exception e) {
+            log.warn("[SUBMISSION] 등록 시 요약·키워드 자동 생성 실패 — 비워 둔 채 등록한다: {}", e.getMessage());
+            return new Enrichment(summary == null ? "" : summary.strip(),
+                    keywords == null ? "" : keywords.strip(), false);
+        }
+    }
+
+    private static String clamp(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max).strip();
+    }
+
+    /**
+     * 요약·키워드의 공통 정리 — 저장 경로 셋(신규·수정·승인)이 같은 규칙을 지나야 한다.
+     * 길이를 넘기면 거절이 아니라 자른다: 이 둘은 사용자가 직접 쓸 수도 있지만 자동 생성으로
+     * 채워지는 쪽이 보통이고, 모델이 조금 길게 답했다는 이유로 제안 등록 전체를 실패시킬 일이 아니다.
+     */
+    private static String cleanSummary(String v) {
+        return v == null || v.isBlank() ? null : clamp(PromptInjectionGuard.validate(v.strip()), MAX_SUMMARY_LEN);
+    }
+
+    private static String cleanKeywords(String v) {
+        return v == null || v.isBlank() ? null : clamp(PromptInjectionGuard.validate(v.strip()), MAX_KEYWORDS_LEN);
     }
 
     /**
@@ -90,6 +206,33 @@ public class CuratedSubmissionService {
      * per-user pending cap still are.
      */
     public long submit(String authorUserId, String title, String body, List<String> tags) {
+        return submit(authorUserId, title, body, tags, null, null, null, null);
+    }
+
+    /**
+     * §10.11 — same as {@link #submit(String, String, String, List)}, plus the chat turn this
+     * proposal came from. The turn is <b>re-read and ownership-checked here</b>: the client may
+     * edit the prefilled text (that is the point of routing 좋아요 through review), but it may not
+     * decide on its own that some text "came from a chat answer". An unresolvable or foreign
+     * turn is not an error — the proposal is simply stored as a hand-written one.
+     *
+     * <p>The per-user pending cap is <b>skipped</b> for these (trap ④): the cap exists to stop a
+     * user from flooding the review queue by typing, and a 좋아요 is one button press with nowhere
+     * to render a "20건이 밀려 있습니다" form error. Flooding by 좋아요 is bounded by
+     * {@link #findLiveProposalForTurn} instead — one live proposal per turn.
+     */
+    public long submit(String authorUserId, String title, String body, List<String> tags,
+                       String sourceThreadId, Long sourceTurnId,
+                       String summary, String keywords) {
+        boolean fromTurn = sourceTurnId != null && sourceThreadId != null
+                && memoryService.getTurn(authorUserId, sourceThreadId, sourceTurnId).isPresent();
+        return submitInternal(authorUserId, title, body, tags,
+                fromTurn ? sourceTurnId : null, fromTurn ? sourceThreadId : null, summary, keywords);
+    }
+
+    private long submitInternal(String authorUserId, String title, String body, List<String> tags,
+                                Long sourceTurnId, String sourceThreadId,
+                                String summary, String keywords) {
         String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
         if (cleanTitle.length() > MAX_TITLE_LEN) {
             throw new IllegalArgumentException(
@@ -104,17 +247,117 @@ public class CuratedSubmissionService {
         imageStore.validateImageCount(cleanBody);
         // TagUtils.normalize throws on policy violation (최대 10개 / 32자) — the message is user-facing.
         String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
-        if (repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
+        if (sourceTurnId == null && repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
             throw new IllegalArgumentException(
                     "검토 대기 중인 제안이 이미 " + MAX_PENDING_PER_USER + "건입니다. 처리된 뒤 다시 등록해 주세요.");
         }
 
-        long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv);
+        // 비어 있는 요약·키워드는 등록 시점에 채운다 — 버튼을 누르지 않고 그냥 등록한 제안도
+        // BM25 축에서 제 몫을 하도록. enrich() 가 '빈 칸만' 규칙을 그대로 들고 있으므로 사람이
+        // 쓴 값은 여기서도 덮이지 않고, 둘 다 차 있으면 LLM 호출 자체가 없다.
+        Enrichment filled = enrichQuietly(cleanBody, summary, keywords);
+        long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv,
+                sourceTurnId, sourceThreadId, cleanSummary(filled.summary()), cleanKeywords(filled.keywords()));
         auditLogger.log("curated.submission.create", "submission:" + id,
-                Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv));
-        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={} chars={}", id, authorUserId, cleanBody.length());
+                Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv,
+                        "sourceTurnId", sourceTurnId == null ? "" : String.valueOf(sourceTurnId)));
+        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={} chars={} turn={}",
+                id, authorUserId, cleanBody.length(), sourceTurnId);
         return id;
     }
+
+    /**
+     * §10.11 프리필 — the 좋아요된 답변, read <b>server-side from the turn</b> so the form starts
+     * from what was actually said (trap ③: a 3,000자 답변 does not fit in a URL, and text carried
+     * by the client could claim an origin it doesn't have).
+     *
+     * <p>Empty when the turn doesn't exist or isn't this user's — the page then just renders the
+     * blank write form rather than an error, since a stale link is not worth a failure page.
+     */
+    public Optional<TurnPrefill> prefillFromTurn(String userId, String threadId, long turnId) {
+        return memoryService.getTurn(userId, threadId, turnId).map(turn -> {
+            String answer = turn.answer();
+            // 답변의 '## 요약' 은 본문에서 떼어 요약 칸으로 옮긴다 — 두 곳에 같은 문장이 남으면
+            // 승인 시 그 문장이 BM25 검색 텍스트에 두 번 들어가고(요약은 앞에 붙고 본문은 그대로
+            // 색인된다) 화면에서도 같은 말이 두 번 보인다. 자를 자리와 꺼낼 자리를 같은 클래스가
+            // 정의하므로 두 조각이 어긋날 수 없다(CuratedTextUtils).
+            //
+            // 한 번 계산해 셋이 같은 값을 본다 — 특히 이미지 개수가 그렇다. 세는 대상은 화면이
+            // 보여 줄, 그리고 승인 시 Vision 을 부르게 될 '실제 등록될 본문'이므로 자른 뒤의
+            // body 여야 한다(원문을 세면 요약 섹션에 마커가 있을 때 제출 단계의
+            // validateImageCount(cleanBody) 보다 큰 수를 미리 보여 준다).
+            String body = CuratedTextUtils.stripSummarySection(answer);
+            return new TurnPrefill(
+                    turnId,
+                    threadId,
+                    // 질문은 2,000자까지 가능하고 제목은 200자다 — 자르지 않으면 폼이 예외로 죽는다.
+                    truncateTitle(turn.question()),
+                    body,
+                    clampSummary(CuratedTextUtils.extractSummarySection(answer)),
+                    turn.selectedTags(),
+                    CuratedImageStore.markerPaths(body).size(),
+                    turn.responseModeLabel());
+        });
+    }
+
+    /** 요약 칸의 상한을 넘는 프리필은 잘라서 넣는다 — 폼이 열리자마자 검증 오류로 죽지 않도록. */
+    private static String clampSummary(String summary) {
+        if (summary == null || summary.isBlank()) return "";
+        return clamp(summary.strip(), MAX_SUMMARY_LEN);
+    }
+
+    /**
+     * §10.11 중복 제안 방지 — the live (pending/approved) proposal already made for this turn.
+     * The chat's 좋아요 flow sends the user to that entry instead of opening a second draft.
+     */
+    public Optional<Submission> findLiveProposalForTurn(long turnId) {
+        return repository.findLiveByTurn(turnId);
+    }
+
+    /**
+     * §10.11 — what the admin review screen needs to know about a 좋아요 출신 제안: which
+     * conversation it came from, and under which 두 글자 표기 it was answered.
+     *
+     * <p>The label is the reviewer's cheapest signal. A {@code DN} proposal is an answer that
+     * <b>read no document at all</b>, and that is exactly the case §10.11 exists to put in front of
+     * a person: nothing about the text itself says so. It is looked up as the <b>author</b>, since
+     * turns are user-scoped and the reviewer is someone else.
+     *
+     * <p>Empty for a hand-written proposal. A chat-origin one whose turn has since been deleted
+     * still returns its origin with a {@code null} label — "we know where this came from, but it
+     * is gone" is different from "this was typed into the form", and the screen says so.
+     */
+    public Optional<TurnOrigin> originOf(Submission s) {
+        if (!s.fromChatTurn()) return Optional.empty();
+        String label = memoryService.getTurn(s.authorUserId(), s.sourceThreadId(), s.sourceTurnId())
+                .map(MemoryRepository.Turn::responseModeLabel)
+                .orElse(null);
+        return Optional.of(new TurnOrigin(s.sourceThreadId(), s.sourceTurnId(), label));
+    }
+
+    /** @param modeLabel {@code RN}/{@code DN}/… , or null when the originating turn is gone. */
+    public record TurnOrigin(String threadId, long turnId, String modeLabel) {}
+
+    /** Cuts a chat question down to a title. Public so the chat-side prefill and the form agree. */
+    public static String truncateTitle(String question) {
+        String q = question == null ? "" : question.strip().replaceAll("\\s+", " ");
+        return q.length() <= MAX_TITLE_LEN ? q : q.substring(0, MAX_TITLE_LEN);
+    }
+
+    /**
+     * What the 제안 폼 is pre-populated with when it is opened from a 좋아요.
+     *
+     * @param imageCount how many image markers the answer carries — shown next to
+     *                   {@link CuratedImageStore#MAX_IMAGES_PER_SUBMISSION} so the author can
+     *                   delete some <em>before</em> submitting rather than being rejected after
+     *                   (trap ⑥; document images are counted too)
+     * @param modeLabel  the turn's two-letter 표기 ({@code RN}/{@code DN}/…) — the same label the
+     *                   admin will review it under, shown here so the author knows a Direct answer
+     *                   is being proposed as shared knowledge
+     */
+    /** @param summary 답변의 {@code ## 요약} 섹션 — 본문({@code body})에서는 빠져 있다. 없으면 빈 문자열 */
+    public record TurnPrefill(long turnId, String threadId, String title, String body,
+                              String summary, String tags, int imageCount, String modeLabel) {}
 
     /**
      * Admin 임베딩 실행: copies the (possibly edited) text into a real curated row and flips the
@@ -135,20 +378,40 @@ public class CuratedSubmissionService {
         String body  = (editedBody  == null || editedBody.isBlank())  ? row.body()  : editedBody.strip();
         String tagsCsv = (editedTags == null) ? row.tags() : TagUtils.toMetaValue(TagUtils.normalize(editedTags));
         imageStore.validateImageCount(body);
+        // 승인 화면은 이 둘을 편집하지 않으므로 제안에 저장된 값을 그대로 싣는다. 여기서
+        // 자동 생성으로 채우지는 않는다 — 승인 한 번이 청크 수만큼 LLM 을 부르게 되고,
+        // 무엇이 코퍼스에 들어가는지는 사람이 보고 정한다는 §10.11 의 규칙에도 어긋난다.
+        String summary  = row.summary();
+        String keywords = row.keywords();
 
         // 본문 이미지에 Vision 설명을 주입한 뒤 자른다. 순서가 중요하다 — 설명은 임베딩되는 텍스트의
         // 일부여야 이미지 내용이 검색에 걸리고, 임베딩은 지금 이 승인 시점에 딱 한 번 일어난다.
         // 나중에(분할 후) 주입하면 마커와 설명이 서로 다른 청크로 갈라질 수 있다.
         body = imageStore.describeImages(body);
 
-        // 본문을 문서와 같은 방식으로 분할해 N개 청크로 등록한다 — 길이 제한이 없어진 대신 각 청크가
-        // 임베딩 가능한 크기로 보장된다. 태그는 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
-        List<String> bodyChunks = splitBody(body);
-        List<Long> curatedIds = curatedQaService.createFromSubmission(
-                submissionId, row.authorUserId(), title, bodyChunks, tagsCsv);
+        // 등록 경로가 출처에 따라 갈린다 (§10.11 함정 ①). 좋아요 출신은 turn 단위로 식별되는
+        // 행 하나이고(대화·턴 삭제 회수와 재승인이 전부 그 키를 탄다), 손으로 쓴 제안은 승인 시점에
+        // 미리 나뉜 N개 행이다. 태그는 어느 쪽이든 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
+        List<Long> curatedIds;
+        if (row.fromChatTurn()) {
+            // 재승인이면 같은 행이 제자리에서 갱신되고 다시 임베딩된다 — 이것이 정책 3의 "교체"다.
+            // 여기서 먼저 회수하면 백그라운드 벡터 삭제가 방금 새로 쓴 벡터를 지울 수 있다(같은 id).
+            curatedIds = List.of(curatedQaService.createFromLikedTurn(submissionId, row.sourceTurnId(),
+                    row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv, summary, keywords));
+        } else {
+            // 손으로 쓴 제안은 승인마다 새 id 의 행이 생기므로, 남아 있던 이전 등록본을 먼저 내린다.
+            // 수정 중에도 검색에 남아 있던(정책 3) 그 행들이다 — 안 내리면 같은 제안이 두 벌로 검색된다.
+            if (row.curatedActive() > 0) {
+                int replaced = curatedQaService.forceRemoveBySubmission(submissionId);
+                log.info("[SUBMISSION] 재승인 — 이전 등록본 {}건을 교체한다 id={}", replaced, submissionId);
+            }
+            curatedIds = curatedQaService.createFromSubmission(
+                    submissionId, row.authorUserId(), title, splitBody(body), tagsCsv, summary, keywords);
+        }
         long firstCuratedId = curatedIds.get(0);
 
-        if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId)) {
+        if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId,
+                summary, keywords)) {
             // Lost the CAS — another request approved it first. Undo every chunk we just created
             // (전부/전무: a half-rolled-back submission would show as partially registered).
             curatedQaService.forceRemoveBySubmission(submissionId);
@@ -181,14 +444,67 @@ public class CuratedSubmissionService {
         return ok;
     }
 
-    /** Author-initiated withdrawal of a still-pending submission. */
+    /**
+     * Author-initiated withdrawal. §10.11 — this now covers an <b>approved</b> submission too, and
+     * that is the whole point: before, a user could take back a proposal only while nobody had
+     * looked at it, so contributed knowledge was irretrievable except through an admin. With 좋아요
+     * routed through this board that gap would cover every promoted answer.
+     *
+     * <p>The board row flips first, then the curated rows come down, then the images are released —
+     * both cleanups scan for live references and must not count this row as one.
+     */
     public boolean withdraw(long submissionId, String authorUserId) {
         Optional<Submission> rowOpt = repository.findById(submissionId);
+        boolean wasApproved = rowOpt.map(r -> CuratedSubmissionRepository.STATUS_APPROVED.equals(r.status()))
+                .orElse(false);
         boolean ok = repository.markWithdrawn(submissionId, authorUserId);
         if (ok) {
+            if (wasApproved) {
+                int removed = curatedQaService.forceRemoveBySubmission(submissionId);
+                auditLogger.log("curated.submission.withdraw", "submission:" + submissionId,
+                        Map.of("author", authorUserId, "retracted", removed));
+                log.info("[SUBMISSION] 저자 철회 id={} — 등록본 {}건 회수", submissionId, removed);
+            }
             rowOpt.ifPresent(row -> imageStore.releaseImages(row.body()));
         }
         return ok;
+    }
+
+    /**
+     * §10.11 저자 수정 — the author rewrites their own proposal; it goes back to 검토 대기 either
+     * way. An approved entry keeps serving search until the new text is approved (정책 3), so an
+     * edit costs nothing while it waits.
+     *
+     * <p>Same validation as {@link #submit} minus the pending cap — the row already exists, so
+     * editing it cannot add to the queue.
+     */
+    public boolean updateByAuthor(long submissionId, String authorUserId,
+                                  String title, String body, List<String> tags,
+                                  String summary, String keywords) {
+        String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
+        if (cleanTitle.length() > MAX_TITLE_LEN) {
+            throw new IllegalArgumentException(
+                    "제목이 너무 깁니다 (최대 " + MAX_TITLE_LEN + "자, 입력: " + cleanTitle.length() + "자)");
+        }
+        if (body == null || body.isBlank()) {
+            throw new IllegalArgumentException("본문을 입력해 주세요.");
+        }
+        String cleanBody = body.strip();
+        imageStore.validateImageCount(cleanBody);
+        String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
+
+        Optional<Submission> before = repository.findById(submissionId);
+        if (!repository.updateByAuthor(submissionId, authorUserId, cleanTitle, cleanBody, tagsCsv,
+                cleanSummary(summary), cleanKeywords(keywords))) {
+            return false;
+        }
+        // 수정으로 본문에서 빠진 이미지를 정리한다 — releaseImages 는 살아 있는 다른 본문이
+        // 참조하는 파일은 남기므로, 새 본문에 그대로 남은 이미지는 지워지지 않는다.
+        before.ifPresent(row -> imageStore.releaseImages(row.body()));
+        auditLogger.log("curated.submission.update", "submission:" + submissionId,
+                Map.of("author", authorUserId, "chars", cleanBody.length(), "tags", tagsCsv));
+        log.info("[SUBMISSION] 저자 수정 id={} author={} — 검토 대기로 되돌림", submissionId, authorUserId);
+        return true;
     }
 
     public List<Submission> listForAdmin(String status, int offset, int limit) {
@@ -197,6 +513,10 @@ public class CuratedSubmissionService {
 
     public List<Submission> listMine(String authorUserId, int offset, int limit) {
         return repository.findByAuthor(authorUserId, offset, limit);
+    }
+
+    public List<Submission> listMine(String authorUserId, String status, int offset, int limit) {
+        return repository.findByAuthor(authorUserId, status, offset, limit);
     }
 
     public Optional<Submission> findById(long id) {

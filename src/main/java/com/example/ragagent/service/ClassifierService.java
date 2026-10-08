@@ -55,9 +55,19 @@ public class ClassifierService {
         return parseType(response);
     }
 
+    /**
+     * §10.12 — 분류도 <b>독립화된 질문</b>을 본다({@link AgentState#effectiveSearchQuestion()}).
+     * 재작성이 없었으면 원문이라 기존 동작 그대로다.
+     *
+     * <p>분류기에 이력을 통째로 넘기는 대신 이 값을 쓰는 이유는, 흐름을 바꾸는 분류가
+     * {@code meta} 하나뿐이라 그 한 갈래를 위해 매 턴 이력을 5지선다에 태울 값이 없고, 애초에
+     * 분류기에 필요한 것이 이력이 아니라 자립적인 질문이기 때문이다 — {@code "왜?"} 가 잡담으로
+     * 읽히는 문제는 검색이 틀리는 문제와 <b>같은 값</b>으로 풀린다.
+     */
     public AgentState execute(AgentState state) {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
-        String userPrompt = PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat();
+        String userPrompt = PromptInjectionGuard.wrap(state.effectiveSearchQuestion())
+                + "\n\n" + converter.getFormat();
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, RoutingMode.COST_FIRST,
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return state.toBuilder()

@@ -44,6 +44,8 @@ class QuestionReuseModeFilterTest {
                     reused_from_turn_id INTEGER)
                 """);
         jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
+        jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
+                + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
         jdbc.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT, content TEXT, metadata TEXT)");
         repo = new QuestionReuseRepository(jdbc, jdbc);
         repo.init();

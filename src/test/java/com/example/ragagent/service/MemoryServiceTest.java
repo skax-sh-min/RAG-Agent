@@ -50,4 +50,63 @@ class MemoryServiceTest {
 
         verify(repository).getHistory(eq("u1"), eq("t1"), eq(1000));
     }
+
+    // ── §10.13 이 턴의 예산 ──────────────────────────────────────────────────
+
+    private static MemoryService withWindow(MemoryRepository repository, int maxTokens,
+                                            String provider, int windowTokens) {
+        com.example.ragagent.llm.LlmRouter router = mock(com.example.ragagent.llm.LlmRouter.class);
+        when(router.findProviderName(eq(com.example.ragagent.llm.TaskType.TEXT),
+                org.mockito.ArgumentMatchers.any())).thenReturn(provider);
+        var windows = new com.example.ragagent.llm.ProviderContextWindows();
+        if (windowTokens > 0) {
+            windows.record(provider, windowTokens,
+                    com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
+        }
+        return new MemoryService(repository, propsWithMaxTokens(maxTokens), router, windows);
+    }
+
+    @Test
+    @DisplayName("§10.13 — Direct 턴은 문서가 비운 자리를 이력으로 받는다")
+    void directTurn_getsTheEmptyDocumentSlot() {
+        MemoryService service = withWindow(repository, 10_000, "local", 40_960);
+
+        int direct = service.maxConversationChars(true, com.example.ragagent.model.ResponseMode.N,
+                com.example.ragagent.llm.RoutingMode.COST_FIRST, true, "질문");
+
+        // 40,960 − 5,000(N 스트리밍 출력 예약) − 4,096(여유) − 질문 − 1,000(고정비)
+        assertThat(direct).isGreaterThan(30_000);
+        assertThat(direct).isGreaterThan(service.maxConversationChars() * 5);
+    }
+
+    @Test
+    @DisplayName("§10.13 — RAG 턴은 지금의 고정값 그대로다 (검색이 몇 개를 가져올지 아직 모른다)")
+    void ragTurn_keepsTheFixedBudget() {
+        MemoryService service = withWindow(repository, 10_000, "local", 40_960);
+
+        assertThat(service.maxConversationChars(false, com.example.ragagent.model.ResponseMode.N,
+                com.example.ragagent.llm.RoutingMode.COST_FIRST, true, "질문"))
+                .isEqualTo(service.maxConversationChars());
+    }
+
+    @Test
+    @DisplayName("§10.13 — 창을 모르면 Direct 턴도 고정값 그대로 (추측으로 맥락을 늘리지 않는다)")
+    void unknownWindow_keepsTheFixedBudget() {
+        MemoryService service = withWindow(repository, 10_000, "local", 0);
+
+        assertThat(service.maxConversationChars(true, com.example.ragagent.model.ResponseMode.N,
+                com.example.ragagent.llm.RoutingMode.COST_FIRST, true, "질문"))
+                .isEqualTo(service.maxConversationChars());
+    }
+
+    @Test
+    @DisplayName("§10.13 — 스트리밍은 출력 예약이 작아 이력에 줄 자리가 더 넓다")
+    void streamingReservesLessForOutput() {
+        MemoryService service = withWindow(repository, 10_000, "local", 40_960);
+        var n = com.example.ragagent.model.ResponseMode.N;
+        var mode = com.example.ragagent.llm.RoutingMode.COST_FIRST;
+
+        assertThat(service.maxConversationChars(true, n, mode, true, "질문"))
+                .isGreaterThan(service.maxConversationChars(true, n, mode, false, "질문"));
+    }
 }

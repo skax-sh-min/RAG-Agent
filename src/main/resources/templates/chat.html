@@ -202,6 +202,14 @@
                                     <i class="bi bi-scissors me-1"></i>
                                     <span th:text="${v.budgetNote}"></span>
                                 </div>
+                                <!-- §10.12 — 저장해 둔 검색어 재작성. 질문 버블에는 원문이 떠 있어
+                                     이 줄이 없으면 새로고침 후 원인을 짚을 방법이 없다. 진단값이라
+                                     기본 숨김(아래 RETRIEVAL_METRICS_ENABLED 가 벗긴다). -->
+                                <div th:if="${v != null and v.hasCondensedQuestion()}"
+                                     class="condensed-question small text-muted mt-2 d-none">
+                                    <i class="bi bi-search me-1"></i>검색에 사용된 질문:
+                                    <span th:text="${v.condensedQuestion}"></span>
+                                </div>
                             </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
@@ -274,35 +282,23 @@
                                 <div class="feedback-controls d-flex gap-1"
                                      th:attr="data-turn-id=${turn.id},data-thread-id=${threadId}">
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="LIKE"
-                                            th:if="${turn.curatable}"
+                                            th:if="${turn.proposable}"
                                             th:classappend="${turn.feedback == 'LIKE'} ? 'btn-primary' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
-                                    <!-- 좋아요가 아무 일도 하지 않는 모드(S·C). 이 수정 이전에 눌린
-                                         LIKE 기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 실제로
-                                         curated_qa 행을 만든 적이 없으므로, 기여 중인 것처럼 칠하는
-                                         것이 바로 여기서 고치려는 거짓말이다. -->
+                                    <!-- 좋아요가 지식 제안을 열어 주지 않는 모드(S). 이전에 눌린 LIKE
+                                         기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 아무것도 만든
+                                         적이 없으므로, 기여 중인 것처럼 칠하는 것이 여기서 고치려는
+                                         거짓말이다. -->
                                     <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50"
-                                            th:unless="${turn.curatable}" disabled
-                                            th:attr="aria-label=#{${turn.curationBlockedMessageKey}},
-                                                     title=#{${turn.curationBlockedMessageKey}}">👍</button>
+                                            th:unless="${turn.proposable}" disabled
+                                            th:attr="aria-label=#{${turn.submissionBlockedMessageKey}},
+                                                     title=#{${turn.submissionBlockedMessageKey}}">👍</button>
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
                                             th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
-                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌).
-                                         curatable 조건이 함께 걸린다: 이 수정 이전 S·C 턴에 남은 LIKE 기록은
-                                         curated_qa 행이 없으므로, 연필만 보고 누르면 편집할 대상이 없다. -->
-                                    <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn"
-                                            th:style="${turn.feedback == 'LIKE' and turn.curatable} ? '' : 'display:none;'"
-                                            th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                    <!-- §10.10 embedding-fallback — 좋아요한 답변의 큐레이션 임베딩이 (재시도 후에도)
-                                         실패한 경우의 표시. 백그라운드 스레드에서 몇 초 뒤 실패하므로 실시간으로는
-                                         알릴 수 없어 다음 페이지 로드 시 여기서 보여준다. -->
-                                    <span th:if="${curatedEmbedFailedTurnIds != null and curatedEmbedFailedTurnIds.contains(turn.id)}"
-                                          class="badge bg-warning text-dark"
-                                          th:text="#{curated.embed.failed}"
-                                          th:title="#{curated.embed.failed.hint}">임베딩 실패</span>
+                                    <!-- §10.11 — 채팅은 감상만 다룬다. 큐레이션 상태(연필·임베딩 실패
+                                         배지)는 여기 있지 않다: 등록·수정·철회가 전부 지식 제안 페이지에서
+                                         일어나므로, 두 화면이 같은 것을 서로 다르게 말할 자리를 없앴다. -->
                                 </div>
                                 <div class="text-muted"
                                      style="font-size:0.68rem;"
@@ -470,22 +466,6 @@
         </div>
     </div>
 
-    <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas (본인 좋아요 답변) ──────────────── -->
-    <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:480px; max-width:100%;">
-        <div class="offcanvas-header border-bottom">
-            <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i><span th:text="#{curated.edit.title}">큐레이션 답변 편집</span></h6>
-            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
-        </div>
-        <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
-            <textarea id="curated-edit-chat-answer" class="form-control flex-grow-1"
-                      style="min-height:280px; font-size:0.9rem; resize:vertical;"></textarea>
-            <div class="form-text small" th:text="#{curated.edit.hint}">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
-            <button class="btn btn-primary btn-sm" id="curated-edit-save-btn">
-                <i class="bi bi-save me-1"></i><span th:text="#{action.save}">저장</span>
-            </button>
-        </div>
-    </div>
-
     <div class="modal fade" id="chatImageModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content">
@@ -519,17 +499,88 @@
                          auto 여백은 남는 공간이 없어 무해하고, X를 헤더 패딩 안쪽으로 당기는
                          음수 여백은 그대로 살아 있다. -->
                     <div class="d-flex align-items-center gap-2 ms-auto">
+                        <!-- §10.14 내용 오류 신고 — 제거 버튼과 나란히 서지만 답하는 질문이 다르다:
+                             제거는 "이 답변과 상관없는 청크"(표시 전용), 신고는 "청크 내용이 틀렸다"
+                             (관리자 대기열). 그래서 참여도 게이트를 물려받지 않고 항상 노출된다 —
+                             답변을 실제로 떠받친 청크일수록 틀렸을 때 더 문제이기 때문이다. -->
+                        <button type="button" class="btn btn-sm btn-outline-warning"
+                                id="chunk-report-btn"
+                                th:text="#{chat.chunk.report}"
+                                th:attr="title=#{chat.chunk.report.hint}">내용 오류 신고</button>
                         <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
                              쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
                              닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
                         <button type="button" class="btn btn-sm btn-outline-danger d-none"
                                 id="chunk-exclude-btn"
-                                th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
+                                th:text="#{chat.chunk.exclude}"
+                                th:attr="title=#{chat.chunk.exclude.hint}">현재 대화에서 이 청크 제거</button>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                 </div>
                 <div class="modal-body">
                     <div class="md-content" id="chunk-fulltext-modal-body"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- §10.14 청크 내용 오류 신고 — 원문 보기에서 열린다. 신고는 아무것도 바꾸지 않고 관리자
+         대기열에만 쌓이며, 실제 수정은 관리자가 확인한 뒤에 일어난다(그 문구를 화면에도 적는다). -->
+    <div class="modal fade" id="chunkReportModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title small fw-semibold mb-0"
+                        th:text="#{chat.chunk.report.title}">내용 오류 신고</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-2" th:text="#{chat.chunk.report.desc}">
+                        관리자가 확인한 뒤 수정합니다. 신고 즉시 반영되지는 않습니다.</div>
+                    <div class="small fw-semibold text-truncate mb-3" id="chunk-report-label"></div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-wrong" value="WRONG" checked>
+                            <label class="form-check-label small" for="chunk-report-reason-wrong"
+                                   th:text="#{chunk.report.reason.wrong}">사실이 틀림</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-outdated" value="OUTDATED">
+                            <label class="form-check-label small" for="chunk-report-reason-outdated"
+                                   th:text="#{chunk.report.reason.outdated}">오래됨 · 업데이트 필요</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-broken" value="BROKEN">
+                            <label class="form-check-label small" for="chunk-report-reason-broken"
+                                   th:text="#{chunk.report.reason.broken}">깨진 텍스트 · 표 · 이미지</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-other" value="OTHER">
+                            <label class="form-check-label small" for="chunk-report-reason-other"
+                                   th:text="#{chunk.report.reason.other}">기타</label>
+                        </div>
+                    </div>
+
+                    <label class="form-label small fw-semibold" for="chunk-report-comment"
+                           th:text="#{chat.chunk.report.comment}">무엇이 잘못됐나요?</label>
+                    <textarea class="form-control form-control-sm" id="chunk-report-comment"
+                              rows="3" maxlength="500"
+                              th:attr="placeholder=#{chat.chunk.report.comment.placeholder}"></textarea>
+                    <div class="form-text d-flex justify-content-between">
+                        <span th:text="#{chat.chunk.report.comment.hint}">틀린 부분과 맞는 내용을 적어 주세요.</span>
+                        <span><span id="chunk-report-count">0</span>/500</span>
+                    </div>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+                            th:text="#{action.cancel}">취소</button>
+                    <button type="button" class="btn btn-sm btn-warning" id="chunk-report-submit"
+                            th:text="#{chat.chunk.report.submit}">신고하기</button>
                 </div>
             </div>
         </div>
@@ -566,7 +617,7 @@
     /* 서버가 렌더한 이전 turn들의 진단 수치 노출 — 이 페이지는 message-assistant 프래그먼트가
        아니라 자체 마크업으로 이전 turn을 그리므로(§복원 경로), 해제 처리도 여기서 한다. */
     if (RETRIEVAL_METRICS_ENABLED) {
-        document.querySelectorAll('.source-metrics.d-none').forEach(function (el) {
+        document.querySelectorAll('.source-metrics.d-none, .condensed-question.d-none').forEach(function (el) {
             el.classList.remove('d-none');
         });
     }
@@ -592,6 +643,10 @@
     const chunkExcludeBtn = document.getElementById('chunk-exclude-btn');
     /* 모달이 지금 보여주는 출처가 어느 턴의 어느 청크인지 — 제거 버튼이 쓴다. */
     let activeChunkContext = null;
+    /* 신고 버튼이 쓰는 컨텍스트. activeChunkContext와 따로 두는 이유: 그쪽은 "제거 가능"
+       (참여도 0%)일 때만 채워지는데, 신고는 참여도와 무관하게 언제나 가능해야 한다.
+       재사용하면 답변에 기여한 청크일수록 신고가 안 되는 정확히 반대 게이트가 된다. */
+    let activeChunkView = null;
 
     /* 응답 참여도 0% 판정. AnswerAttribution은 답변에 기여하지 않은 청크에 0.0이 아니라 값을
        아예 넣지 않으므로(§ SourceRef.answerShare), "값 없음"이 곧 0%다. 참여도 계산 자체가
@@ -611,9 +666,11 @@
            이벤트로 turnId가 심어지기 전까지 turnId가 없어 자연히 숨겨진다. */
         const removable = !!(turnId && chunkId && hasNoAnswerShare(item));
         activeChunkContext = removable ? { turnId, chunkId, item } : null;
+        activeChunkView = { chunkId, turnId, label: label || '' };
         if (chunkExcludeBtn) chunkExcludeBtn.classList.toggle('d-none', !removable);
         chunkFullTextModalTitle.textContent = label || CHUNK_TITLE_DEFAULT;
         chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${CHUNK_LOADING_TEXT}</div>`;
+        if (chunkReportBtn) chunkReportBtn.classList.remove('d-none');
         chunkFullTextModal.show();
         fetch('/api/v1/chunks/' + encodeURIComponent(chunkId))
             .then(res => res.ok ? res.json() : Promise.reject(res.status === 404 ? 'notfound' : 'error'))
@@ -621,6 +678,9 @@
             .catch(reason => {
                 const text = reason === 'notfound' ? CHUNK_NOTFOUND_TEXT : CHUNK_ERROR_TEXT;
                 chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${text}</div>`;
+                /* 이미 사라진 청크는 신고해도 관리자가 할 일이 없다 — 대기열에 노이즈만 남는다.
+                   불러오기 자체가 실패한 경우도 같이 숨긴다(무엇을 신고하는지 본 적이 없다). */
+                if (chunkReportBtn) chunkReportBtn.classList.add('d-none');
             });
     }
 
@@ -667,6 +727,103 @@
         });
     }
 
+    /* ── §10.14 청크 내용 오류 신고 ─────────────────────────────────────────
+       신고는 아무것도 바꾸지 않는다 — 관리자 대기열에 쌓일 뿐이고, 실제 수정은 관리자가
+       확인한 뒤 /admin 의 청크 편집으로 한다. 제거(표시 전용)와 답하는 질문이 다르므로
+       버튼도 컨텍스트도 따로다. */
+    const chunkReportModalEl = document.getElementById('chunkReportModal');
+    const chunkReportModal = chunkReportModalEl ? bootstrap.Modal.getOrCreateInstance(chunkReportModalEl) : null;
+    const chunkReportBtn    = document.getElementById('chunk-report-btn');
+    const chunkReportSubmit = document.getElementById('chunk-report-submit');
+    const chunkReportLabel  = document.getElementById('chunk-report-label');
+    const chunkReportComment = document.getElementById('chunk-report-comment');
+    const chunkReportCount  = document.getElementById('chunk-report-count');
+    const REPORT_DONE      = /*[[#{chat.chunk.report.done}]]*/ '신고를 접수했습니다. 관리자가 확인 후 처리합니다.';
+    const REPORT_DUPLICATE = /*[[#{chat.chunk.report.duplicate}]]*/ '이 대화에서 이미 신고한 청크입니다.';
+    const REPORT_FAILED    = /*[[#{chat.chunk.report.failed}]]*/ '신고 접수에 실패했습니다.';
+    /* 신고 대상은 모달을 여는 시점의 청크다 — 제출 중에 다른 출처를 눌러도 바뀌지 않도록
+       폼을 열 때 값을 복사해 둔다. */
+    let pendingReport = null;
+
+    if (chunkReportComment && chunkReportCount) {
+        chunkReportComment.addEventListener('input', function () {
+            chunkReportCount.textContent = String(this.value.length);
+        });
+    }
+
+    if (chunkReportBtn && chunkReportModal) {
+        chunkReportBtn.addEventListener('click', function () {
+            if (!activeChunkView || !activeChunkView.chunkId) return;
+            pendingReport = {
+                chunkId: activeChunkView.chunkId,
+                turnId: activeChunkView.turnId || '',
+                label: activeChunkView.label || ''
+            };
+            if (chunkReportLabel) chunkReportLabel.textContent = pendingReport.label;
+            if (chunkReportComment) chunkReportComment.value = '';
+            if (chunkReportCount) chunkReportCount.textContent = '0';
+            const firstReason = document.getElementById('chunk-report-reason-wrong');
+            if (firstReason) firstReason.checked = true;
+            /* 원문 모달을 먼저 닫고 그 다음에 연다 — 두 모달이 겹치면 배경(backdrop)이 하나 남아
+               신고 모달을 닫아도 화면이 잠긴 것처럼 보인다. */
+            if (chunkFullTextModal) {
+                chunkFullTextModalEl.addEventListener('hidden.bs.modal',
+                    () => chunkReportModal.show(), { once: true });
+                chunkFullTextModal.hide();
+            } else {
+                chunkReportModal.show();
+            }
+        });
+    }
+
+    async function submitChunkReport() {
+        if (!pendingReport) return;
+        const reason = document.querySelector('input[name="chunk-report-reason"]:checked');
+        const body = new URLSearchParams({
+            chunkId: pendingReport.chunkId,
+            threadId: chatForm.querySelector('input[name="threadId"]').value,
+            reason: reason ? reason.value : '',
+            comment: chunkReportComment ? chunkReportComment.value.trim() : ''
+        });
+        if (pendingReport.turnId) body.append('turnId', pendingReport.turnId);
+
+        const res = await fetch('/ui/chunk-reports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body
+        });
+        if (res.ok) {
+            chunkReportModal.hide();
+            pendingReport = null;
+            if (typeof showToast === 'function') showToast(REPORT_DONE, 'success');
+            return;
+        }
+        /* 409 = 이미 신고함(오류가 아니다), 400 = 검증 실패(서버 문구를 그대로 보여준다). */
+        if (res.status === 409) {
+            chunkReportModal.hide();
+            pendingReport = null;
+            if (typeof showToast === 'function') showToast(REPORT_DUPLICATE, 'warning');
+            return;
+        }
+        let message = REPORT_FAILED;
+        try {
+            const problem = await res.json();
+            if (problem && problem.detail) message = problem.detail;
+        } catch (e) { /* 본문이 없거나 JSON이 아니면 기본 문구 */ }
+        if (typeof showToast === 'function') showToast(message, 'warning');
+    }
+
+    if (chunkReportSubmit) {
+        chunkReportSubmit.addEventListener('click', function () {
+            chunkReportSubmit.disabled = true;
+            submitChunkReport()
+                .catch(() => {
+                    if (typeof showToast === 'function') showToast(REPORT_FAILED, 'warning');
+                })
+                .finally(() => { chunkReportSubmit.disabled = false; });
+        });
+    }
+
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
     const labelDirect = /*[[#{chat.direct.label.direct}]]*/ 'Direct';
@@ -690,7 +847,6 @@
     });
 
     const versionInput  = document.getElementById('version-input');
-    const tagSelect     = document.getElementById('chat-tag-select');
 
     /* Sync version selector → hidden form field */
     versionInput.addEventListener('change', function () {
@@ -722,23 +878,26 @@
     const chatTagsInput   = document.getElementById('chat-tags-input');
     const chatAllLabel    = /*[[#{chat.tags.all}]]*/ 'All';
     const chatAllTooltip  = /*[[#{chat.tags.all.tooltip}]]*/ 'Search all documents';
+    const chatTagSingleHint = /*[[#{chat.tags.single.tooltip}]]*/ 'Pick one tag at a time';
 
+    /* 검색 스코프 태그는 **한 번에 하나만** 고른다.
+       태그 필터는 엄격 AND(TagUtils.matchesAnd — 청크가 선택한 태그를 전부 가져야 통과)이고
+       태그는 문서 단위 값이라, 두 개를 고르면 "두 태그를 모두 가진 문서"만 남는다. 태그가
+       문서군을 가르는 축으로 쓰이면 그 교집합은 대개 비어 결과가 0건이 되는데, 칩을 여러 개
+       누르는 동작은 "더 넓게 찾는다"로 읽히기 때문에 사용자는 왜 답이 사라졌는지 알 수 없었다.
+       서버 계약(쉼표로 이어진 목록)은 그대로다 — 좁히는 쪽은 화면이다. */
     function chatCurrentTags() {
         return (chatTagsInput.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     }
-    function chatToggleTag(tag) {
-        const tags = chatCurrentTags();
-        const i = tags.indexOf(tag);
-        if (i >= 0) tags.splice(i, 1); else tags.push(tag);
-        chatTagsInput.value = tags.join(', ');
-        chatSyncTagChips();
+    /** 지금 선택된 태그(없으면 null). 값이 여러 개인 옛 상태가 들어와도 첫 개만 본다. */
+    function chatSelectedTag() {
+        return chatCurrentTags()[0] || null;
     }
-    function chatAddTag(tag) {
+    /** 라디오처럼: 같은 칩을 다시 누르면 해제(= 전체 검색), 다른 칩을 누르면 교체. */
+    function chatToggleTag(tag) {
         const t = (tag || '').trim().toLowerCase();
         if (!t) return;
-        const tags = chatCurrentTags();
-        if (!tags.includes(t)) tags.push(t);
-        chatTagsInput.value = tags.join(', ');
+        chatTagsInput.value = (chatSelectedTag() === t) ? '' : t;
         chatSyncTagChips();
     }
     /* 'All' 칩: 태그 선택을 모두 비워 전체 문서를 검색한다(기존 "태그 미선택 = 전체 검색" 의미론
@@ -749,15 +908,15 @@
         chatSyncTagChips();
     }
     function chatSyncTagChips() {
-        const sel = chatCurrentTags();
+        const sel = chatSelectedTag();
         const allBtn = document.querySelector('#chat-tag-suggest-chips [data-tag-all]');
         if (allBtn) {
-            allBtn.classList.toggle('btn-primary', sel.length === 0);
-            allBtn.classList.toggle('btn-outline-secondary', sel.length > 0);
+            allBtn.classList.toggle('btn-primary', sel === null);
+            allBtn.classList.toggle('btn-outline-secondary', sel !== null);
         }
         document.querySelectorAll('#chat-tag-suggest-chips [data-tag]').forEach(el => {
-            el.classList.toggle('btn-primary', sel.includes(el.dataset.tag));
-            el.classList.toggle('btn-outline-secondary', !sel.includes(el.dataset.tag));
+            el.classList.toggle('btn-primary', el.dataset.tag === sel);
+            el.classList.toggle('btn-outline-secondary', el.dataset.tag !== sel);
         });
     }
     function loadChatTagSuggestions() {
@@ -772,37 +931,22 @@
                 if (!tags || tags.length === 0) {
                     wrap.classList.add('d-none');
                     chips.innerHTML = '';
-                    if (tagSelect) {
-                        tagSelect.innerHTML = '<option value="" selected>태그 선택...</option>';
-                    }
                     return;
                 }
                 const allChip = `<button type="button" class="btn btn-sm py-0 px-2"
                          style="font-size:0.72rem;" data-tag-all="true" title="${escHtml(chatAllTooltip)}">${escHtml(chatAllLabel)}</button>`;
                 chips.innerHTML = allChip + tags.map(t =>
                     `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                             style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
+                             style="font-size:0.72rem;" data-tag="${escHtml(t)}"
+                             title="${escHtml(chatTagSingleHint)}">${escHtml(t)}</button>`).join('');
                 chips.querySelector('[data-tag-all]').addEventListener('click', chatSelectAllTags);
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
                     btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
-
-                if (tagSelect) {
-                    const opts = ['<option value="" selected>태그 선택...</option>']
-                        .concat(tags.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`));
-                    tagSelect.innerHTML = opts.join('');
-                }
 
                 wrap.classList.remove('d-none');
                 chatSyncTagChips();
             })
             .catch(() => {});
-    }
-    if (tagSelect) {
-        tagSelect.addEventListener('change', function () {
-            if (!this.value) return;
-            chatAddTag(this.value);
-            this.value = '';
-        });
     }
     loadVersionOptions();
     loadChatTagSuggestions();
@@ -890,9 +1034,9 @@
 
     function renderMarkdownText(raw) {
         if (!raw) return '';
-        if (typeof marked === 'undefined') return escHtml(raw);
-        const html = marked.parse(raw);
-        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        // 살균기가 없으면 마크다운 렌더를 포기하고 평문으로 — chat-stream.js 의 렌더러와 같은 규칙.
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return escHtml(raw);
+        return DOMPurify.sanitize(marked.parse(raw));
     }
 
     function stripImagePreviewFromSourceMarkdown(raw) {
@@ -907,9 +1051,10 @@
     function renderSourcePreviewHtml(raw) {
         const text = stripImagePreviewFromSourceMarkdown(raw);
         if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
-        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
-        const parsed = marked.parse(text);
-        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            return `<div class="md-content small">${escHtml(text)}</div>`;
+        }
+        const sanitized = DOMPurify.sanitize(marked.parse(text));
         const wrap = document.createElement('div');
         wrap.innerHTML = sanitized;
         wrap.querySelectorAll('img').forEach(img => img.remove());
@@ -1376,9 +1521,10 @@
     /* ── 서버 렌더 이전 turn 마크다운 처리 + syntax highlight + 초기 스크롤 ── */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';
-        if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
-        const html = marked.parse(raw);
-        el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            el.textContent = raw; delete el.dataset.md; return;
+        }
+        el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
         if (typeof hljs !== 'undefined') {
             el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }
@@ -1435,6 +1581,12 @@
             return;
         }
 
+        // §10.11 — 좋아요로 '바뀌는' 클릭에서만 지식 제안을 묻는다(해제 토글에는 묻지 않는다).
+        // '아니오'는 좋아요 자체를 취소한다 — 무엇도 저장하지 않고 그냥 돌아간다. 좋아요만 남기고
+        // 제안은 안 하는 중간 상태를 만들지 않는 것이 이 화면의 계약이다: 채팅은 감상만 다루고,
+        // 지식으로 만드는 일은 전부 제안 페이지에서 일어난다.
+        if (newValue === 'LIKE' && !confirm(I18N.proposeConfirm)) return;
+
         fetch(`/ui/threads/${tId}/turns/${turnId}/feedback`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
@@ -1449,47 +1601,12 @@
                 btn.classList.remove('btn-outline-secondary');
                 btn.classList.add(activeClass);
             }
-            // §10.10 — 편집 아이콘은 LIKE 상태일 때만 노출(승격 즉시 임베딩되므로 그 즉시부터 편집 가능).
-            const editBtn = container.querySelector('.curated-edit-btn');
-            if (editBtn) editBtn.style.display = (newValue === 'LIKE') ? '' : 'none';
-        }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
-    });
-
-    /* ── §10.10 큐레이션 Q&A 인라인 편집 (본인 좋아요 답변) ─────────────────── */
-    let curatedEditTarget = null; // { threadId, turnId, container }
-
-    document.getElementById('chat-messages').addEventListener('click', function (e) {
-        const editBtn = e.target.closest('.curated-edit-btn');
-        if (!editBtn) return;
-        const container = editBtn.closest('.feedback-controls');
-        if (!container) return;
-        const threadId = container.dataset.threadId;
-        const turnId = container.dataset.turnId;
-        if (!threadId || !turnId) return;
-
-        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`)
-            .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-            .then(function (data) {
-                curatedEditTarget = { threadId, turnId };
-                document.getElementById('curated-edit-chat-answer').value = data.answer || '';
-                new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
-            })
-            .catch(function () { showToast(I18N.requestFailed, 'danger'); });
-    });
-
-    document.getElementById('curated-edit-save-btn').addEventListener('click', function () {
-        if (!curatedEditTarget) return;
-        const { threadId, turnId } = curatedEditTarget;
-        const answer = document.getElementById('curated-edit-chat-answer').value;
-
-        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
-            body: 'answer=' + encodeURIComponent(answer)
-        }).then(function (r) {
-            if (!r.ok) { showToast(I18N.requestFailed, 'danger'); return; }
-            showToast(I18N.curatedSaved, 'success');
-            bootstrap.Offcanvas.getInstance(document.getElementById('curatedEditOffcanvas')).hide();
+            // 좋아요가 기록된 뒤에 이동한다 — 제안 화면에서 뒤로 오면 버튼이 눌린 채로 있어야 한다.
+            // 본문은 서버가 그 턴에서 읽으므로 URL 로는 어느 턴인지만 넘긴다.
+            if (newValue === 'LIKE') {
+                location.href = '/curated/submissions?fromThread=' + encodeURIComponent(tId)
+                        + '&fromTurn=' + encodeURIComponent(turnId);
+            }
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 

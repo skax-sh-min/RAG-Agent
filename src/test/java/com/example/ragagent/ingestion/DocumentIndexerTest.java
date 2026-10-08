@@ -403,8 +403,11 @@ class DocumentIndexerTest {
     void reindexFromMd_success_preservesTags() throws IOException {
         Path txtFile = tmpDir.resolve("guide.txt");
         Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
-        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
-        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+        // 태그는 업로드 시점에 들어온다 — keywordRepo.updateDocTags() 만 부르는 것은 실제 앱에
+        // 없는 경로다(태그를 쓰는 두 경로는 인덱싱과 RagService.updateDocumentTags() 이고,
+        // 둘 다 doc_registry 와 chunk_fts 를 함께 갱신한다).
+        DocumentInfo info = indexer.index(IndexRequest.single(
+                txtFile, "guide.txt", "v1", "anonymous", List.of("faq", "guide"), e -> {}));
 
         indexer.reindexFromMd(info.docId());
 
@@ -417,8 +420,11 @@ class DocumentIndexerTest {
     void reindexFromMd_vectorStoreAddFails_leavesExistingDataIntact() throws IOException {
         Path txtFile = tmpDir.resolve("guide.txt");
         Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
-        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
-        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+        // 태그는 업로드 시점에 들어온다 — keywordRepo.updateDocTags() 만 부르는 것은 실제 앱에
+        // 없는 경로다(태그를 쓰는 두 경로는 인덱싱과 RagService.updateDocumentTags() 이고,
+        // 둘 다 doc_registry 와 chunk_fts 를 함께 갱신한다).
+        DocumentInfo info = indexer.index(IndexRequest.single(
+                txtFile, "guide.txt", "v1", "anonymous", List.of("faq", "guide"), e -> {}));
 
         // Reset the mock so the earlier successful index() stubbing/interactions don't leak in,
         // then make the reindex's add() call fail. reindexFromMd() uses the progress-reporting

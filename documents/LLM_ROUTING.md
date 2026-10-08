@@ -48,6 +48,7 @@
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → TEXT   (품질 민감 — 큰 모델 유지)      │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
+│    QuestionCondenser (독립화) → MICRO_TEXT  (§10.12, 확장과 여집합)   │
 │    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
 │    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
@@ -66,7 +67,7 @@
 
 ```java
 public enum TaskType {
-    MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
+    MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장·질의 독립화 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
     LIGHT_TEXT,   // 경량 텍스트 전용 — 현재 실제 사용처는 문서 변환 백그라운드(MD 서식 교정·TXT 구조화)뿐
   TEXT,         // 답변 생성·통합 평가 + 분류·meta 직답 — 고추론 모델 선택 가능
     VISION,       // 이미지 설명 — 멀티모달 지원 필수
@@ -364,9 +365,11 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
   **시도했다가 실패해 후보가 없어진 경우엔 시간을 붙이지 않는다** — 기다린다고 풀리는 것이 아니라 거짓말이 된다.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
-- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
-  - 더 짧게(예: 10~20초) 바꾸면 일시적 장애에서 더 빨리 회복되지만, 실제 서버 복구가 그보다 오래 걸리는 상황이면 재시도가 더 잦아져(연결·요청·로그 비용만 반복) 실질적인 다운타임 단축 효과 없이 노이즈만 늘 수 있다.
-  - 세 갈래가 상수 하나를 공유하므로, 폴백 없는 과부하 차단만 다르게(예: 10초) 가져가고 싶다면 상수를 분리해야 한다.
+- **차단 길이 상수는 둘이다** — 둘 다 `LlmRouter` 하드코딩이며, `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다**(값을 바꾸려면 코드 수정).
+  - `SHORT_BLOCK_SECONDS`("30") — **폴백이 있는** 일반 실패(`blockForFailure`)와, **폴백도 `Retry-After`도 없는** 과부하(`blockForOverload`)가 쓴다. `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없던 기존 값이다.
+  - `NO_FALLBACK_BLOCK_SECONDS`("5") — **폴백이 없는** 일반 실패. 프로바이더가 하나뿐이면 차단은 우회가 아니라 전면 중단이고 로컬 LLM 재시작은 보통 몇 초로 끝나므로, 30초는 서버가 이미 올라온 뒤까지 남아 "재시작했는데도 계속 안 된다"가 된다(위 항목 참고).
+  - 두 값이 갈리는 축은 **길이가 아니라 "넘겨줄 상대가 있는가"**다. 폴백이 있으면 차단은 곧 우회이므로 길어도 손해가 없고, 없으면 차단이 곧 다운타임이라 짧아야 한다. 30초를 더 짧게(10~20초) 바꾸는 것은 그 축과 무관한 튜닝이며, 실제 서버 복구가 그보다 오래 걸리면 재시도만 잦아져(연결·요청·로그 비용 반복) 다운타임은 안 줄고 노이즈만 는다.
+  - `SHORT_BLOCK_SECONDS`는 아직 두 갈래가 공유하므로, 그중 하나만 다르게 가져가려면 상수를 한 번 더 분리해야 한다.
 
 ---
 
@@ -400,6 +403,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | `ImageTypeClassifier` |
 | `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
+| `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 
@@ -432,8 +436,9 @@ findFirst(role, priority 오름차순 순회)
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
-- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다. 다만 **응답 모드 `S`·`C` 턴은 좋아요를 눌러도 임베딩 호출이 아예 발생하지 않는다**(`allowsCuration()=false` → `onLike()` 즉시 반환, `curated_qa` 행조차 만들지 않음) — 특히 C는 모델이 만들어 낸 코드가 가중 RRF 축으로 되돌아와 다음 턴의 근거가 되는 것을 막기 위한 게이트다.
-  - **청크 추가 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
+- **큐레이션 Q&A 임베딩(§10.10 · §10.11)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. **§10.11 이후 이 호출은 관리자가 제안을 승인할 때만 발생한다** — 좋아요는 아무것도 임베딩하지 않으므로 채팅 경로에는 임베딩 비용이 없다(예전에는 3초 디바운스 후 배경 스레드에서 실행됐다). 긴 본문은 임베딩 시점에 여러 청크로 나뉘므로 **승인 1회가 청크 수만큼의 임베딩 호출을 만든다** — 모두 위 임베딩 로드밸런싱 대상이다. 별도의 라우팅/동시성 설정은 필요 없다.
+  - **지식 제안의 요약·키워드 자동 생성**은 위 임베딩과 무관한 **채팅 LLM 호출 1회**다(`CuratedSubmissionService.enrich()` → `KeywordExtractor.enrichSingle()`, `MICRO_TEXT`/`COST_FIRST`). 인덱싱이 쓰는 것과 **같은** 추출기라 사용량도 `context:` 범주로 함께 잡히고 TF 폴백도 같다. 작성자가 폼의 버튼을 눌러야만 돌고, **비어 있는 칸이 없으면 호출 자체가 없다**(서버 판정). 프롬프트에 실리는 것은 본문 전체가 아니라 **첫 청크**다 — `enrichSingle()` 의 계약이 청크 하나이고 입력 상한은 그 계약에만 있기 때문이다(제안 본문은 길이 제한이 없다). 배경 호출이라 §6 동시성 게이트(`executeGated`)를 타지 않는다 — 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷과 `LlmRouter` 의 프로바이더 단위 제한이 그대로 걸린다.
+  - **지식 제안 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
     - **유일한 LLM 호출은 본문 이미지의 Vision 설명 생성이다.** 텍스트만 있는 제안은 등록·승인 어느 쪽도 LLM을 부르지 않는다(키워드 추출도 요약도 돌지 않는다). 본문에 `[이미지: ...]` 마커가 있으면 `approve()`가 **분할 전에** `CuratedImageStore.describeImages()` → `LazyVisionService`로 이미지당 1회 `TaskType.VISION` 호출을 낸다 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸리기 때문. 라우팅은 §1 매트릭스의 VISION 규칙(`type=VISION` → `LIGHT_BOTH` → `BOTH`)을 그대로 따르고, **인덱싱 계열이므로 위 표대로 §6 동시성 게이트는 타지 않는다**(`executeWithTracking()`) — 채팅 슬롯을 잠식하지 않지만 로컬 LLM 서버 자원은 공유한다. 동시성은 `LazyVisionService` 자체의 `app.indexing.max-concurrent-llm-calls` 세마포어가 제한하며, 결과는 `image_descriptions` 캐시에 남아 질의 시점에 재분석되지 않는다.
     - 임베딩과 달리 이 Vision 호출은 **승인 요청 안에서 동기로 끝난다**(배경으로 미루면 마커와 설명이 서로 다른 청크로 갈라진다). 그래서 이미지가 있는 제안은 승인 응답 자체가 느리다 — 장수 상한은 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10, 프로퍼티 아님). `IMAGE_DESCRIPTION_ENABLED=false`면 `LazyVisionService` 빈이 없어 이 단계가 통째로 생략된다(이미지는 표시만 되고 검색 기여 없음).
   - 임베딩 입력 텍스트는 `제목 + 본문`이고 **제목은 모든 청크에 반복 부여**된다 — 2번째 청크부터 제목이 빠지면 질문형 질의와의 매칭이 급격히 나빠지기 때문(문서 인덱싱의 소제목 재주입과 같은 이유).
@@ -453,6 +458,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     PRIMARY KEY (provider_name, usage_date)
 );
 ```
+
+> 실제 테이블에는 방어적 `ALTER TABLE`로 추가된 `user_id TEXT NOT NULL DEFAULT 'anonymous'` 컬럼이 하나 더 있다. **읽거나 쓰는 코드가 없어 모든 행이 기본값 그대로**이며(§6.5 사용자별 쿼터를 대비해 넣었으나, 권장 설계는 `conversation_turns.user_id`에서 집계하는 쪽이라 그대로 죽은 채 남을 수 있다), 그래서 위 DDL에서 뺐다 — 집계 쿼리는 이 컬럼을 보지 않는다.
 
 모니터링: `GET /api/v1/llm/usage` (일간·주간·월간), `GET /api/v1/llm/usage/history?days=N` (Chart.js용)
 
@@ -481,7 +488,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 소형 모델(`local-fast`, priority 0)을 등록하지 않은 배포는 단일 LOCAL(`local`, `type=BOTH`, priority 1)이 답변부터 잡무까지 전부 처리한다. 추론이 필요 없는 고빈도 잡무를 별도 소형 모델로 내리면 (1) 큰 모델이 답변 생성에 전념하고 (2) 두 모델이 **독립 Semaphore**(§6)를 써 슬롯 경합이 사라진다 → 대화 응답 지연 감소.
 
-**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2) 4개 백그라운드 호출부가 이 타입으로 라우팅된다.  
+**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2)·`QuestionCondenser`(짧은 후속 질문 독립화, §10.12) 5개 호출부가 이 타입으로 라우팅된다. **`QuestionCondenser` 만 대화형 경로다** — 나머지 넷과 달리 사용자가 기다리는 턴 안에서 돌고(그래서 `executeGated`), MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지는 않는다.  
 **분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 답변과 같은 `TEXT`로 두어 큰 모델이 처리**한다 — 이름만 보면 `LIGHT_TEXT`가 어울리지만, 실제 코드는 `TaskType.TEXT`를 쓴다. 그래야 `type=TEXT`/`BOTH`(답변용 큰 모델)만 후보가 되어, 소형 모델이 어떤 타입으로 등록되든 이 두 호출로 새어 들어갈 수 없다.  
 문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)는 `LIGHT_TEXT`를 쓴다 — 현재 이 타입의 유일한 사용처다.
 
@@ -489,7 +496,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 | 태스크 (TaskType) | 담당 | 이유 |
 |---|---|---|
-| 키워드+맥락·요약·제목·MultiQuery 쿼리확장 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
+| 키워드+맥락·요약·제목·MultiQuery 쿼리확장·질의 독립화 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
 | 분류·meta 직답 (`TEXT`) | **큰 모델** | 답변과 같은 타입이라 `type=TEXT`/`BOTH`만 eligible |
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
 | MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 모델(`TEXT`/`BOTH`)만 eligible |

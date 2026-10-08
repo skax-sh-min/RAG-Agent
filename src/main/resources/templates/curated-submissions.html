@@ -8,10 +8,14 @@
 </head>
 <body>
 
-<!-- 청크 추가 게시판 (사용자) — 등록 폼 + 내가 낸 제안의 처리 결과.
+<!-- 지식 제안 게시판 (사용자) — 등록 폼 + 내가 낸 제안의 처리 결과.
      이 페이지를 여는 것 자체가 "확인"으로 처리되어(컨트롤러의 markAllReadForAuthor)
      헤더의 처리 알림 배지가 사라진다. -->
-<section layout:fragment="content" class="container py-4" style="max-width: 900px;">
+<!-- 폭: documents.html 과 같은 규칙(container-fluid + 1500 상한). 900px 로 묶여 있던 동안
+     본문 작성/미리보기 2컬럼이 화면을 아무리 넓혀도 패널당 414px 였다 — 컨테이너가 먼저
+     멈추기 때문. 상한을 아예 없애지 않는 이유는 넓어지는 쪽이 표가 아니라 산문(미리보기)
+     이라서다: 1500 에서 미리보기가 약 930px(한글 66자/줄)로, 읽기 좋은 구간의 위쪽이다. -->
+<section layout:fragment="content" class="container-fluid py-4" style="max-width: 1500px;">
 
     <h5 class="fw-semibold mb-1">
         <i class="bi bi-journal-plus me-2"></i>
@@ -28,13 +32,54 @@
         <i class="bi bi-exclamation-triangle me-1"></i><span th:text="${submitError}"></span>
     </div>
 
+    <!-- §10.11 중복 제안 방지 — 같은 턴에 이미 살아 있는(검토 대기·등록 완료) 제안이 있으면
+         새 초안을 열지 않고 그 항목을 가리킨다. 아래 목록에서 해당 카드가 강조된다. -->
+    <div th:if="${duplicateOfSubmissionId != null}" class="alert alert-info py-2 small" role="alert">
+        <i class="bi bi-info-circle me-1"></i>
+        <span th:text="#{submission.duplicate}">이 답변은 이미 지식 제안으로 등록되어 있습니다.</span>
+        <a class="ms-1" th:href="'#submission-' + ${duplicateOfSubmissionId}"
+           th:text="#{submission.duplicate.link}">해당 제안 보기</a>
+    </div>
+
     <!-- ── 등록 폼 ────────────────────────────────────────────────────────── -->
     <div class="card mb-4">
         <div class="card-header py-2 fw-semibold small" th:text="#{submission.form.header}">새 제안 등록</div>
         <div class="card-body">
+            <!-- §10.11 — 좋아요에서 넘어온 초안. 본문은 서버가 그 턴에서 읽어 채운 것이고, 여기
+                 보이는 것이 관리자가 검토할 텍스트다(그대로 두든 다듬든 사용자의 선택). -->
+            <div th:if="${prefill != null}" class="alert alert-secondary py-2 px-3 small mb-3">
+                <div class="d-flex align-items-center flex-wrap gap-2">
+                    <span class="badge bg-secondary" th:text="'[' + ${prefill.modeLabel()} + ']'">[RN]</span>
+                    <span class="fw-semibold" th:text="#{submission.from.chat}">채팅 답변에서 가져왔습니다</span>
+                    <!-- 이미지 개수는 미리 보여 준다 — validateImageCount()는 문서 이미지까지 세므로
+                         이미지가 많은 답변은 제출 단계에서 걸린다(§10.11 함정 ⑥). -->
+                    <span th:if="${prefill.imageCount() > 0}"
+                          th:classappend="${prefill.imageCount() > maxImages} ? 'text-danger fw-semibold' : 'text-muted'">
+                        <i class="bi bi-image me-1"></i>
+                        <span th:text="#{submission.from.chat.images}">본문 이미지</span>
+                        <span th:text="${prefill.imageCount()} + ' / ' + ${maxImages}">1 / 10</span>
+                    </span>
+                    <a class="ms-auto" th:href="@{/chat/{id}(id=${prefill.threadId()})}"
+                       th:text="#{submission.from.chat.back}">원 대화 보기</a>
+                </div>
+                <div class="text-muted mt-1" th:text="#{submission.from.chat.hint}">
+                    필요한 부분만 남기고 다듬어 등록하세요.
+                </div>
+                <div th:if="${prefill.imageCount() > maxImages}" class="text-danger mt-1"
+                     th:text="#{submission.from.chat.images.over}">이미지가 상한을 넘습니다.</div>
+            </div>
+
             <form th:action="@{/curated/submissions}" method="post" id="submission-form">
                 <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
                        th:value="${_csrf != null ? _csrf.token : ''}"/>
+                <!-- 출처 턴. 서버가 소유권을 다시 확인하므로 이 값을 위조해도 좋아요 출신으로
+                     기록되지 않는다(§10.11 함정 ③) — 여기 있는 것은 "어느 턴이었나"뿐이다. -->
+                <input type="hidden" name="sourceThreadId"
+                       th:if="${prefill != null or draftSourceThreadId != null}"
+                       th:value="${prefill != null ? prefill.threadId() : draftSourceThreadId}"/>
+                <input type="hidden" name="sourceTurnId"
+                       th:if="${prefill != null or draftSourceTurnId != null}"
+                       th:value="${prefill != null ? prefill.turnId() : draftSourceTurnId}"/>
 
                 <div class="mb-3">
                     <label class="form-label small fw-semibold" for="submission-title"
@@ -83,7 +128,8 @@
                         </button>
                         <input type="file" id="submission-image-input" class="d-none"
                                accept="image/png,image/jpeg,image/gif,image/webp"/>
-                        <div class="btn-group btn-group-sm ms-auto" role="group">
+                        <!-- 넓은 화면에서는 두 패널이 나란히 보이므로 이 탭 자체가 숨는다. -->
+                        <div class="btn-group btn-group-sm ms-auto" role="group" id="body-view-tabs">
                             <input type="radio" class="btn-check" name="body-view" id="body-view-edit" checked/>
                             <label class="btn btn-outline-secondary py-0 px-2" for="body-view-edit"
                                    style="font-size:0.75rem;" th:text="#{submission.body.tab.write}">작성</label>
@@ -91,16 +137,26 @@
                             <label class="btn btn-outline-secondary py-0 px-2" for="body-view-preview"
                                    style="font-size:0.75rem;" th:text="#{submission.body.tab.preview}">미리보기</label>
                         </div>
+                        <!-- 2컬럼일 때만 채워진다(어느 쪽이 무엇인지 한눈에). -->
+                        <span id="body-panes-legend" class="ms-auto small text-muted d-none"></span>
                     </div>
-                    <textarea class="form-control form-control-sm" id="submission-body" name="body"
-                              rows="14" required style="font-size:0.85rem; resize:vertical;"
-                              th:text="${draftBody}"
-                              th:placeholder="#{submission.field.body.placeholder}"></textarea>
-                    <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일).
-                         이미지 마커도 여기서 실제 그림으로 렌더되므로, 마커가 본문 어디에 있는지가
-                         곧 이미지가 어디에 놓이는지다. -->
-                    <div id="submission-preview" class="form-control d-none markdown-body"
-                         style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
+                    <!-- 좁은 화면: 같은 자리를 탭으로 번갈아 쓴다(둘 중 하나만 보인다).
+                         넓은 화면: 스크립트가 d-flex 를 붙여 나란히 놓고, 미리보기를 왼쪽으로
+                         보낸다(order:-1) — /admin 의 편집 화면 넷과 같은 배치다. -->
+                    <div id="submission-body-panes" style="min-height:0;">
+                        <textarea class="form-control form-control-sm" id="submission-body" name="body"
+                                  rows="14" required style="font-size:0.85rem; resize:vertical;"
+                                  th:text="${draftBody}"
+                                  th:placeholder="#{submission.field.body.placeholder}"></textarea>
+                        <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일).
+                             이미지 마커도 여기서 실제 그림으로 렌더되므로, 마커가 본문 어디에 있는지가
+                             곧 이미지가 어디에 놓이는지다. -->
+                        <!-- md-content 는 앱의 마크다운 렌더 스타일(표 테두리·코드블록 배경·헤딩
+                             크기)이다. 여기만 정의된 적 없는 markdown-body 를 달고 있어서, 이
+                             화면의 미리보기만 표에 테두리가 없고 코드블록에 배경이 없었다. -->
+                        <div id="submission-preview" class="form-control d-none md-content"
+                             style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
+                    </div>
                     <div class="d-flex justify-content-between form-text small">
                         <span th:text="#{submission.field.body.hint}">
                             마크다운을 쓸 수 있습니다. 길이 제한은 없으며 등록 시 자동으로 나뉩니다.
@@ -109,6 +165,41 @@
                             <span id="body-count">0</span>자 ·
                             <span id="chunk-estimate">1</span><span th:text="#{submission.chunk.unit}">개 청크 예상</span>
                         </span>
+                    </div>
+                </div>
+
+                <!-- 요약·키워드 — 승인되면 MetaKey.CHUNK_CONTEXT / EXCERPT_KEYWORDS 로 실려
+                     /admin 청크 화면의 같은 이름 칸에 그대로 보인다. 키워드는 chunk_fts 의
+                     전용 컬럼으로 들어가 BM25 축이 실제로 읽고, 요약은 그 축의 검색 텍스트
+                     앞에 붙는다(CuratedQaService.ftsDocument). 즉 여기 쓰는 값이 검색에
+                     반영된다 — 화면을 채우려고 있는 칸이 아니다. -->
+                <div class="mb-3">
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+                        <label class="form-label small fw-semibold mb-0" for="submission-summary"
+                               th:text="#{submission.field.enrich}">요약 · 키워드</label>
+                        <!-- 이미 쓴 칸은 절대 덮지 않는다(판정은 서버) — 버튼 라벨이 그렇게 약속한다. -->
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                id="submission-enrich-btn" style="font-size:0.75rem;"
+                                th:title="#{submission.enrich.hint}">
+                            <i class="bi bi-magic me-1"></i>
+                            <span th:text="#{submission.enrich.btn}">빈 칸 자동 생성</span>
+                        </button>
+                        <span id="submission-enrich-note" class="small text-muted"></span>
+                    </div>
+                    <textarea class="form-control form-control-sm mb-2" id="submission-summary"
+                              name="summary" rows="2" style="font-size:0.85rem; resize:vertical;"
+                              th:maxlength="${maxSummaryLength}"
+                              th:text="${draftSummary}"
+                              th:placeholder="#{submission.field.summary.placeholder}"></textarea>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-key"></i></span>
+                        <input type="text" class="form-control" id="submission-keywords" name="keywords"
+                               autocomplete="off" th:maxlength="${maxKeywordsLength}"
+                               th:value="${draftKeywords}"
+                               th:placeholder="#{submission.field.keywords.placeholder}"/>
+                    </div>
+                    <div class="form-text small" th:text="#{submission.field.enrich.hint}">
+                        비워 두어도 등록됩니다. 채우면 키워드 검색에 함께 반영됩니다.
                     </div>
                 </div>
 
@@ -121,16 +212,34 @@
 
     <!-- ── 내 제안 목록 ───────────────────────────────────────────────────── -->
     <div class="card">
-        <div class="card-header py-2 fw-semibold small d-flex align-items-center">
+        <div class="card-header py-2 fw-semibold small d-flex align-items-center gap-2">
             <span th:text="#{submission.list.header}">내 제안</span>
-            <span class="badge bg-secondary ms-2" th:text="${#lists.size(submissions)}">0</span>
+            <span class="badge bg-secondary" th:text="${#lists.size(submissions)}">0</span>
+            <!-- 상태 필터 — /admin 검토 패널과 같은 목록. 저장된 상태로 거른다: '회수됨'은
+                 등록본에서 파생되는 값이라 고를 수 있는 행이 없고, '등록 완료'를 고르면 그중
+                 회수된 것도 각자의 뱃지를 달고 함께 나온다. -->
+            <select class="form-select form-select-sm ms-auto" style="max-width:140px;"
+                    onchange="location.href='/curated/submissions?status=' + encodeURIComponent(this.value)">
+                <option value="all"       th:selected="${submissionStatus == 'all'}"
+                        th:text="#{submission.filter.all}">전체</option>
+                <option value="pending"   th:selected="${submissionStatus == 'pending'}"
+                        th:text="#{submission.status.pending}">검토 대기</option>
+                <option value="approved"  th:selected="${submissionStatus == 'approved'}"
+                        th:text="#{submission.status.approved}">등록 완료</option>
+                <option value="rejected"  th:selected="${submissionStatus == 'rejected'}"
+                        th:text="#{submission.status.rejected}">반려</option>
+                <option value="withdrawn" th:selected="${submissionStatus == 'withdrawn'}"
+                        th:text="#{submission.status.withdrawn}">철회함</option>
+            </select>
         </div>
 
         <div th:if="${#lists.isEmpty(submissions)}" class="card-body text-center text-muted small py-4"
              th:text="#{submission.list.empty}">등록한 제안이 없습니다.</div>
 
         <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(submissions)}">
-            <div class="list-group-item" th:each="s : ${submissions}">
+            <div class="list-group-item" th:each="s : ${submissions}"
+                 th:id="'submission-' + ${s.id()}"
+                 th:classappend="${duplicateOfSubmissionId != null and duplicateOfSubmissionId == s.id()} ? ' border-start border-3 border-info'">
                 <div class="d-flex align-items-start gap-2">
                     <div class="flex-grow-1 min-w-0">
                         <div class="fw-semibold small text-truncate" th:text="${s.title()}"></div>
@@ -143,6 +252,14 @@
                                   th:text="${t}"></span>
                             <span th:if="${s.chunkCount() > 0}" class="text-muted" style="font-size:0.68rem;"
                                   th:text="${s.chunkCount()} + '개 청크로 등록됨'"></span>
+                        </div>
+                        <!-- 정책 3 — 승인된 제안을 수정하면 검토 대기로 돌아가지만 등록본은 그대로
+                             검색에 남는다. 상태 배지만 보면 "내려간 건가?"로 읽히므로 여기서 말한다.
+                             파생 상태를 새로 만들지 않고 두 값의 조합으로 표기한다. -->
+                        <div th:if="${s.isPending() and s.curatedActive() > 0}"
+                             class="text-muted mt-1" style="font-size:0.68rem;"
+                             th:text="#{submission.pending.stillIndexed}">
+                            현재 등록본은 계속 사용 중입니다.
                         </div>
                         <!-- 반려 사유는 잘라내지 않고 전문을 노출한다 — 사용자가 받는 유일한 피드백. -->
                         <div th:if="${s.reviewNote() != null and s.displayStatus() == 'rejected'}"
@@ -174,14 +291,26 @@
                         </span>
                         <div class="text-muted mt-1" style="font-size:0.72rem;"
                              th:text="${s.createdAt()}"></div>
-                        <form th:if="${s.isPending()}" method="post" class="mt-1"
-                              th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
-                              onsubmit="return confirm('이 제안을 철회하시겠습니까?');">
-                            <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
-                                   th:value="${_csrf != null ? _csrf.token : ''}"/>
-                            <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
-                                    style="font-size:0.72rem;" th:text="#{submission.btn.withdraw}">철회</button>
-                        </form>
+                        <!-- 수정·철회는 검토 대기와 등록 완료에서만. 반려·철회된 제안은 읽기 전용이고,
+                             다시 내려면 새로 등록한다. -->
+                        <div th:if="${s.isPending() or s.status() == 'approved'}"
+                             class="d-flex gap-1 justify-content-end mt-1">
+                            <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                    style="font-size:0.72rem;"
+                                    th:attr="data-submission-id=${s.id()}"
+                                    onclick="openSubmissionEdit(this.dataset.submissionId)"
+                                    th:text="#{submission.btn.edit}">수정</button>
+                            <form method="post"
+                                  th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
+                                  th:attr="onsubmit=|return confirm('${s.curatedActive() > 0
+                                        ? '철회하면 이 내용이 검색에서도 즉시 제외됩니다. 계속할까요?'
+                                        : '이 제안을 철회하시겠습니까?'}');|">
+                                <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                                       th:value="${_csrf != null ? _csrf.token : ''}"/>
+                                <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                        style="font-size:0.72rem;" th:text="#{submission.btn.withdraw}">철회</button>
+                            </form>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -194,9 +323,24 @@
                th:href="@{/curated/submissions(offset=${offset - pageSize})}">‹ 이전</a>
             <a class="btn btn-sm btn-outline-secondary py-0 px-2"
                th:classappend="${#lists.size(submissions) < pageSize} ? ' disabled'"
-               th:href="@{/curated/submissions(offset=${offset + pageSize})}">다음 ›</a>
+               th:href="@{/curated/submissions(offset=${offset + pageSize}, status=${submissionStatus})}">다음 ›</a>
         </div>
     </div>
+
+<!-- §10.11 저자 수정 — /admin 검토 오프캔버스와 같은 컴포넌트를 사용자 쪽에 둔 것.
+     전문을 자르지 않고 보여주는 것이 요점이다: 목록의 한 줄 미리보기만으로는 자기가 무엇을
+     제안했는지 확인할 수 없고, 승인된 제안을 고치려면 원문 전체가 필요하다. -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="submissionEditOffcanvas"
+     style="width:100%; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title">
+            <i class="bi bi-pencil-square me-2"></i>
+            <span th:text="#{submission.edit.title}">제안 수정</span>
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="submissionEditBody"></div>
+</div>
 
 </section>
 
@@ -221,27 +365,119 @@
     refresh();
 })();
 
-/* 작성/미리보기 전환 — renderMarkdownWithImageMarkers()(base.html)가 [이미지: ...] 마커를
-   <img> 로 바꾼 뒤 marked → DOMPurify 를 거친다. sanitize 는 필수: 같은 본문이 관리자 검토
-   화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
+/* 작성/미리보기 — /admin 의 편집 화면 넷과 같은 규칙이다(base.html).
+   넓은 화면은 나란히, 좁은 화면은 같은 자리를 탭으로 번갈아. 렌더는 어느 쪽이든
+   renderMarkdownWithImageMarkers(→ marked → DOMPurify)를 거친다. sanitize 는 필수:
+   같은 본문이 관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
 (function () {
+    /* 2컬럼일 때 두 패널이 함께 갖는 높이. 바닥값은 예전 미리보기의 min-height 와 같고, 그
+       위로는 화면 높이를 따라간다 — 세로로 큰 모니터에서 300px 편집기를 쓰던 것이 이 폼의
+       두 번째 답답함이었다. 오프캔버스 쪽 편집 화면들에는 이 상수가 필요 없다: 그쪽은 패널
+       높이가 이미 정해져 있어 flex-grow-1 이 알아서 채운다. */
+    const MD_PREVIEW_PANE_HEIGHT = 'max(340px, 60vh)';
+
     const box     = document.getElementById('submission-body');
     const preview = document.getElementById('submission-preview');
+    const panes   = document.getElementById('submission-body-panes');
+    const tabs    = document.getElementById('body-view-tabs');
+    const legend  = document.getElementById('body-panes-legend');
     const tabEdit = document.getElementById('body-view-edit');
     const tabView = document.getElementById('body-view-preview');
-    if (!box || !preview || !tabEdit || !tabView) return;
+    if (!box || !preview || !panes || !tabEdit || !tabView) return;
 
-    function showPreview(on) {
-        if (on) {
-            renderMarkdownWithImageMarkers(preview, box.value);
-            preview.style.minHeight = box.offsetHeight + 'px';
+    // 재는 것은 뷰포트가 아니라 panes 자신이다 — 이 폼은 페이지 폭 안에 있어서 둘이 다르다
+    // (layout/base.html 의 isTwoColumnWidth 주석 참고).
+    if (isTwoColumnWidth(panes)) {
+        // 나란히. 미리보기를 왼쪽으로 보내는 것은 order 로만 한다 — DOM 순서를 바꾸면
+        // 폼 필드 순서(탭 이동)까지 따라 바뀐다.
+        panes.classList.add('d-flex', 'gap-3');
+        preview.classList.remove('d-none');
+        preview.style.order = '-1';
+        // 늘어난 폭은 전부 미리보기 몫이다 — /admin 편집 화면 넷·수정 오프캔버스와 같은 규칙.
+        // flex-basis 를 0 으로 눕히지 않으면 초기 폭을 내용 길이가 정해 빈 미리보기가
+        // 찌그러진다(대화 원문 화면에서 겪은 것과 같은 함정).
+        box.style.flex = '0 0 ' + MD_PREVIEW_EDIT_COL_WIDTH + 'px';
+        preview.style.flex = '1 1 0';
+        box.style.minWidth = '0';
+        preview.style.minWidth = '0';
+        // 높이는 두 패널이 한 짝으로 갖는다. 예전에는 rows="14"(≈300px)와 min-height:340px 이라는
+        // 서로 다른 고정값이라 나란히 놓았을 때 아래가 어긋났고, 세로로 큰 화면에서도 300px
+        // 편집기가 그대로였다. 리사이즈 핸들도 행이 쥔다 — 패널마다 핸들이 있으면 끌 때마다
+        // 다시 어긋나고, 행보다 크게 끌면 넘쳐 나간다.
+        panes.style.height = MD_PREVIEW_PANE_HEIGHT;
+        panes.style.overflow = 'hidden';      // resize 는 overflow 가 visible 이 아니어야 동작한다
+        panes.style.resize = 'vertical';
+        box.style.height = '100%';
+        box.style.resize = 'none';
+        preview.style.height = '100%';
+        preview.style.minHeight = '0';        // 행을 짧게 끌었을 때 인라인 340px 이 넘치지 않도록
+        if (tabs) tabs.classList.add('d-none');
+        if (legend) {
+            legend.classList.remove('d-none');
+            legend.innerHTML = '<i class="bi bi-eye me-1"></i>왼쪽 미리보기 · 오른쪽 작성';
         }
-        box.classList.toggle('d-none', on);
-        preview.classList.toggle('d-none', !on);
+        bindLivePreview(box, preview);
+    } else {
+        // 좁은 화면 — 지금까지의 동작 그대로.
+        function showPreview(on) {
+            if (on) {
+                renderMarkdownWithImageMarkers(preview, box.value);
+                preview.style.minHeight = box.offsetHeight + 'px';
+            }
+            box.classList.toggle('d-none', on);
+            preview.classList.toggle('d-none', !on);
+        }
+        tabEdit.addEventListener('change', () => showPreview(false));
+        tabView.addEventListener('change', () => showPreview(true));
     }
-    tabEdit.addEventListener('change', () => showPreview(false));
-    tabView.addEventListener('change', () => showPreview(true));
 })();
+
+/* "빈 칸 자동 생성" — 본문에서 요약·키워드를 LLM 한 번으로 만든다.
+
+   작성 폼과 수정 오프캔버스가 같은 함수를 쓴다: 두 화면이 같은 두 칸을 편집하므로 규칙이
+   갈리면 한쪽만 고쳐진다(요약/키워드 필드를 도입한 이유 자체가 그 두 칸의 단일 출처다).
+   "비어 있는 칸만 채운다"는 판정은 여기서 하지 않는다 — 현재 값을 그대로 보내고 서버가
+   정한다. 그래야 규칙의 출처가 하나다(CuratedSubmissionService.enrich). */
+function wireEnrichButton(btnId, bodyId, summaryId, keywordsId, noteId) {
+    const btn = document.getElementById(btnId);
+    const body = document.getElementById(bodyId);
+    const summary = document.getElementById(summaryId);
+    const keywords = document.getElementById(keywordsId);
+    const note = noteId ? document.getElementById(noteId) : null;
+    if (!btn || !body || !summary || !keywords) return;
+
+    btn.addEventListener('click', () => {
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중…';
+        if (note) note.textContent = '';
+        fetch('/curated/submissions/enrich', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
+            body: JSON.stringify({
+                body: body.value, summary: summary.value, keywords: keywords.value
+            })
+        })
+            .then(async r => {
+                let d = {};
+                try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+                if (!r.ok) throw new Error(d.message || '');
+                return d;
+            })
+            .then(d => {
+                summary.value = d.summary || summary.value;
+                keywords.value = d.keywords || keywords.value;
+                if (note) {
+                    note.textContent = d.llmCalled ? '' : '두 칸이 이미 채워져 있어 그대로 두었습니다.';
+                }
+            })
+            .catch(e => showToast(e.message || '자동 생성에 실패했습니다.', 'danger'))
+            .finally(() => { btn.disabled = false; btn.innerHTML = original; });
+    });
+}
+
+wireEnrichButton('submission-enrich-btn', 'submission-body',
+                 'submission-summary', 'submission-keywords', 'submission-enrich-note');
 
 /* 본문 이미지 업로드 — 파일을 고르면 즉시 서버에 저장하고, 돌아온 [이미지: ...] 마커를
    커서 위치에 끼워 넣는다. 위치를 마커로 표현하는 덕분에 이후 편집·잘라내기·붙여넣기가
@@ -296,6 +532,134 @@
         box.dispatchEvent(new Event('input'));   // 글자수·예상 청크 수 갱신
     }
 })();
+
+/* §10.11 저자 수정 오프캔버스. /admin 의 검토 오프캔버스와 같은 모양이고 다른 것은 권한뿐이다 —
+   여기서는 자기 제안만 열리고(서버가 작성자 스코프로 거른다) 승인/거부 버튼이 없다.
+
+   저장하면 상태가 검토 대기로 돌아간다. 승인된 제안이었다면 그 등록본은 검색에 그대로 남고,
+   관리자가 새 본문을 승인할 때 교체된다(정책 3) — 오타 하나 고치는 동안 그 지식이 사라지지
+   않게 하려는 것이다. 안내 문구가 그 사실을 미리 말한다. */
+const SUBMISSION_MAX_TITLE = /*[[${maxTitleLength}]]*/ 200;
+// 요약·키워드의 상한 — 서버(CuratedSubmissionService.MAX_SUMMARY_LEN/MAX_KEYWORDS_LEN)가
+// 넘치면 자르므로 여기 maxlength 는 편의이지 규칙이 아니다. 값의 출처는 서버 하나다.
+const SUBMISSION_MAX_SUMMARY  = /*[[${maxSummaryLength}]]*/ 500;
+const SUBMISSION_MAX_KEYWORDS = /*[[${maxKeywordsLength}]]*/ 300;
+
+function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                           .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function openSubmissionEdit(id) {
+    fetch('/curated/submissions/' + encodeURIComponent(id) + '/detail')
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => {
+            const box = document.getElementById('submissionEditBody');
+            const offcanvasEl = document.getElementById('submissionEditOffcanvas');
+            const wasApproved = data.status === 'approved';
+            // /admin 의 편집 화면 넷과 같은 규칙 — 폭은 언제나 뷰포트 전체, 바뀌는 건 컬럼 수뿐.
+            offcanvasEl.style.width = '100%';
+            const isWide = isTwoColumnWidth();
+            const editFields = `
+                <div id="submission-edit-error" class="alert alert-danger py-2 small d-none"></div>
+                <div>
+                    <label class="form-label small fw-semibold">제목</label>
+                    <input id="submission-edit-title" type="text" class="form-control form-control-sm"
+                           maxlength="${SUBMISSION_MAX_TITLE}" value="${escHtml(data.title)}"/>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">태그</label>
+                    <input id="submission-edit-tags" type="text" class="form-control form-control-sm"
+                           autocomplete="off" value="${escHtml(data.tags)}"
+                           placeholder="쉼표로 구분 · 비우면 모든 검색에 반영"/>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">본문</label>
+                        ${isWide ? '' : previewToggleBar('submission-edit', false, '작성')}
+                    </div>
+                    <textarea id="submission-edit-body" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:320px; font-size:0.82rem; resize:vertical;"
+                              >${escHtml(data.body)}</textarea>
+                    ${isWide ? '' : previewTogglePane('submission-edit', 320)}
+                    <div class="form-text small mb-2">
+                        저장하면 다시 검토 대기 상태가 됩니다.${wasApproved
+                            ? ' 검토가 끝날 때까지 현재 등록본이 검색에 계속 사용되고, 승인 시 교체됩니다.'
+                            : ''}
+                    </div>
+                    <!-- 작성 폼과 같은 두 칸 — 같은 엔드포인트, 같은 "빈 칸만" 규칙(wireEnrichButton). -->
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+                        <label class="form-label small fw-semibold mb-0">요약 · 키워드</label>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                id="submission-edit-enrich-btn" style="font-size:0.72rem;"
+                                title="비어 있는 칸만 본문에서 자동으로 채웁니다. 이미 쓴 내용은 그대로 둡니다.">
+                            <i class="bi bi-magic me-1"></i>빈 칸 자동 생성
+                        </button>
+                        <span id="submission-edit-enrich-note" class="small text-muted"></span>
+                    </div>
+                    <textarea id="submission-edit-summary" class="form-control form-control-sm mb-2"
+                              rows="2" maxlength="${SUBMISSION_MAX_SUMMARY}"
+                              style="font-size:0.82rem; resize:vertical;"
+                              placeholder="이 내용이 무엇에 관한 것인지 1~2문장"
+                              >${escHtml(data.summary || '')}</textarea>
+                    <input id="submission-edit-keywords" type="text" class="form-control form-control-sm"
+                           maxlength="${SUBMISSION_MAX_KEYWORDS}" autocomplete="off"
+                           placeholder="핵심 키워드 2~5개 · 쉼표로 구분"
+                           value="${escHtml(data.keywords || '')}"/>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveSubmissionEdit(${Number(id)})">
+                    <i class="bi bi-save me-1"></i>저장
+                </button>`;
+
+            if (isWide) {
+                box.className = 'offcanvas-body d-flex flex-row gap-3';
+                box.innerHTML = `
+                    <div class="flex-grow-1 overflow-auto" style="min-width:0;">
+                        <div class="text-muted small fw-semibold mb-2"><i class="bi bi-eye me-1"></i>미리보기</div>
+                        <div class="md-content" id="submission-edit-preview-pane"></div>
+                    </div>
+                    <div class="d-flex flex-column gap-3 overflow-auto"
+                         style="width:${MD_PREVIEW_EDIT_COL_WIDTH}px; flex-shrink:0;">${editFields}</div>`;
+                bindLivePreview(document.getElementById('submission-edit-body'),
+                                document.getElementById('submission-edit-preview-pane'));
+            } else {
+                box.className = 'offcanvas-body d-flex flex-column gap-3';
+                box.innerHTML = editFields;
+                wirePreviewToggle('submission-edit', 'submission-edit-body');
+            }
+            // 오프캔버스는 열 때마다 innerHTML 로 다시 그려지므로 배선도 매번 다시 한다.
+            wireEnrichButton('submission-edit-enrich-btn', 'submission-edit-body',
+                             'submission-edit-summary', 'submission-edit-keywords',
+                             'submission-edit-enrich-note');
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
+        })
+        .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
+}
+
+function saveSubmissionEdit(id) {
+    const err = document.getElementById('submission-edit-error');
+    err.classList.add('d-none');
+    fetch('/curated/submissions/' + encodeURIComponent(id), {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
+        body: JSON.stringify({
+            title:    document.getElementById('submission-edit-title').value,
+            body:     document.getElementById('submission-edit-body').value,
+            tags:     document.getElementById('submission-edit-tags').value,
+            summary:  document.getElementById('submission-edit-summary').value,
+            keywords: document.getElementById('submission-edit-keywords').value
+        })
+    })
+        .then(async r => {
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.message || '');
+            location.reload();
+        })
+        .catch(e => {
+            err.textContent = e.message || '저장에 실패했습니다.';
+            err.classList.remove('d-none');
+        });
+}
 
 /* 기존 태그 칩 — documents.html 업로드 태그와 동일한 동작(클릭하면 입력창에 추가).
    includeCurated=true 로 문서 태그와 큐레이션 태그의 합집합을 받는다. */

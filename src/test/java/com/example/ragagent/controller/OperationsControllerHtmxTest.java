@@ -80,7 +80,7 @@ class OperationsControllerHtmxTest {
     /**
      * §6.25 — 대화 삭제가 그 대화의 좋아요 큐레이션을 회수하지 않으면, 대화가 사라진 뒤에도
      * curated_qa 행과 벡터가 남아 계속 검색에 기여한다(turn 단위 {@code deleteTurn} 이 이미
-     * {@code onUnlike} 로 막고 있는 것과 같은 고아 문제). 세 호출의 <b>순서까지</b> 고정한다 —
+     * {@code onTurnDeleted} 로 막고 있는 것과 같은 고아 문제). 세 호출의 <b>순서까지</b> 고정한다 —
      * 회수가 기록 삭제보다 먼저다.
      */
     @Test
@@ -141,6 +141,52 @@ class OperationsControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("§10.11 — 좋아요는 검색 지식을 만들지 않는다 (무검토 유입 경로가 사라졌다)")
+    void updateTurnFeedback_like_createsNoCuratedEntry() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow(null)));
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/feedback")
+                        .param("feedback", "LIKE")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        // 이 엔드포인트가 curated_qa 를 만들던 것이 §10.11 이 막으려는 바로 그 구멍이다 —
+        // 문서를 하나도 안 본 Direct 답변이 좋아요 한 번에 전체 검색 지식이 됐다.
+        // 등록은 이제 관리자 승인에서만 일어나므로 여기서는 어떤 호출도 있어서는 안 된다.
+        org.mockito.Mockito.verifyNoInteractions(curatedQaService);
+    }
+
+    @Test
+    @DisplayName("§10.11 — 좋아요를 해제해도 등록된 지식은 그대로 남는다 (철회는 제안 페이지의 일)")
+    void updateTurnFeedback_unlike_doesNotRetract() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/feedback")
+                        .param("feedback", "NONE")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verifyNoInteractions(curatedQaService);
+    }
+
+    @Test
+    @DisplayName("DELETE .../turns/{id} — 좋아요 여부와 무관하게 등록된 지식을 회수한다")
+    void deleteTurn_retractsRegardlessOfFeedback() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow(null)));
+        when(memoryService.deleteTurn(any(), any(), anyLong())).thenReturn(true);
+
+        mvc.perform(delete("/ui/threads/t1/turns/42").with(csrf()))
+                .andExpect(status().isNoContent());
+
+        // 예전에는 feedback='LIKE' 일 때만 회수했다. §10.11 이 엔트리의 존재를 피드백 값에서
+        // 떼어냈으므로, LIKE 를 확인하고 들어가면 나중에 마음이 바뀐 저자의 엔트리를 전부 놓친다.
+        verify(curatedQaService).onTurnDeleted(any(), eq("t1"), eq(42L));
+    }
+
+    @Test
     @DisplayName("PATCH .../turns/{id}/feedback — 존재하지 않는 turn → 404")
     void updateTurnFeedback_notFound_returns404() throws Exception {
         when(memoryService.getFeedback(any(), any(), anyLong())).thenReturn(Optional.empty());
@@ -160,56 +206,4 @@ class OperationsControllerHtmxTest {
                 .andExpect(status().isBadRequest());
     }
 
-    // ── §10.10 step ④ — 본인 큐레이션 답변 인라인 편집 ────────────────────────
-
-    @Test
-    @DisplayName("GET .../turns/{id}/curated — 소유 turn + 활성 큐레이션 엔트리 → 200 + answer")
-    void getCuratedAnswer_ownedAndActive_returnsAnswer() throws Exception {
-        when(memoryService.getFeedback(any(), any(), anyLong()))
-                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
-        when(curatedQaService.findActiveByTurn(42L)).thenReturn(Optional.of(
-                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
-                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1)));
-
-        mvc.perform(get("/ui/threads/t1/turns/42/curated"))
-                .andExpect(status().isOk())
-                .andExpect(content().json("{\"answer\":\"답변\"}"));
-    }
-
-    @Test
-    @DisplayName("GET .../turns/{id}/curated — 소유하지 않은 turn → 404")
-    void getCuratedAnswer_notOwned_returns404() throws Exception {
-        when(memoryService.getFeedback(any(), any(), anyLong())).thenReturn(Optional.empty());
-
-        mvc.perform(get("/ui/threads/t1/turns/42/curated"))
-                .andExpect(status().isNotFound());
-    }
-
-    @Test
-    @DisplayName("PATCH .../turns/{id}/curated — 소유 turn + 갱신 성공 → 204 No Content")
-    void updateCuratedAnswer_success_returnsNoContent() throws Exception {
-        when(memoryService.getFeedback(any(), any(), anyLong()))
-                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
-        when(curatedQaService.updateAnswerForTurn(any(), any(), eq(42L), any()))
-                .thenReturn(true);
-
-        mvc.perform(patch("/ui/threads/t1/turns/42/curated")
-                        .param("answer", "수정된 답변")
-                        .with(csrf()))
-                .andExpect(status().isNoContent());
-    }
-
-    @Test
-    @DisplayName("PATCH .../turns/{id}/curated — 소유하지 않은 turn → 404 (curatedQaService 호출 자체가 없음)")
-    void updateCuratedAnswer_notOwned_returns404() throws Exception {
-        when(memoryService.getFeedback(any(), any(), anyLong())).thenReturn(Optional.empty());
-
-        mvc.perform(patch("/ui/threads/t1/turns/42/curated")
-                        .param("answer", "수정된 답변")
-                        .with(csrf()))
-                .andExpect(status().isNotFound());
-
-        org.mockito.Mockito.verify(curatedQaService, org.mockito.Mockito.never())
-                .updateAnswerForTurn(any(), any(), anyLong(), any());
-    }
 }

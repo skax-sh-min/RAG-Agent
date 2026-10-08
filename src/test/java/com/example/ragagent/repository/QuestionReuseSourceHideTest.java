@@ -34,6 +34,8 @@ class QuestionReuseSourceHideTest {
         // findSourcePreviewRows()가 조인하는 최소 스키마 — 청크 본문은 이 테스트의 관심사가 아니다.
         jdbc.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY, user_id TEXT)");
         jdbc.execute("CREATE TABLE chunk_fts (spring_doc_id TEXT, content TEXT, filename TEXT, page TEXT, chapter TEXT)");
+        jdbc.execute("CREATE TABLE chunk_fts_key (spring_doc_id TEXT PRIMARY KEY, fts_rowid INTEGER, doc_id TEXT, "
+                + "version TEXT, filename TEXT, page TEXT, chapter TEXT, content_hash TEXT)");
         jdbc.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT, content TEXT, metadata TEXT)");
         jdbc.update("INSERT INTO conversation_turns (id, user_id) VALUES (7, 'u1')");
         repo = new QuestionReuseRepository(jdbc, jdbc);

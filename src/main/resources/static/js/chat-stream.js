@@ -52,9 +52,15 @@
     function renderSourcePreviewHtml(raw) {
         const text = stripImagePreviewFromSourceMarkdown(raw);
         if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
-        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
-        const parsed = marked.parse(text);
-        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        // 살균기가 없으면 마크다운 렌더를 아예 포기하고 평문으로 떨어진다 — 예전에는
+        // DOMPurify 가 없을 때 marked 의 출력을 그대로 innerHTML 에 넣었는데, 여기 들어오는
+        // 본문은 업로드된 문서와 LLM 출력(신뢰 경계 밖)이고 CSP 가 'unsafe-inline' 이라
+        // 마지막 방어선이 DOMPurify 하나다. marked 미로드는 이미 이렇게 처리하고 있었으니,
+        // 두 라이브러리를 같은 게이트에 두는 것이 원래의 대칭이다.
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            return `<div class="md-content small">${escHtml(text)}</div>`;
+        }
+        const sanitized = DOMPurify.sanitize(marked.parse(text));
         const wrap = document.createElement('div');
         wrap.innerHTML = sanitized;
         wrap.querySelectorAll('img').forEach(img => img.remove());
@@ -465,9 +471,10 @@
     function renderMarkdown(el) {
         if (!el) return;
         const raw = el.textContent || '';
-        if (typeof marked !== 'undefined') {
-            const html = marked.parse(raw);
-            el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        // 살균기가 없으면 렌더하지 않는다(el 의 textContent 가 그대로 남는다) —
+        // renderSourcePreviewHtml() 의 게이트와 같은 규칙.
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
             if (typeof hljs !== 'undefined') {
                 el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
             }
@@ -550,12 +557,12 @@
             if (data.turnId != null) {
                 const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
                 const tId = threadIdInput ? threadIdInput.value : '';
-                // 좋아요가 실제로 무언가를 하는 모드에서만 누를 수 있다. S·C는 눌러도 curated_qa
-                // 행조차 생기지 않는데 피드백 값은 저장돼, 예전에는 버튼만 눌린 채 남아 사용자가
-                // 기여했다고 믿게 됐다. 판정과 사유 문구 모두 서버가 내려준다(done.curatable /
-                // done.likeDisabledReason) — 여기서 모드 문자열을 비교하면 모드가 늘 때마다
-                // 이 파일을 사람이 기억해서 찾아야 한다. 싫어요는 모드와 무관하게 그대로 동작한다.
-                const likeBtn = (data.curatable === false)
+                // 좋아요가 지식 제안을 열어 주는 모드에서만 누를 수 있다(§10.11). 막힌 모드에서
+                // 버튼을 살려 두면 눌린 채 남아 사용자는 기여했다고 믿게 된다. 판정과 사유 문구
+                // 모두 서버가 내려준다(done.proposable / done.likeDisabledReason) — 여기서 모드
+                // 문자열을 비교하면 모드가 늘 때마다 이 파일을 사람이 기억해서 찾아야 한다.
+                // 싫어요는 모드와 무관하게 그대로 동작한다.
+                const likeBtn = (data.proposable === false)
                     ? `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50" disabled aria-label="${escHtml(data.likeDisabledReason || '')}" title="${escHtml(data.likeDisabledReason || '')}">👍</button>`
                     : `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>`;
                 html += `<div class="feedback-controls d-flex gap-1" data-turn-id="${data.turnId}" data-thread-id="${escHtml(tId)}">
@@ -627,6 +634,18 @@
                 html += `<div class="small text-warning mt-1">`
                      +  `<i class="bi bi-scissors me-1"></i>`
                      +  `${escHtml(data.budgetNote)}</div>`;
+            }
+
+            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
+               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
+               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
+               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
+            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
+                && window.isRetrievalMetricsEnabled();
+            if (data.condensedQuestion && condenseVisible) {
+                html += `<div class="small text-muted mt-1">`
+                     +  `<i class="bi bi-search me-1"></i>`
+                     +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
             }
 
             metaEl.innerHTML = html;

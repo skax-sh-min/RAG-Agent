@@ -16,6 +16,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 4.1 [Docker Compose (권장)](#41-docker-compose-권장)
       - 4.1.1 [ChromaDB 백엔드](#411-chromadb-백엔드)
       - 4.1.2 [sqlite-vec 백엔드](#412-sqlite-vec-백엔드)
+      - 4.1.3 [메모리(JVM 힙) 설정](#413-메모리jvm-힙-설정)
    - 4.2 [로컬 실행](#42-로컬-실행)
       - 4.2.1 [ChromaDB 백엔드](#421-chromadb-백엔드)
       - 4.2.2 [sqlite-vec 백엔드](#422-sqlite-vec-백엔드)
@@ -39,11 +40,12 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
-   - 6.7 [큐레이션 Q&A (좋아요 기반 지식 승격, §10.10)](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)
+   - 6.7 [큐레이션 Q&A (좋아요 기반 지식 승격, §10.10)](#67-큐레이션-qa-공유-지식-축-1010--1011)
    - 6.8 [문서 내보내기](#68-문서-내보내기)
-   - 6.9 [청크 추가 게시판 (사용자 제안 → 관리자 임베딩)](#69-청크-추가-게시판-사용자-제안--관리자-임베딩)
+   - 6.9 [지식 제안 게시판 (사용자 제안 → 관리자 임베딩)](#69-지식-제안-게시판-사용자-제안--관리자-임베딩)
    - 6.10 [청크 분할 전략 (크기 기준 병합 / 소제목 최대 분할)](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할)
   - 6.11 [중복 질문 재사용 (추천·검증·무효화)](#611-중복-질문-재사용-추천검증무효화)
+  - 6.12 [청크 오류 신고 처리 (사용자 신고 → 관리자 확인·수정)](#612-청크-오류-신고-처리-사용자-신고--관리자-확인수정)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
@@ -103,6 +105,7 @@ rag_java/
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
 │   └── memory.db               # 대화 이력 + LLM 사용량 + 인덱스 레지스트리 (SQLite WAL)
+│                               #   ※ SQLITE_VEC_DB_PATH 를 켜면 이 내용도 그 벡터 DB 파일로 간다 (§6.3.1)
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
@@ -229,19 +232,20 @@ copy .env.example .env
 | `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 청크/섹션 병합 최소 길이 기준. DOCX·TXT·MD는 이 값 미만인 챕터(헤딩) 섹션을 다음 섹션과 병합하고(단 상위=부모 헤딩 방향은 금지), 슬라이딩 분할 뒤에도 이보다 작은 청크는 직전 청크로 뒤로 병합한다(§청킹 상세는 PIPELINE.md §6.4) |
 | `CHUNK_SPLIT_GRANULAR` | `false` | true/false | 청크 분할 전략 (hot). `false`=크기 기준 병합(기본, 위 `MIN_CHUNK_SIZE` 적용). `true`=소제목 최대 분할 — `MIN_CHUNK_SIZE`를 무시하고 헤딩마다 분할하되 "제목+2문장 이내" 도입부만 하위 챕터와 통합, 표·코드 블록은 경계를 옮겨 보존, PPTX/PDF는 1슬라이드=1청크. **이미 인덱싱된 문서는 ↺ 재인덱싱해야 전환됨** — [§6.10](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
 | `SEARCH_TOP_K` | `10` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑. **검증 호출에 실리는 발췌량(`topK × CHUNK_SIZE`)도 이 값이 정한다** — 그 호출이 이 앱 최대의 단일 요청이므로, n_ctx 가 좁으면 여기부터 낮춘다([§8 n_ctx 산정](#8-문제-해결)) |
-| `SEARCH_SIMILARITY_THRESHOLD` | `0.3` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 기본 `0.3`은 **관련 있는 청크는 걸리지 않으면서 `topK`가 그만큼 요구했다는 이유만으로 딸려 오는 꼬리를 잘라내는** 수준의 바닥값이다. `VectorStoreProvider` 내부에 걸리므로 **벡터 축에만** 적용된다(큐레이션 축도 벡터 검색이라 함께 걸러지지만, BM25 축은 걸러지지 않는다) — 즉 이 값을 올리면 키워드 축의 상대 비중이 자동으로 올라간다. `SEARCH_RRF_KEYWORD_WEIGHT`와 **같은 단계에 함께 올리지 말 것**. 더 올릴 때(0.5~0.75)는 골든셋 recall 확인 후 적용 |
+| `SEARCH_SIMILARITY_THRESHOLD` | `0.3` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 기본 `0.3`은 **관련 있는 청크는 걸리지 않으면서 `topK`가 그만큼 요구했다는 이유만으로 딸려 오는 꼬리를 잘라내는** 수준의 바닥값이다. `VectorStoreProvider` 내부에 걸리므로 **벡터 축에만** 적용된다(큐레이션 축의 벡터 쪽도 함께 걸러지지만, BM25 축은 — 문서든 큐레이션이든 — 걸러지지 않는다) — 즉 이 값을 올리면 키워드 축의 상대 비중이 자동으로 올라간다. `SEARCH_RRF_KEYWORD_WEIGHT`와 **같은 단계에 함께 올리지 말 것**. 더 올릴 때(0.5~0.75)는 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
+
+> **검색이 0건이면 그 턴은 LLM 을 아예 부르지 않습니다.** 답변·검증 두 호출을 건너뛰고 `## 요약 / 문서에 관련 정보가 확인되지 않습니다.` 정형 응답을 그대로 내보냅니다(문구는 `chat.answer.no-documents` 메시지 키 — 번들에서 바꿀 수 있고 `## 요약` 헤더는 한/영 공통으로 두어야 합니다). 예전에는 문서 없는 프롬프트로 답변을 받아 검증이 당연히 미통과를 내고 재검색으로 되돌아가는 왕복을 `1 + MAX_RETRY_COUNT` 번 돌았습니다 — 결과가 정해져 있는 호출에 한 턴의 예산을 전부 태우고 끝에 미검증 배지가 붙었습니다. 그 턴은 **`RS` + 미검증**으로 저장되며(대화 목록·`/admin` 에서 그 표기로 보입니다), 검색 튜닝(`SEARCH_TOP_K`·`SEARCH_SIMILARITY_THRESHOLD`·태그 스코프)이 지나치게 좁은지 판단하는 신호로 쓰기 좋습니다. 임계값을 올린 뒤 이 표기가 늘었다면 되돌릴 때입니다.
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이며, 기본값은 그 절반이다(근거는 [§7.8](#78-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)). `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
-| `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축에 포함할지 여부. `false`면 해당 검색을 아예 실행하지 않음(비용 절감) |
-| `SEARCH_CURATED_QA_WEIGHT` | `1.0` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치. 키워드축과 동일하게 그룹 정규화 없이 그대로 적용됨(벡터축 그룹은 항상 `1/축개수`). **기본 `1.0` = 정규화된 벡터 축 그룹과 동등** — 예전 기본값 `1.2`에서 질문과 크게 관련 없는 큐레이션 항목이 상위로 올라오는 것이 관측됐다. 이 축은 후보가 적어 웬만하면 자기 축에서 상위 랭크를 받는데, 거기에 가산점까지 주면 "이 축에 무엇이든 있으면 끌어올린다"에 가까워진다 |
-| `SEARCH_SUBMISSION_WEIGHT` | `1.0` | 0.5 ~ 5.0 | **지식 제안**(승인된 사용자 제출) 축 RRF 가중치 (hot). 좋아요 큐레이션과 같은 벡터 네임스페이스·같은 검색을 쓰되 `curated_origin` 메타데이터로 **서로 다른 RRF 축**으로 갈린다 — 지금은 둘 다 `1.0`에서 시작하지만 한쪽만 따로 올릴 수 있다는 점에서 축 분리의 의미는 그대로다([§6.7](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)) |
+| `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 큐레이션 Q&A를 RRF 축에 포함할지 여부. `false`면 해당 검색(벡터·BM25 **둘 다**)을 아예 실행하지 않음(비용 절감) |
+| `SEARCH_CURATED_QA_WEIGHT` | `1.0` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치 (§10.11 에서 좋아요 축과 제안 축이 이 값 하나로 합쳐졌다 — 모든 항목이 같은 심사를 거치므로 신뢰 근거가 갈리지 않는다). 키워드축과 동일하게 그룹 정규화 없이 그대로 적용됨(벡터축 그룹은 항상 `1/축개수`). **기본 `1.0` = 정규화된 벡터 축 그룹과 동등** — 예전 기본값 `1.2`에서 질문과 크게 관련 없는 큐레이션 항목이 상위로 올라오는 것이 관측됐다. 이 축은 후보가 적어 웬만하면 자기 축에서 상위 랭크를 받는데, 거기에 가산점까지 주면 "이 축에 무엇이든 있으면 끌어올린다"에 가까워진다. **이 축은 이제 벡터와 BM25 를 함께 본다**(§6.7) — 가중치는 여전히 하나지만 후보 풀에 등장할 확률 자체가 올라갔으므로, 큐레이션이 과하게 올라온다고 느껴지면 먼저 볼 값이 이것이다 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
 대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.5`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `10000 × 0.5 = 5000`자. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
@@ -250,7 +254,7 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한 |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한. **프롬프트에 원문으로 실리는 턴은 그 절반**(`HistoryPolicy.promptTurnCap()`, 기본 5턴) — 나머지는 요약이 담당합니다 |
 | `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 10 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
@@ -402,7 +406,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
+| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
 | `SPRING_SECURITY_LOGGING_LEVEL` | `WARN` | Spring Security 로그 레벨 (`logging.level.org.springframework.security`). `DEBUG`로 변경하면 인증 필터·세션 생성·권한 결정 과정이 상세하게 출력됨. 인증 이슈 디버깅 시에만 임시 사용 권장 |
 
 #### 설정 예시
@@ -518,7 +522,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). **`LLM_MAX_TOKENS`도 §6.26 A6 이후 핫 수정 대상입니다**(범위 1,000~32,000) — 단순한 출력 상한이 아니라 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약·컨텍스트 입력 예산이 전부 여기서 파생되므로, 컨텍스트 압박을 조정할 때 가장 크게 듣는 손잡이입니다. LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). **`LLM_MAX_TOKENS`도 §6.26 A6 이후 핫 수정 대상입니다**(범위 1,000~32,000) — 단순한 출력 상한이 아니라 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약·컨텍스트 입력 예산이 전부 여기서 파생되므로, 컨텍스트 압박을 조정할 때 가장 크게 듣는 손잡이입니다. LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~0.1**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -578,12 +582,19 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|----------|--------|------|
 | `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
 | `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기 요청**만 — `POST /ui/documents/upload`, `POST /api/v1/documents`. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | **새 파일을 받는 쓰기 요청** — `POST /ui/documents/upload`, `POST /api/v1/documents`, 그리고 지식 제안 본문 이미지 `POST /curated/submissions/images`. 마지막 것이 여기 있는 이유는 인증 없이 부를 수 있는 유일한 바이너리 쓰기 경로라서입니다(예전에는 `default`(분당 120)라 5MB × 120 = 분당 600MB를 게스트가 밀어 넣을 수 있었고, 저장 상한은 기본이 무제한입니다). 분당 10은 제안 하나에 담을 수 있는 이미지 수와 같은 값이라 정상적인 작성 한 번은 그대로 지나갑니다. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
 | `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
 | `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
 | `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
 
 초과 시 429 응답 + `Retry-After: {초}` 헤더 + `{"errorCode":"RAG-RATE-001","message":"..."}` body.
+
+> **버킷을 나누는 기준(누가 한 요청인가)**: 로그인 사용자는 계정 id, 그 밖에는 클라이언트 IP입니다
+> (IP 판정은 §9.4.3의 `TRUST_FORWARDED_FOR`를 따릅니다). **`AUTH_GUEST_IDENTITY=shared`의 공유 게스트는
+> 사용자로 세지 않고 IP로 떨어뜨립니다** — 그 전략에서는 모든 방문자가 같은 게스트 principal을 받고
+> 그것이 "인증됨"으로 잡히기 때문에, 예전에는 배포 전체가 버킷 하나를 나눠 썼고 방문자 한 명이 분당
+> 한도를 소진하면 나머지 전원이 429를 받았습니다(남용을 막는 장치가 그 자체로 서비스 거부의
+> 지렛대였습니다). `ip`/`cookie`/`hybrid`는 이미 방문자별 id를 주므로 그대로 사용자 키를 씁니다.
 
 #### 감사 로그 (`app.audit.*`)
 
@@ -594,7 +605,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `document.upload` / `.delete` / `.sync` / `.export` / `.tags_update` / `.display_name_update` | 문서 관리 |
 | `thread.delete` / `thread.routing-mode` | 사용자가 자기 대화를 삭제·라우팅 모드 변경 (삭제 시 회수된 큐레이션 수 포함) |
 | `turn.delete` / `turn.feedback` / `turn.image.exclude` / `turn.source.exclude` | 턴 단위 조작 |
-| `curated.edit` / `curated.submission.create` / `.approve` / `.reject` | 큐레이션·청크 추가 제안 |
+| `curated.edit` / `curated.submission.create` / `.approve` / `.reject` | 큐레이션·지식 제안 |
 | `settings.update` / `settings.reset` / `settings.provider.toggle` | `/settings` 변경 |
 | `llm-usage.delete-orphan` | orphan 사용 기록 삭제 |
 | **`admin.thread.delete`** | 관리자가 **다른 사용자의** 대화를 삭제 (소유자·턴 수·회수된 큐레이션 수, §7.9) |
@@ -609,6 +620,13 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 > 크기·보관 3개 값은 `logback-spring.xml`이 `springProperty`로 읽어 `AUDIT_FILE` appender의 롤링 기준으로도
 > 쓰이므로, 환경변수로 바꾸면 로거 쪽에도 그대로 반영됩니다.
+
+> **`ip` 필드는 `TRUST_FORWARDED_FOR`를 따릅니다.** 그 값이 `false`(프록시 없는 배포의 정상 설정)면
+> `X-Forwarded-For`를 무시하고 실제 remote address를 기록합니다. 예전에는 감사 로그만 이 플래그를
+> 보지 않고 헤더를 무조건 신뢰해서, 같은 요청에서 속도 제한·방문자 식별은 실제 주소를 쓰는데
+> **"누가 했는가"를 남기는 필드만 공격자가 적어 보낸 문자열**이었습니다. 프록시 뒤라면 §9.4.3대로
+> `true`로 켜야 실제 클라이언트 IP가 남습니다. 요청 스레드 밖(가상 스레드에서 도는 비동기 작업)에서
+> 기록되는 이벤트에는 `ip` 키가 아예 들어가지 않습니다.
 
 #### 인증 (`app.auth.*`)
 
@@ -656,6 +674,21 @@ docker compose down
 > `docker-compose.yml`에서 `CHROMA_HOST=chroma`, `CHROMA_PORT=8000`이 app 컨테이너에 자동 주입됩니다.
 > Chroma healthcheck 통과 후 app 컨테이너가 시작됩니다.
 
+> ⚠️ **컨테이너는 UID 10001(비-root)로 실행됩니다.** 이 프로세스는 신뢰 경계 밖의 문서를 파싱하고
+> (PDFBox·POI), OCR을 JNA로 같은 프로세스에 붙이며, sqlite-vec를 쓰면 네이티브 확장까지 로드합니다 —
+> 그중 하나에서 코드 실행이 일어났을 때 컨테이너 안에서 root인지 아닌지가 그다음을 가릅니다.
+> **예전 이미지(root 실행)로 만든 `./data`가 이미 있는 Linux 배포는 한 번만** 아래를 실행하세요.
+> 하지 않으면 엔트리포인트가 쓰기 권한을 먼저 확인해 이 명령을 그대로 안내하고 종료합니다
+> (SQLite 스택트레이스로 나오는 것보다 낫습니다). Docker Desktop(Windows/macOS)의 bind mount는
+> 소유권을 강제하지 않으므로 해당 없습니다.
+>
+> ```bash
+> sudo chown -R 10001:10001 ./data
+> ```
+>
+> UID를 10001로 못 박은 이유는 `./data`가 bind mount라 소유권이 호스트를 따르기 때문입니다 —
+> 이미지가 UID를 매번 다르게 잡으면 업그레이드마다 쓰기 권한이 깨집니다.
+
 #### 4.1.2 sqlite-vec 백엔드
 
 ```bash
@@ -678,6 +711,31 @@ docker compose down
 
 > sqlite-vec 모드에서는 `SQLITE_VEC_EXTENSION_PATH`에 **컨테이너 내부에서 접근 가능한 경로**를 지정해야 합니다.
 > Docker에서는 플랫폼에 맞는 vec0 바이너리를 볼륨으로 마운트하고 경로를 지정하세요.
+
+---
+
+#### 4.1.3 메모리(JVM 힙) 설정
+
+컨테이너 이미지는 `JAVA_OPTS="-XX:MaxRAMPercentage=70"`으로 뜹니다. JVM 기본값은 25%인데, 이 앱은 업로드 상한이 200MB이고 PDFBox/POI가 문서를 통째로 메모리에 올리며 마크다운 교정이 변환된 전문을 문자열로 다루기 때문에 그 기본값으로는 대형 문서 인덱싱에서 `OutOfMemoryError`가 납니다.
+
+**70%가 무엇의 70%인지**는 컨테이너에 메모리 한도가 걸렸는지에 달려 있습니다.
+
+| 상황 | 힙 상한 |
+|------|---------|
+| `mem_limit` 등으로 한도를 건 경우 | **그 한도**의 70% (예: `mem_limit: 4g` → 약 2.8GB) |
+| 한도가 없는 경우(기본 `docker-compose.yml`) | **호스트 전체 메모리**의 70% |
+
+호스트에서 LLM 서버(LM Studio·llama-server)를 함께 돌리는 배포라면 한도를 걸어 두는 편이 예측 가능합니다 — `docker-compose.yml`의 `app` 서비스 주석 참조.
+
+나머지 30%는 여유분이 아니라 **실제로 쓰이는 몫**입니다: OCR(tess4j)은 별도 프로세스가 아니라 JNA로 같은 프로세스에 붙는 네이티브 메모리이고, sqlite-vec 확장도 마찬가지이며, 여기에 reactor-netty의 direct buffer와 가상 스레드 스택이 더해집니다. LibreOffice를 추가한 이미지라면 `soffice`가 자식 프로세스로 같은 한도를 나눠 씁니다. 이 몫을 힙으로 끌어다 쓰면 **애플리케이션 로그에 아무것도 남기지 않고 컨테이너가 OOM kill됩니다.**
+
+**직접 지정하려면** `.env`에 `JAVA_OPTS`를 두세요(컨테이너 실행 시 준 값이 이미지 기본값을 이깁니다).
+
+```env
+JAVA_OPTS=-Xms512m -Xmx3g
+```
+
+> Docker를 쓰지 않는 실행 경로(`scripts/*_run_by_jar_*`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
 
 ---
 
@@ -1177,7 +1235,7 @@ export VECTORSTORE_TYPE=sqlite-vec
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
 
-- **Vision 설명**: 기본 `app.image-description.mode=strip`(설명 생략, 모델 불요). 설명을 켜려면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록.
+- **Vision 설명**: `IMAGE_DESCRIPTION_ENABLED=false`면 Vision 호출이 아예 없습니다(모델 불요). 켜 두더라도 실제 설명은 업로드 시 "이미지 설명 추가"를 체크한 문서에서만 생성되므로, 설명이 필요하면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록하세요. (`app.image-description.mode`는 **읽지 않는 값**입니다 — §3.2 참고.)
 - **OCR**: 스캔 PDF 처리에만 사용. 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
 
 #### 6) 기동 확인 체크리스트
@@ -1227,9 +1285,8 @@ Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts +
 #### 3) 수동 초기화 (기존 데이터 삭제)
 
 공통 삭제 대상:
-- `data/memory.db`
-- `data/memory.db-wal`
-- `data/memory.db-shm`
+- `data/memory.db` (+`-wal`/`-shm`)
+- **`SQLITE_VEC_DB_PATH` 를 설정했다면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.3.1](#631-sqlite-파일별-테이블-구성))
 - `data/documents/`
 - `data/converted/`
 - `data/images/`
@@ -1241,6 +1298,7 @@ chroma 백엔드 추가 삭제 대상:
 ```bash
 # macOS / Linux
 rm -f data/memory.db data/memory.db-wal data/memory.db-shm
+rm -f data/vector.db data/vector.db-wal data/vector.db-shm   # SQLITE_VEC_DB_PATH 를 켠 경우
 rm -rf data/documents data/converted data/images data/chroma
 mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```
@@ -1248,6 +1306,8 @@ mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```powershell
 # Windows PowerShell
 Remove-Item data/memory.db,data/memory.db-wal,data/memory.db-shm -Force -ErrorAction SilentlyContinue
+# SQLITE_VEC_DB_PATH 를 켠 경우
+Remove-Item data/vector.db,data/vector.db-wal,data/vector.db-shm -Force -ErrorAction SilentlyContinue
 Remove-Item data/documents,data/converted,data/images,data/chroma -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force data/documents,data/converted,data/images,data/chroma,data/audit | Out-Null
 ```
@@ -1357,7 +1417,7 @@ app.llm.providers[1].stream=false
 
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
-| `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
+| `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장·질의 독립화만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
 | `LIGHT_TEXT` | MD 서식 교정·TXT 구조화 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
 | `LIGHT_BOTH` | `LIGHT_TEXT` 태스크 + Vision | 범용 로컬 LLM |
 | `TEXT` | 답변 생성·Rerank·분류·meta 직답 **+ `LIGHT_TEXT`·`MICRO_TEXT` 잡무 전부** | 텍스트 전용 대형 모델 |
@@ -1381,6 +1441,9 @@ app.llm.providers[1].stream=false
 |------|----------|------|
 | ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
+| CuratedQuestionSuggester | `MICRO_TEXT` | 큐레이션 Q&A 질문 구체화 제안 — 관리자가 `/admin` 편집에서 버튼을 눌러야만 돕니다. 배경 호출이라 동시성 게이트를 타지 않고, 사용량은 `/llm-usage` 에 `question:` 범주로 잡힙니다 |
+| CuratedSubmissionService.enrich | `MICRO_TEXT` | 지식 제안의 **요약·키워드 자동 생성**(§6.9) — 작성자가 폼의 "빈 칸 자동 생성" 버튼을 눌러야만 돕니다. 인덱싱과 **같은** `KeywordExtractor` 를 쓰므로 사용량도 `context:` 범주로 함께 잡히고, TF 폴백까지 동일합니다. **비어 있는 칸이 없으면 호출 자체가 없습니다**(서버 판정). 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷(분당 120)과 `LlmRouter` 동시성 게이트를 그대로 탑니다 |
+| QuestionCondenser | `MICRO_TEXT` | 짧은 후속 질문의 독립화 (§10.12) — 확장이 생략되는 길이 구간에서만 돌아 한 턴의 질의 전처리 호출은 여전히 최대 1회 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
 | DirectAnswerService | `TEXT` | meta 질문 직접 응답 (사용자 노출 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
@@ -1802,30 +1865,38 @@ app.llm.providers[8].concurrency=4
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴 이내에서 `LLM_MAX_TOKENS × 0.5`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴을 읽어오되, **프롬프트에 원문으로 들어가는 것은 그 절반**(기본 5턴)입니다 — 나머지는 요약이 담당합니다. 글자 상한은 별도로 `LLM_MAX_TOKENS × 0.5`(Direct 턴은 §10.13 의 예산 계산)입니다
+- **이전 턴이 Direct(RAG 끔)였으면 그 답변은 요약이 아니라 본문 그대로** 다음 턴의 이력에 들어갑니다. 그 턴에는 근거로 삼을 검색 문서가 없었으므로 답변의 산문이 그 대화의 유일한 기록이기 때문입니다. 대신 검증 프롬프트에는 이력이 들어가지 않으므로, 모델이 그 내용에 기대어 답하면 **미검증 배지**가 뜰 수 있습니다(문서에 근거가 없다는 판정이며, 재시도는 답변만 다시 씁니다)
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 
 **요약 캐시 (`ConversationSummarizerService`)**: 스레드 대화 이력을 미리 요약해 캐싱해두고, 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
 
-- **대부분의 경우 LLM을 쓰지 않습니다.** RAG 답변은 `prompt.answer.system`이 강제하는 5-섹션 형식상 이미 자기 요약(`## 요약`)을 첫 섹션으로 갖고 있어, 그것을 그대로 뽑아 쓰면 됩니다. 모든 턴이 그렇다면 **LLM 호출 0회**로 요약이 완성됩니다. LLM이 필요한 것은 그 섹션이 없는 답변, 즉 **Direct 모드·meta 답변뿐**이고, 그때도 입력은 이미 다른 턴들이 요약으로 치환된 상태라 모델은 사실상 그 답변만 압축합니다.
-- **소형 모델(`LOCAL_FAST_LLM_URL`)이 없으면 LLM 호출만 생략하고, 요약 조립은 그대로 합니다.** 요약 섹션이 없는 답변은 300자로 잘라 담습니다(`UNSUMMARIZED_ANSWER_CAP`, 상수 — 프로퍼티 아님). 완성된 요약은 `SUMMARY_MAX_SUMMARY_CHARS`로 **앞에서부터** 잘리므로, 이 절단이 없으면 앞쪽의 긴 Direct 답변 하나가 예산을 독식해 정작 최신 턴이 밀려납니다.
+- **대부분의 경우 LLM을 쓰지 않습니다.** RAG 답변은 `prompt.answer.system`이 강제하는 5-섹션 형식상 이미 자기 요약(`## 요약`)을 첫 섹션으로 갖고 있어, 그것을 그대로 뽑아 쓰면 됩니다. 모든 턴이 그렇다면 **LLM 호출 0회**로 요약이 완성됩니다. LLM이 필요한 것은 그 섹션이 없는 답변뿐이고 — §10.13 이후 DN 답변도 요약을 낼 수 있어 그 빈도가 줄었지만, 요구가 **조건부**라 인사말·짧은 답변·요약이 군더더기인 답변에서는 여전히 없습니다 — 그때도 입력은 이미 다른 턴들이 요약으로 치환된 상태라 모델은 사실상 그 답변만 압축합니다.
+- **소형 모델(`LOCAL_FAST_LLM_URL`)이 없으면 LLM 호출만 생략하고, 요약 조립은 그대로 합니다.** 요약 섹션이 없는 답변은 300자로 잘라 담습니다(`UNSUMMARIZED_ANSWER_CAP`, 상수 — 프로퍼티 아님). §10.13 이후 DN 답변도 요약을 낼 수 있게 됐지만 그 요구가 **조건부**라(요약이 도움이 될 때만) 이 절단은 계속 쓰입니다. 완성된 요약은 `SUMMARY_MAX_SUMMARY_CHARS`로 **앞에서부터** 잘리므로, 이 절단이 없으면 앞쪽의 긴 Direct 답변 하나가 예산을 독식해 정작 최신 턴이 밀려납니다.
 - 원문 history 폴백은 이제 **요약할 턴이 아예 없을 때만** 일어납니다(빈 스레드, 전부 DISLIKE 등).
 
 - **트리거**: 주 트리거는 답변이 완료되고 턴이 저장된 직후(`precomputeAfterTurn()`)입니다 — 사용자가 다음 질문을 입력하기 전부터 백그라운드로 미리 갱신을 시작하므로, 응답을 읽는 동안이 곧 요약 준비 시간이 됩니다. 사용자가 질문창에 첫 글자를 입력할 때 발화되는 기존 트리거(`precompute()`)는 아직 한 번도 요약이 만들어지지 않은 스레드(예: 재시작 후 처음 열어본 오래된 대화)를 위한 콜드스타트 안전망으로 남아 있습니다.
 - **요약과 `[Recent]`는 겹치지 않게 나뉩니다**: 요약 대상은 **최근 `SUMMARY_RECENT_RAW_TURNS`개를 뺀 이전 턴들**이고, 최근 창은 `[Recent]`가 담당합니다. 예전에는 요약이 전체 턴을 대상으로 만들어져 최근 턴이 양쪽에 중복으로 들어갔습니다(아래 렌더링 변경 이후로는 RAG 턴의 경우 **문자 그대로 동일한** 중복이라 3턴 대화 기준 문맥의 약 40%가 낭비였습니다).
   - 따라서 **요약은 3턴째부터 생깁니다**(기본값 기준). 1~2턴 스레드는 `[Conversation Summary]` 섹션 없이 `[Recent]`만으로 문맥이 구성되고 **LLM 요약 호출도 0회**입니다 — 압축할 이전 대화가 애초에 없기 때문입니다.
   - 이때 요약 캐시에는 **빈 문자열**이 저장됩니다. "요약 실패"(캐시 없음 → 원본 폴백)와 "요약할 이전 턴이 없음"을 구분하기 위한 것으로, 후자를 캐시 없음으로 두면 `getHistory()` 폴백으로 떨어져 방금 줄인 답변 전문이 그대로 되돌아옵니다.
-- **`[Recent]` 구간의 답변 렌더링** (`SUMMARY_RECENT_RAW_TURNS`개, 기본 2): 답변 종류에 따라 다르게 담습니다.
+- **`[Recent]` 구간의 답변 렌더링** (`SUMMARY_RECENT_RAW_TURNS`개, 기본 2): **지금 무엇을 묻는지**와 **이전 턴이 어떤 모드였는지**, 두 축이 함께 정합니다(§10.13). 아래는 **RAG로 물을 때**이고, Direct로 물을 때는 그 아래 항목을 보세요.
   - **RAG 답변**(`## 요약` 섹션 있음) → **요약만**. 원문은 문서 청크를 다시 풀어 쓴 것인데 그 청크는 **다음 턴이 어차피 재검색**하므로(매 턴 검색), 전문을 되먹이면 `[검색된 문서]`를 수천 자짜리로 중복시키는 셈입니다. 게다가 그 중복본은 원본이 아니라 모델이 만든 미검증 산문이라, 이전 턴의 오류가 문맥에 고착될 위험도 있습니다. 2,700자짜리 답변이 ~250자로 줄어듭니다.
-  - **Direct/meta 답변**(그 섹션 없음) → **원문을 남기되 1,200자에서 절단**. 근거 문서가 없어 그 답변 자체가 유일한 기록이므로 지울 수 없고, 길이만 제한합니다. 상한은 `RECENT_DIRECT_ANSWER_CAP` 상수 — **프로퍼티가 아닙니다**.
-  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에는 `direct_mode` 컬럼이 있으나, 요약 컨텍스트 렌더링 로직은 답변 본문 형식을 직접 기준으로 삼습니다). `prompt.answer.system`은 그 섹션을 강제하고 `prompt.direct.system`은 요구하지 않으므로 사실상 정확하며, 형식을 어긴 RAG 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
+  - **요약 섹션이 없는 답변** → **원문을 남기되 1,200자에서 절단**. 근거 문서가 없어 그 답변 자체가 유일한 기록이므로 지울 수 없고, 길이만 제한합니다. 상한은 `HistoryPolicy.RECENT_ANSWER_CAP` 상수 — **프로퍼티가 아닙니다**. §10.13 이 DN 답변에도 `## 요약`을 요구하면서 이 캡에 걸리는 빈도가 줄었지만 — 요구가 **조건부**라 요약이 없는 긴 DN 답변은 여전히 나옵니다 — 그 경우의 안전판으로 남아 있습니다.
+  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에는 `direct_mode` 컬럼이 있으나, 렌더링은 답변 본문 형식을 직접 기준으로 삼습니다). `prompt.answer.system`은 그 섹션을 강제하고, `prompt.direct.system.n`은 §10.13 이후 **조건부**로 요구합니다("핵심을 먼저 요약하는 것이 도움이 될 때" — 분량이 아니라 쓸모가 기준이라, 코드 한 덩어리나 단계별 절차처럼 그 자체가 개요인 답변에는 붙지 않습니다) — 형식을 어긴 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
+
+- **Direct로 물을 때는 이력을 훨씬 많이 받습니다** (§10.13). Direct 답변의 프롬프트에는 `[검색된 문서]` 블록이 **통째로 없는데**(기본 설정에서 그 자리는 `SEARCH_TOP_K × CHUNK_SIZE` ≈ 15,000자) 이력 상한은 모드와 무관하게 `LLM_MAX_TOKENS/2`로 고정이었습니다 — 창의 큰 부분이 놀고, 정작 이력만으로 답해야 하는 모드가 이력을 가장 적게 받았습니다. 규칙은 "Direct라서"가 아니라 **"문서 자리가 비어서"**입니다: `이력 상한 = 입력 예산 − 문서가 차지할 자리`.
+  - **넓히기만 하는 것이 아닙니다.** 창이 좁은 배포에서는 고정 5,000자보다 작게 나올 수 있고, 그것이 옳습니다 — Direct 경로에는 예산 가드가 없어서 그 5,000자가 이미 창을 넘기고 있었습니다. 줄여야 했다면 답변 아래에 `컨텍스트 한도로 이전 대화 일부를 제외했습니다.`가 함께 뜹니다.
+  - **창을 모르는 프로바이더면 아무것도 하지 않습니다**(고정값 그대로). 추측한 숫자로 대화 맥락을 늘리거나 버리지 않습니다 — `/settings`의 컨텍스트 창 재탐지(§6.26)를 돌리면 이 계산이 켜집니다.
+  - 이때 이전 턴의 렌더도 달라집니다: **S 턴은 `## 요약`**(그게 답변 전부), **N·C 턴은 `## 요약`·`## 참고`를 뺀 본문**, **DN 턴은 전문**(뺄 섹션이 없고 캡도 걸리지 않음). C의 `## 검증되지 않은 부분`은 남습니다 — 다음 턴이 무엇이 미확인인지 아는 것은 쓸모가 있습니다.
+  - **RAG로 물을 때는 지금 동작 그대로입니다.** 이력은 검색보다 **먼저** 로딩되므로 그 시점에 문서가 몇 개 올지 모르고, Direct만 검색이 아예 돌지 않아 0이 확정입니다.
+  - 같은 이전 턴이 **다음에 무엇을 묻느냐에 따라 다르게 렌더됩니다**(`RN → Direct`면 본문 통째로, `RN → RAG`면 요약 두세 문장). 이번 턴에 무엇이 함께 들어가야 하는지가 다르기 때문입니다.
   - 이전에는 양쪽 다 **무제한 원문**이었습니다. RAG 답변이 2~3천 자인데 이력 예산이 3,000자(`LLM_MAX_TOKENS/2`)라, 한 건이 예산을 독식해 `SUMMARY_RECENT_RAW_TURNS=2`가 사실상 1로 동작했습니다.
 - **싫어요 제외 범위**: 싫어요가 눌린 턴은 이 경로의 **요약과 `[Recent]` 원문 구간 양쪽**에서 빠집니다(`dedupeTurns()`). `getRecentTurns()`의 SQL에는 feedback 조건이 없으므로 — 다른 호출자는 원본 행이 필요합니다 — 이 클래스에서 그 메서드를 쓰는 곳은 반드시 `dedupeTurns()`를 거쳐야 합니다. 예전에는 `buildContext()`가 이를 건너뛰어, 싫어요 답변이 요약에서만 빠지고 `[Recent]`에는 **전문 그대로** 다시 들어갔습니다(원본 폴백 경로와도 어긋났고, RAG 답변은 2~3천 자라 그 한 건이 문자 예산을 독식해 정상 턴을 밀어냈습니다).
 - **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
-- **좋아요 처리**: DISLIKE와 달리 LIKE는 대화 컨텍스트가 아니라 **검색 인덱스**에 영향을 준다 — 좋아요한 답변은 별도로 임베딩되어 향후 검색의 근거로 재사용된다. 상세는 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
+- **좋아요 처리**: LIKE 는 그 자체로는 아무것도 등록하지 않는다(§10.11) — 지식 제안 폼을 열어 줄 뿐이고, 검색 인덱스에 들어가는 것은 관리자가 승인한 뒤다. 저장된 LIKE 값을 읽는 곳은 둘: 재사용 필터(Direct 턴은 좋아요가 있어야 재사용된다)와 채팅 버튼 상태. 상세는 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
 - 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
-- 요약 경로와 폴백 경로는 **동일한 문자 예산**을 지키도록 통일되어 있어(위 참조), 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트 양이 달라지지 않음
+- 요약 경로와 폴백 경로는 **동일한 문자 예산과 동일한 렌더 규칙**을 씁니다(§6.11 + §10.13, 규칙의 단일 출처는 `HistoryPolicy`) — 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트의 **양도 내용도** 달라지지 않습니다. 예전에는 폴백 경로가 답변을 전문 그대로 넣어, 캐시 TTL이 지나는 순간 같은 스레드의 맥락이 갑자기 달라졌습니다
 - **요약 대상 자체도 무제한이 아닙니다**: 요약을 만들 때 읽어오는 원문(`MemoryService.getRecentTurns()`)은 `getHistory()`와 동일하게 `MEMORY_FETCH_LIMIT_TURNS`(기본 10턴)로 상한이 걸려 있습니다. 대화가 길어져도 매번 LLM에 보내는 요약용 입력 크기가 무한정 커지지 않도록 하기 위함이며, 이 턴 수보다 오래된 내용은 이 요약에서도 함께 유실됩니다(스레드를 다시 열었을 때 전체 메시지 버블을 복원하는 `MemoryService.getTurns()`는 이 제한과 무관하게 항상 전체를 반환합니다)
 - 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
@@ -1870,19 +1941,23 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
+| 인덱스 레지스트리 | `doc_registry` 테이블 — `SQLITE_VEC_DB_PATH`를 **비웠으면** `DATA_DIR/memory.db`, **설정했으면 그 벡터 DB 파일**([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
-| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
+| 대화 이력 + LLM 사용량 | 인덱스 레지스트리와 **같은 파일** (위 행 참조 — `memory.db` 또는 벡터 DB 파일) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
+>
+> ⚠️ **DB 파일만 골라 백업하려면 [§6.3.1](#631-sqlite-파일별-테이블-구성)을 먼저 읽으세요.** `SQLITE_VEC_DB_PATH`를 설정한 배포에서는 대화·계정·설정까지 **전부 그 벡터 DB 파일에 있고 `memory.db`는 빈 껍데기**입니다 — 이름만 보고 `memory.db`를 복사하면 0행짜리 파일을 백업하게 됩니다.
 
 #### 6.3.1 SQLite 파일별 테이블 구성
 
-DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 벡터·검색 색인 테이블만 그 파일로 분리됩니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 `vector.db`에는 FTS 색인만 남습니다.
+DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 두 번째 파일이 생깁니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 그 파일에는 FTS 색인만 남습니다.
 
-**`memory.db`** — 대화·운영 데이터 전부 (`spring.datasource.url`, `@Primary` DataSource)
+> ⚠️ **분리를 켜면 벡터뿐 아니라 운영 테이블까지 그 파일로 갑니다** — 이름과 달리 `memory.db`에는 아무것도 쌓이지 않습니다. 이유는 아래 «어느 파일에 들어가는가»에 있습니다. 스위치를 켠 배포에서 **실데이터가 있는 파일은 벡터 DB 하나뿐**이라고 생각하는 편이 맞습니다.
+
+**운영 테이블** — 대화·계정·설정·레지스트리. 분리 **off**면 `memory.db`, **on**이면 벡터 DB 파일에 만들어집니다.
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -1894,13 +1969,14 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 | `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
 | `llm_usage` | 프로바이더별 일자별 토큰 사용량 | Flyway V1 |
 | `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | `CuratedQaRepository` |
-| `curated_submission` | 청크 추가 제안 게시판 | `CuratedSubmissionRepository` |
+| `curated_submission` | 지식 제안 게시판 | `CuratedSubmissionRepository` |
+| `chunk_report` | 청크 오류 신고 대기열(사유·코멘트 + 신고 시점 원문·질문 스냅샷, §6.12) | `ChunkReportRepository` |
 | `settings_override` | `/settings` 핫 수정 오버라이드 | `SettingsOverrideRepository` |
 | `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 / `SqliteUserDetailsService` |
 | `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
 | `flyway_schema_history` | 마이그레이션 이력 | Flyway |
 
-**`vector.db`** — 벡터·검색 색인 (분리 설정을 켰을 때만 별도 파일; 끄면 아래 테이블이 `memory.db` 안에 생깁니다)
+**벡터·검색 색인 테이블** — 분리 **on**이면 벡터 DB 파일, **off**면 위 운영 테이블과 같은 `memory.db`
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -1910,11 +1986,15 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 
 > 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
 >
-> **어느 파일에 들어가는지는 코드가 주입받는 `JdbcTemplate`으로 결정됩니다** — `@Qualifier("vectorJdbcTemplate")`를 받는 컴포넌트(`SqliteVecSchemaInitializer`·`SqliteVecVerifier`·`SqliteVecVectorStoreProvider`·`KeywordSearchRepository`·`AdminService`)만 `vector.db`를 씁니다. 그 외는 전부 `memory.db`입니다. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만 **쓰기(`turn_source_ref`)는 `memory.db`**, 벡터 템플릿은 청크 원문을 읽을 때만 씁니다.
+> **어느 파일에 들어가는가 — 코드가 주입받는 `JdbcTemplate`이 정합니다.** 그런데 **분리를 켜면 그 템플릿이 하나뿐**입니다: `DataSourceConfig`가 `vectorJdbcTemplate` 빈을 직접 정의하는 순간 Spring Boot의 `JdbcTemplateAutoConfiguration`(`@ConditionalOnMissingBean(JdbcOperations.class)`)이 통째로 물러나, 컨텍스트에 `memory.db`용 `JdbcTemplate`이 아예 만들어지지 않습니다. 그래서 `@Qualifier` 없이 `JdbcTemplate`을 받는 저장소(`SqliteMemoryRepository`·`SqliteUserDetailsService`·`ThreadMetaRepository`·`CuratedQaRepository`·`CuratedSubmissionRepository`·`ChunkReportRepository`·`LlmUsageRepository`·`SettingsOverrideRepository`·`AppSecretRepository`·`DocRegistry`…)도 **전부 벡터 DB 파일에 씁니다**. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만, 분리가 켜져 있으면 `turn_source_ref` 쓰기도 결국 같은 파일로 갑니다. 분리가 **꺼져 있으면** 그 한 빈이 운영 DataSource를 감싸므로 전부 `memory.db`이고, 이 사실은 겉으로 드러나지 않습니다. (동작 고정: `DataSourceJdbcTemplateWiringTest`, `-Dsqlitevec.path` 필요)
 >
-> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리(`memory.db`) 순서로 쓰며, 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 백업할 때는 **두 파일을 같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+> **그럼 `memory.db`는 지워도 되나?** 분리를 켠 배포에서 그 파일은 Flyway가 만든 **빈 테이블 + 마이그레이션 이력**뿐이라 데이터 손실 없이 지울 수 있지만, **얻는 것도 없습니다** — 앱은 기동할 때마다 `@Primary` DataSource로 그 파일을 다시 만들고 Flyway를 다시 적용합니다(빈 파일이므로 무해). 백업 대상에서 빼는 것은 괜찮고, 파일 자체를 없애려면 배선을 바꿔야 합니다.
 >
-> **스키마는 기동 시 자동 정비됩니다** — Flyway 마이그레이션(V1~V3) 이후의 컬럼은 각 리포지터리의 `@PostConstruct`에서 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 따라서 **오래된 `memory.db`를 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
+> ⚠️ **Flyway는 실데이터에 닿지 않습니다.** Flyway는 `@Primary` DataSource(=`memory.db`)에 적용되고 이력(`flyway_schema_history`)도 거기 남는데, 분리를 켜면 실제 테이블은 벡터 DB 파일에 각 저장소의 런타임 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER`)로 만들어집니다. 그래서 **새 `V4__*.sql`을 추가하면 빈 파일에만 적용되고 "성공"으로 보고됩니다.** 신규 컬럼은 Flyway가 아니라 런타임 `ALTER` 패턴으로 추가한다는 규약([PLAN §13](PLAN.md#13-db-스키마-변경-요약))을 지키는 한 문제가 되지 않습니다 — 그 규약을 어기지 마세요.
+>
+> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 두 파일을 쓰는 배포라면(분리 off·Chroma 조합 등) 백업 시 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+>
+> **스키마는 기동 시 자동 정비됩니다** — 위 «생성 주체»에 Flyway로 적힌 테이블도 각 저장소가 런타임 `CREATE TABLE IF NOT EXISTS`를 함께 갖고 있고, Flyway 이후의 컬럼은 `@PostConstruct`의 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. Flyway가 닿지 않는 벡터 DB 파일에서도 같은 스키마가 만들어지는 것이 이 때문입니다. 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
@@ -1978,9 +2058,10 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 후보 배수(리랭크) | `app.search-candidate-multiplier` | 1 ~ 20 |
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
 | 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
+| ↳ **이 값은 경계다** — 길이가 이 값 **이상**이면 멀티쿼리 확장, **미만**이면 §10.12 질의 독립화(짧은 후속 질문 재작성)가 돈다. 둘은 여집합이라 한 턴의 질의 전처리 LLM 호출은 어느 쪽이든 최대 1회다. 0 으로 두면 확장만 돌고 독립화는 영영 돌지 않는다 | | |
 | 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
 | topK (검색 상위 K) | `app.search-top-k` | 1 ~ 50 |
-| 멀티쿼리 확장 | `app.search-multiquery-enabled` | true/false |
+| 멀티쿼리 확장 (+ §10.12 질의 독립화) | `app.search-multiquery-enabled` | true/false |
 | 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
 | 큐레이션 Q&A 검색 반영 (§10.10) | `app.search-curated-qa-enabled` | true/false |
 | 큐레이션 Q&A 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |
@@ -2062,28 +2143,32 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
-### 6.7 큐레이션 Q&A (좋아요 기반 지식 승격, §10.10)
+### 6.7 큐레이션 Q&A (공유 지식 축, §10.10 · §10.11)
 
-채팅 응답에 **좋아요**(👍)를 누르면 해당 질문·답변 쌍이 별도로 임베딩되어, 이후 유사한 질문의 검색 결과에 **큐레이션 Q&A 축**으로 반영됩니다. `documents/PLAN.md` §10.10에 전체 설계·구현 기록이 있으며, 여기서는 운영 관점만 요약합니다.
+관리자가 승인한 **지식 제안**이 별도로 임베딩되어, 이후 유사한 질문의 검색 결과에 **큐레이션 Q&A 축**으로 반영됩니다. `documents/PLAN.md` §10.10·§10.11에 전체 설계·구현 기록이 있으며, 여기서는 운영 관점만 요약합니다.
+
+> **2026-09-02 변경 (§10.11) — 좋아요가 더 이상 직접 등록하지 않습니다.** 예전에는 👍 를 누르면 그 자리에서 `curated_qa` 행이 만들어지고 3초 뒤 임베딩되어 전체 사용자의 검색에 들어갔습니다. 검색 코퍼스로 들어가는 문이 둘인데 한쪽만 관리자 승인을 요구하는 상태였고, 문서를 하나도 안 본 Direct 답변이 클릭 한 번에 공유 지식이 될 수 있었습니다. 지금은 👍 가 [§6.9 지식 제안](#69-지식-제안-게시판-사용자-제안--관리자-임베딩) 폼을 그 답변으로 채워 열어 줄 뿐이고, **등록은 관리자 승인에서만** 일어납니다. 검토 화면에는 그 답변의 `[RN]`/`[DN]` 표기와 원 대화 링크가 함께 뜹니다 — `D` 는 검색을 거치지 않은 답변이라는 뜻이므로 반려 판단의 재료입니다.
 
 **동작 원리**:
-- 좋아요를 누르면 `curated_qa` 테이블(`memory.db`)에 질문·답변 스냅샷이 즉시 저장되고, 백그라운드에서 **3초 디바운스** 후 임베딩됩니다 — 3초 안에 좋아요를 취소하면 임베딩 API 호출 자체가 생략됩니다(실수 클릭 비용 절감).
-- **응답 모드가 `S`(간단히) 또는 `C`(응용)였던 turn은 좋아요를 눌러도 아무 일도 일어나지 않습니다** — `curated_qa` 행조차 만들지 않습니다. 큐레이션 임베딩 입력은 답변에서 요약·참고 섹션을 걷어낸 나머지인데(`CuratedTextUtils.stripStructuralSections`), **S 답변은 전체가 `## 요약` 한 섹션이라 걷어내고 나면 남는 것이 없어** 질문만 담긴 벡터가 만들어지기 때문입니다. 애초에 축약된 답변이라 공유 지식으로 승격할 대상도 아닙니다. `C`는 이유가 다릅니다 — 내용이 없어서가 아니라, **모델이 만들어 낸 코드가 가중 RRF 축으로 다시 검색돼 다음 턴의 "문서"가 되기 때문**입니다. 세대를 거치며 환각이 정설로 굳는 되먹임이고 되돌리려면 벡터를 찾아 지워야 해서, 이 설계에서 가장 위험한 단일 지점으로 분류돼 게이트가 걸려 있습니다. 판정은 `ResponseMode.allowsCuration() = false`이고, 기준값은 `conversation_turns.response_mode`(turn 생성 시 저장)입니다. LIKE 피드백의 유일한 소비자가 큐레이션이므로 결과적으로 좋아요가 무동작이 되며, **싫어요는 모드와 무관하게 그대로 동작합니다**(다음 대화 컨텍스트에서 제외).<br>※ 옛 `L`(원문 최대) 모드의 임베딩 스킵은 §6.24에서 제거됐습니다 — "L 답변은 원문을 미러링한다"는 전제가 실측과 어긋나(길이가 M과 4.6% 차이) 멀쩡한 큐레이션 지식을 버리고 있었습니다. 응답 모드와 `LLM_MAX_TOKENS`의 관계는 [§3.2 `LLM_MAX_TOKENS`](#32-환경변수-전체-목록), 설계 전체는 [PIPELINE §3.1](PIPELINE.md)을 참고하세요.
+- 관리자가 **임베딩 실행**을 누르면 `curated_qa` 테이블(운영 테이블 — 파일은 §6.3.1)에 검토된 텍스트가 저장되고, 백그라운드 스레드가 곧바로 임베딩합니다(디바운스 없음 — 승인은 취소와 경합할 수 없는 명시적 동작입니다).
+- **응답 모드가 `S`(간단히)였던 turn은 좋아요를 눌러도 제안을 만들 수 없습니다** — 버튼이 비활성으로 뜨고 사유가 툴팁에 붙습니다. S 는 **의도적으로 축약된 답변**이기 때문입니다: 1,000자 상한의 `## 요약` 한 섹션이고, 프롬프트가 배경·이유·전제·예외를 빼라고 지시합니다 — 지금 짧게 보려고 고른 형식이지 오래 남길 지식의 원본이 아닙니다. `C`(응용)는 §10.11 에서 **열렸습니다** — 예전에 막았던 이유(모델이 지어낸 코드가 다음 턴의 "문서"가 되는 되먹임)가 치명적이었던 것은 게이트가 없었기 때문이고, 사람이 편집하고 관리자가 승인하는 지금은 C 답변도 다른 제안과 같은 심사를 받습니다. 판정은 `ResponseMode.allowsSubmission()`이고 기준값은 `conversation_turns.response_mode`(turn 생성 시 저장)입니다. **싫어요는 모드와 무관하게 그대로 동작합니다**(다음 대화 컨텍스트에서 제외).<br>※ 옛 `L`(원문 최대) 모드의 임베딩 스킵은 §6.24에서 제거됐습니다. 응답 모드와 `LLM_MAX_TOKENS`의 관계는 [§3.2 `LLM_MAX_TOKENS`](#32-환경변수-전체-목록), 설계 전체는 [PIPELINE §3.1](PIPELINE.md)을 참고하세요.
 - 임베딩은 예약된 벡터 스토어 버전 네임스페이스 `"curated"`에 저장됩니다 — 실제 문서 버전과 완전히 분리되어 있어 **문서를 재인덱싱해도 큐레이션 지식은 사라지지 않습니다.**
+- **이 축은 이제 벡터와 BM25 를 함께 봅니다.** 임베딩이 성공하면 같은 청크가 `chunk_fts` 에도 색인되고(`CuratedQaService.indexFts()`), 검색 시 큐레이션 축이 예약 네임스페이스 `"curated"` 로 BM25 를 **한 번 더** 질의해 벡터 결과와 합칩니다(`RetrievalService.curatedAxis()`). 두 결과는 **이 축 안에서** 합쳐지므로 가중치는 여전히 `SEARCH_CURATED_QA_WEIGHT` 하나입니다 — 키워드 축으로 흘려보내면 `SEARCH_RRF_KEYWORD_WEIGHT` 까지 동시에 받아 이중 가산이 됩니다. `SEARCH_HYBRID_ENABLED=false` 면 큐레이션 쪽 BM25 도 함께 꺼집니다.
+  - 이 색인이 붙기 전에는 큐레이션 청크가 `chunk_fts` 에 아예 없어서, 정확한 단어로 물어도 이 축은 벡터로만 걸렸습니다. **기존 항목은 재임베딩해야 BM25 축에 올라옵니다** — `/admin` §7.5 카드에서 저장(편집 없이 그대로 저장해도 됩니다)하거나, §7.2-bis 청크 재인덱싱을 누르면 그 행 전체가 다시 색인됩니다.
+- 승인된 제안의 **요약·키워드**(§6.9)가 문서 청크와 같은 메타데이터 키(`chunk_context`/`excerpt_keywords`)로 실려 `/admin` 청크 화면에 그대로 보입니다. 키워드는 `chunk_fts` 의 전용 컬럼으로 들어가 BM25 가 직접 읽고, 요약은 **BM25 입력 앞에만** 붙습니다 — 벡터 입력은 `제목 + 본문` 그대로입니다(요약은 본문을 다시 말한 것이라 의미 벡터에서는 희석이지만, 어휘 매칭에서는 그 항목이 무엇에 관한 것인지를 말하는 토큰의 반복입니다).
 - 검색 시 이 축은 기존 벡터/키워드(BM25) 축과 함께 가중 RRF로 융합됩니다(§6.5 "큐레이션 Q&A 검색 반영/가중치" 참고) — 큐레이션 답변이 검색되면 **정답을 그대로 반환하는 것이 아니라 LLM이 참고할 근거로 주입**되므로, 현재 문서 내용과 다르면 LLM이 최신 문서를 우선하도록 설계되어 있습니다.
 - 답변 텍스트 끝에 LLM이 자동으로 붙이는 "## 참고"(출처 인용) 섹션과 맨 앞 "## 요약" 섹션은 검색 색인에 들어가지 않습니다 — 파일명·페이지 번호가 질문 의도와 무관한 노이즈이고, 요약은 "## 상세 설명"과 중복이기 때문입니다. **원문 전체는 `curated_qa.answer`에 그대로 보존**되어 채팅 버블과 관리자 편집기에서 그대로 보입니다.
-- **긴 답변은 여러 청크로 나뉘어 임베딩됩니다**(§6.9 제안 게시판과 같은 `ChunkSplitter`, §6.10의 분할 전략까지 동일 적용). 다만 게시판과 달리 **DB 행은 turn 당 하나로 유지**되고 벡터만 여러 개가 됩니다 — 좋아요 취소·본인 편집·관리자 목록이 전부 turn 단위라 행을 쪼개면 그 동작들이 깨지기 때문입니다. 몇 개로 나뉘었는지는 `curated_qa.chunk_count`에 기록되어 좋아요 취소·강제 삭제·재임베딩이 모든 벡터를 찾습니다.
+- **긴 답변은 여러 청크로 나뉘어 임베딩됩니다**(§6.9 제안 게시판과 같은 `ChunkSplitter`, §6.10의 분할 전략까지 동일 적용). 다만 게시판과 달리 **DB 행은 turn 당 하나로 유지**되고 벡터만 여러 개가 됩니다 — 대화·턴 삭제 회수와 재승인이 전부 turn 단위라 행을 쪼개면 그 동작들이 깨지기 때문입니다. 몇 개로 나뉘었는지는 `curated_qa.chunk_count`에 기록되어 회수·강제 삭제·재임베딩이 모든 벡터를 찾습니다.
 - 재임베딩(편집 저장)은 **새 벡터를 먼저 쓴 뒤** 남은 이전 벡터를 지웁니다 — 답변이 짧아져 청크 수가 줄어도, 재임베딩이 실패하면 기존 벡터가 검색에 그대로 남아 있도록 하기 위해서입니다.
-- **검색 가중치는 출처별로 다릅니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 검색도 한 번만 하지만, 결과를 `curated_origin` 메타데이터로 갈라 **두 개의 RRF 축**으로 넣습니다 — 좋아요 승격은 `SEARCH_CURATED_QA_WEIGHT`(기본 **1.0**), 지식 제안은 `SEARCH_SUBMISSION_WEIGHT`(기본 **1.0**). 좋아요는 "질문한 사람이 맞다고 확인한 답변", 제안은 "사람이 직접 써서 관리자가 검토한 지식"이라 신뢰 근거가 달라 따로 조절합니다. 둘 다 `/settings`에서 핫 수정됩니다.
-  - 이 키가 생기기 전에 임베딩된 벡터에는 `curated_origin`이 없어 **좋아요 쪽으로 취급**됩니다(실제로 대부분 그렇습니다). 제안 가중치를 적용받게 하려면 해당 항목을 다시 임베딩해야 합니다(큐레이션 탭에서 저장).
+- **검색 가중치는 하나입니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 한 번의 검색으로 나오며, `SEARCH_CURATED_QA_WEIGHT`(기본 **1.0**, `/settings`에서 핫 수정) 하나가 전체를 다룹니다. 예전에는 `curated_origin`으로 갈라 좋아요 축과 제안 축에 각각 가중치를 줬는데, 그 구분의 근거가 "앱이 만든 무검토 출력" 대 "사람이 쓴 텍스트"였습니다 — 이제 **모든 항목이 사람 편집 + 관리자 승인을 거치므로** 그 차이가 사라져 `SEARCH_SUBMISSION_WEIGHT`는 제거됐습니다. `curated_origin` 자체는 감사·통계용으로 계속 기록됩니다.
 - **긴 항목일수록 청크가 많아 그 축에서 차지하는 후보 수가 늘어납니다** — 한 답변이 상위권을 여러 칸 차지할 수 있습니다. 가중치를 올리기 전에 이 점을 함께 고려하세요.
 - **임베딩 청크 크기는 문서보다 크게 시작합니다**: `CHUNK_SIZE`의 **2배 → 1.5배 → 1배** 순으로 시도하고, 임베딩 서버가 거부할 때만 줄입니다. 큐레이션 텍스트는 하나의 이어진 논증이라 문서용 크기로 자르면 근거로서 읽히지 않기 때문이며, 줄이는 것은 오직 거부에 대한 대응입니다. 세 크기가 모두 실패하면 기존처럼 핵심 섹션만으로 한 번 더 시도합니다. `EMBED_MAX_CHUNK_CHARS`가 설정돼 있으면 어느 배수에서든 그 상한이 먼저 적용됩니다.
 
 **대화 삭제와의 관계**: 대화(thread)를 통째로 삭제하면 그 대화에서 승격된 큐레이션 Q&A도 **함께 회수됩니다**(행 비활성화 + 벡터 삭제). 사용자가 채팅창에서 지우든 관리자가 §7.9에서 지우든 동일하며, 관리자 경로에서는 확인 대화상자에 회수될 건수가 미리 표시되고 삭제 후 감사 로그에도 남습니다.
 
-> ⚠️ **정책이 한 번 바뀌었습니다.** 최초 §10.10 정책은 반대였습니다 — "대화를 지워도 큐레이션은 유지"(개인 대화 정리가 공유 검색 품질을 조용히 떨어뜨리는 것을 막기 위함). §6.25에서 회수로 바뀐 이유는 (1) 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 실제로는 더 혼란스러웠고, (2) **턴 단위 삭제는 처음부터 회수하고 있어**(싫어요 → 턴 삭제 시 `onUnlike`) 두 경로의 동작이 갈려 있었기 때문입니다. 이전 버전에서 대화를 지웠다면 그때 승격된 항목은 여전히 살아 있을 수 있으니, 정리하려면 §7.5의 큐레이션 카드에서 확인하세요.
+> ⚠️ **정책이 한 번 바뀌었습니다.** 최초 §10.10 정책은 반대였습니다 — "대화를 지워도 큐레이션은 유지"(개인 대화 정리가 공유 검색 품질을 조용히 떨어뜨리는 것을 막기 위함). §6.25에서 회수로 바뀐 이유는 (1) 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 실제로는 더 혼란스러웠고, (2) **턴 단위 삭제는 처음부터 회수하고 있어**(싫어요 → 턴 삭제 시, 지금의 `onTurnDeleted`) 두 경로의 동작이 갈려 있었기 때문입니다. 이전 버전에서 대화를 지웠다면 그때 승격된 항목은 여전히 살아 있을 수 있으니, 정리하려면 §7.5의 큐레이션 카드에서 확인하세요.
 >
-> 승인된 **청크 추가 제안**(`origin='manual'`, §6.9)은 특정 대화에 속하지 않으므로 이 회수의 대상이 아닙니다 — 대화를 아무리 지워도 남습니다. 회수는 §7.5에서 강제 삭제하거나 제안 자체를 회수해야 합니다.
+> 승인된 **지식 제안**(`origin='manual'`, §6.9)은 특정 대화에 속하지 않으므로 이 회수의 대상이 아닙니다 — 대화를 아무리 지워도 남습니다. 회수는 §7.5에서 강제 삭제하거나 제안 자체를 회수해야 합니다.
 
 **편집 권한**:
 | 주체 | 방법 | 범위 |
@@ -2125,11 +2210,11 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
-### 6.9 청크 추가 게시판 (사용자 제안 → 관리자 임베딩)
+### 6.9 지식 제안 게시판 (사용자 제안 → 관리자 임베딩)
 
-사용자가 문서에 없는 내용을 **게시판 형식으로 등록**하고, 관리자가 검토해 **임베딩 실행**하거나 **거부**하는 경로입니다. 승인된 제안은 §6.7 큐레이션 Q&A와 **같은 저장소·같은 검색 축**(예약 version 네임스페이스 `"curated"`)으로 들어갑니다 — 검색·가중치 설정(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`)이 그대로 적용되고, 별도로 켜고 끄는 스위치는 없습니다.
+사용자가 문서에 없는 내용을 **게시판 형식으로 등록**하고, 관리자가 검토해 **임베딩 실행**하거나 **거부**하는 경로입니다. **§10.11 이후 검색 코퍼스로 들어가는 유일한 문**이며, 채팅의 좋아요도 여기를 거칩니다(좋아요를 누르면 그 답변으로 채워진 제안 폼이 열립니다). 승인된 제안은 §6.7 큐레이션 Q&A와 **같은 저장소·같은 검색 축**(예약 version 네임스페이스 `"curated"`)으로 들어갑니다 — 검색·가중치 설정(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`)이 그대로 적용되고, 별도로 켜고 끄는 스위치는 없습니다.
 
-**⚠️ 보안: 관리자 승인이 유일한 방어선입니다.**
+**⚠️ 보안: 관리자 승인이 유일한 방어선입니다.** (§10.11 이전에는 좋아요가 이 문장을 조용히 거짓으로 만들고 있었습니다 — 지금은 사실입니다.)
 
 여기 등록된 본문은 승인 즉시 검색 대상이 되어, 검색되면 답변 프롬프트의 `[검색된 문서]` 블록에 그대로 주입됩니다. `PromptInjectionGuard.wrap()`은 사용자 *질문*을 감싸는 장치일 뿐 **검색 결과는 감싸지 않으므로**, 프롬프트 인젝션에 대한 실질적인 관문은 승인 단계 하나뿐입니다. 그래서:
 
@@ -2141,12 +2226,12 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 | 테이블 | 위치 | 역할 |
 |---|---|---|
-| `curated_submission` | `memory.db` | 게시글 자체 — 제목·본문·상태(`pending`/`approved`/`rejected`/`withdrawn`)·거부 사유·검토자·작성자 확인 시각 |
-| `curated_qa` | `memory.db` | 승인된 제안의 실제 색인 항목 — §6.7 좋아요 승격 항목과 같은 테이블(`origin='manual'`로 구분). 제안 1건이 **여러 행**(청크)을 가질 수 있으며 `source_submission_id`로 묶입니다 |
+| `curated_submission` | 운영 DB(§6.3.1) | 게시글 자체 — 제목·본문·상태(`pending`/`approved`/`rejected`/`withdrawn`)·거부 사유·검토자·작성자 확인 시각·출처 턴(`source_turn_id`/`source_thread_id`, 좋아요 출신일 때만) |
+| `curated_qa` | 운영 DB(§6.3.1) | 승인된 제안의 실제 색인 항목(`origin` 으로 출처 구분 — 감사·통계용이며 검색 가중치는 하나입니다). 손으로 쓴 제안은 승인 시 **여러 행**(청크)이 되고, 좋아요 출신은 **turn 을 키로 하는 행 하나**가 임베딩 시점에 벡터 여러 개로 나뉩니다. 어느 쪽이든 `source_submission_id`로 묶입니다 |
 
 두 테이블을 분리한 이유: `curated_qa.status='active'`는 "지금 검색에 기여 중"이라는 뜻으로 검색·모더레이션 코드 전반이 이 의미에 의존하고 있어, 검토 대기 상태를 여기 섞으면 그 불변식이 깨집니다.
 
-> **첫 기동 시 자동 스키마 마이그레이션**: 사용자 제안은 대화 turn이 없으므로 `curated_qa.source_turn_id`가 nullable이어야 하는데, SQLite는 이를 `ALTER`로 바꿀 수 없습니다. 그래서 기존 DB에서 이 기능이 처음 올라올 때 `CuratedQaRepository`가 **테이블을 1회 재생성**합니다(단일 트랜잭션 — 중간 실패 시 롤백, 기존 행은 `origin='like'`로 그대로 보존). 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 줄로 확인할 수 있으며, 두 번째 기동부터는 실행되지 않습니다. 기존 좋아요 항목의 검색 반영은 영향받지 않지만, 큰 변경이므로 **적용 전 `data/memory.db` 백업을 권장**합니다(§6.3).
+> **첫 기동 시 자동 스키마 마이그레이션**: 사용자 제안은 대화 turn이 없으므로 `curated_qa.source_turn_id`가 nullable이어야 하는데, SQLite는 이를 `ALTER`로 바꿀 수 없습니다. 그래서 기존 DB에서 이 기능이 처음 올라올 때 `CuratedQaRepository`가 **테이블을 1회 재생성**합니다(단일 트랜잭션 — 중간 실패 시 롤백, 기존 행은 `origin='like'`로 그대로 보존). 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 줄로 확인할 수 있으며, 두 번째 기동부터는 실행되지 않습니다. 기존 좋아요 항목의 검색 반영은 영향받지 않지만, 큰 변경이므로 **적용 전 DB 파일 백업을 권장**합니다 — `data/memory.db`, 그리고 `SQLITE_VEC_DB_PATH` 를 켰다면 실데이터가 있는 그 벡터 DB 파일([§6.3.1](#631-sqlite-파일별-테이블-구성)).
 
 **입력 제한** (`CuratedSubmissionService` — 이미지 3종만 `CuratedImageStore`):
 
@@ -2155,6 +2240,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 제목 최대 길이 | 200자 | `curated_qa.question` 컬럼에 그대로 저장됨 — 임베딩 입력의 앞부분이라 질문형 제목일수록 검색이 잘 됨 |
 | 본문 최대 길이 | **없음** | 승인 시 `ChunkSplitter`로 분할되므로 상한을 두지 않는다(아래 참고) |
 | 태그 | 최대 10개 · 각 32자 | `TagUtils.normalize()` 정책 공용. 관리자가 검토 화면에서 수정 가능 |
+| 요약 | 500자 (`MAX_SUMMARY_LEN`) | 선택. `chunk_context` 로 실려 BM25 검색 텍스트 앞에 붙는다. 넘치면 **거부가 아니라 잘린다** — 자동 생성으로 채워지는 쪽이 보통이라 모델이 조금 길게 답했다고 등록 전체를 실패시킬 일이 아니다 |
+| 키워드 | 300자 (`MAX_KEYWORDS_LEN`) | 선택. `excerpt_keywords` 로 실려 `chunk_fts.keywords` 컬럼이 된다(BM25 가 직접 읽는 유일한 자리). 쉼표 구분 2~5개를 기대하며, 상한 초과는 요약과 같이 잘린다 |
 | 사용자당 검토 대기 상한 | 20건 | 초과 시 등록 거부 |
 | 본문 이미지 개수 | 10장 (`CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`) | 등록 시점과 승인 시점 **양쪽**에서 검사. 승인 1회가 이미지 수만큼의 Vision 호출을 부르므로, 본문 길이와 달리 분할로 흡수되지 않는 비용이다 |
 | 이미지 파일 크기 | 5MB (`MAX_IMAGE_BYTES`) | 서블릿 multipart 상한(200MB)보다 훨씬 낮게 잡아 400으로 깔끔히 거부되게 함 |
@@ -2167,6 +2254,18 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - 관리자 검토 화면에 **승인 시 몇 개 청크가 되는지**가 미리 표시되고, 승인 후에는 실제 생성된 개수가 표시됩니다.
 - ⚠️ `MIN_CHUNK_SIZE`를 `CHUNK_SIZE`에 가깝게 잡으면 잘린 조각이 다시 병합되어 **분할이 사실상 사라집니다**(기본 1500/500 비율에서는 문제 없음).
 
+**요약·키워드와 "빈 칸 자동 생성"**:
+
+본문 아래 두 칸입니다. 비워 두어도 등록되지만, 채우면 그 값이 승인 시 `curated_qa` → 벡터 메타데이터로 실려 **BM25 축이 실제로 읽습니다**(§6.7). 화면을 채우려고 있는 칸이 아닙니다 — 이 축이 BM25 에 색인되기 전까지 두 값은 저장은 되지만 아무 코드도 읽지 않는 값이었고, 그래서 그때는 입력란 자체를 두지 않았습니다.
+
+- **"빈 칸 자동 생성" 버튼**은 본문에서 두 값을 LLM **한 번**으로 만듭니다(인덱싱과 같은 `KeywordExtractor`, `MICRO_TEXT`, TF 폴백 동일). 작성 폼과 저자 수정 오프캔버스 양쪽에 있습니다.
+- **이미 채워진 칸은 절대 덮지 않습니다.** 판정은 **서버**가 합니다(`CuratedSubmissionService.enrich()`) — 사람이 쓴 문장을 버튼 한 번이 조용히 갈아엎는 일이 없어야 하고, 그 규칙이 클라이언트에만 있으면 다른 호출자가 생기는 순간 사라지기 때문입니다. **둘 다 이미 차 있으면 LLM 을 아예 부르지 않습니다**(호출 0회).
+- 승인 화면에서는 이 둘을 편집하지 않고 제안에 저장된 값을 그대로 싣습니다. 승인 시점에 자동 생성하지 않는 이유는 (1) 승인 1회가 청크 수만큼 LLM 을 부르게 되고, (2) 무엇이 코퍼스에 들어가는지는 사람이 보고 정한다는 §10.11 의 규칙에도 어긋나기 때문입니다.
+- **자동 생성이 읽는 것은 본문의 첫 청크입니다**(`CHUNK_SIZE`, 기본 1,500자). 본문에는 길이 제한이 없는데 이 호출은 게스트도 부를 수 있어, 본문 전체를 넘기면 긴 제안 하나가 컨텍스트 초과나 수십 초짜리 호출이 됩니다. 그래서 승인 시 본문을 나눌 때와 **같은 분할기**로 첫 조각만 넘깁니다(표·코드 블록 경계 보존). 아주 긴 제안이라면 요약·키워드가 앞부분만 반영하므로, 그런 경우에는 직접 쓰시는 편이 정확합니다.
+- **비워 둔 채 등록해도 서버가 등록 시점에 채웁니다**(LLM 1회). 버튼은 등록 전에 결과를 보고 다듬고 싶을 때 쓰는 것이고, 그냥 등록해도 BM25 축에서 제 몫을 합니다. 추출이 실패하면 비워 둔 채로 등록됩니다 — 부속값 때문에 제안 등록 자체를 실패시키지는 않습니다. 등록 요청이 그만큼(로컬 LLM 기준 수 초) 길어질 수 있습니다.
+- **좋아요로 연 제안은 답변의 `## 요약` 섹션이 요약 칸에 미리 들어가 있고, 그만큼 본문에서는 빠져 있습니다.** 두 곳에 같은 문장이 남으면 승인 후 BM25 입력에 두 번 들어갑니다.
+- 요약·키워드는 **제안 하나가 통째로 갖는 값**이라 나뉜 모든 청크에 같은 값이 붙습니다(제목과 같은 규칙).
+
 **본문 이미지** (`CuratedImageStore`):
 
 작성자가 본문에 이미지를 넣을 수 있습니다. 파일은 `{DATA_DIR}/images/submissions/{sha16}.{ext}`에 저장되고, 본문에는 **문서 파이프라인이 쓰는 것과 같은 `[이미지: images/submissions/…]` 마커**가 들어갑니다. 표준 마크다운(`![]()`)이 아니라 이 마커를 재사용한 덕분에 하위 경로가 전부 그대로 동작합니다 — `GET /api/v1/images/{docId}/{filename}`이 이미 이 경로를 서빙하고(디렉터리 이름 `submissions`는 16자리 hex인 문서 imageId와 절대 충돌하지 않습니다), `/admin` 청크 뷰가 이미 렌더하며, `RetrievalService`가 이미 `image_paths` 메타데이터를 답변 썸네일로 바꿉니다.
@@ -2177,7 +2276,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
   - 설명은 `image_descriptions` 캐시에도 저장되고, 주입된 줄을 `RetrievalService.hasEmbeddedDescription()`이 인식하므로 **질의 시점에 다시 분석되지 않습니다**(§6.7 Lazy Vision과 중복 호출 없음).
   - ⚠️ **승인 요청이 이미지 수만큼의 Vision 호출을 동기로 기다립니다.** 로컬 Vision 모델이 느리면 이미지 5장짜리 제안의 승인이 수십 초 걸릴 수 있습니다(관리 UI는 버튼을 잠그고 스피너를 표시). 이 호출은 §6.12 채팅 동시성 게이트를 타지 않는 `executeWithTracking()` 경로이므로 채팅 슬롯을 잠식하지는 않지만, 로컬 LLM 서버 자원은 공유합니다. 상한(10장)을 낮추려면 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION` 상수를 바꿔야 합니다 — 프로퍼티로 외부화되어 있지 않습니다.
 - **보안**: 게시판은 모든 인증 모드에서 게스트에게 열려 있어, 여기가 **미인증 사용자가 디스크에 바이너리를 쓰는 유일한 지점**입니다. 방어는 4겹입니다 — 확장자 허용목록 → 5MB 상한 → 매직바이트 검증(`FileTypeDetector`) → **내용 해시 파일명**(클라이언트가 경로의 어느 조각도 정하지 못하고, 같은 그림을 다시 올려도 바이트가 중복되지 않음). 본문에 손으로 적은 경로는 `images/{디렉터리}/{파일}.{확장자}` 형태이면서 실제로 존재할 때만 Vision 대상이 됩니다(`..` 차단이 아니라 형태 허용목록 — `LazyVisionService`는 자체 경로 봉쇄가 없습니다).
-- **정리**: 파일명이 내용 해시라 두 제안이 같은 그림을 공유할 수 있으므로, 삭제는 **참조 세기** 방식입니다. `releaseImages()`(반려·철회 시)와 `sweepOrphans()`(기동 시 `ApplicationReadyEvent`, **24시간 유예**)가 살아 있는 제안(`pending`/`approved`)·활성 `curated_qa` 어디에서도 참조하지 않는 파일만 지웁니다. 유예 시간이 있는 이유는 폼이 **등록 전에** 이미지를 먼저 올리기 때문입니다(작성자가 미리보기로 확인할 수 있게) — 열어둔 작성 화면의 이미지를 발밑에서 지우지 않기 위함입니다. 상시 실행되는 스케줄러는 없으므로, 장기 무재기동 서버에서는 등록되지 않은 초안 이미지가 누적될 수 있습니다(디스크 사용량 점검 시 `{DATA_DIR}/images/submissions/` 확인).
+- **정리**: 파일명이 내용 해시라 두 제안이 같은 그림을 공유할 수 있으므로, 삭제는 **참조 세기** 방식입니다. `releaseImages()`(반려·철회 시)와 `sweepOrphans()`(**기동 시 + 6시간마다**, 24시간 유예)가 살아 있는 제안(`pending`/`approved`)·활성 `curated_qa` 어디에서도 참조하지 않는 파일만 지웁니다. 유예 시간이 있는 이유는 폼이 **등록 전에** 이미지를 먼저 올리기 때문입니다(작성자가 미리보기로 확인할 수 있게) — 열어둔 작성 화면의 이미지를 발밑에서 지우지 않기 위함입니다.
+- **업로드 속도 제한**: `POST /curated/submissions/images`는 `upload` 버킷(분당 10, `RATE_LIMIT_UPLOAD_PER_MINUTE`)입니다. 인증 없이 부를 수 있는 유일한 바이너리 쓰기 경로라 문서 업로드와 같은 취급이며, 분당 10은 제안 하나에 담을 수 있는 이미지 수와 같은 값이라 정상적인 작성 한 번은 그대로 지나갑니다. 예전에는 `default`(분당 120)라 파일당 5MB × 120 = **분당 600MB**를 밀어 넣을 수 있었고, 저장 상한은 기본이 무제한입니다 — 게스트 개방 배포라면 `UPLOAD_MAX_TOTAL_SIZE`를 함께 설정하세요.
 - **업로드 자체는 감사 로그에 남지 않습니다** — 실제로 검색에 들어가는 시점인 `curated.submission.create`/`.approve`가 본문(마커 포함)을 기록합니다. 업로드 요청은 `[SUBMISSION] 본문 이미지 저장 {파일명}` INFO 로그로만 확인할 수 있습니다.
 
 **전부/전무 (1:N 상태 파생)**: 제안은 청크가 여러 개여도 **하나라도 살아 있으면 등록 완료**, **전부 내려가면 회수됨**입니다. §7.5 큐레이션 탭에서 어느 청크 하나를 삭제하면 `CuratedQaService.forceRemoveBySubmission()`이 **같은 제안의 나머지 청크도 함께** 내립니다 — 작성자에게 "반쪽만 등록된" 상태를 보이지 않기 위한 의도적 설계이며, "N개 중 M개" 부분 표시는 제공하지 않습니다. 임베딩 실패 배지는 반대로 **하나라도 실패하면** 표시됩니다.
@@ -2187,7 +2287,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 경로 | 접근 |
 |---|---|
 | `GET/POST /curated/submissions`, `POST /{id}/withdraw`, `GET /unread-count` | 모든 인증 모드에서 열림(게스트 포함) — 등록은 검색에 즉시 영향을 주지 않는 `pending` 행 하나를 만들 뿐 |
-| `POST /curated/submissions/images` | 위와 동일하게 열림 — 다만 **디스크에 파일을 쓰는** 유일한 게스트 개방 쓰기 경로다. 위 "본문 이미지"의 4겹 검증 + `RATE_LIMIT_DEFAULT_PER_MINUTE`(기본 120/분)이 방어선이며, 외부 노출 배포라면 프록시 단에서 이 경로만 따로 조이는 것도 검토할 만하다 |
+| `POST /curated/submissions/images` | 위와 동일하게 열림 — 다만 **디스크에 파일을 쓰는** 유일한 게스트 개방 쓰기 경로다. 위 "본문 이미지"의 4겹 검증 + `RATE_LIMIT_UPLOAD_PER_MINUTE`(기본 **10/분** — 문서 업로드와 같은 버킷이다. 예전엔 `default` 120/분이라 5MB × 120 = 분당 600MB였다)이 방어선이며, 외부 노출 배포라면 프록시 단에서 이 경로만 따로 조이는 것도 검토할 만하다 |
 | `GET /admin/submissions*`, `POST /admin/submissions/{id}/approve\|reject` | `/admin/**` 게이팅 상속 — 관리 전용 인증 모드(§9.4.2)에서는 `ROLE_ADMIN` 로그인 필수 |
 
 > 대기 건수 조회(`GET /admin/submissions/pending-count`)를 `/api/v1/**`이 아니라 `/admin/**` 아래 둔 것은 의도적입니다 — `/api/v1/**`은 관리 전용 인증 모드에서 CSRF 예외 + 게스트 개방이라 거기 두면 대기 건수가 누구에게나 노출됩니다.
@@ -2322,6 +2422,34 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
+### 6.12 청크 오류 신고 처리 (사용자 신고 → 관리자 확인·수정)
+
+채팅에서 출처 원문을 연 사용자가 **그 청크의 내용이 틀렸거나 오래됐다**고 알리는 경로입니다(§10.14). §6.9 지식 제안이 "코퍼스에 **넣는** 문"이라면 이쪽은 "**고치는** 문"입니다.
+
+**신고는 아무것도 바꾸지 않습니다.** `chunk_report` 행은 검색·재사용 판정·벡터/FTS 어디에서도 읽히지 않습니다 — 반영은 관리자가 청크를 실제로 고칠 때 일어납니다. 자동 비활성화 임계값 같은 것은 **의도적으로 없습니다**(신고가 곧 삭제 버튼이 되면 §6.9 가 지키는 "코퍼스는 사람이 지킨다"와 방향이 어긋납니다).
+
+**처리 절차** — `/admin` → **청크 오류 신고** 카드(펼칠 때 조회):
+
+1. 목록의 **한 행은 신고 1건이 아니라 청크 1개**입니다(배지 숫자가 그 청크에 모인 신고 수). 헤더 배지와 카드 pill 도 **열린 신고를 가진 청크 수**를 셉니다 — 관리자가 할 일의 개수이기 때문입니다.
+2. 행의 🚩 버튼을 누르면 그 청크의 신고가 **전부 한 화면에** 열립니다: 사유·코멘트·신고 시각·당시 질문, 그리고 **신고 시점 원문 스냅샷 ↔ 현재 내용** 비교와 "신고 이후 수정됨/삭제됨" 표시.
+3. 비교는 기본이 **「차이」 보기**입니다 — 바뀐 줄만 초록(추가)·빨강(삭제)으로 나오고, **줄 안에서 실제로 달라진 낱말**까지 짙게 칠해집니다(포트 번호 하나만 바뀐 문단이 "문단 통째로 교체"로 보이지 않게). 상단 배지가 한 줄로 답합니다: `동일 — 신고된 그대로입니다` 또는 `+N / -M 줄`. 두 벌을 그대로 읽고 싶으면 **「나란히」** 로 바꿉니다(같은 응답에 이미 실려 있어 다시 불러오지 않습니다).
+4. **수정은 「청크 편집 열기」** 로 기존 청크 편집 오프캔버스에서 합니다(§7.1) — 신고 패널에는 편집기가 없습니다. 신고 패널은 **닫히고** 편집 패널이 열리며, 편집을 닫으면 **보던 신고로 되돌아옵니다**(그다음에 할 일이 「처리 완료」이고 그 버튼은 신고 패널에만 있습니다). 편집 후 「이 청크만 재인덱싱」까지 해야 검색에 반영됩니다(§7.2-bis). 큐레이션 Q&A 청크는 §6.7 카드에서 고칩니다.
+5. 조치는 **청크 단위**입니다: 「처리 완료」 또는 「반려」(사유 필수) 한 번으로 그 청크의 열린 신고가 전부 닫히며, 보던 사이에 도착한 신고도 함께 닫힙니다(같은 청크에 대한 같은 조치이므로).
+
+**운영 시 알아둘 것**
+
+- **신고자에게 결과를 알리는 알림은 없습니다.** 반려 사유는 감사 로그와 이력에만 남습니다.
+- **`/settings` 의 출처 미리보기를 끄면 신고 경로도 함께 닫힙니다** — 신고 버튼이 출처 원문 팝업 안에 있고, 그 토글이 팝업 자체를 열지 않게 하기 때문입니다. 이미 사라진 청크(원문을 불러오지 못한 경우)에서도 버튼이 숨겨집니다.
+- **중복 방지 키는 (청크, 신고자, 대화)** 입니다. `AUTH_GUEST_IDENTITY=shared` 배포에서는 모든 방문자의 `userId` 가 같으므로, 대화를 키에 넣지 않으면 청크당 한 명만 신고할 수 있게 됩니다. 처리 완료된 뒤에는 같은 사람이 다시 신고할 수 있습니다(고쳤는데 또 틀릴 수 있으므로).
+- **사용자당 건수 상한은 없습니다.** 남용은 위 중복 방지와 `RATE_LIMIT` 기본 버킷이 막습니다.
+- **"현재 내용"이 원문이 아닐 수 있습니다.** sqlite-vec 백엔드에서는 청크 원문을, 그렇지 않은 배포에서는 검색용 파생 텍스트(맥락 헤더 + 정규화 본문)를 보여주며 화면에 `(검색용 파생 텍스트)` 라고 표시됩니다. 스냅샷도 **같은 경로**에서 뜨므로 한 배포 안에서는 양쪽이 같은 종류의 텍스트이고 비교는 그대로 성립합니다.
+- **배지는 「수정됨」인데 차이가 「동일」로 나올 수 있습니다.** 변경 판정은 `chunk_fts` 의 **검색 텍스트 해시**로 내는데 그 텍스트에는 요약(맥락 헤더)이 섞여 있어, 본문은 그대로 두고 요약·키워드만 고쳐도 해시가 달라집니다. 그 조합일 때는 비교 위에 `본문은 같습니다 — 요약·키워드처럼 검색 텍스트에만 들어가는 부분이 바뀌었습니다` 가 함께 표시됩니다.
+- **비교가 생략되는 경우** — ① 신고 시점 원문이 없을 때(FTS 인덱스 없이 접수된 신고), ② 청크가 이미 사라졌을 때, ③ 내용이 너무 커서 줄 단위 비교 상한을 넘을 때. 셋 다 "차이 없음"으로 넘기지 않고 이유를 적은 안내가 뜨며 화면은 나란히 보기로 떨어집니다.
+- **감사 로그**: `chunk.report`(접수) · `chunk.report.resolve` · `chunk.report.reject`(닫은 건수 포함).
+- **저장 위치**: `chunk_report`(신고 내용 + 신고 시점 원문·질문 스냅샷) — 다른 운영 테이블과 같은 파일입니다([§6.3.1](#631-sqlite-파일별-테이블-구성): 분리를 켠 배포에서는 벡터 DB 파일). 문서나 대화가 지워져도 스냅샷은 남습니다 — 지워진 뒤에는 "무엇이 틀렸다는 것인지"를 그 복사본으로만 알 수 있기 때문입니다.
+
+---
+
 ## 7. 벡터 스토어 관리
 
 `/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)의 접근 제어는 인증 모드에 따라 다릅니다.  
@@ -2363,10 +2491,12 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 문서 전체 재인덱싱 없이 **청크 하나만** 재임베딩·FTS 재색인합니다. Body: `{"regenerateKeywords": true|false}`(생략 시 `false`).
 
 - **동작**: 벡터 스토어 id를 그대로 유지한 채 upsert합니다(Chroma: `upsertEmbeddings`가 같은 id를 덮어씀 / sqlite-vec: `add()`가 같은 id를 delete-then-insert) — 새 청크가 생기는 게 아니라 기존 청크가 그 자리에서 갱신됩니다.
-- **`regenerateKeywords=false`(기본)**: 현재 저장된 `excerpt_keywords` 등 메타데이터를 그대로 두고, 현재 텍스트로만 재임베딩 + FTS 재색인합니다. LLM 호출 없음, 즉시 처리. 단, `chunk_context`(LLM이 생성한 1~2문장 맥락)는 §10.1 설계상 애초에 영속 저장되지 않으므로 "그대로 유지"할 방법이 없고, 이 경로에서는 구조적 맥락(`"{파일명} > {헤딩}"`)만으로 임베딩/FTS 입력이 구성됩니다.
+- **`regenerateKeywords=false`(기본)**: 현재 저장된 `excerpt_keywords`·`chunk_context` 를 그대로 두고, 현재 텍스트로만 재임베딩 + FTS 재색인합니다. LLM 호출 없음, 즉시 처리. 두 값 모두 **영속 메타데이터**라 편집 패널에서 손으로 고친 값이 이 재임베딩까지 그대로 살아남습니다.
 - **`regenerateKeywords=true`**: 이 청크에 한해 `KeywordExtractor`를 다시 실행해(LLM 1회, TF 타임아웃 폴백 동일 적용) `excerpt_keywords`/`chunk_context`를 재생성한 뒤 그 결과로 재임베딩·재색인합니다. 문서 전체 ↺ 재인덱싱과 동일한 품질을 청크 단위로 얻을 수 있습니다.
+- **큐레이션 청크의 '요약(맥락)'·'키워드' 칸은 읽기 전용입니다** — 두 값의 단일 출처가 `curated_qa` 컬럼이고, 청크에 실린 값은 재임베딩마다 거기서 다시 쓰이는 사본이라 여기서 고쳐 봐야 다음 재임베딩에 되돌아갑니다(그래서 화면과 서버 양쪽에서 막습니다). 고치는 자리는 **§7.5 큐레이션 Q&A 카드**이며, 그쪽 저장은 질문·답변·요약·키워드를 한 번에 반영하고 재임베딩까지 함께 돌립니다. 위치 표시 자리에는 `(지식 제안 — 파일 위치 없음)` 이 뜹니다. ⚠️ **청크 본문(텍스트)은 아직 같은 성질입니다** — 큐레이션 청크의 텍스트도 `curated_qa.answer` 를 나눈 사본이라 여기서 고치면 재임베딩에 되돌아갑니다. 본문을 고치려면 큐레이션 카드의 **답변**을 고치세요. 문서 청크는 그 값이 `{파일명} > {헤딩}` + LLM 문장이라 첫 줄이 읽기 전용 위치 표시로 떨어져 나오지만, 큐레이션 청크에는 파일 위치라는 개념이 없어 값 전체가 작성자가 쓴 요약입니다. 위치 표시 자리에는 `(지식 제안 — 파일 위치 없음)` 이 뜹니다. (이 구분이 없던 동안에는 요약 전체가 읽기 전용 칸에 표시되고 편집란이 비어 있었으며, 그 상태로 저장하면 요약이 사라졌습니다.)
+- ⚠️ **큐레이션 청크는 이 경로로 가지 않습니다.** `/admin/chunks` 는 `docId` 없이 컬렉션 전체를 훑으므로 승인된 지식 제안도 같은 표에 나오고 이 버튼이 눌립니다. 그런데 이 경로는 **문서 청크의 규칙**(`chunk_context` + 본문)으로 검색 텍스트를 다시 만드는 반면 큐레이션 축의 검색 텍스트는 `제목 + 본문`이고 **제목은 벡터 메타데이터에 없습니다**(`curated_qa.question` 컬럼에만 있습니다) — 그대로 태우면 그 청크만 조용히 제목을 잃고 질문형 질의와의 매칭이 무너집니다. 지금은 서버가 `doc_type` 을 보고 갈라 `CuratedQaService.reembedRow()` 로 보냅니다. **단위가 '청크 하나'가 아니라 '행 하나'**인 것은 의도된 것입니다 — 이 축에서 제목·본문·요약·키워드는 행이 통째로 갖는 값이라 한 청크만 다시 만들 수 있는 상태가 없습니다. 같은 이유로 큐레이션 청크에는 "키워드 재생성"이 적용되지 않습니다(그 자리는 §6.9 의 "빈 칸 자동 생성"입니다).
 - **동기 처리**: 청크 1개 단위라 문서 재인덱싱(SSE 진행률 추적)과 달리 응답이 올 때까지 대기합니다.
-- 존재하지 않는 청크이거나 임베딩 API 호출이 실패하면 404를 반환하고, 이 경우 FTS 재색인은 시도하지 않습니다(부분 반영 방지).
+- 존재하지 않는 청크이거나 임베딩 API 호출이 실패하면 404를 반환하고, 이 경우 FTS 재색인은 시도하지 않습니다(부분 반영 방지). 큐레이션 청크도 같은 계약입니다 — 행이 없거나 **`active` 가 아니거나** 임베딩이 실패하면 404입니다(예전에는 행만 있으면 성공으로 응답해, 비활성 행에 눌렀을 때 아무 일도 없이 성공 토스트가 떴습니다).
 
 ### 7.3 주의사항
 
@@ -2396,7 +2526,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 `/admin` 페이지 **최하단**에 **큐레이션 Q&A** 카드가 있습니다 — 좋아요로 승격된 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다. 페이지당 20/50/100건 중 선택, 이전/다음으로 이동합니다.
 
-카드 순서는 **청크 추가 제안(§7.6) → 큐레이션 Q&A**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
+카드 순서는 **지식 제안 검토(§7.6) → 큐레이션 Q&A**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
 카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
@@ -2409,14 +2539,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - API: `GET /admin/curated/{id}/detail`(조회), `POST /admin/curated/{id}`(수정, body `{"answer":"..."}`), `DELETE /admin/curated/{id}`(강제 삭제) — 접근 제어는 `/admin/**`와 동일(§7 상단 참고).
 - 강제 삭제는 좋아요 취소(사용자 경로)와 **같은 내부 매커니즘**(비활성화+de-index)을 쓰지만, 소유권 검증을 거치지 않는 별도 인가 경로입니다.
-- 동작 원리·좋아요 승격 흐름 전체는 [§6.7](#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
+- 동작 원리·좋아요 승격 흐름 전체는 [§6.7](#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
 - 사용자가 직접 등록한 제안이 승인되면 이 카드에 **함께** 나타납니다(내부적으로 `origin='manual'`) — 편집·강제 삭제 방법은 좋아요 항목과 동일합니다. 여기서 강제 삭제하면 §7.6 목록에서는 "회수됨"으로 표시되며, 같은 제안의 나머지 청크도 함께 내려갑니다(전부/전무).
 
 ---
 
-### 7.6 청크 추가 제안 검토 (§6.9)
+### 7.6 지식 제안 검토 (§6.9)
 
-`/admin` 페이지 하단 **청크 추가 제안** 카드입니다. 큐레이션 Q&A 카드와 같은 `<details>` 지연 로딩 구조로, 펼칠 때만(`GET /admin/submissions`) 목록을 조회합니다. 카드 제목 옆에는 검토 대기 건수가 빨간 배지로 표시됩니다(대기 0건이면 감춰짐).
+`/admin` 페이지 하단 **지식 제안 검토** 카드입니다. 큐레이션 Q&A 카드와 같은 `<details>` 지연 로딩 구조로, 펼칠 때만(`GET /admin/submissions`) 목록을 조회합니다. 카드 제목 옆에는 검토 대기 건수가 빨간 배지로 표시됩니다(대기 0건이면 감춰짐).
 
 기본 필터는 **검토 대기**(`status=pending`) — 요청 그대로 "아직 등록되지 않은 제안"만 보여줍니다. 드롭다운에서 등록 완료/반려/철회됨/전체로 바꿀 수 있습니다.
 
@@ -2461,7 +2591,7 @@ rrfScore(문서) = Σ  가중치 ÷ (그 축에서의 순위 + k)      ← k = S
 검색기여 = rrfScore ÷ Σ(최종 컷 문서들의 rrfScore)
 ```
 
-가중치는 벡터축 `1/축개수`(그룹 정규화), BM25 `SEARCH_RRF_KEYWORD_WEIGHT`(0.5), 좋아요 큐레이션 `SEARCH_CURATED_QA_WEIGHT`(1.0), 지식 제안 `SEARCH_SUBMISSION_WEIGHT`(1.0)입니다 — 큐레이션 두 축은 벡터 축 그룹과 **동등**에서 시작합니다.
+가중치는 벡터축 `1/축개수`(그룹 정규화), BM25 `SEARCH_RRF_KEYWORD_WEIGHT`(0.5), 큐레이션 `SEARCH_CURATED_QA_WEIGHT`(1.0)입니다 — 큐레이션 축은 벡터 축 그룹과 **동등**에서 시작합니다.
 
 **① 값이 다 비슷한 것이 정상입니다.** k=60이 순위 차이를 크게 눌러 줍니다. 벡터 축 하나에만 걸린 문서 8개라면:
 
@@ -2557,7 +2687,7 @@ A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 
 **대화 삭제**
 
 - 삭제는 되돌릴 수 없고 **다른 사용자의 대화에까지 닿습니다.** 확인 대화상자의 숫자는 화면의 행이 아니라 **클릭 시점에 서버에서 다시 읽습니다** — 패널을 열어둔 지 오래됐을 수 있기 때문입니다.
-- 지워지는 것: `conversation_turns`·`turn_source_ref`·`turn_image_ref`·`thread_meta`, 그리고 **그 대화에서 좋아요로 승격된 큐레이션 Q&A 행과 벡터**. 마지막 항목이 없으면 대화가 사라진 뒤에도 그 답변이 검색 근거로 계속 쓰입니다(§6.7). 승인된 **청크 추가 제안**(`origin='manual'`)은 대화에 속하지 않으므로 영향받지 않습니다.
+- 지워지는 것: `conversation_turns`·`turn_source_ref`·`turn_image_ref`·`thread_meta`, 그리고 **그 대화에서 좋아요로 승격된 큐레이션 Q&A 행과 벡터**. 마지막 항목이 없으면 대화가 사라진 뒤에도 그 답변이 검색 근거로 계속 쓰입니다(§6.7). 승인된 **지식 제안**(`origin='manual'`)은 대화에 속하지 않으므로 영향받지 않습니다.
 - 그 대화의 **검색 진단 수치도 함께 사라집니다** — 튜닝의 관측 표본이 그만큼 줄어듭니다. 확인 문구에 함께 표시됩니다.
 - 감사 로그에 `admin.thread.delete`(소유자·턴 수·회수된 큐레이션 수)가 남습니다.
 - **일괄 삭제 기능은 없습니다**(의도적).
@@ -2584,7 +2714,7 @@ mvn spring-boot:run 2>&1 | head -80
 curl http://localhost:8080/api/v1/health
 
 # Chroma 연결 확인
-curl http://localhost:8001/api/v1/heartbeat
+curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 404 (docker-compose 헬스체크와 동일)
 ```
 
 | 원인 | 조치 |
@@ -2837,6 +2967,7 @@ docker-compose logs app
 | `.env` 환경변수 누락 | 필수 항목 모두 입력 확인 |
 | Chroma 미준비 | healthcheck 설정 확인; `docker-compose up chroma` 먼저 실행 |
 | 포트 충돌 | `docker-compose.yml`의 포트 매핑 변경 |
+| **메모리 부족(OOM kill)** | `docker inspect <container> --format '{{.State.OOMKilled}}'`가 `true`면 이것입니다. **앱 로그에는 아무것도 남지 않습니다** — 커널이 프로세스를 즉시 죽이기 때문에 `OutOfMemoryError` 스택조차 없습니다. 대형 문서 인덱싱 중에 반복된다면 `mem_limit`을 올리거나(없다면 호스트 여유 메모리 확인), `INDEXING_MAX_FILES`/`INDEXING_MAX_LLM`을 줄여 동시 처리량을 낮추세요. 힙만 좁히려면 `.env`의 `JAVA_OPTS`로 `-Xmx`를 직접 지정합니다([§4.1.3](#413-메모리jvm-힙-설정)) |
 
 ---
 
@@ -2921,7 +3052,7 @@ Vision 호출이 실패해도 승인은 실패하지 않고 설명 없이 진행
 
 제안 폼은 **등록 전에** 이미지를 먼저 업로드합니다(작성자가 미리보기로 확인할 수 있게). 등록하지 않고 창을 닫은 초안의 이미지는 그대로 남습니다.
 
-- 회수는 **기동 시 1회**(`CuratedImageStore.sweepOrphans()`, `ApplicationReadyEvent`)만 돕니다 — 상시 스케줄러가 없으므로 **장기 무재기동 서버에서는 누적**됩니다. 재기동하면 24시간 지난 미참조 파일이 정리되고 `[SUBMISSION] 참조되지 않는 본문 이미지 N건 정리` 로그가 남습니다.
+- 회수는 `CuratedImageStore.sweepOrphans()`가 **기동 시 1회 + 이후 6시간마다** 돕니다(`ApplicationReadyEvent` + `@Scheduled`). 24시간 지난 미참조 파일이 정리되고 `[SUBMISSION] 참조되지 않는 본문 이미지 N건 정리` 로그가 남습니다. 예전에는 기동 시에만 돌아 몇 주씩 재기동 없이 도는 서버에 초안 이미지가 쌓이기만 했습니다 — 주기가 유예 시간(24시간)보다 훨씬 짧아야 의미가 있고, 훑는 비용은 디렉터리 목록 한 번 + 참조 조회 두 번이라 무시할 만합니다.
 - 24시간 유예는 열어둔 작성 화면의 이미지를 발밑에서 지우지 않기 위한 것입니다.
 - 살아 있는 제안(`pending`/`approved`)이나 활성 `curated_qa`가 참조하는 파일은 절대 지워지지 않습니다. 파일명이 내용 해시라 **여러 제안이 같은 파일을 공유**할 수 있어, 삭제는 항상 참조 세기를 거칩니다.
 - 수동 정리가 필요하면 앱을 내린 뒤 `data/images/submissions/`에서 오래된 파일을 지우세요 — 다만 승인된 제안이 참조하던 파일을 지우면 답변 썸네일이 404가 됩니다(본문 텍스트와 설명은 그대로 남으므로 검색 자체는 계속 동작).
@@ -3004,6 +3135,8 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 
 재시작 없이 `/actuator/loggers` 엔드포인트로 레벨을 변경합니다.  
 변경은 **JVM 프로세스 내에서만 유효**하며, 재시작 시 `application.properties` 값으로 초기화됩니다.
+
+> **접근 권한**: `/actuator/**`(`/actuator/health` 제외)는 **전체 인증 모드와 관리 전용 인증 모드에서 `ROLE_ADMIN`**입니다 — 레벨을 TRACE/DEBUG로 올리는 순간 프롬프트 전문(검색된 문서 원문 포함)이 로그 파일에 쌓이므로 인가 관점에서 관리 행위입니다. 그 두 모드에서는 아래 `curl` 예시가 그대로는 동작하지 않으며, 관리자로 로그인한 세션 쿠키를 함께 보내야 합니다 (`curl -b` / 브라우저). 평문 no-auth 모드(§9.4.1)에서는 예시 그대로 동작합니다.
 
 ```bash
 # 형식: POST /actuator/loggers/{logger-name}
@@ -3096,6 +3229,20 @@ sh scripts/install-hooks.sh
 | 파일 업로드 크기 | 최대 200 MB (기본) | 413 Payload Too Large |
 | 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
 | API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |
+| `X-Trace-Id` 요청 헤더 | 영숫자와 `_`·`-`, 최대 64자 | 거부가 아니라 **서버가 새로 발급**(요청은 정상 처리) |
+
+> **`X-Trace-Id`를 검증하는 이유**: 이 값은 모든 로그 줄의 `[traceId]` 자리에 그대로 들어갑니다. 줄바꿈이
+> 들어가면 로그 한 줄을 두 줄로 위조할 수 있고(가짜 ERROR 줄 주입), 수 KB짜리 값은 매 줄에 반복돼 로그
+> 파일을 부풀립니다. 채팅과 지식 제안이 게스트 개방이라 누구나 보낼 수 있는 헤더입니다. UUID는
+> 하이픈째로 통과하므로 기존 상관관계 id 연동은 그대로 동작합니다.
+
+**크로스 오리진**: `/api/**`에 CORS 매핑이 없습니다. 인증 없는 두 모드에서 그 접두사는 `permitAll` +
+CSRF 예외이므로, 와일드카드 오리진을 열어 두면 방문자가 연 아무 페이지나 그 브라우저를 통해
+`POST /api/v1/chat`으로 검색 답변을, `GET /api/v1/documents`·`/api/v1/chunks/{id}`로 문서·청크 본문을
+읽고 응답까지 가져갈 수 있습니다(폐쇄망이라도 내부 위키·CI 화면 하나의 XSS면 충분합니다). 이 앱의 API
+소비자는 전부 같은 오리진이고 **curl 등 스크립트는 브라우저가 아니라 CORS와 무관**하므로, 자동화에는
+영향이 없습니다. 외부 웹 클라이언트를 붙여야 한다면 와일드카드가 아니라 구체적인 오리진 목록으로
+`WebConfig`에 다시 추가하세요.
 
 업로드 허용 형식과 매직바이트 매핑:
 
@@ -3130,6 +3277,7 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 | 첫 접속 (admin DB 없음) | `/setup` 페이지로 리다이렉트 |
 | `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성 |
 | `/admin/**` 접근 | DB 첫 번째 `ROLE_ADMIN` 계정으로 자동 인증 |
+| `/actuator/**` | 인증 없이 열림 — 폐쇄망 단일 운영자 전제라 `/admin`이 자동 인증되는 것과 같은 선상입니다. **외부에 노출되는 배포라면 이 모드를 쓰지 말고 §9.4.2를 사용하세요** |
 | 그 외 모든 경로 | 고정 guest 계정 자동 인증 (userId = `00000000-0000-0000-0000-000000000001`, `ROLE_USER`) |
 | 로그아웃 버튼 | Navbar에서 숨겨짐 |
 
@@ -3168,7 +3316,9 @@ AUTH_MANAGEMENT_ONLY=true
 | `GET /documents`, `GET /ui/documents/list`, `GET /api/v1/documents` | 로그인 없이 조회 가능 |
 | 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집, **내보내기**) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403. 내보내기는 읽기 동작이지만 문서 전체 내용을 한 번에 반출하는 벌크 기능이라 이 그룹에 포함(§6.8) |
 | `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
-| `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
+| `/actuator/**` (`/actuator/health` 제외) | **`ROLE_ADMIN` 로그인 필요** — `POST /actuator/loggers/{name}`으로 TRACE를 켜면 `LlmCurlLogger`가 검색된 문서 본문이 실린 프롬프트 전문을 로그 파일에 남깁니다. 게스트에게 열린 배포이므로 로그 레벨 변경은 관리 행위로 묶습니다([런타임 레벨 변경](#런타임-레벨-변경-actuator) 참고 — 이 모드에서는 로그인 세션 없이 curl로 레벨을 바꿀 수 없습니다). `/actuator/health`는 모니터링용으로 계속 열려 있습니다 |
+| `/api/v1/documents/**` REST **읽기**(`GET`) | 로그인 없이 조회 가능 + CSRF 예외 |
+| `/api/v1/documents/**` REST **쓰기**(`POST` 업로드·`/sync`, `DELETE`) | **`ROLE_ADMIN` 로그인 필요** (403). CSRF 예외는 유지되므로 토큰은 필요 없고 **세션 쿠키만** 있으면 됩니다. 예전에는 무인증으로 열려 있었는데, 그 상태에서는 바로 위의 문서 관리 UI 게이트가 장식이었습니다 — 이 모드를 켜는 이유가 "문서 관리는 로그인해야 한다"인데 `curl -X DELETE .../api/v1/documents/{docId}` 한 줄이 그것을 그대로 우회했기 때문입니다. curl 자동화는 아래 방법으로 세션을 얻어 그대로 동작합니다 |
 | Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
 | 로그아웃 버튼 | 관리자로 로그인했을 때만 노출 |
 
@@ -3177,6 +3327,28 @@ AUTH_MANAGEMENT_ONLY=true
 2. `/login`에서 방금 만든 이메일·비밀번호로 로그인
 3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
 4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
+
+**curl 자동화 (관리 전용 인증 모드)**: REST 쓰기가 `ROLE_ADMIN`을 요구하므로 세션 쿠키를 한 번 받아
+재사용합니다. `/login`은 폼 로그인이라 CSRF 토큰이 필요하고, `/api/v1/**`은 CSRF 예외라 이후 호출에는
+쿠키만 있으면 됩니다.
+
+```bash
+COOKIES=$(mktemp)
+
+# 1) CSRF 토큰 받기 (쿠키에 XSRF-TOKEN 이 실린다)
+curl -s -c "$COOKIES" http://localhost:8080/login > /dev/null
+TOKEN=$(awk '$6=="XSRF-TOKEN"{print $7}' "$COOKIES")
+
+# 2) 로그인 — 성공하면 같은 쿠키 파일에 JSESSIONID 가 들어온다
+curl -s -b "$COOKIES" -c "$COOKIES" -X POST http://localhost:8080/login \
+  -d "username=admin@example.com" -d "password=..." -d "_csrf=$TOKEN" > /dev/null
+
+# 3) 이후 REST 쓰기는 쿠키만으로 (CSRF 토큰 불필요)
+curl -s -b "$COOKIES" -X POST "http://localhost:8080/api/v1/documents/sync?version=latest"
+```
+
+> 읽기 전용 호출(`GET /api/v1/documents`, `POST /api/v1/chat`, `GET /api/v1/health` 등)은 예전처럼
+> 로그인 없이 그대로 동작합니다 — 위 절차는 **쓰기**에만 필요합니다.
 
 > **주의**: 이 모드는 "누가 관리할 수 있는가"만 잠급니다. 채팅 개인화가 필요하면 아래 §9.4.3을, 계정 기반의 진짜 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
 
@@ -3200,14 +3372,21 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 
 - **프록시 뒤(Caddy 등) → `true` 필수**. 끄면 모든 요청이 프록시 IP 하나로 보여 **개인화가 무효**가 되고, per-IP 속도 제한도 전원이 한 버킷을 공유합니다.
 - **프록시 없이 직접 노출 → `false` 유지**. `X-Forwarded-For`는 클라이언트가 임의로 넣을 수 있는 헤더라, 신뢰하면 공격자가 매 요청 헤더만 바꿔 속도 제한을 무한 우회하거나 **다른 방문자의 게스트 신원을 가로채 대화 목록을 열람**할 수 있습니다(PLAN §6.19.3).
+- 이 플래그를 읽는 소비자는 **셋**입니다: 속도 제한(`RateLimitFilter`), 방문자 식별(`GuestIdentityResolver`), 그리고 **감사 로그의 `ip` 필드**(`AuditLogger`). 세 번째는 뒤늦게 합류했습니다 — 그전까지 감사 로그만 이 플래그를 보지 않고 헤더를 무조건 믿었고, 하필 "누가 무엇을 했는가"를 남기는 것이 목적인 필드가 셋 중 가장 위조하기 쉬웠습니다.
 
 **동작 세부**:
 - 방문자 id는 `guest-<12자리 hex>` 형식입니다. IP 원문은 저장되지 않고, 서버가 최초 기동 시 생성해 `app_secret` 테이블에 보관하는 키로 HMAC 해싱됩니다(재기동해도 id가 바뀌지 않도록 영속화).
 - 쿠키 이름은 `rag_visitor`(HttpOnly, SameSite=Lax, 1년). HTTPS 접속이면 `Secure`도 붙습니다.
-- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권, 그리고 **청크 추가 게시판의 "내 제안" 목록·처리 알림**(§6.9)뿐입니다.
-- **§6.9 청크 추가 게시판을 쓴다면 이 설정이 사실상 필수**입니다 — `shared`에서는 모든 방문자가 한 사람으로 취급되어 서로의 제안과 처리 알림이 섞여 보입니다. `hybrid`에서는 실제 로그인한 관리자가 이 화면을 열어도 게스트 id로 덮어써지지 않으므로(`NoAuthAutoLoginFilter.hasRealLogin()`), 관리자 본인 제안이 게스트 목록에 섞이지 않습니다.
+- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권, 그리고 **지식 제안 게시판의 "내 제안" 목록·처리 알림**(§6.9)뿐입니다.
+- **§6.9 지식 제안 게시판을 쓴다면 이 설정이 사실상 필수**입니다 — `shared`에서는 모든 방문자가 한 사람으로 취급되어 서로의 제안과 처리 알림이 섞여 보입니다. `hybrid`에서는 실제 로그인한 관리자가 이 화면을 열어도 게스트 id로 덮어써지지 않으므로(`NoAuthAutoLoginFilter.hasRealLogin()`), 관리자 본인 제안이 게스트 목록에 섞이지 않습니다.
 - 오타 등 알 수 없는 값은 `shared`로 폴백합니다(설정 실수가 "반쪽만 분리된" 상태로 이어지지 않도록). 기동 로그의 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값을 확인하세요.
 - **기존 대화는 보이지 않게 됩니다.** 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id(`00000000-…-0001`)에 묶여 있어 새 방문자 id로는 조회되지 않습니다(삭제되지는 않음). 되돌리려면 `shared`로 다시 바꾸면 그대로 다시 보입니다.
+
+> **전체 인증 모드의 문서 관리도 `ROLE_ADMIN`입니다.** `/signup`이 열려 있는 모드라 "로그인한 사용자
+> 누구나"로 두면 가입만 하면 문서를 올리고 지우고 통째로 내보낼 수 있습니다 — 관리 전용 모드와
+> **같은 목록**(`SecurityConfig.gateDocumentManagement`)을 씁니다. 그 짝으로 `/setup`은 이 모드에서도
+> 열립니다: 관리자 계정을 만드는 유일한 경로이고(`/signup`은 `ROLE_USER`만 만듭니다), 관리자가 하나라도
+> 생기면 스스로 닫힙니다. 배포 직후 가장 먼저 `/setup`으로 관리자를 만드세요.
 
 **인증 재활성화 (전체 인증 모드로 전환)**:
 1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
@@ -3258,7 +3437,9 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] (평문 no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 - [ ] (관리 전용 인증 모드) 게스트로 `/admin` 및 문서 업로드 시도 → `/login` 리다이렉트 확인, 게스트 화면에 업로드 카드 미노출 확인
 - [ ] (관리 전용 인증 모드) 관리자 로그인 후 `/admin`·문서 업로드/삭제 정상 동작 + 다른 페이지 이동 후에도 로그인 상태 유지 확인
-- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 정상 동작 확인(curl 자동화 보존)
+- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 → **403** 확인(REST 쓰기도 관리 게이트를 받는다)
+- [ ] (관리 전용 인증 모드) 로그인 세션 쿠키를 실은 같은 호출 → 200 확인(curl 자동화가 세션으로 계속 동작)
+- [ ] (관리 전용 인증 모드) 무인증 `curl ".../api/v1/documents"`(GET) → 200 확인(읽기는 게스트 개방 유지)
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
@@ -3274,18 +3455,18 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] 벡터 스토어 관리 페이지 ↺ 버튼으로 MD 재인덱싱 성공 확인
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
-**청크 추가 게시판 (§6.9, 사용하는 경우)**:
-- [ ] 기존 DB 업그레이드라면 **적용 전 `data/memory.db` 백업** + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
+**지식 제안 게시판 (§6.9, 사용하는 경우)**:
+- [ ] 기존 DB 업그레이드라면 **적용 전 DB 파일 백업**(`data/memory.db` + 분리를 켰다면 벡터 DB 파일 — §6.3.1) + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
 - [ ] (게스트 배포) `AUTH_GUEST_IDENTITY`가 `shared`가 아닌지 확인 — 기동 로그 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값 확인
 - [ ] `/curated/submissions`에서 제안 1건 등록 → 관리자 헤더 배지에 대기 건수 표시(최대 60초) 확인
 - [ ] 게스트로 `GET /admin/submissions/pending-count` 호출 → 로그인 리다이렉트(또는 403) 확인
-- [ ] `/admin` 청크 추가 제안 카드에서 **임베딩 실행** → 해당 내용으로 검색 시 답변 근거에 반영되는지 확인
+- [ ] `/admin` 지식 제안 검토 카드에서 **임베딩 실행** → 해당 내용으로 검색 시 답변 근거에 반영되는지 확인
 - [ ] 거부 처리 → 작성자 화면에 사유 전문 표시 + 헤더 배지 갱신 확인
 - [ ] `data/audit/audit.log`에 `curated.submission.approve`/`.reject` 기록 확인
 
 **태그 기반 검색 적용 시 (프리릴리즈 정책)**:
 - [ ] 적용 전 백업 여부 결정 및 수행 (선택)
-- [ ] `data/memory.db`(+wal/shm), `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
+- [ ] `data/memory.db`(+wal/shm) — 분리를 켰다면 벡터 DB 파일도 함께 —, `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
 - [ ] (chroma) `data/chroma` 또는 `chroma_data` 볼륨 초기화 완료
 - [ ] 재기동 후 `/setup` 또는 로그인 경로 정상 확인
 - [ ] 문서 재업로드/동기화 후 태그 엄격 필터 동작 확인

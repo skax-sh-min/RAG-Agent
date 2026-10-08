@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -43,6 +44,53 @@ import java.util.stream.Collectors;
 public class DocumentLoaderService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentLoaderService.class);
+
+    /** 스캔 문서 OCR 의 기준 해상도. 페이지가 작으면 이 값을 그대로 쓴다. */
+    private static final int OCR_TARGET_DPI = 300;
+
+    /**
+     * 한 페이지를 렌더할 때 허용하는 최대 픽셀 수.
+     *
+     * <p>{@code renderImageWithDPI} 는 페이지 전체를 <b>한 장의</b> {@code BufferedImage} 로 만든다
+     * ({@code ImageType.RGB} → 픽셀당 4바이트). 300 DPI 고정이면 그 크기가 종이 크기에 비례해
+     * 자란다 — A4 는 2480×3508(약 35MB)이라 괜찮지만 <b>A0 도면은 9933×14043, 한 장이 약 560MB</b>
+     * 다. 인덱싱은 백그라운드에서 도는 작업이라 그 OOM 은 사용자에게 "업로드가 실패했다"로만 보인다.
+     *
+     * <p>4천만 픽셀이면 A2 까지는 300 DPI 가 그대로 유지되고(A2 300DPI = 약 3,500만), A1 은 약
+     * 227 DPI, A0 는 약 160 DPI 로 내려간다 — 스캔 문서 OCR 에 충분한 범위다. 상한에 닿은 최악이
+     * 약 160MB.
+     */
+    private static final long MAX_OCR_RENDER_PIXELS = 40_000_000L;
+
+    /**
+     * 아무리 큰 페이지라도 이 아래로는 내리지 않는다 — 그 밑은 OCR 이 사실상 글자를 읽지 못해
+     * 렌더링 비용만 버리는 셈이 된다. 이 하한에서 상한을 넘으려면 페이지가 6m 를 넘어야 하므로
+     * (현실의 도면에는 없다) 두 제약이 실제로 충돌하지는 않는다.
+     */
+    private static final float MIN_OCR_DPI = 72f;
+
+    /**
+     * 이 크기의 페이지를 몇 DPI 로 렌더할 것인가 — {@link #MAX_OCR_RENDER_PIXELS} 만 보는 순수 계산.
+     *
+     * <p>픽셀 수는 DPI 의 <b>제곱</b>에 비례하므로(양 축이 함께 늘어난다) 축소 배율은 비율의
+     * 제곱근이다. 그래서 상한을 두 배 넘긴 페이지의 DPI 는 절반이 아니라 약 0.71 배가 된다.
+     *
+     * @param widthPt/heightPt 페이지 크기(포인트, 1/72 인치). 0 이하면 기준 DPI 를 그대로 쓴다
+     *                         (깨진 상자 때문에 해상도를 바꾸지는 않는다 — 렌더가 알아서 실패한다).
+     */
+    static float ocrRenderDpi(float widthPt, float heightPt) {
+        if (widthPt <= 0 || heightPt <= 0) return OCR_TARGET_DPI;
+        double inches = (widthPt / 72.0) * (heightPt / 72.0);
+        double pixelsAtTarget = inches * OCR_TARGET_DPI * OCR_TARGET_DPI;
+        if (pixelsAtTarget <= MAX_OCR_RENDER_PIXELS) return OCR_TARGET_DPI;
+        double scale = Math.sqrt(MAX_OCR_RENDER_PIXELS / pixelsAtTarget);
+        double exact = OCR_TARGET_DPI * scale;
+        float dpi = (float) exact;
+        // float 로 좁히면서 위로 반올림되면 상한을 몇 픽셀 넘긴다. 렌더 결과로는 무의미한 차이지만
+        // "상한 이하"라는 계약이 흔들리므로, 그런 경우에만 한 칸 내린다.
+        if (dpi > exact) dpi = Math.nextDown(dpi);
+        return Math.max(MIN_OCR_DPI, dpi);
+    }
 
     private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지: ([^\\]]+?)]");
     private static final Pattern HEADING_PAGE_MARKER = Pattern.compile("^\\[헤딩페이지:\\s*(\\d+)]\\s*$");
@@ -137,7 +185,15 @@ public class DocumentLoaderService {
             int pageCount = pdDoc.getNumberOfPages();
             log.debug("[LOADER:OCR] {} → {}페이지 렌더링 시작", filePath.getFileName(), pageCount);
             for (int i = 0; i < pageCount; i++) {
-                BufferedImage img = renderer.renderImageWithDPI(i, 300, ImageType.RGB);
+                // 페이지 크기에 맞춰 DPI 를 정한다 — 300 고정은 큰 도면에서 한 장이 수백 MB 다.
+                PDRectangle box = pdDoc.getPage(i).getCropBox();   // 렌더가 기준으로 삼는 상자
+                float dpi = ocrRenderDpi(box.getWidth(), box.getHeight());
+                if (dpi < OCR_TARGET_DPI) {
+                    log.info("[LOADER:OCR] 페이지 {} 이(가) 커서 해상도를 낮춥니다: {}x{}pt → {} DPI (기본 {} DPI)",
+                            i + 1, Math.round(box.getWidth()), Math.round(box.getHeight()),
+                            Math.round(dpi), OCR_TARGET_DPI);
+                }
+                BufferedImage img = renderer.renderImageWithDPI(i, dpi, ImageType.RGB);
                 String text = ocrService.extractText(img);
                 if (text == null || text.isBlank()) {
                     log.debug("[LOADER:OCR] 페이지 {} 텍스트 없음, 스킵", i + 1);

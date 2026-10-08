@@ -78,7 +78,7 @@ class RagServiceTest {
                 new AbstractMap.SimpleEntry<>("new.pdf_bbb", entry("bbb", "latest", "2026-06-01T00:00:00Z", 5))
         ));
         when(docRegistry.entries(DocRegistry.SHARED)).thenReturn(entries);
-        when(keywordRepo.tagsByDocIds(anyList()))
+        when(docRegistry.tagsByDocIds(anyList()))
                 .thenReturn(Map.of("new.pdf_bbb", List.of("faq")));
 
         List<DocumentInfo> result = service.listDocuments("u1");
@@ -179,7 +179,7 @@ class RagServiceTest {
     void findDocument_present_includesTags() {
         when(docRegistry.findByDocId("doc1", DocRegistry.SHARED))
                 .thenReturn(java.util.Optional.of(entry("sha", "latest", "2026-01-01T00:00:00Z", 3)));
-        when(keywordRepo.tagsByDocIds(List.of("doc1"))).thenReturn(Map.of("doc1", List.of("faq", "guide")));
+        when(docRegistry.tagsByDocIds(List.of("doc1"))).thenReturn(Map.of("doc1", List.of("faq", "guide")));
 
         Optional<DocumentInfo> result = service.findDocument("u1", "doc1");
 
@@ -209,6 +209,9 @@ class RagServiceTest {
         assertThat(result.tags()).containsExactly("faq", "guide"); // normalized: lowercase + trim + dedupe
         verify(vectorStore).updateTags(DocRegistry.SHARED, "v2", existing.springDocIds(), "faq,guide");
         verify(keywordRepo).updateDocTags("doc1", "faq,guide");
+        // 목록·제안 UI 가 읽는 출처. 셋(vector store · registry · chunk_fts)이 함께 갱신돼야
+        // 화면의 태그와 검색 필터가 어긋나지 않는다.
+        verify(docRegistry).updateTags("doc1", DocRegistry.SHARED, "faq,guide");
     }
 
     @Test

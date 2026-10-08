@@ -102,6 +102,41 @@ public class PptxImageExtractor {
 
     /** Rendered pixels per anchor point — anchor sizes are modest, so upscale for legibility. */
     private static final double RENDER_SCALE = 2.0;
+
+    /**
+     * 래스터라이즈 한 장에 허용하는 최대 픽셀 수.
+     *
+     * <p>{@link #rasterize} 는 도형들의 바운딩박스 합집합을 <b>한 장의</b> {@code BufferedImage} 로
+     * 만든다({@code TYPE_INT_RGB} → 픽셀당 4바이트). 그 크기는 슬라이드가 아니라 <b>도형의 앵커</b>
+     * 에서 오므로, 슬라이드 밖 멀리 놓인 도형 하나(잘못 저장된 앵커, 캔버스 밖으로 밀어 둔 초안)가
+     * 수 GB 짜리 할당이 된다 — PDF 내장 이미지·OCR 렌더에 상한을 건 것과 같은 종류의 구멍이다.
+     *
+     * <p>1,600만 픽셀이면 표준 16:9 슬라이드(960×540pt) 전체를 기준 배율로 그린 것(약 200만)의
+     * 8배라, 정상 도형은 배율이 그대로다. 상한에 닿은 최악이 64MB.
+     */
+    static final long MAX_RASTER_PIXELS = 16_000_000L;
+
+    /**
+     * 이 크기의 합집합을 몇 배로 그릴 것인가 — {@link #MAX_RASTER_PIXELS} 만 보는 순수 계산.
+     *
+     * <p>픽셀 수는 배율의 <b>제곱</b>에 비례하므로 축소는 비율의 제곱근이다. 기준 배율로 상한을
+     * 넘으면 낮추되, <b>1.0 아래로는 내리지 않는다</b> — 그 밑은 원래 크기보다 작게 그리는 것이라
+     * Vision 이 읽을 것이 없고, 상한을 넘기려면 합집합이 4,000×4,000pt(슬라이드의 약 30배 면적)를
+     * 넘어야 하므로 그건 다이어그램이 아니라 앵커 사고다. 그 경우 {@code 0} 을 돌려 호출자가
+     * 그리지 않게 한다. 크기가 0 이하면 기준 배율을 그대로 준다(호출자가 따로 거른다).
+     */
+    static double renderScale(double widthPt, double heightPt) {
+        if (widthPt <= 0 || heightPt <= 0) return RENDER_SCALE;
+        double pixelsAtTarget = widthPt * RENDER_SCALE * heightPt * RENDER_SCALE;
+        if (pixelsAtTarget <= MAX_RASTER_PIXELS) return RENDER_SCALE;
+        double scale = RENDER_SCALE * Math.sqrt(MAX_RASTER_PIXELS / pixelsAtTarget);
+        // 배율을 낮췄더라도 ceil 두 번이면 몇 픽셀 넘길 수 있다 — 계약은 "상한 이하"다. 한 칸(ULP)씩
+        // 내리면 픽셀 하나를 줄이는 데 수조 번이 걸리므로 0.1% 씩 내린다(보통 한 번이면 끝난다).
+        while (Math.ceil(widthPt * scale) * Math.ceil(heightPt * scale) > MAX_RASTER_PIXELS) {
+            scale *= 0.999;
+        }
+        return scale < 1.0 ? 0 : scale;
+    }
     /** Clusters larger than this are treated as a crowded slide, not a diagram — see class javadoc. */
     private static final int MAX_CLUSTER_SHAPES = 25;
 
@@ -526,8 +561,11 @@ public class PptxImageExtractor {
             union = (union == null) ? anchor : union.createUnion(anchor);
         }
 
-        int width = (int) Math.ceil(union.getWidth() * RENDER_SCALE);
-        int height = (int) Math.ceil(union.getHeight() * RENDER_SCALE);
+        // 앵커 합집합 크기에 맞춰 배율을 정한다 — 슬라이드 밖 멀리 놓인 도형 하나가 수 GB 할당이 된다.
+        double scale = renderScale(union.getWidth(), union.getHeight());
+        if (scale <= 0) return false;
+        int width = (int) Math.ceil(union.getWidth() * scale);
+        int height = (int) Math.ceil(union.getHeight() * scale);
         if (width <= 0 || height <= 0) return false;
 
         try {
@@ -542,7 +580,7 @@ public class PptxImageExtractor {
                 // NPEs if it's absent — bypassing DrawSheet/DrawSlide (as this single/multi-shape
                 // renderer does) means we have to seed it ourselves.
                 graphics.setRenderingHint(Drawable.GROUP_TRANSFORM, new AffineTransform());
-                graphics.scale(RENDER_SCALE, RENDER_SCALE);
+                graphics.scale(scale, scale);
                 graphics.translate(-union.getX(), -union.getY());
 
                 DrawFactory factory = DrawFactory.getInstance(graphics);

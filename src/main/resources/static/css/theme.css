@@ -13,6 +13,12 @@
     --thread-hover:   #f0f4ff;
     --thread-active:  #e7f0ff;
     --dropzone-hover: #e7f1ff;
+
+    /* §10.14 신고 검토의 차이 보기. -bg 는 줄 전체, -hl 은 그 줄 안에서 실제로 달라진 구간. */
+    --diff-add-bg:    #e6ffec;
+    --diff-add-hl:    #abf2bc;
+    --diff-del-bg:    #ffebe9;
+    --diff-del-hl:    #ffc9c5;
 }
 
 /* ── Dark mode overrides ──────────────────────────────────────────────── */
@@ -30,6 +36,10 @@
     --thread-hover:   #1c2128;
     --thread-active:  #1a2233;
     --dropzone-hover: #1a2233;
+    --diff-add-bg:    #12261e;
+    --diff-add-hl:    #1f6f3f;
+    --diff-del-bg:    #25171c;
+    --diff-del-hl:    #7a2c31;
 
     /* Bootstrap CSS variable bridge — lets Bootstrap built-in components
        (bg-body, bg-body-tertiary, offcanvas, modal, popover, form-text …)

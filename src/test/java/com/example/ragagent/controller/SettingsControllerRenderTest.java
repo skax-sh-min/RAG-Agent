@@ -41,7 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(value = SettingsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
-@WithMockUser
+// §6.19.2 — 이 클래스가 렌더를 확인하는 엔드포인트는 /admin/** 아래이고, 전체 인증 모드에서
+// 그 경로는 ROLE_ADMIN 이다. 기본 @WithMockUser(ROLE_USER)로는 프래그먼트에 닿기 전에 403 이다.
+@WithMockUser(roles = "ADMIN")
 @ResourceLock("global-state")
 class SettingsControllerRenderTest {
 

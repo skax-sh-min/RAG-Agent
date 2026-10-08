@@ -25,12 +25,14 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import org.mockito.ArgumentMatchers;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -125,6 +127,163 @@ class AdminServiceTest {
         assertThat(json.getValue()).contains(MetaKey.EDITED_AT);
     }
 
+    /**
+     * 화면의 메타데이터 JSON 은 읽기 전용이고 편집 가능한 것은 키워드·맥락 둘뿐이다. 예전에는
+     * 클라이언트가 보낸 맵이 저장본을 통째로 대체해서, (a) 요청에 아무 키나 실어 청크 메타데이터를
+     * 만들어 낼 수 있었고 (b) 화면이 보내지 않는 키(로더가 붙이는 {@code section} 등)가 편집 한 번에
+     * 사라졌다.
+     */
+    // ── chunk_context 를 위치 표시 / 요약으로 나누는 규칙 ─────────────────────
+    //
+    // 이 규칙은 화면(admin.html)에 있었다. 소비하는 자리가 둘인데다(편집 패널을 열 때, 키워드·
+    // 요약 재생성 뒤 다시 읽을 때) 이 프로젝트에는 JS 테스트 하네스가 없어 테스트를 붙일 수가
+    // 없었다 — 실제로 한쪽만 고쳐서 재생성 한 번이 요약을 읽기 전용 칸으로 옮겨 놓는 일이 있었다.
+
+    private static AdminService.ChunkRow chunk(Map<String, String> meta) {
+        return new AdminService.ChunkRow("c1", "미리보기", "본문", meta);
+    }
+
+    @Test
+    @DisplayName("문서 청크: 첫 줄이 위치 표시, 나머지가 편집 가능한 요약")
+    void chunkContext_documentChunk_splitsAtTheFirstNewline() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "doc1",
+                MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포\n배포 절차를 설명하는 청크다."));
+
+        assertThat(row.hasBreadcrumb()).isTrue();
+        assertThat(row.contextBreadcrumb()).isEqualTo("manual.md > 3.2 배포");
+        assertThat(row.contextSummary()).isEqualTo("배포 절차를 설명하는 청크다.");
+    }
+
+    /**
+     * 큐레이션 청크의 값은 작성자가 쓴 요약 그 자체다 — 파일 위치라는 개념이 없어 줄바꿈도 없다.
+     * 문서 규칙을 그대로 적용하면 요약 <b>전체</b>가 읽기 전용 칸으로 들어가고 편집란이 빈다.
+     */
+    @Test
+    @DisplayName("큐레이션 청크: 위치 표시가 없고 값 전체가 요약이다")
+    void chunkContext_curatedChunk_isAllSummary() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "curated:7",
+                MetaKey.DOC_TYPE, "curated_qa",
+                MetaKey.CHUNK_CONTEXT, "배포는 ArgoCD 가 자동 반영한다."));
+
+        assertThat(row.hasBreadcrumb()).isFalse();
+        assertThat(row.contextBreadcrumb()).isEmpty();
+        assertThat(row.contextSummary()).isEqualTo("배포는 ArgoCD 가 자동 반영한다.");
+    }
+
+    /** LLM 문장 없이 구조적 맥락만 있는 청크(추출 실패 폴백) — 편집란이 비는 것이 맞다. */
+    @Test
+    @DisplayName("문서 청크에 줄바꿈이 없으면 전부 위치 표시다 (요약은 빈 문자열)")
+    void chunkContext_documentChunkWithoutSentence_isAllBreadcrumb() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "doc1",
+                MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포"));
+
+        assertThat(row.contextBreadcrumb()).isEqualTo("manual.md > 3.2 배포");
+        assertThat(row.contextSummary()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("chunk_context 가 아예 없으면 둘 다 빈 문자열")
+    void chunkContext_absent_isEmptyOnBothSides() {
+        AdminService.ChunkRow row = chunk(Map.of(MetaKey.DOC_ID, "doc1"));
+
+        assertThat(row.contextBreadcrumb()).isEmpty();
+        assertThat(row.contextSummary()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("mergeEditableMeta: 편집 가능한 두 키만 반영하고 나머지 저장본은 그대로 둔다")
+    void mergeEditableMeta_takesOnlyEditableKeys() {
+        Map<String, String> stored = new java.util.LinkedHashMap<>();
+        stored.put(MetaKey.DOC_ID, "doc1");
+        stored.put(MetaKey.FILENAME, "manual.pdf");
+        stored.put("section", "3");                      // MetaKey 에 없는 레거시 키
+        stored.put(MetaKey.EXCERPT_KEYWORDS, "이전 키워드");
+
+        Map<String, String> merged = AdminService.mergeEditableMeta(stored, Map.of(
+                MetaKey.EXCERPT_KEYWORDS, "새 키워드",
+                MetaKey.CHUNK_CONTEXT, "새 맥락",
+                MetaKey.DOC_ID, "위조된-doc",            // 편집 불가 — 무시돼야 한다
+                "injected_key", "임의 값"));             // 클라이언트가 지어낸 키 — 무시돼야 한다
+
+        assertThat(merged).containsEntry(MetaKey.EXCERPT_KEYWORDS, "새 키워드")
+                .containsEntry(MetaKey.CHUNK_CONTEXT, "새 맥락")
+                .containsEntry(MetaKey.DOC_ID, "doc1")
+                .containsEntry(MetaKey.FILENAME, "manual.pdf")
+                .containsEntry("section", "3")
+                .containsKey(MetaKey.EDITED_AT)
+                .doesNotContainKey("injected_key");
+    }
+
+    /**
+     * 큐레이션 청크에서 이 둘의 단일 출처는 {@code curated_qa.summary}/{@code .keywords} 컬럼이고,
+     * 벡터 메타데이터의 값은 재임베딩마다 거기서 다시 쓰이는 <b>사본</b>이다
+     * ({@code CuratedQaService.buildDocument}). 편집을 받아 주면 화면은 "저장되었습니다"라고 하는데
+     * 다음 재임베딩이 조용히 옛 값으로 되돌린다 — 오류도 로그도 없다. 고치는 자리는 큐레이션
+     * 패널 하나이며, 그쪽 저장은 재임베딩까지 함께 돈다.
+     */
+    @Test
+    @DisplayName("mergeEditableMeta: 큐레이션 청크에서는 요약·키워드 편집을 받지 않는다 (되돌아갈 값이라서)")
+    void mergeEditableMeta_curatedChunkIgnoresEnrichmentEdits() {
+        Map<String, String> stored = new java.util.LinkedHashMap<>();
+        stored.put(MetaKey.DOC_ID, "curated:7");
+        stored.put(MetaKey.DOC_TYPE, "curated_qa");
+        stored.put(MetaKey.EXCERPT_KEYWORDS, "저장된 키워드");
+        stored.put(MetaKey.CHUNK_CONTEXT, "저장된 요약");
+
+        Map<String, String> merged = AdminService.mergeEditableMeta(stored, Map.of(
+                MetaKey.EXCERPT_KEYWORDS, "화면에서 고친 키워드",
+                MetaKey.CHUNK_CONTEXT, "화면에서 고친 요약"));
+
+        assertThat(merged).containsEntry(MetaKey.EXCERPT_KEYWORDS, "저장된 키워드")
+                .containsEntry(MetaKey.CHUNK_CONTEXT, "저장된 요약")
+                .as("본문 편집 추적은 그대로 — 텍스트는 여전히 고칠 수 있다")
+                .containsKey(MetaKey.EDITED_AT);
+    }
+
+    /** 문서 청크는 영향이 없어야 한다 — 가드는 doc_type 하나로만 걸린다. */
+    @Test
+    @DisplayName("mergeEditableMeta: doc_type 이 없는 평범한 문서 청크는 예전 그대로 편집된다")
+    void mergeEditableMeta_documentChunkStillEditable() {
+        Map<String, String> merged = AdminService.mergeEditableMeta(
+                new java.util.LinkedHashMap<>(Map.of(MetaKey.DOC_ID, "doc1")),
+                Map.of(MetaKey.CHUNK_CONTEXT, "새 맥락"));
+
+        assertThat(merged).containsEntry(MetaKey.CHUNK_CONTEXT, "새 맥락");
+    }
+
+    @Test
+    @DisplayName("mergeEditableMeta: 본문만 고친 편집(clientMeta=null)도 저장본을 지키고 스탬프를 찍는다")
+    void mergeEditableMeta_nullClientMetaPreservesStored() {
+        Map<String, String> merged = AdminService.mergeEditableMeta(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.TAGS, "billing"), null);
+
+        assertThat(merged).containsEntry(MetaKey.DOC_ID, "doc1")
+                .containsEntry(MetaKey.TAGS, "billing")
+                .containsKey(MetaKey.EDITED_AT);
+    }
+
+    @Test
+    @DisplayName("updateChunk(sqlite-vec): 저장된 메타데이터를 읽어 그 위에 편집분을 얹는다")
+    void updateChunk_mergesOntoStoredMetadata() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+        when(jdbc.query(eq("SELECT metadata FROM vec_document_chunks WHERE spring_doc_id = ?"),
+                ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<String>>any(), eq("c1")))
+                .thenReturn(List.of("{\"doc_id\":\"doc1\",\"section\":\"3\"}"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+        svc.updateChunk("latest", "c1", "new text", Map.of(MetaKey.EXCERPT_KEYWORDS, "kw"));
+
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"),
+                json.capture(), eq("c1"));
+        assertThat(json.getValue()).contains("doc1").contains("section").contains("kw");
+    }
+
     /** 호출자가 넘긴 맵은 불변(Map.of)일 수 있고, 남의 맵을 고쳐 놓아서도 안 된다. */
     @Test
     @DisplayName("updateChunk: 호출자가 넘긴 메타데이터 맵 자체는 변경하지 않는다")
@@ -198,6 +357,129 @@ class AdminServiceTest {
 
         assertThat(page1).extracting(AdminService.ChunkRow::fullText).containsExactly("d1c0", "d1c1");
         assertThat(page2).extracting(AdminService.ChunkRow::fullText).containsExactly("d2c0", "d2c1");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 1단계는 메타데이터만, 2단계는 이 페이지의 id 만 본문과 함께 읽는다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_readsBodiesOnlyForThePage() {
+        ChromaApi api = mock(ChromaApi.class);
+        List<String> ids  = List.of("zid", "aid", "mid", "bid");
+        List<String> docs = List.of("d1c1", "d2c0", "d1c0", "d2c1");
+        List<Map<String, String>> metas = List.of(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "1"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "1"));
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(ids, List.of(), docs, metas));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        svc.getChunks("col", null, 0, 2);
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> reqs =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api, times(2)).getEmbeddings(anyString(), anyString(), anyString(), reqs.capture());
+
+        ChromaApi.GetEmbeddingsRequest ordering = reqs.getAllValues().get(0);
+        assertThat(ordering.include())
+                .as("순서만 정하는 조회다 — 본문은 페이로드의 대부분이고 정렬 기준은 전부 메타데이터에 있다")
+                .doesNotContain(ChromaApi.QueryRequest.Include.DOCUMENTS);
+        assertThat(ordering.ids()).as("1단계는 매치 집합 전체를 봐야 한다").isNull();
+
+        ChromaApi.GetEmbeddingsRequest bodies = reqs.getAllValues().get(1);
+        assertThat(bodies.include()).contains(ChromaApi.QueryRequest.Include.DOCUMENTS);
+        assertThat(bodies.ids())
+                .as("본문은 이 페이지에 보이는 것만 — 정렬 결과 첫 2개(doc1의 chunk 0,1)")
+                .containsExactly("mid", "zid");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 2단계 응답이 요청 순서와 다르게 와도 페이지 순서는 정렬 순서를 따른다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_keepsRequestedOrderWhenResponseIsShuffled() {
+        ChromaApi api = mock(ChromaApi.class);
+        List<Map<String, String>> metas = List.of(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "1"),
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "0"));
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                // 1단계(순서 결정) → 2단계(본문). 2단계 응답은 요청한 ids 순서와 반대로 온다.
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("second", "first"), List.of(), List.of("c1", "c0"), metas))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("second", "first"), List.of(), List.of("c1", "c0"), metas));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getChunks("col", null, 0, 2))
+                .extracting(AdminService.ChunkRow::fullText)
+                .containsExactly("c0", "c1");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 1·2단계 사이에 지워진 청크는 조용히 빠진다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_dropsChunksDeletedBetweenPhases() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a", "b"), List.of(), List.of("", ""),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"),
+                                Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "1"))))
+                // 2단계에서는 b 가 이미 없다
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a"), List.of(), List.of("body-a"),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"))));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getChunks("col", null, 0, 2))
+                .extracting(AdminService.ChunkRow::id)
+                .containsExactly("a");
+    }
+
+    @Test
+    @DisplayName("countChunks(chroma, docId) — 세는 데 본문을 끌어오지 않는다")
+    @SuppressWarnings("unchecked")
+    void countChunks_chroma_doesNotFetchBodies() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a", "b", "c"), List.of(), List.of("", "", ""),
+                        List.of(Map.of(), Map.of(), Map.of())));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.countChunks("col", "doc1")).isEqualTo(3);
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> req =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api).getEmbeddings(anyString(), anyString(), anyString(), req.capture());
+        assertThat(req.getValue().include()).doesNotContain(ChromaApi.QueryRequest.Include.DOCUMENTS);
+    }
+
+    @Test
+    @DisplayName("getAllChunks(chroma) — 전체가 필요한 경로는 한 번에 본문까지 읽는다(왕복을 늘리지 않는다)")
+    @SuppressWarnings("unchecked")
+    void getAllChunks_chroma_singleRoundTripWithBodies() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("b", "a"), List.of(), List.of("c1", "c0"),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "1"),
+                                Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"))));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getAllChunks("col", "d"))
+                .extracting(AdminService.ChunkRow::fullText)
+                .containsExactly("c0", "c1");
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> req =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api).getEmbeddings(anyString(), anyString(), anyString(), req.capture());
+        assertThat(req.getValue().include()).contains(ChromaApi.QueryRequest.Include.DOCUMENTS);
     }
 
     @Test

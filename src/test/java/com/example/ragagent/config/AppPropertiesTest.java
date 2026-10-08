@@ -18,7 +18,7 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, sseTimeoutSeconds,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                sseIdleTimeoutSeconds, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                sseIdleTimeoutSeconds, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static AppProperties withAuth(AppProperties.AuthConfig auth) {
@@ -26,7 +26,7 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, auth, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static AppProperties withMdCorrectionDefaultCodeLanguage(String lang) {
@@ -34,7 +34,7 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, lang, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, lang, null, null, null, null, null, null, null, null, null);
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
 import com.example.ragagent.service.CuratedQaService;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -36,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -46,6 +49,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -71,6 +75,8 @@ class AdminControllerWebMvcTest {
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
+    @MockitoBean com.example.ragagent.service.CuratedQuestionSuggester questionSuggester;
+    @MockitoBean com.example.ragagent.service.ChunkReportService chunkReportService;
     @MockitoBean com.example.ragagent.audit.AuditLogger auditLogger;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
@@ -216,7 +222,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1, null, null)));
 
         mvc.perform(get("/admin/curated").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -232,7 +238,7 @@ class AdminControllerWebMvcTest {
         when(submissionService.listForAdmin(anyString(), anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                         1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                        "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0)));
+                        "2026-01-01", "2026-01-01", null, null, "인프라", null, null, null, null, 0, 0, 0, 0)));
 
         mvc.perform(get("/admin/submissions").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -241,6 +247,39 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("검토 대기")));
 
         verify(submissionService).listForAdmin("pending", 0, 20);
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions/{id}/detail — 좋아요 출신이면 표기와 원 대화를 함께 싣는다")
+    void submissionDetail_carriesChatOrigin() throws Exception {
+        var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
+                1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
+                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", null, null, 0, 0, 0, 0);
+        when(submissionService.findById(1L)).thenReturn(Optional.of(row));
+        when(submissionService.previewChunkCount(anyString())).thenReturn(1);
+        when(submissionService.originOf(row)).thenReturn(Optional.of(
+                new CuratedSubmissionService.TurnOrigin("t1", 42L, "DN")));
+
+        // [DN] = 문서를 하나도 읽지 않은 답변. 본문만 봐서는 알 수 없고, 반려 여부를 가르는 정보다.
+        mvc.perform(get("/admin/submissions/1/detail").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"modeLabel\":\"DN\",\"sourceThreadId\":\"t1\",\"sourceTurnId\":42}"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions/{id}/detail — 손으로 쓴 제안에는 출처가 실리지 않는다")
+    void submissionDetail_handWritten_hasNoOrigin() throws Exception {
+        var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
+                2L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
+                "2026-01-01", "2026-01-01", null, null, null, null, null, null, null, 0, 0, 0, 0);
+        when(submissionService.findById(2L)).thenReturn(Optional.of(row));
+        when(submissionService.previewChunkCount(anyString())).thenReturn(1);
+        when(submissionService.originOf(row)).thenReturn(Optional.empty());
+
+        String json = mvc.perform(get("/admin/submissions/2/detail").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(json).doesNotContain("sourceTurnId").doesNotContain("modeLabel");
     }
 
     @Test
@@ -319,7 +358,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1, null, null)));
 
         mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -336,9 +375,9 @@ class AdminControllerWebMvcTest {
     }
 
     @Test
-    @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200")
+    @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200 (answer 만 보내는 기존 호출 모양)")
     void updateCurated_success_returnsOk() throws Exception {
-        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(true);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString(), any(), any())).thenReturn(true);
 
         mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -347,14 +386,80 @@ class AdminControllerWebMvcTest {
     }
 
     @Test
+    @DisplayName("POST /admin/curated/{id} — 질문과 답변을 함께 보내면 둘 다 서비스로 넘어간다")
+    void updateCurated_passesQuestionAndAnswer() throws Exception {
+        when(curatedQaService.updateEntry(anyLong(), any(), any(), any(), any())).thenReturn(true);
+
+        mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"VPN 접속이 안 될 때 확인할 설정은?\",\"answer\":\"본문\"}"))
+                .andExpect(status().isOk());
+
+        // 질문과 답변이 같은 검색 텍스트를 이루므로 한 번의 저장이 둘 다 실어야 한다 —
+        // 나눠 보내면 같은 항목을 두 번 임베딩하고 그 사이에 반쪽 상태가 남는다.
+        verify(curatedQaService).updateEntry(1L, "VPN 접속이 안 될 때 확인할 설정은?", "본문", null, null);
+    }
+
+    /**
+     * 요약·키워드의 단일 출처가 이 엔드포인트다 — 청크 편집 화면의 같은 이름 칸은 재임베딩마다
+     * 이 값으로 다시 쓰이는 사본이라 그쪽에서 고치면 조용히 되돌아간다
+     * ({@code AdminService.mergeEditableMeta} 가 서버에서도 막는다).
+     */
+    @Test
+    @DisplayName("POST /admin/curated/{id} — 요약·키워드도 같은 저장으로 넘어간다 (단일 출처)")
+    void updateCurated_passesEnrichmentFields() throws Exception {
+        when(curatedQaService.updateEntry(anyLong(), any(), any(), any(), any())).thenReturn(true);
+
+        mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"질문\",\"answer\":\"본문\","
+                               + "\"summary\":\"한 줄 요약\",\"keywords\":\"배포, 인프라\"}"))
+                .andExpect(status().isOk());
+
+        verify(curatedQaService).updateEntry(1L, "질문", "본문", "한 줄 요약", "배포, 인프라");
+    }
+
+    @Test
     @DisplayName("POST /admin/curated/{id} — 존재하지 않으면 404")
     void updateCurated_missing_returns404() throws Exception {
-        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(false);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString(), any(), any())).thenReturn(false);
 
         mvc.perform(post("/admin/curated/99").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"answer\":\"x\"}"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id}/suggest-question — 제안을 돌려주되 저장하지는 않는다")
+    void suggestCuratedQuestion_returnsProposalWithoutSaving() throws Exception {
+        when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 7L, "u1", "t1", "그거 어떻게 해?", "VPN 프로파일에서 split tunneling 을 끄면 됩니다.",
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1, null, null)));
+        when(questionSuggester.suggest(any(), any(), any()))
+                .thenReturn(java.util.Optional.of("VPN 접속이 안 될 때 확인할 설정은?"));
+
+        mvc.perform(post("/admin/curated/1/suggest-question").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("VPN 접속이 안 될 때")));
+
+        // 제안은 제안일 뿐이다 — 사람의 검토가 이 축의 유일한 관문이므로 자동 반영하지 않는다.
+        verify(curatedQaService, never()).updateEntry(anyLong(), any(), any());
+        verify(curatedQaService, never()).updateAnswer(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id}/suggest-question — 제안할 것이 없으면 204")
+    void suggestCuratedQuestion_noProposal_returns204() throws Exception {
+        when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 7L, "u1", "t1", "이미 충분히 구체적인 질문", "본문",
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1, null, null)));
+        when(questionSuggester.suggest(any(), any(), any())).thenReturn(java.util.Optional.empty());
+
+        mvc.perform(post("/admin/curated/1/suggest-question").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNoContent());
     }
 
     @Test
@@ -377,9 +482,59 @@ class AdminControllerWebMvcTest {
 
     // ── 청크 재인덱싱 (재임베딩 + FTS 재색인) ──────────────────────────────────
 
+    /**
+     * 편집 화면이 {@code chunk_context} 를 다시 나누지 않도록 서버가 갈라서 준다. 이 세 필드가
+     * 빠지면 화면은 조용히 빈 문자열로 떨어지고 — 편집란이 빈 채로 열려 — 그대로 저장하면
+     * 요약이 사라진다. 오류는 어디에도 나지 않는다.
+     */
+    @Test
+    @DisplayName("GET /admin/chunks/{id}/detail — chunk_context 를 위치 표시/요약으로 갈라서 준다")
+    void chunkDetail_splitsTheContextForTheEditor() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(
+                new AdminService.ChunkRow("c1", "미리보기", "본문", java.util.Map.of(
+                        MetaKey.DOC_ID, "doc1",
+                        MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포\n배포 절차를 설명한다.")));
+
+        mvc.perform(get("/admin/chunks/c1/detail").with(user(ADMIN)).param("collection", "manual_latest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contextBreadcrumb").value("manual.md > 3.2 배포"))
+                .andExpect(jsonPath("$.contextSummary").value("배포 절차를 설명한다."))
+                .andExpect(jsonPath("$.enrichmentEditable").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunks/{id}/detail — 큐레이션 청크는 값 전체가 요약이고 편집 불가로 표시된다")
+    void chunkDetail_curatedChunkIsAllSummaryAndLocked() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(
+                new AdminService.ChunkRow("curated-7", "미리보기", "본문", java.util.Map.of(
+                        MetaKey.DOC_ID, "curated:7",
+                        MetaKey.DOC_TYPE, "curated_qa",
+                        MetaKey.CHUNK_CONTEXT, "배포는 ArgoCD 가 자동 반영한다.")));
+
+        mvc.perform(get("/admin/chunks/curated-7/detail").with(user(ADMIN)).param("collection", "curated"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contextBreadcrumb").value(""))
+                .andExpect(jsonPath("$.contextSummary").value("배포는 ArgoCD 가 자동 반영한다."))
+                .andExpect(jsonPath("$.enrichmentEditable").value(false));
+    }
+
+    /** 문서 청크 한 줄 — 재인덱싱은 이제 어느 축인지 보고 갈라지므로 조회부터 스텁해야 한다. */
+    private static AdminService.ChunkRow documentChunk() {
+        return new AdminService.ChunkRow("c1", "본문 미리보기", "본문 전체",
+                java.util.Map.of(MetaKey.DOC_ID, "doc-1", MetaKey.FILENAME, "manual.md"));
+    }
+
+    /** 큐레이션 청크 한 줄 — {@code doc_id} 가 {@code curated:<id>} 이고 {@code doc_type} 이 표식이다. */
+    private static AdminService.ChunkRow curatedChunk() {
+        return new AdminService.ChunkRow("curated-7", "제안 미리보기", "제안 본문",
+                java.util.Map.of(MetaKey.DOC_ID, "curated:7", MetaKey.DOC_TYPE, "curated_qa",
+                        MetaKey.FILENAME, "curated_qa"));
+    }
+
     @Test
     @DisplayName("POST /admin/chunks/{id}/reindex — 본문 없이 호출해도 regenerateKeywords=false로 처리(200)")
     void reindexChunk_noBody_defaultsToKeepKeywords() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(documentChunk());
         when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(false)))
                 .thenReturn(true);
 
@@ -391,6 +546,7 @@ class AdminControllerWebMvcTest {
     @Test
     @DisplayName("POST /admin/chunks/{id}/reindex — regenerateKeywords=true가 서비스로 그대로 전달됨")
     void reindexChunk_regenerateKeywordsTrue_passedThrough() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(documentChunk());
         when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(true)))
                 .thenReturn(true);
 
@@ -399,6 +555,27 @@ class AdminControllerWebMvcTest {
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"regenerateKeywords\":true}"))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * 큐레이션 청크의 재인덱싱은 문서 청크 경로로 가면 안 된다 — 그 경로는
+     * {@code chunk_context + 본문}으로 검색 텍스트를 다시 만드는데, 이 축의 검색 텍스트는
+     * <b>질문 + 본문</b>이고 질문은 벡터 메타데이터에 없다. 그대로 태우면 그 청크만 조용히
+     * 질문을 잃고 질문형 질의와의 매칭이 무너진다.
+     */
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 큐레이션 청크는 CuratedQaService 로 간다(문서 경로 미사용)")
+    void reindexChunk_curatedChunk_goesThroughCuratedService() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(curatedChunk());
+        when(curatedQaService.reembedRow(org.mockito.ArgumentMatchers.eq(7L), anyString())).thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/curated-7/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "curated"))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(curatedQaService).reembedRow(org.mockito.ArgumentMatchers.eq(7L), anyString());
+        org.mockito.Mockito.verify(adminService, org.mockito.Mockito.never())
+                .reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test
@@ -777,5 +954,129 @@ class AdminControllerWebMvcTest {
                 .andExpect(status().isNotFound());
 
         verifyNoInteractions(auditLogger);
+    }
+
+    // ── §10.14 청크 오류 신고 패널 ─────────────────────────────────────────
+
+    /** 목록의 단위가 신고가 아니라 청크라는 것이 이 화면의 규칙이다 — 건수는 배지로만 나온다. */
+    @Test
+    @DisplayName("GET /admin/chunk-reports — 청크 단위 행 + 신고 건수 배지를 렌더한다")
+    void chunkReportPanel_rendersGroupedRows() throws Exception {
+        when(chunkReportService.openGroups(0, 20)).thenReturn(List.of(
+                new com.example.ragagent.repository.ChunkReportRepository.Group(
+                        "chunk-1", "doc-1", "latest", "manual.pdf", 3,
+                        "2026-09-04 10:00:00", "2026-09-04 12:00:00")));
+
+        mvc.perform(get("/admin/chunk-reports").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("manual.pdf")))
+                .andExpect(content().string(containsString("chunk-1")))
+                .andExpect(content().string(containsString(">3<")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 코멘트 N개를 한 화면에 + 변경 여부 배지")
+    void chunkReportDetail_rendersEveryComment() throws Exception {
+        var r1 = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                1L, "chunk-1", "doc-1", "latest", "manual.pdf", "u1", "t1", 7L,
+                "포트가 뭐야?", "WRONG", "8080이 아니라 9090입니다", "h1", "신고 당시 원문",
+                "open", null, null, "2026-09-04 10:00:00", null);
+        var r2 = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                2L, "chunk-1", "doc-1", "latest", "manual.pdf", "u2", "t2", 8L,
+                null, "OUTDATED", "작년 기준입니다", "h1", "신고 당시 원문",
+                "open", null, null, "2026-09-04 11:00:00", null);
+        when(chunkReportService.chunkDetail("chunk-1")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ChunkReportService.ChunkReportDetail(
+                        "chunk-1", "doc-1", "latest", "manual.pdf", false,
+                        List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r1, false),
+                                new com.example.ragagent.service.ChunkReportService.ReportView(r2, false)),
+                        "신고 당시 원문", "지금 내용", "original",
+                        com.example.ragagent.service.ChunkDiff.compare("신고 당시 원문", "지금 내용"),
+                        com.example.ragagent.service.ChunkReportService.CHANGE_UNCHANGED,
+                        List.of())));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+
+        mvc.perform(get("/admin/chunk-reports/chunks/chunk-1").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("8080이 아니라 9090입니다")))
+                .andExpect(content().string(containsString("작년 기준입니다")))
+                .andExpect(content().string(containsString("신고 이후 변경 없음")))
+                // 수정은 기존 청크 편집 경로로 보낸다 — 신고 패널은 자체 편집기를 갖지 않는다.
+                .andExpect(content().string(containsString("manual_latest")));
+    }
+
+    /**
+     * 신고 검토의 핵심 질문이 "그대로인가, 아니라면 어디가 달라졌나"라 두 뷰가 <b>같은 응답에</b>
+     * 실려야 한다(토글은 보이기만 바꾼다). 편집 버튼이 신고 전용 진입점을 부르는 것도 함께 본다 —
+     * openChunkEdit() 을 직접 부르면 편집 패널이 신고 패널 뒤에서 열려 아무 일도 없어 보인다.
+     */
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 차이 보기와 나란히 보기를 함께 내려준다")
+    void chunkReportDetail_rendersTheDiff() throws Exception {
+        var r = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                1L, "chunk-9", "doc-1", "latest", "manual.pdf", "u1", "t1", 7L,
+                null, "WRONG", "포트가 틀렸습니다", "h1", "기본 포트는 8080입니다",
+                "open", null, null, "2026-09-04 10:00:00", null);
+        when(chunkReportService.chunkDetail("chunk-9")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ChunkReportService.ChunkReportDetail(
+                        "chunk-9", "doc-1", "latest", "manual.pdf", false,
+                        List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r, true)),
+                        "기본 포트는 8080입니다", "기본 포트는 9090입니다", "original",
+                        com.example.ragagent.service.ChunkDiff.compare(
+                                "기본 포트는 8080입니다", "기본 포트는 9090입니다"),
+                        com.example.ragagent.service.ChunkReportService.CHANGE_MODIFIED,
+                        List.of())));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+
+        mvc.perform(get("/admin/chunk-reports/chunks/chunk-9").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("chunk-report-diff")))
+                .andExpect(content().string(containsString("chunk-report-side")))
+                .andExpect(content().string(containsString("chunk-diff-ch")))
+                .andExpect(content().string(containsString("openChunkEditFromReport")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 그 사이 처리되었으면 빈 안내를 렌더한다")
+    void chunkReportDetail_alreadyHandled() throws Exception {
+        when(chunkReportService.chunkDetail("gone")).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/chunk-reports/chunks/gone").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("열린 신고가 없습니다")));
+    }
+
+    /** 배지 값은 신고 건수가 아니라 열린 신고를 가진 청크 수다(관리자가 할 일의 개수). */
+    @Test
+    @DisplayName("GET /admin/chunk-reports/open-count — 청크 수를 돌려준다")
+    void chunkReportOpenCount() throws Exception {
+        when(chunkReportService.openChunkCount()).thenReturn(2);
+
+        mvc.perform(get("/admin/chunk-reports/open-count").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"count\":2")));
+    }
+
+    @Test
+    @DisplayName("POST .../resolve — 그 청크의 열린 신고를 한 번에 닫고 닫힌 건수를 돌려준다")
+    void resolveChunkReports() throws Exception {
+        // reviewer id 는 CurrentUser 에서 온다(이 테스트에서는 mock 기본값) — 검증 대상이 아니다.
+        when(chunkReportService.resolveChunk(eq("chunk-1"), any(), eq("수정 완료"))).thenReturn(3);
+
+        mvc.perform(post("/admin/chunk-reports/chunks/chunk-1/resolve").with(user(ADMIN)).with(csrf())
+                        .contentType("application/json")
+                        .content("{\"note\":\"수정 완료\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"closed\":3")));
+    }
+
+    @Test
+    @DisplayName("POST .../resolve — 이미 처리된 청크는 409")
+    void resolveAlreadyHandledIsConflict() throws Exception {
+        when(chunkReportService.resolveChunk(anyString(), anyString(), any())).thenReturn(0);
+
+        mvc.perform(post("/admin/chunk-reports/chunks/chunk-1/resolve").with(user(ADMIN)).with(csrf())
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isConflict());
     }
 }

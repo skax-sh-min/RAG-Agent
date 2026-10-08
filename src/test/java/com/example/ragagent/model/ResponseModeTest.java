@@ -151,19 +151,20 @@ class ResponseModeTest {
     }
 
     @Test
-    @DisplayName("allowsCuration — C는 절대 큐레이션되지 않는다(모델이 지어낸 코드가 다음 턴의 '문서'가 되는 되먹임)")
-    void creativeModeIsNeverCuratable() {
-        // 이 설계에서 가장 위험한 단일 지점 — 되돌리려면 벡터를 찾아 지워야 한다(§6.24 Step 3-a).
-        assertThat(ResponseMode.C.allowsCuration()).isFalse();
+    @DisplayName("allowsSubmission — C도 지식 제안을 열 수 있다(§10.11: 되먹임을 막는 것은 모드 제외가 아니라 심사)")
+    void creativeModeMayNowBeProposed() {
+        // 예전에 C를 막은 이유는 좋아요 한 번이 3초 뒤 전체 검색 지식이 됐기 때문이다. 그 직행
+        // 경로가 사라지고 사람 편집 + 관리자 승인이 그 자리에 들어갔으므로 제외할 근거가 없다.
+        assertThat(ResponseMode.C.allowsSubmission()).isTrue();
     }
 
     @Test
-    @DisplayName("allowsCuration — S는 큐레이션 대상이 아니다(좋아요 무동작), N만 승격된다")
-    void summaryModeIsNotCuratable() {
-        // S 답변은 전체가 "## 요약" 한 섹션이라 큐레이션 임베딩 입력에서 본문이 통째로 사라진다
-        // (stripStructuralSections 가 요약·참고를 걷어내는데 S에는 남을 것이 없다).
-        assertThat(ResponseMode.S.allowsCuration()).isFalse();
-        assertThat(ResponseMode.N.allowsCuration()).isTrue();
+    @DisplayName("allowsSubmission — S만 제외된다(의도적으로 축약된 답변이라 지식 원본이 아니다)")
+    void summaryModeIsNotProposable() {
+        // 사유가 §10.11 에서 바뀌었다: "임베딩 입력에 남을 것이 없다"가 아니라, 배경·이유·전제를
+        // 빼라고 지시받은 형식이라 오래 남길 지식의 원본이 아니라는 것.
+        assertThat(ResponseMode.S.allowsSubmission()).isFalse();
+        assertThat(ResponseMode.N.allowsSubmission()).isTrue();
     }
 
     @Test

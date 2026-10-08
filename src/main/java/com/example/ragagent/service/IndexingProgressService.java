@@ -138,7 +138,10 @@ public class IndexingProgressService {
 
         emitters.put(taskId, emitter);
 
-        java.util.concurrent.ScheduledFuture<?> hb = cleaner.scheduleAtFixedRate(() -> {
+        // 실제 쓰기는 SseHeartbeat 가 가상 스레드로 넘긴다 — 인덱싱 진행률을 보고 있는 탭 하나가
+        // 느리면 이 스케줄러 스레드가 붙잡히고, 그 뒤로 모든 taskId 의 ping 이 함께 밀린다.
+        // 실패 시 정리(emitters 에서 제거 + complete)는 여기 람다 안에 그대로 남는다.
+        java.util.concurrent.ScheduledFuture<?> hb = cleaner.scheduleAtFixedRate(new SseHeartbeat(() -> {
             try {
                 emitter.send(SseEmitter.event().name("ping").data(""));
             } catch (Exception e) {
@@ -146,7 +149,7 @@ public class IndexingProgressService {
                 emitters.remove(taskId);
                 try { emitter.complete(); } catch (Exception ignored) {}
             }
-        }, 25, 25, TimeUnit.SECONDS);
+        }), 25, 25, TimeUnit.SECONDS);
 
         emitter.onCompletion(() -> { hb.cancel(false); emitters.remove(taskId); });
         emitter.onTimeout(   () -> { hb.cancel(false); emitters.remove(taskId); });

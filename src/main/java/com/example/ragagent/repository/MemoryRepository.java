@@ -7,7 +7,22 @@ import java.util.Map;
 import java.util.Optional;
 
 public interface MemoryRepository {
-    String getHistory(String userId, String threadId, int maxChars);
+
+    /**
+     * 요약 캐시가 없을 때 쓰는 원본 이력.
+     *
+     * <p>{@code askingDirect} 는 <b>지금 묻는 턴</b>이 Direct 인가다 (§10.13) — 그 턴에는
+     * {@code [검색된 문서]} 블록이 없어 이력에 줄 자리가 넓고, 이전 턴의 답변도 다르게 렌더된다
+     * ({@code HistoryPolicy.renderAnswer}). 요약 경로
+     * ({@code ConversationSummarizerService.buildContext})가 같은 값을 같은 규칙으로 쓰므로,
+     * 두 경로가 캐시 유무에 따라 다른 맥락을 만들지 않는다.
+     */
+    String getHistory(String userId, String threadId, int maxChars, boolean askingDirect);
+
+    /** RAG 턴 기준 — §10.13 이전과 동작이 같다. */
+    default String getHistory(String userId, String threadId, int maxChars) {
+        return getHistory(userId, threadId, maxChars, false);
+    }
 
     /** Returns the generated turn id (conversation_turns.id). {@code responseMode}: the turn's
      *  S/N response mode ({@code ResponseMode.name()}), null-safe (nullable column). Legacy
@@ -181,20 +196,20 @@ public interface MemoryRepository {
                 boolean directMode) {
 
         /**
-         * 이 턴에 좋아요가 <b>실제로 무언가를 하는가</b> — 대화 기록 렌더러가 읽는 값이다.
+         * 이 턴에서 좋아요가 <b>지식 제안을 열어 주는가</b> — 대화 기록 렌더러가 읽는 값이다
+         * (§10.11).
          *
-         * <p>LIKE의 유일한 소비자가 큐레이션 승격이라, {@code allowsCuration()}이 false인 모드
-         * (S·C)에서는 {@code CuratedQaService.onLike()}가 행조차 만들지 않고 즉시 돌아온다. 그런데
-         * 피드백 값 자체는 저장되므로 버튼은 눌린 채 남고, 사용자는 공유 지식에 기여했다고 믿게
-         * 된다 — 화면 어디에도 아무 일도 없었다는 신호가 없었다.
+         * <p>{@code false}면 좋아요 버튼이 비활성으로 뜨고 사유가 툴팁에 붙는다
+         * ({@link #submissionBlockedMessageKey()}). 그 표시가 없으면 사용자는 버튼을 눌러 두고
+         * 공유 지식에 기여했다고 믿게 되는데 실제로는 아무 일도 일어나지 않는다.
          *
          * <p>레코드 컴포넌트가 아니라 파생 메서드인 것은 {@code SourceRef.staleBadge()}와 같은
          * 이유다: 저장된 사실이 아니라 저장된 값에서 계산되는 표시 규칙이고, 규칙의 출처는
-         * {@code ResponseMode} 하나여야 한다. 템플릿이 {@code ${turn.curatable}}로 읽으므로
-         * SpEL 접근 가능 여부를 {@code TurnCuratableTest}가 고정한다.
+         * {@code ResponseMode} 하나여야 한다. 템플릿이 {@code ${turn.proposable}}로 읽으므로
+         * SpEL 접근 가능 여부를 {@code TurnProposableTest}가 고정한다.
          */
-        public boolean curatable() {
-            return ResponseMode.parse(responseMode).allowsCuration();
+        public boolean proposable() {
+            return ResponseMode.parse(responseMode).allowsSubmission();
         }
 
         /**
@@ -225,14 +240,13 @@ public interface MemoryRepository {
         }
 
         /**
-         * 좋아요가 막힌 사유의 메시지 키 — {@link #curatable()}이 true면 {@code null}.
+         * 좋아요가 막힌 사유의 메시지 키 — {@link #proposable()}이 true면 {@code null}.
          *
-         * <p>불린만으로는 툴팁을 쓸 수 없다. 사유가 모드마다 다르기 때문이다 — S는 임베딩할 본문이
-         * 남지 않아서, C는 모델 생성물이 다음 턴의 "문서"가 되는 것을 막기 위해서다
-         * ({@code ResponseMode.curationBlockedMessageKey}).
+         * <p>불린만으로는 툴팁을 쓸 수 없다. "안 됩니다"만 말하고 사유를 감추면 버그로 읽힌다
+         * ({@code ResponseMode.submissionBlockedMessageKey}).
          */
-        public String curationBlockedMessageKey() {
-            return ResponseMode.parse(responseMode).curationBlockedMessageKey();
+        public String submissionBlockedMessageKey() {
+            return ResponseMode.parse(responseMode).submissionBlockedMessageKey();
         }
     }
 

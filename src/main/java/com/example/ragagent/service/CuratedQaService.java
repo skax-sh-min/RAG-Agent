@@ -4,7 +4,9 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.ChunkSplitter;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
+import com.example.ragagent.ingestion.KeywordSearchRepository;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
+import com.example.ragagent.ingestion.SearchTextBuilder;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
@@ -14,7 +16,6 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -24,14 +25,22 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * §10.10 — promotes 👍'd chat turns into a separately embedded, shared knowledge axis (reserved
- * vector-store version namespace {@value #CURATED_VERSION} — auto-isolated per backend: a
- * distinct Chroma collection / a sqlite-vec partition key, version-agnostic so it survives
- * document re-indexing). See documents/PLAN.md §10.10 for the full design.
+ * §10.10 — the shared knowledge axis: a separately embedded corpus (reserved vector-store version
+ * namespace {@value #CURATED_VERSION} — auto-isolated per backend: a distinct Chroma collection /
+ * a sqlite-vec partition key, version-agnostic so it survives document re-indexing) fused into
+ * retrieval as its own weighted RRF axis. See documents/PLAN.md §10.10 and §10.11.
  *
- * <p>The DB snapshot ({@code curated_qa}) is written synchronously (cheap local write, same
- * request as the feedback flip); the embedding call is background + debounced so an accidental
- * like→unlike never pays for an LLM/embedding round-trip on the interactive path (§6.12).
+ * <p><b>Everything here is created by an admin approving a 지식 제안</b> (§10.11). Nothing writes
+ * to this corpus on a user action alone. Until then a 👍 wrote a row directly and embedded it three
+ * seconds later, which meant the app had two doors into the search corpus guarded oppositely — one
+ * requiring review, the other requiring nothing — and a Direct answer, grounded in no document at
+ * all, could become everyone's search knowledge on one click. The entry points that remain are
+ * {@link #createFromSubmission} and {@link #createFromLikedTurn}, both reached only from
+ * {@code CuratedSubmissionService.approve}.
+ *
+ * <p>The DB row is written synchronously (cheap local write, inside the approving request) and the
+ * embedding call runs on a background thread — never block the interactive path on remote I/O
+ * (§6.12).
  */
 @Service
 public class CuratedQaService {
@@ -40,8 +49,6 @@ public class CuratedQaService {
 
     /** Reserved vectorstore version namespace for curated Q&A — never a real document version. */
     public static final String CURATED_VERSION = "curated";
-
-    private static final long DEFAULT_EMBED_DEBOUNCE_MILLIS = 3_000L;
 
     /**
      * Chunk-size multipliers tried, in order, when embedding a curated entry.
@@ -56,33 +63,30 @@ public class CuratedQaService {
     static final double[] EMBED_CHUNK_SIZE_MULTIPLIERS = {2.0, 1.5, 1.0};
 
     private final CuratedQaRepository repository;
-    private final MemoryService memoryService;
     private final ThreadMetaService threadMetaService;
     private final VectorStoreFacade vectorStore;
     private final ChunkSplitter chunkSplitter;
     private final AppProperties props;
-    private final long embedDebounceMillis;
+    /**
+     * 큐레이션 청크의 BM25(키워드) 축. 예전에는 이 축에 아예 없었다 — {@code indexChunks()} 를
+     * 부르는 곳이 {@code DocumentIndexer} 와 {@code AdminService.reindexChunk()} 뿐이라
+     * 큐레이션 청크는 {@code chunk_fts} 행 자체가 없었고, 그래서 {@code excerpt_keywords} 를
+     * 채워 봐야 읽는 코드가 없었다. 이제 벡터를 쓸 때마다 같은 문서로 FTS 도 함께 쓴다.
+     *
+     * <p>{@code Optional} 이 아니라 필수 의존이다 — {@code KeywordSearchRepository} 는 FTS5 를
+     * 못 쓰는 환경에서도 빈으로 존재하고 {@code indexChunks()} 가 스스로 no-op 이 된다.
+     */
+    private final KeywordSearchRepository keywordRepo;
 
-    @Autowired
-    public CuratedQaService(CuratedQaRepository repository, MemoryService memoryService,
-                            ThreadMetaService threadMetaService, VectorStoreFacade vectorStore,
-                            ChunkSplitter chunkSplitter, AppProperties props) {
-        this(repository, memoryService, threadMetaService, vectorStore, chunkSplitter, props,
-                DEFAULT_EMBED_DEBOUNCE_MILLIS);
-    }
-
-    /** Package-private — lets tests shrink the debounce instead of waiting out the real 3s. */
-    CuratedQaService(CuratedQaRepository repository, MemoryService memoryService,
-                     ThreadMetaService threadMetaService, VectorStoreFacade vectorStore,
-                     ChunkSplitter chunkSplitter, AppProperties props,
-                     long embedDebounceMillis) {
+    public CuratedQaService(CuratedQaRepository repository, ThreadMetaService threadMetaService,
+                            VectorStoreFacade vectorStore, ChunkSplitter chunkSplitter,
+                            AppProperties props, KeywordSearchRepository keywordRepo) {
         this.repository = repository;
-        this.memoryService = memoryService;
         this.threadMetaService = threadMetaService;
         this.vectorStore = vectorStore;
         this.chunkSplitter = chunkSplitter;
         this.props = props;
-        this.embedDebounceMillis = embedDebounceMillis;
+        this.keywordRepo = keywordRepo;
     }
 
     /**
@@ -120,75 +124,20 @@ public class CuratedQaService {
     }
 
     /**
-     * Call after a turn's feedback transitions INTO {@code LIKE}. Upserts the curated_qa snapshot
-     * synchronously, then embeds on a background virtual thread after a short debounce:
-     * <ol>
-     *   <li>sleep {@link #embedDebounceMillis} — lets a fat-fingered like→unlike cancel before any
-     *       embedding API call is made (cost-saving; correctness does not depend on this step)</li>
-     *   <li>re-check feedback right before the embed call — skip entirely if no longer LIKE</li>
-     *   <li>after the embed call succeeds, re-check once more and compensate (delete) if the turn
-     *       was unliked while the call was in flight</li>
-     * </ol>
-     * Mirrors the DISLIKE-discard guard in {@link ConversationSummarizerService#precompute}.
+     * §10.11 — retracts the curated entry a deleted <b>turn</b> produced; the single-turn
+     * counterpart of {@link #onThreadDeleted}. Deactivates synchronously (fast, local) and removes
+     * the vectors on a background thread, since a Chroma delete is a network round-trip (§6.12 —
+     * never block the interactive path on remote I/O). A no-op when the turn was never promoted.
      *
-     * <p>PLAN §6.24 Step 0-a — the old "skip embedding for L-mode answers" branch is gone with L
-     * itself. Its premise ("an L answer mirrors the indexed source almost verbatim, so re-embedding
-     * duplicates an existing vector") did not hold: L answers measured the same length as M ones,
-     * i.e. they were ordinary answers, and the branch was quietly discarding legitimate curated
-     * knowledge. A mode-driven skip returns in Step 3-a via {@code ResponseMode.allowsCuration()},
-     * but for a real reason — keeping model-invented C-mode content out of the search corpus.
+     * <p>This used to be {@code onUnlike}, called whenever feedback moved off {@code LIKE}. It no
+     * longer is: a curated entry is now created by an <b>admin approving a proposal</b>, not by the
+     * like, so taking it back is the author's or the admin's action on the 지식 제안 board — not a
+     * side effect of changing one's mind about the chat message. What remains is the orphan
+     * problem the method existed for: a {@code curated_qa} row is linked to its turn by a
+     * <em>copy</em> of the id, not a foreign key, so deleting the turn would otherwise leave the
+     * row and its vectors feeding search from an exchange that no longer exists.
      */
-    public void onLike(String userId, String threadId, long turnId) {
-        Optional<MemoryRepository.Turn> turnOpt = memoryService.getTurn(userId, threadId, turnId);
-        if (turnOpt.isEmpty()) {
-            log.warn("[CURATED] onLike: turn not found userId={} threadId={} turnId={}", userId, threadId, turnId);
-            return;
-        }
-        MemoryRepository.Turn turn = turnOpt.get();
-
-        // 큐레이션 대상이 아닌 모드는 여기서 끝 — curated_qa 행조차 만들지 않는다. LIKE 피드백의
-        // 유일한 소비자가 큐레이션이므로 그 모드에서는 좋아요가 무동작이 된다(싫어요는 그대로
-        // 다음 컨텍스트 제외로 동작). 사유는 ResponseMode 의 해당 모드 주석 참조.
-        ResponseMode mode = ResponseMode.parse(turn.responseMode());
-        if (!mode.allowsCuration()) {
-            log.debug("[CURATED] onLike: {} 모드는 큐레이션 대상이 아니라 무시한다 turnId={}", mode, turnId);
-            return;
-        }
-
-        String version = threadMetaService.findById(userId, threadId)
-                .map(t -> t.version())
-                .orElse(null);
-
-        // 질문 당시의 검색 스코프(태그)를 그대로 승계한다 — 그 태그로 좁혀 얻은 답변이므로 이후
-        // 같은 스코프에서 다시 검색될 때 살아남아야 한다. 태그 없이(전체 검색) 물은 질문이면 빈 값이
-        // 되고, 그 경우 buildDocument()가 태그 메타데이터를 아예 붙이지 않아 어떤 태그 스코프에서도
-        // 걸러지지 않는다(RetrievalService.filterByTags의 큐레이션 면제).
-        long curatedId = repository.upsertActive(turnId, userId, threadId,
-                turn.question(), turn.answer(), version, turn.selectedTags());
-
-        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
-            try {
-                Thread.sleep(embedDebounceMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            if (!isStillLiked(userId, threadId, turnId)) {
-                log.debug("[CURATED] embed skipped (unliked during debounce) turnId={}", turnId);
-                return;
-            }
-            embed(curatedId, userId, threadId, turnId);
-        });
-    }
-
-    /**
-     * Call after a turn's feedback transitions OUT OF {@code LIKE} (to NONE or DISLIKE).
-     * Deactivates the row synchronously (fast, local); vector removal runs on a background thread
-     * since a Chroma delete is a network round-trip (§6.12 — never block the interactive path on
-     * remote I/O). Safe no-op if nothing was ever embedded (delete-by-id on a missing id is a
-     * no-op on both backends) or if the turn was never promoted at all.
-     */
-    public void onUnlike(String userId, String threadId, long turnId) {
+    public void onTurnDeleted(String userId, String threadId, long turnId) {
         Optional<CuratedQa> existing = repository.findBySourceTurnId(turnId);
         if (existing.isEmpty() || !"active".equals(existing.get().status())) return;
 
@@ -210,12 +159,12 @@ public class CuratedQaService {
 
     /**
      * §6.25 — retracts every 👍-promoted entry of a conversation that is being deleted whole; the
-     * thread-level counterpart of {@link #onUnlike}.
+     * thread-level counterpart of {@link #onTurnDeleted}.
      *
      * <p><b>Why this has to exist at all.</b> A {@code curated_qa} row is linked to its turn by a
      * <em>copy</em> of the thread/turn id, not a foreign key, so deleting the conversation removes
      * the turns while the row and its vectors survive and keep feeding search from a conversation
-     * that no longer exists. That is exactly the orphan {@link #onUnlike} is called for on the
+     * that no longer exists. That is exactly the orphan {@link #onTurnDeleted} is called for on the
      * single-turn delete path — one level up. Both delete paths (the user's own
      * {@code DELETE /ui/threads/{threadId}} and the admin one) must call this, or the outcome
      * depends on which button was pressed.
@@ -245,46 +194,66 @@ public class CuratedQaService {
             repository.deactivateById(row.id());
             vectorIds.addAll(vectorIdsFor(row.id(), row.chunkCount()));
         }
-        Thread.ofVirtual().name("curated-deindex-thread-" + threadId).start(() -> {
-            try {
-                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, vectorIds);
-            } catch (Exception e) {
-                log.warn("[CURATED] 대화 삭제 후 벡터 삭제 실패 threadId={}: {}", threadId, e.getMessage());
-            }
-        });
+        // 한 스레드의 벡터를 한 번에 지우는 것은 그대로 두되, 지우는 문은 deindex() 하나다 —
+        // 여기서 vectorStore 를 직접 부르던 동안 FTS 행이 남아, 대화를 지워도 그 항목이 BM25
+        // 축에서 계속 근거로 붙었다.
+        Thread.ofVirtual().name("curated-deindex-thread-" + threadId)
+                .start(() -> deindex(vectorIds, "threadId=" + threadId));
         log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
                 threadId, rows.size(), vectorIds.size());
         return rows.size();
     }
 
     /**
-     * §10.10 step ④ — looked up by the originating turn (all the chat UI knows — threadId/turnId,
-     * not the curated row's own id). The caller (controller) is responsible for the ownership
-     * check — {@code memoryService.getFeedback} already scopes by (userId, threadId), same as the
-     * existing feedback-toggle endpoint. Used by both the GET (populate the edit box) and PATCH
-     * (save) chat-inline-edit endpoints.
+     * §10.10 step ④ — the {@code /admin} curated tab's edit path (looked up by curated id).
+     * Re-embeds on a background thread — no debounce and no like-state re-check: an edit is an
+     * explicit save action, not a promotion that can race with an accidental unlike.
+     *
+     * <p>§10.11 removed the chat-side twin of this ({@code updateAnswerForTurn}, reached by a
+     * pencil next to 👍). Editing a curated entry now happens where it was proposed — the 지식 제안
+     * page — so the chat window never shows or changes curation state.
      */
-    public Optional<CuratedQa> findActiveByTurn(long turnId) {
-        return repository.findBySourceTurnId(turnId).filter(r -> "active".equals(r.status()));
-    }
-
-    /** §10.10 step ④ — owner edit path (chat inline "편집"), see {@link #findActiveByTurn}. */
-    public boolean updateAnswerForTurn(String userId, String threadId, long turnId, String newAnswer) {
-        Optional<CuratedQa> rowOpt = findActiveByTurn(turnId);
-        if (rowOpt.isEmpty()) return false;
-        return updateAnswer(rowOpt.get().id(), newAnswer);
+    public boolean updateAnswer(long curatedId, String newAnswer) {
+        return updateEntry(curatedId, null, newAnswer, null, null);
     }
 
     /**
-     * §10.10 step ④ — edit path shared by both the owner (via {@link #updateAnswerForTurn}) and
-     * the {@code /admin} curated tab (looked up directly by id there). Re-embeds on a background
-     * thread — no debounce and no like-state re-check here: unlike {@link #onLike}, an edit is an
-     * explicit save action, not a promotion that can race with an accidental unlike.
+     * 질문·답변을 함께 고치는 경로 — {@code /admin} 편집 화면의 저장 하나가 둘 다 보낼 수 있다.
+     *
+     * <p><b>재임베딩은 한 번만 돈다.</b> 질문과 답변이 같은 검색 텍스트를 이룬다
+     * ({@code defaultSearchText()} = 질문 + 본문, 질문은 모든 청크에 반복 부여) — 따로 저장하면
+     * 같은 항목을 두 번 임베딩하게 되고, 그 사이에 벡터가 질문만 바뀐 중간 상태로 남는다.
+     *
+     * <p>{@code null} 인 쪽은 건드리지 않는다. 둘 다 비어 있으면 아무것도 하지 않고 {@code false} —
+     * 빈 질문은 그 항목을 검색에서 사실상 지우는 것과 같고, 빈 답변은 근거가 사라지는 것이다.
      */
-    public boolean updateAnswer(long curatedId, String newAnswer) {
-        if (newAnswer == null || newAnswer.isBlank()) return false;
+    public boolean updateEntry(long curatedId, String newQuestion, String newAnswer) {
+        return updateEntry(curatedId, newQuestion, newAnswer, null, null);
+    }
+
+    /**
+     * 위와 같되 <b>요약·키워드까지 한 번의 저장으로</b> 반영한다.
+     *
+     * <p>이 둘의 단일 출처는 {@code curated_qa} 컬럼이다 — 벡터 메타데이터의
+     * {@code chunk_context}/{@code excerpt_keywords} 는 재임베딩 때마다 여기서 다시 쓰이는
+     * <b>사본</b>이다. 그래서 {@code /admin} 청크 화면에서 그 두 키를 고쳐 봐야 다음 재임베딩에
+     * 조용히 되돌아간다(그쪽이 큐레이션 청크에서 두 칸을 읽기 전용으로 막는 이유이자, 고칠
+     * 자리를 여기 하나로 모은 이유다).
+     *
+     * <p>{@code null} 은 "안 보냄", 빈 문자열은 "비우기"다. 넷 중 무엇이 왔든 재임베딩은
+     * <b>한 번만</b> 돈다 — 같은 항목을 두 번 임베딩하면 그 사이 벡터가 반만 갱신된 중간
+     * 상태로 남는다.
+     */
+    public boolean updateEntry(long curatedId, String newQuestion, String newAnswer,
+                               String newSummary, String newKeywords) {
+        boolean hasQuestion   = newQuestion != null && !newQuestion.isBlank();
+        boolean hasAnswer     = newAnswer   != null && !newAnswer.isBlank();
+        boolean hasEnrichment = newSummary != null || newKeywords != null;
+        if (!hasQuestion && !hasAnswer && !hasEnrichment) return false;
         if (repository.findById(curatedId).isEmpty()) return false;
-        repository.updateAnswer(curatedId, newAnswer);
+        if (hasQuestion)   repository.updateQuestion(curatedId, newQuestion.strip());
+        if (hasAnswer)     repository.updateAnswer(curatedId, newAnswer);
+        if (hasEnrichment) repository.updateEnrichment(curatedId, newSummary, newKeywords);
         Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
                 embedActiveRow(curatedId, "edit"));
         return true;
@@ -301,19 +270,53 @@ public class CuratedQaService {
      * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
      */
     public List<Long> createFromSubmission(long submissionId, String authorUserId, String title,
-                                           List<String> bodyChunks, String tags) {
+                                           List<String> bodyChunks, String tags,
+                                           String summary, String keywords) {
         List<Long> curatedIds = new java.util.ArrayList<>(bodyChunks.size());
         for (String chunk : bodyChunks) {
             // 제목은 모든 청크에 반복 부여한다 — defaultSearchText()가 question+answer를 임베딩하므로
             // 2번째 청크부터 제목이 없으면 질문형 질의와의 매칭이 급격히 나빠진다(문서 인덱싱의
             // reinjectHeadingForSplitPieces와 같은 이유).
-            curatedIds.add(repository.insertManual(submissionId, authorUserId, title, chunk, tags));
+            // 요약·키워드는 제안 하나가 통째로 갖는 값이라 모든 청크에 같은 값이 붙는다 —
+            // 제목과 같은 이유다(청크마다 다시 만들면 승인 한 번에 LLM 을 N 번 부르게 된다).
+            curatedIds.add(repository.insertManual(submissionId, authorUserId, title, chunk, tags,
+                    summary, keywords));
         }
         for (long curatedId : curatedIds) {
             Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
                     embedActiveRow(curatedId, "submission"));
         }
         return List.copyOf(curatedIds);
+    }
+
+    /**
+     * §10.11 — admin approval of a <b>좋아요 출신</b> proposal. Same review, different storage shape
+     * from {@link #createFromSubmission}: <b>one row whose vectors are split at embed time</b>,
+     * not N pre-split rows.
+     *
+     * <p>That difference is not cosmetic (함정 ①). Three things about a promoted chat answer are
+     * keyed by the turn — {@code UNIQUE(source_turn_id)}, the conversation/turn delete retraction
+     * ({@link #onThreadDeleted}), and the row's identity across a re-approval — and pushing this
+     * through {@code insertManual} would write {@code source_turn_id = NULL}, killing all three at
+     * once and silently: nothing here fails, the retraction simply never finds the row again.
+     *
+     * <p>The text stored is the <b>reviewed</b> title/body, not the raw turn: the whole point of
+     * §10.11 is that a person edited it and an admin approved that edit. {@code source_doc_version}
+     * still comes from the thread so the entry knows which document version it was answered against.
+     *
+     * @return the curated row's id
+     */
+    public long createFromLikedTurn(long submissionId, long turnId, String userId, String threadId,
+                                    String title, String body, String tags,
+                                    String summary, String keywords) {
+        String version = threadMetaService.findById(userId, threadId)
+                .map(t -> t.version())
+                .orElse(null);
+        long curatedId = repository.upsertActive(turnId, userId, threadId, title, body, version,
+                tags, submissionId, summary, keywords);
+        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
+                embedActiveRow(curatedId, "submission-like"));
+        return curatedId;
     }
 
     /**
@@ -339,7 +342,7 @@ public class CuratedQaService {
 
     /**
      * §10.10 step ④ — admin moderation path: deactivates + de-indexes regardless of the original
-     * asker's own feedback state (separate authorization from {@link #onUnlike}'s ownership check
+     * asker's own feedback state (separate authorization from {@link #onTurnDeleted}'s ownership check
      * — the admin curated tab looks entries up by curated id, not by thread/turn).
      */
     public boolean forceRemove(long curatedId) {
@@ -371,19 +374,9 @@ public class CuratedQaService {
         return repository.findAllActive(offset, limit);
     }
 
-    /** §10.10 step ④ — direct id lookup for the admin edit panel (chat's owner-edit path looks
-     *  up by turn instead, see {@link #updateAnswerForTurn}). */
+    /** §10.10 step ④ — direct id lookup for the admin edit panel. */
     public Optional<CuratedQa> findById(long id) {
         return repository.findById(id);
-    }
-
-    /**
-     * §10.10 embedding-fallback — turn ids (among the given set) whose active curated row is
-     * currently stuck in {@code embed_status='failed'}. chat.html's turn-history render uses this
-     * to show a "임베딩 실패" badge next to the curated-edit pencil icon.
-     */
-    public Set<Long> findFailedTurnIds(List<Long> turnIds) {
-        return repository.findFailedTurnIds(turnIds);
     }
 
     /**
@@ -391,39 +384,42 @@ public class CuratedQaService {
      * the owner/admin edit path and the submission-approval path. No like-state re-check (unlike
      * {@link #embed}): both callers are explicit save/approve actions that can't race an unlike.
      */
-    private void embedActiveRow(long curatedId, String reason) {
+    private boolean embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
-        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
-        int chunks = tryEmbedWithFallback(rowOpt.get());
-        if (chunks > 0) {
+        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return false;
+        CuratedQa row = rowOpt.get();
+        List<Document> written = tryEmbedWithFallback(row);
+        if (!written.isEmpty()) {
+            // BM25 축은 벡터가 실제로 쓰인 뒤에만 따라간다 — 임베딩이 실패한 항목을 키워드로만
+            // 검색되게 두면 출처는 붙는데 의미 매칭은 안 되는 절반짜리 항목이 생긴다.
+            indexFts(row, written);
             repository.markEmbedOk(curatedId);
-            log.info("[CURATED] embedded curatedId={} chunks={} reason={}", curatedId, chunks, reason);
-        } else {
-            repository.markEmbedFailed(curatedId);
+            log.info("[CURATED] embedded curatedId={} chunks={} reason={}", curatedId, written.size(), reason);
+            return true;
         }
+        repository.markEmbedFailed(curatedId);
+        return false;
     }
 
-    private void embed(long curatedId, String userId, String threadId, long turnId) {
-        Optional<CuratedQa> rowOpt = repository.findById(curatedId);
-        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
-        CuratedQa row = rowOpt.get();
-
-        int chunks = tryEmbedWithFallback(row);
-        if (chunks == 0) {
-            repository.markEmbedFailed(curatedId);
-            return;
-        }
-        repository.markEmbedOk(curatedId);
-
-        // Compensating re-check: an unlike that raced during the (network) embed call itself gets
-        // undone immediately instead of left as a dangling active-in-vectorstore/inactive-in-DB
-        // entry — narrows the race window to just this call's own duration.
-        if (!isStillLiked(userId, threadId, turnId)) {
-            log.debug("[CURATED] embed committed then reverted (unliked during embed) turnId={}", turnId);
-            deleteVectors(curatedId, chunks);
-            return;
-        }
-        log.info("[CURATED] embedded curatedId={} chunks={} turnId={}", curatedId, chunks, turnId);
+    /**
+     * 한 큐레이션 행을 규칙대로 다시 임베딩한다 — {@code /admin} 청크 화면의 재인덱싱이
+     * 큐레이션 청크를 만났을 때 부르는 자리({@code AdminController}).
+     *
+     * <p>그쪽의 {@code AdminService.reindexChunk()} 를 그대로 태우면 안 된다: 그건 문서 청크의
+     * 규칙({@code chunk_context} + 본문)으로 검색 텍스트를 다시 만드는데, 이 축의 검색 텍스트는
+     * <b>질문 + 본문</b>이고 질문은 벡터 메타데이터에 실려 있지 않다. 즉 그 경로를 지나면 그
+     * 청크만 조용히 질문을 잃는다.
+     *
+     * <p>단위가 '청크 하나'가 아니라 '행 하나'인 것은 의도된 것이다 — 이 축에서 질문·본문·요약·
+     * 키워드는 행이 통째로 갖는 값이라, 한 청크만 다시 만들 수 있는 상태 자체가 없다.
+     *
+     * @return 실제로 벡터를 다시 쓴 경우에만 {@code true}. 행이 없거나 {@code active} 가 아니거나
+     *         임베딩이 실패하면 {@code false} 다 — 예전에는 행만 존재하면 {@code true} 였고,
+     *         그래서 비활성 행에 재인덱싱을 누르면 아무 일도 없이 성공 토스트가 떴다.
+     *         문서 청크의 {@code AdminService.reindexChunk()} 와 같은 계약이다(호출자가 404 로 옮긴다).
+     */
+    public boolean reembedRow(long curatedId, String reason) {
+        return embedActiveRow(curatedId, reason);
     }
 
     /**
@@ -449,7 +445,7 @@ public class CuratedQaService {
      * answer) are removed <em>after</em> the new ones are written, never before — a failed re-embed
      * then leaves the old vectors searchable instead of silently dropping the entry from the index.
      */
-    private int tryEmbedWithFallback(CuratedQa row) {
+    private List<Document> tryEmbedWithFallback(CuratedQa row) {
         // 크기 사다리: 2× → 1.5× → 1×. 실패의 압도적 다수는 "입력이 너무 큼"이고, 그건 더 잘게
         // 자르는 것으로만 풀린다 — 그래서 재시도할 때마다 청크를 줄인다.
         List<Document> docs = List.of();
@@ -464,7 +460,7 @@ public class CuratedQaService {
                     log.info("[CURATED] embedded at {}× chunk-size ({} chunks) curatedId={}",
                             multiplier, docs.size(), row.id());
                 }
-                return docs.size();
+                return docs;
             } catch (Exception e) {
                 log.warn("[CURATED] embed failed at {}× chunk-size ({} chunks) curatedId={}: {}",
                         multiplier, docs.size(), row.id(), e.getMessage());
@@ -474,11 +470,11 @@ public class CuratedQaService {
         // 청크가 하나도 남지 않았다면(예: 답변이 사실상 인용 목록뿐) 분할 이전과 똑같이 답변 전체를
         // 한 벡터로 넣어 본다 — 여기서 실패로 처리하면 임베딩할 값이 없었을 뿐인 항목에 실패 배지가 붙는다.
         if (docs.isEmpty()) {
+            List<Document> whole = List.of(buildDocument(row, 0, row.answer(), defaultSearchText(row)));
             try {
-                vectorStore.add(DocRegistry.SHARED, CURATED_VERSION,
-                        List.of(buildDocument(row, 0, row.answer(), defaultSearchText(row))));
+                vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, whole);
                 pruneStaleVectors(row, 1);
-                return 1;
+                return whole;
             } catch (Exception e) {
                 log.warn("[CURATED] whole-row embed failed curatedId={}: {}", row.id(), e.getMessage());
             }
@@ -488,18 +484,18 @@ public class CuratedQaService {
         if (core.isBlank()) {
             log.warn("[CURATED] no core-section fallback available curatedId={} (answer isn't in the RAG format)",
                     row.id());
-            return 0;
+            return List.of();
         }
         String fallbackSearchText = row.question() + "\n\n" + MarkdownNoiseNormalizer.normalize(core);
+        List<Document> fallback = List.of(buildDocument(row, 0, row.answer(), fallbackSearchText));
         try {
-            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION,
-                    List.of(buildDocument(row, 0, row.answer(), fallbackSearchText)));
+            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, fallback);
             pruneStaleVectors(row, 1);
             log.info("[CURATED] embedded with core-sections fallback curatedId={}", row.id());
-            return 1;
+            return fallback;
         } catch (Exception e) {
             log.warn("[CURATED] core-sections fallback embed also failed curatedId={}: {}", row.id(), e.getMessage());
-            return 0;
+            return List.of();
         }
     }
 
@@ -559,11 +555,7 @@ public class CuratedQaService {
         if (oldCount > newCount) {
             List<String> stale = new java.util.ArrayList<>(oldCount - newCount);
             for (int i = newCount; i < oldCount; i++) stale.add(springDocId(row.id(), i));
-            try {
-                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, stale);
-            } catch (Exception e) {
-                log.warn("[CURATED] stale vector cleanup failed curatedId={}: {}", row.id(), e.getMessage());
-            }
+            deindex(stale, "stale curatedId=" + row.id());
         }
         repository.updateChunkCount(row.id(), newCount);
     }
@@ -620,18 +612,89 @@ public class CuratedQaService {
         if (!imagePaths.isEmpty()) {
             meta.put(MetaKey.IMAGE_PATHS, String.join(",", new java.util.LinkedHashSet<>(imagePaths)));
         }
+        // 요약·키워드를 문서 청크와 같은 키로 싣는다 — /admin 청크 화면이 이 두 키만 보고
+        // '요약'·'키워드' 칸을 그리므로, 이 축만 다른 이름을 쓰면 그 화면에서 영원히 빈칸이다.
+        // 비어 있으면 키 자체를 넣지 않는다: 빈 문자열을 넣으면 FTS keywords 컬럼에 빈 토큰이
+        // 들어가고, /admin 에서 "값이 있는데 비어 있음"과 "값이 없음"을 구분할 수 없게 된다.
+        putIfPresent(meta, MetaKey.CHUNK_CONTEXT, row.summary());
+        putIfPresent(meta, MetaKey.EXCERPT_KEYWORDS, row.keywords());
         meta.put(MetaKey.SEARCH_TEXT, searchText); // transient override — stripped before persistence
 
         return new Document(springDocId(row.id(), chunkIndex), storedText, meta);
     }
 
+    private static void putIfPresent(Map<String, Object> meta, String key, String value) {
+        if (value != null && !value.isBlank()) meta.put(key, value.strip());
+    }
+
+    /**
+     * FTS 행에 실을 문서 — 벡터용 문서와 <b>검색 텍스트만</b> 다르다.
+     *
+     * <p>벡터 입력은 {@link #defaultSearchText}(질문 + 본문) 그대로 두고, FTS 입력에만 요약을
+     * 앞에 붙인다. 두 축이 같은 텍스트를 원하지 않기 때문이다 — 요약은 본문을 다시 말한 것이라
+     * 의미 벡터에서는 희석이고(그래서 {@code stripSummarySection} 이 임베딩에서 걷어낸다),
+     * 어휘 매칭인 BM25 에서는 그 항목이 무엇에 관한 것인지를 말하는 <b>토큰의 반복</b>이다 —
+     * 문서 청크에서 {@code chunk_context} 가 하는 일이 정확히 그것이고, 이 축에서는 그 자리를
+     * 요약이 맡는다.
+     */
+    private static Document ftsDocument(Document vectorDoc, String summary) {
+        if (summary == null || summary.isBlank()) return vectorDoc;
+        Map<String, Object> meta = new HashMap<>(vectorDoc.getMetadata());
+        meta.put(MetaKey.SEARCH_TEXT, summary.strip() + "\n\n" + SearchTextBuilder.build(vectorDoc));
+        return new Document(vectorDoc.getId(), vectorDoc.getText(), meta);
+    }
+
+    /**
+     * 방금 쓴 벡터와 같은 청크들을 BM25 축에도 쓴다. 먼저 지우고 넣는 것은
+     * {@code AdminService.reindexChunk()} 와 같은 이유다 — {@code indexChunks()} 는 INSERT 라
+     * 지우지 않으면 같은 {@code spring_doc_id} 의 행이 쌓인다.
+     *
+     * <p>실패해도 예외를 올리지 않는다: 벡터는 이미 성공적으로 쓰였고, 키워드 축이 빠진 항목은
+     * 검색 품질이 조금 낮을 뿐 여전히 검색된다. 여기서 던지면 그 반대가 된다(항목 전체가
+     * 임베딩 실패로 기록된다).
+     */
+    private void indexFts(CuratedQa row, List<Document> docs) {
+        try {
+            keywordRepo.deleteBySpringDocIds(docs.stream().map(Document::getId).toList());
+            keywordRepo.indexChunks(docs.stream().map(d -> ftsDocument(d, row.summary())).toList());
+        } catch (Exception e) {
+            log.warn("[CURATED] FTS index failed curatedId={}: {}", row.id(), e.getMessage());
+        }
+    }
+
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
+        deindex(vectorIdsFor(curatedId, chunkCount), "curatedId=" + curatedId);
+    }
+
+    /**
+     * 이 축에서 무언가를 내리는 <b>단 하나의</b> 자리 — 벡터와 FTS 행을 함께 지운다.
+     *
+     * <p><b>둘은 짝이다.</b> 한쪽만 지우면 검색 코퍼스에서 내린 항목이 다른 축에는 남아 계속
+     * 답변 근거로 붙는다. 특히 FTS 쪽이 남으면 {@code RetrievalService.curatedAxis()} 의 BM25
+     * 질의가 그대로 집어 오고, {@code markCurated()} 가 출처 라벨까지 붙여 준다 — 내린 지식이
+     * 멀쩡한 큐레이션 항목처럼 계속 인용된다. 덤으로 {@code chunk_fts_key} 의 해시가 살아 있어
+     * {@code QuestionReuseService.validateTurn()} 의 "청크가 그대로인가" 검사까지 통과해,
+     * 그 항목에 근거한 답변이 재사용되기까지 한다.
+     *
+     * <p>그래서 <b>id 목록을 받는 이 메서드 하나</b>만 둔다. 대화 삭제({@link #onThreadDeleted})는
+     * 한 스레드의 모든 행을 한 번에 지우느라 자기 목록을 따로 모으는데, 예전에는 그 자리에서
+     * {@code vectorStore.deleteByDocIds()} 를 직접 불러 <b>FTS 를 빠뜨렸다</b>. 짝을 기억에
+     * 맡기는 대신 지우는 문을 하나로 만든 이유다.
+     *
+     * @param what 로그용 식별 문구(어느 행인지 / 어느 대화인지)
+     */
+    private void deindex(List<String> ids, String what) {
+        if (ids == null || ids.isEmpty()) return;
         try {
-            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION,
-                    vectorIdsFor(curatedId, chunkCount));
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, ids);
         } catch (Exception e) {
-            log.warn("[CURATED] vector delete failed curatedId={}: {}", curatedId, e.getMessage());
+            log.warn("[CURATED] vector delete failed {}: {}", what, e.getMessage());
+        }
+        try {
+            keywordRepo.deleteBySpringDocIds(ids);
+        } catch (Exception e) {
+            log.warn("[CURATED] FTS delete failed {}: {}", what, e.getMessage());
         }
     }
 
@@ -643,12 +706,6 @@ public class CuratedQaService {
         List<String> ids = new java.util.ArrayList<>(Math.max(1, chunkCount));
         for (int i = 0; i < Math.max(1, chunkCount); i++) ids.add(springDocId(curatedId, i));
         return ids;
-    }
-
-    private boolean isStillLiked(String userId, String threadId, long turnId) {
-        return memoryService.getFeedback(userId, threadId, turnId)
-                .map(f -> "LIKE".equals(f.feedback()))
-                .orElse(false);
     }
 
     /**

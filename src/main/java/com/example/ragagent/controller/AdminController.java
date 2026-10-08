@@ -5,7 +5,9 @@ import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.service.CuratedQuestionSuggester;
 import com.example.ragagent.service.AdminService;
+import com.example.ragagent.service.ChunkReportService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
@@ -14,6 +16,7 @@ import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.ThreadAdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -39,6 +42,8 @@ public class AdminController {
     private final CuratedSubmissionService submissionService;
     private final RetrievalMetricsService retrievalMetricsService;
     private final ThreadAdminService threadAdminService;
+    private final CuratedQuestionSuggester questionSuggester;
+    private final ChunkReportService chunkReportService;
     private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
@@ -46,7 +51,10 @@ public class AdminController {
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
                             RetrievalMetricsService retrievalMetricsService,
-                            ThreadAdminService threadAdminService, AuditLogger auditLogger,
+                            ThreadAdminService threadAdminService,
+                            CuratedQuestionSuggester questionSuggester,
+                            ChunkReportService chunkReportService,
+                            AuditLogger auditLogger,
                             CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
@@ -55,6 +63,8 @@ public class AdminController {
         this.submissionService = submissionService;
         this.retrievalMetricsService = retrievalMetricsService;
         this.threadAdminService = threadAdminService;
+        this.questionSuggester = questionSuggester;
+        this.chunkReportService = chunkReportService;
         this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
@@ -129,7 +139,13 @@ public class AdminController {
         return ResponseEntity.ok(Map.of(
                 "id",       row.id(),
                 "text",     row.fullText(),
-                "metadata", row.metadata()
+                "metadata", row.metadata(),
+                // chunk_context 를 화면이 다시 나누지 않도록 서버가 갈라서 준다 — 그 규칙은
+                // doc_type 에 따라 갈리고 소비하는 자리가 둘이라, 화면에 두면 한쪽만 고쳐진다
+                // (AdminService.ChunkRow.contextBreadcrumb 주석 참고).
+                "contextBreadcrumb", row.contextBreadcrumb(),
+                "contextSummary",    row.contextSummary(),
+                "enrichmentEditable", row.hasBreadcrumb()
         ));
     }
 
@@ -169,7 +185,15 @@ public class AdminController {
                                               @RequestParam String collection,
                                               @RequestBody(required = false) Map<String, Object> body) {
         boolean regenerateKeywords = body != null && Boolean.TRUE.equals(body.get("regenerateKeywords"));
-        boolean ok = adminService.reindexChunk(collection, chunkId, regenerateKeywords);
+        // 축마다 검색 텍스트를 만드는 규칙이 다르다. 큐레이션 청크를 문서 청크용 경로로 보내면
+        // 질문이 빠진 채 재임베딩된다(AdminService.reindexChunk 의 가드 주석 참고) — 그래서
+        // 여기서 갈라 각자의 규칙을 소유한 서비스로 보낸다. 두 서비스를 이미 들고 있는 것이
+        // 이 컨트롤러이므로 어느 쪽에도 새 의존을 만들지 않는다.
+        AdminService.ChunkRow row = adminService.getChunk(collection, chunkId);
+        if (row == null) return ResponseEntity.notFound().build();
+        boolean ok = row.curatedRowId().isPresent()
+                ? curatedQaService.reembedRow(row.curatedRowId().getAsLong(), "admin-reindex")
+                : adminService.reindexChunk(collection, chunkId, regenerateKeywords);
         return ok ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
     }
 
@@ -199,17 +223,53 @@ public class AdminController {
                 .<ResponseEntity<?>>map(row -> ResponseEntity.ok(Map.of(
                         "id",       row.id(),
                         "question", row.question(),
-                        "answer",   row.answer())))
+                        "answer",   row.answer(),
+                        // 요약·키워드의 단일 출처는 이 컬럼들이다 — 청크 화면의 같은 이름 칸은
+                        // 재임베딩마다 여기서 다시 쓰이는 사본이라 거기서는 읽기 전용이다.
+                        "summary",  row.summary()  == null ? "" : row.summary(),
+                        "keywords", row.keywords() == null ? "" : row.keywords())))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Update a curated entry's answer text (re-embeds) — admin can edit any user's entry. */
+    /**
+     * Update a curated entry's question / answer / summary / keywords — <b>one save, one re-embed</b>.
+     * Admin can edit any user's entry. Every field is optional: older clients send only
+     * {@code answer}, and {@code null} means "not sent" while an empty string means "clear it".
+     *
+     * <p>요약·키워드가 여기 있는 이유는 이곳이 그 둘의 <b>단일 출처</b>이기 때문이다. 청크 화면의
+     * 같은 이름 칸은 재임베딩마다 다시 쓰이는 사본이라 그쪽에서는 읽기 전용이다
+     * ({@code AdminService.mergeEditableMeta}).
+     */
     @PostMapping("/admin/curated/{id}")
     @ResponseBody
     public ResponseEntity<Void> updateCurated(@PathVariable long id, @RequestBody Map<String, Object> body) {
-        String newAnswer = body.get("answer") instanceof String s ? s : null;
-        boolean updated = curatedQaService.updateAnswer(id, newAnswer);
+        String newAnswer   = body.get("answer")   instanceof String s ? s : null;
+        String newQuestion = body.get("question") instanceof String q ? q : null;
+        String newSummary  = body.get("summary")  instanceof String s ? s : null;
+        String newKeywords = body.get("keywords") instanceof String s ? s : null;
+        boolean updated = curatedQaService.updateEntry(id, newQuestion, newAnswer, newSummary, newKeywords);
         return updated ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
+    /**
+     * 본문을 근거로 더 구체적인 질문을 <b>제안만</b> 한다 — 저장하지 않는다.
+     *
+     * <p>큐레이션 축의 검색 텍스트는 {@code 질문 + 본문}이고 질문은 모든 청크에 반복 부여되므로,
+     * 이 축이 어떤 질의에 걸리는지는 사실상 질문 한 줄이 정한다. 그래서 고칠 값이지만, 자동으로
+     * 갈아치우면 그 판단이 사람 몰래 일어난다 — 반영 여부는 화면에서 관리자가 정한다(§10.11 의
+     * "사람의 검토가 유일한 관문"과 같은 이유).
+     *
+     * @return {@code 200 {"question": "..."}} 또는 제안할 것이 없으면 {@code 204}
+     */
+    @PostMapping("/admin/curated/{id}/suggest-question")
+    @ResponseBody
+    public ResponseEntity<?> suggestCuratedQuestion(@PathVariable long id) {
+        return curatedQaService.findById(id)
+                .<ResponseEntity<?>>map(row -> questionSuggester
+                        .suggest(row.question(), row.answer(), LocaleContextHolder.getLocale())
+                        .<ResponseEntity<?>>map(q -> ResponseEntity.ok(Map.of("question", q)))
+                        .orElseGet(() -> ResponseEntity.noContent().build()))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** Force-remove a curated entry regardless of the original asker's own feedback state (moderation). */
@@ -417,16 +477,26 @@ public class AdminController {
     @ResponseBody
     public ResponseEntity<?> submissionDetail(@PathVariable long id) {
         return submissionService.findById(id)
-                .<ResponseEntity<?>>map(s -> ResponseEntity.ok(Map.of(
-                        "id",     s.id(),
-                        "title",  s.title(),
-                        "body",   s.body(),
-                        "tags",   s.tags() == null ? "" : s.tags(),
-                        "author", s.authorUserId(),
-                        "status", s.displayStatus(),
-                        // 승인 시 몇 개 청크로 나뉘는지 미리 보여준다(승인 후에는 실제 생성된 개수).
-                        "chunkPreview", s.chunkCount() > 0
-                                ? s.chunkCount() : submissionService.previewChunkCount(s.body()))))
+                .<ResponseEntity<?>>map(s -> {
+                    Map<String, Object> body = new java.util.HashMap<>(Map.of(
+                            "id",     s.id(),
+                            "title",  s.title(),
+                            "body",   s.body(),
+                            "tags",   s.tags() == null ? "" : s.tags(),
+                            "author", s.authorUserId(),
+                            "status", s.displayStatus(),
+                            // 승인 시 몇 개 청크로 나뉘는지 미리 보여준다(승인 후에는 실제 생성된 개수).
+                            "chunkPreview", s.chunkCount() > 0
+                                    ? s.chunkCount() : submissionService.previewChunkCount(s.body())));
+                    // §10.11 — 좋아요 출신이면 원 대화와 두 글자 표기를 함께 싣는다. [DN] 은 문서를
+                    // 하나도 읽지 않은 답변이라는 뜻이고, 본문만 봐서는 절대 알 수 없다.
+                    submissionService.originOf(s).ifPresent(o -> {
+                        body.put("sourceThreadId", o.threadId());
+                        body.put("sourceTurnId", o.turnId());
+                        if (o.modeLabel() != null) body.put("modeLabel", o.modeLabel());
+                    });
+                    return ResponseEntity.ok(body);
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -465,6 +535,80 @@ public class AdminController {
         String reason = body.get("reason") instanceof String s ? s : null;
         boolean ok = submissionService.reject(id, currentUser.userId(), reason);
         return ok ? ResponseEntity.ok().build() : ResponseEntity.status(409).build();
+    }
+
+    // ── §10.14 청크 오류 신고 ─────────────────────────────────────────────────
+
+    /**
+     * 신고 대기열 — 같은 lazy-load 패턴. <b>행의 단위는 신고가 아니라 청크</b>다: 한 청크에 여러
+     * 사람이 신고하는 것이 정상이고, 관리자가 하는 일은 그 청크를 고치는 하나이기 때문이다.
+     */
+    @GetMapping("/admin/chunk-reports")
+    public String chunkReportPanel(@RequestParam(defaultValue = "0")  int offset,
+                                   @RequestParam(defaultValue = "20") int limit,
+                                   Model model) {
+        model.addAttribute("groups", chunkReportService.openGroups(offset, limit));
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
+        return "fragments/admin-chunk-reports :: panel";
+    }
+
+    /**
+     * 헤더 배지(60초 폴링) — {@link #pendingSubmissionCount} 와 같은 이유로 {@code /admin/**} 아래에
+     * 둔다. 값은 <b>열린 신고를 가진 청크 수</b>이지 신고 건수가 아니다(한 청크에 열 명이 신고해도
+     * 관리자가 할 일은 하나다).
+     */
+    @GetMapping("/admin/chunk-reports/open-count")
+    @ResponseBody
+    public Map<String, Integer> openChunkReportCount() {
+        return Map.of("count", chunkReportService.openChunkCount());
+    }
+
+    /**
+     * 한 청크에 달린 신고 <b>전부</b>를 한 화면에 — 사유·코멘트·당시 질문 + 신고 시점 원문 스냅샷 +
+     * 현재 내용 + 그 사이 청크가 바뀌었는지. 서버 렌더 프래그먼트인 이유는 사유 문구가 메시지
+     * 번들에 있어서다(채팅 신고 폼과 같은 키를 읽어야 문구가 갈라지지 않는다).
+     *
+     * <p>{@code collection} 은 기존 청크 편집 오프캔버스를 그대로 열기 위한 값이다
+     * ({@code openChunkEdit(chunkId, collection)}) — 신고 패널은 자체 편집기를 갖지 않는다.
+     */
+    @GetMapping("/admin/chunk-reports/chunks/{chunkId}")
+    public String chunkReportDetail(@PathVariable String chunkId, Model model) {
+        var detail = chunkReportService.chunkDetail(chunkId).orElse(null);
+        model.addAttribute("detail", detail);
+        model.addAttribute("collection",
+                detail == null ? null : adminService.collectionFor(detail.version()));
+        return "fragments/admin-chunk-reports :: detail";
+    }
+
+    /**
+     * 「처리 완료」 — 이 청크의 열린 신고를 전부 닫는다. 청크 자체는 건드리지 않는다: 실제 수정은
+     * 청크 편집({@link #updateChunk}/{@link #reindexChunk})의 일이고, 그래야 편집 시각 스탬프와
+     * 재사용 무효화가 한 경로에만 붙는다.
+     */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/resolve")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> resolveChunkReports(
+            @PathVariable String chunkId, @RequestBody(required = false) Map<String, Object> body) {
+        String note = (body != null && body.get("note") instanceof String s) ? s : null;
+        int closed = chunkReportService.resolveChunk(chunkId, currentUser.userId(), note);
+        return closed > 0
+                ? ResponseEntity.ok(Map.of("closed", closed))
+                : ResponseEntity.status(409).body(Map.of(
+                        "status", "not_open", "message", "이미 처리된 신고입니다."));
+    }
+
+    /** 「반려」 — 사유 필수. */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/reject")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> rejectChunkReports(
+            @PathVariable String chunkId, @RequestBody Map<String, Object> body) {
+        String reason = body.get("reason") instanceof String s ? s : null;
+        int closed = chunkReportService.rejectChunk(chunkId, currentUser.userId(), reason);
+        return closed > 0
+                ? ResponseEntity.ok(Map.of("closed", closed))
+                : ResponseEntity.status(409).body(Map.of(
+                        "status", "not_open", "message", "이미 처리된 신고입니다."));
     }
 
     /**

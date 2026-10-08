@@ -49,7 +49,7 @@ public class CuratedQaRepository {
     private static final String COLUMNS =
             "id, source_turn_id, source_user_id, source_thread_id, question, answer, " +
             "status, source_doc_version, created_at, updated_at, embed_status, " +
-            "origin, source_submission_id, tags, chunk_count ";
+            "origin, source_submission_id, tags, chunk_count, summary, keywords ";
 
     private final JdbcTemplate jdbc;
 
@@ -73,7 +73,9 @@ public class CuratedQaRepository {
                 rs.getString("origin"),
                 sourceSubmissionId,
                 rs.getString("tags"),
-                rs.getInt("chunk_count"));
+                rs.getInt("chunk_count"),
+                rs.getString("summary"),
+                rs.getString("keywords"));
     };
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
@@ -97,7 +99,9 @@ public class CuratedQaRepository {
                     origin                TEXT NOT NULL DEFAULT 'like',
                     source_submission_id  INTEGER,
                     tags                  TEXT,
-                    chunk_count           INTEGER NOT NULL DEFAULT 1
+                    chunk_count           INTEGER NOT NULL DEFAULT 1,
+                    summary               TEXT,
+                    keywords              TEXT
                 )
             """;
 
@@ -126,6 +130,17 @@ public class CuratedQaRepository {
         if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
                 .noneMatch(c -> "chunk_count".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE curated_qa ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1");
+        }
+        // 요약·키워드는 승인 시점에 제안에서 복사되어 MetaKey.CHUNK_CONTEXT/EXCERPT_KEYWORDS 로
+        // 실린다. nullable 인 채로 두는 것이 의미가 있다 — NULL 은 "이 행은 이 필드가 생기기 전에
+        // 등록됐다"이고, 빈 문자열은 "작성자가 비워 두기로 했다"이다. 둘 다 buildDocument() 에서
+        // 키를 싣지 않는 쪽으로 수렴하므로 동작은 같지만, 나중에 백필 대상을 고를 때 구분이 필요하다.
+        var enrichCols = jdbc.queryForList("PRAGMA table_info(curated_qa)");
+        if (enrichCols.stream().noneMatch(c -> "summary".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN summary TEXT");
+        }
+        if (enrichCols.stream().noneMatch(c -> "keywords".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN keywords TEXT");
         }
         createIndexes();
     }
@@ -184,18 +199,28 @@ public class CuratedQaRepository {
     }
 
     /**
-     * Upserts an active row keyed by {@code source_turn_id} — a re-like after unlike reactivates
-     * and refreshes the existing row instead of accumulating duplicate rows/vectors across
-     * like→unlike→like cycles (the vector store's {@code spring_doc_id} is derived from this row's
-     * id, so reusing the row keeps re-embedding idempotent). Returns the row id.
+     * Upserts an active row keyed by {@code source_turn_id} — approving the same turn twice (or
+     * re-approving an edited proposal) refreshes the existing row instead of accumulating duplicate
+     * rows/vectors, and the vector store's {@code spring_doc_id} is derived from this row's id, so
+     * reusing the row keeps re-embedding idempotent. Returns the row id.
+     *
+     * <p>{@code sourceSubmissionId} <b>must</b> be set for a 좋아요 출신 제안 (§10.11 함정 ②).
+     * A submission's whole state — chunk count, 등록 완료 vs 회수됨, embed-failure badge — is
+     * counted through that column alone, so a NULL there silently decouples the proposal from the
+     * knowledge it created: it reports 청크 0개 while being live, and keeps reporting 등록 완료
+     * after an admin takes that knowledge down. Nothing fails and nothing is logged. It is left
+     * NULL only for a row that no submission owns.
      */
     public long upsertActive(long turnId, String userId, String threadId,
-                             String question, String answer, String sourceDocVersion, String tags) {
+                             String question, String answer, String sourceDocVersion, String tags,
+                             Long sourceSubmissionId, String summary, String keywords) {
         String now = now();
         int updated = jdbc.update(
                 "UPDATE curated_qa SET status='active', question=?, answer=?, " +
-                "source_doc_version=?, tags=?, updated_at=? WHERE source_turn_id=?",
-                question, answer, sourceDocVersion, tags, now, turnId);
+                "source_doc_version=?, tags=?, source_submission_id=?, summary=?, keywords=?, " +
+                "updated_at=? WHERE source_turn_id=?",
+                question, answer, sourceDocVersion, tags, sourceSubmissionId,
+                summary, keywords, now, turnId);
         if (updated > 0) {
             return jdbc.queryForObject(
                     "SELECT id FROM curated_qa WHERE source_turn_id=?", Long.class, turnId);
@@ -205,8 +230,9 @@ public class CuratedQaRepository {
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
-                    "question, answer, status, source_doc_version, created_at, updated_at, tags) " +
-                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                    "question, answer, status, source_doc_version, created_at, updated_at, tags, " +
+                    "source_submission_id, summary, keywords) " +
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, turnId);
             ps.setString(2, userId);
@@ -217,6 +243,13 @@ public class CuratedQaRepository {
             ps.setString(7, now);
             ps.setString(8, now);
             ps.setString(9, tags);
+            if (sourceSubmissionId == null) {
+                ps.setNull(10, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(10, sourceSubmissionId);
+            }
+            ps.setString(11, summary);
+            ps.setString(12, keywords);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -232,15 +265,15 @@ public class CuratedQaRepository {
      * Returns the new row id.
      */
     public long insertManual(long submissionId, String authorUserId, String question, String answer,
-                             String tags) {
+                             String tags, String summary, String keywords) {
         String now = now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
                     "question, answer, status, source_doc_version, created_at, updated_at, " +
-                    "origin, source_submission_id, tags) " +
-                    "VALUES (NULL, ?, '', ?, ?, 'active', NULL, ?, ?, '" + ORIGIN_MANUAL + "', ?, ?)",
+                    "origin, source_submission_id, tags, summary, keywords) " +
+                    "VALUES (NULL, ?, '', ?, ?, 'active', NULL, ?, ?, '" + ORIGIN_MANUAL + "', ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, authorUserId);
             ps.setString(2, question);
@@ -249,6 +282,8 @@ public class CuratedQaRepository {
             ps.setString(5, now);
             ps.setLong(6, submissionId);
             ps.setString(7, tags);
+            ps.setString(8, summary);
+            ps.setString(9, keywords);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -318,6 +353,35 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET answer=?, updated_at=? WHERE id=?", answer, now(), id);
     }
 
+    /**
+     * 질문 문장만 갱신한다. 답변과 나누어 두는 이유는 둘의 수정 이유가 다르기 때문이다 — 답변은
+     * 내용이 틀렸을 때, 질문은 <b>검색에 걸리지 않을 때</b> 고친다.
+     *
+     * <p>질문은 {@code CuratedQaService.defaultSearchText()} 의 앞부분이자 모든 청크에 반복
+     * 부여되는 값이라, 이 한 줄을 바꾸면 그 항목이 어떤 질의에 걸리는지가 통째로 달라진다 —
+     * 호출부는 반드시 재임베딩해야 한다(이 메서드는 저장만 한다).
+     */
+    /**
+     * 요약·키워드 갱신 — {@code null} 인 쪽은 건드리지 않고, 빈 문자열은 "비우기"로 저장한다
+     * (그 구분이 필요해서 {@code Optional} 이 아니라 nullable 을 받는다: 화면이 한 칸만 보낼 수도
+     * 있고, 관리자가 일부러 지운 것과 안 보낸 것은 다른 일이다).
+     */
+    public void updateEnrichment(long id, String summary, String keywords) {
+        if (summary == null && keywords == null) return;
+        StringBuilder sql = new StringBuilder("UPDATE curated_qa SET updated_at=?");
+        List<Object> args = new java.util.ArrayList<>();
+        args.add(now());
+        if (summary != null)  { sql.append(", summary=?");  args.add(summary.isBlank() ? null : summary.strip()); }
+        if (keywords != null) { sql.append(", keywords=?"); args.add(keywords.isBlank() ? null : keywords.strip()); }
+        sql.append(" WHERE id=?");
+        args.add(id);
+        jdbc.update(sql.toString(), args.toArray());
+    }
+
+    public void updateQuestion(long id, String question) {
+        jdbc.update("UPDATE curated_qa SET question=?, updated_at=? WHERE id=?", question, now(), id);
+    }
+
     /** Same as {@link #findAllActive(int, int)} with {@code offset=0}. */
     public List<CuratedQa> findAllActive(int limit) {
         return findAllActive(0, limit);
@@ -354,18 +418,6 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET embed_status='ok', updated_at=? WHERE id=?", now(), id);
     }
 
-    /** Turn ids (among the given set) whose active curated row is currently stuck in
-     *  {@code embed_status='failed'} — chat.html's turn-history render uses this to show a badge
-     *  without threading a new column through {@code MemoryRepository.Turn}. */
-    public Set<Long> findFailedTurnIds(Collection<Long> turnIds) {
-        if (turnIds == null || turnIds.isEmpty()) return Set.of();
-        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
-        List<Long> rows = jdbc.queryForList(
-                "SELECT source_turn_id FROM curated_qa WHERE status='active' AND embed_status='failed' " +
-                "AND source_turn_id IN (" + placeholders + ")",
-                Long.class, turnIds.toArray());
-        return new HashSet<>(rows);
-    }
 
     /**
      * Distinct tags used by active curated rows (comma-joined column → flattened, lowercased).
@@ -412,7 +464,8 @@ public class CuratedQaRepository {
     public record CuratedQa(long id, Long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,
                             String createdAt, String updatedAt, String embedStatus,
-                            String origin, Long sourceSubmissionId, String tags, int chunkCount) {
+                            String origin, Long sourceSubmissionId, String tags, int chunkCount,
+                            String summary, String keywords) {
 
         public boolean isManual() { return ORIGIN_MANUAL.equals(origin); }
     }
