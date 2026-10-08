@@ -59,8 +59,16 @@
 │    PostAnswerService        → MICRO_TEXT  (답변 뒤 질문 다듬기·추가 질문, 턴마다 배경 호출) │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 │                                                                      │
-│  ※ 독립화·질문 다듬기·"본문으로 구체화"는 생각(thinking)을 끄고 부른다 │
-│    (ThinkingOffChatModel — LOCAL 프로바이더에만 chat_template_kwargs)  │
+│  ※ 생각(thinking) 수준은 호출 지점별 app.llm.thinking.* (§6.29)        │
+│    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
+│    채팅 답변 스트리밍(체인 우회)은 AnswerStreamer 가 같은 규칙으로 싣는다 │
+│    켬으로 나가면 max_tokens 에 생각 여유 — ThinkingBudget(창 25% 상한)  │
+│    /settings 의 생각 수준 카드(관리자 전용)가 호출 지점마다 이 라우팅이  │
+│    고른 프로바이더·dialect·창으로 예약·입력 예산을 미리 계산해 보인다   │
+│    출하값은 6단계 실측(llama.cpp b11433 + gemma-4-E2B)으로 정했다 —     │
+│    생각은 응답 검증·응용(C) 답변에만 낮게, 나머지는 끔. 이 서버는 요청  │
+│    단위 생각 토큰 예산(reasoning_budget_tokens)도 받는다(아직 안 씀)    │
+│    측정 결과·재현 방법: documents/THINKING_EVALUATION.md              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -141,8 +149,8 @@ app.llm.circuit-breaker-minutes=4
 # says HOW C answers, this says WHETHER C is offered — it is the only mode that writes content the
 # documents do not contain. max-tokens is hot-editable too (§6.26 A6, 1000~32000) and applies to blocking
 # calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
-app.llm.temperature=${LLM_TEMPERATURE:0.0}
-app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
+app.llm.temperature=${LLM_TEMPERATURE:0.2}
+app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.5}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
 app.llm.creative-mode-enabled=${CREATIVE_MODE_ENABLED:true}
@@ -157,7 +165,7 @@ app.llm.shrink-step=${LLM_SHRINK_STEP:1}
 # 무관하므로 일부러 쓰지 않는다.
 # app.llm.providers[1].max-tokens=4000
 # app.llm.providers[1].context-size=8192
-app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
+app.llm.max-tokens=${LLM_MAX_TOKENS:12000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:60}

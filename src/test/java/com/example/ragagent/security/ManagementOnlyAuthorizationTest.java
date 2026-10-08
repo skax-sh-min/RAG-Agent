@@ -70,7 +70,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * without it, the "open surface" assertions below would trivially pass for the wrong reason
  * (no filter running at all) rather than proving the real guest path works.
  */
-@WebMvcTest(value = {DocumentController.class, AdminController.class, CuratedSubmissionController.class},
+@WebMvcTest(value = {DocumentController.class, AdminController.class, CuratedSubmissionController.class,
+        com.example.ragagent.controller.SettingsController.class},
         properties = {"app.auth.enabled=false", "app.auth.management-only=true"})
 @Import({com.example.ragagent.context.WebMvcConfig.class, SecurityConfig.class, NoAuthAutoLoginFilter.class,
         SessionCurrentUser.class, ManagementOnlyAuthorizationTest.TestConfig.class})
@@ -145,6 +146,9 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;
     @MockitoBean DocumentExportService documentExportService;
     @MockitoBean com.example.ragagent.service.StorageQuotaService storageQuotaService;
+    // §6.29 — 생각 수준 카드(/admin/settings/thinking)의 게이트를 확인하려고 SettingsController 를 슬라이스에 넣었다.
+    @MockitoBean com.example.ragagent.service.SettingsService settingsService;
+    @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;
 
     private AppUserDetails adminUser() {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);
@@ -163,6 +167,33 @@ class ManagementOnlyAuthorizationTest {
         when(adminService.vectorStoreView()).thenReturn(new VectorStoreAdminView(
                 "chroma", true, -1, 0, 0, null, null, "memory.db"));
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of());
+    }
+
+    // ── §6.29 생각 수준 카드 — 읽기까지 관리자만 ───────────────────────────────
+
+    @Test
+    @DisplayName("게스트(ROLE_USER) GET /admin/settings/thinking — 403: 관리 전용 인증에서 게스트에게 프로바이더·창·관측값을 보이지 않는다")
+    void guestCannotReadTheThinkingCard() throws Exception {
+        mvc.perform(get("/admin/settings/thinking").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 GET /admin/settings/thinking — 로그인으로 리다이렉트")
+    void anonymousThinkingCardRedirectsToLogin() throws Exception {
+        mvc.perform(get("/admin/settings/thinking"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("관리자 GET /admin/settings/thinking — 200")
+    void adminCanReadTheThinkingCard() throws Exception {
+        when(thinkingPreview.preview()).thenReturn(new com.example.ragagent.model.ThinkingPreview(
+                java.time.Instant.now(),
+                new com.example.ragagent.model.ThinkingPreview.Basis(10_000, 10, 1_500, 2, 600, 200, 3_000, 5_000, null, 0),
+                List.of()));
+        mvc.perform(get("/admin/settings/thinking").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk());
     }
 
     // ── 게이트 경로: 익명 접근 → 로그인으로 리다이렉트 ──────────────────────────

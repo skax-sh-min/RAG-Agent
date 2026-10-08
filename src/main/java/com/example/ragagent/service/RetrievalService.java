@@ -9,9 +9,10 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TrackingChatModel;
+import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingSiteChatModel;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
@@ -61,14 +62,17 @@ public class RetrievalService {
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    /** 재시도 컨텍스트 여유 판단의 검증 예약에 생각 여유를 더한다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt, MessageSource messageSource,
                             ChatImageAnalysisSkipRegistry imageSkipRegistry,
-                            ProviderContextWindows contextWindows) {
+                            ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
@@ -83,7 +87,7 @@ public class RetrievalService {
         // resolve to the local BOTH model (unchanged); TEXT is the final fallback for cloud-only
         // (TEXT-typed providers, no LOCAL) setups so construction never fails.
         LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
-                List.of(TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), RoutingMode.COST_FIRST);
+                ThinkingSite.QUERY_EXPANSION.taskTypes(), ThinkingSite.QUERY_EXPANSION.fixedRoutingMode());
         // Gate this persistent model too: MultiQueryExpander calls it internally at a
         // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
         ChatModel gatedExpansionModel =
@@ -98,8 +102,11 @@ public class RetrievalService {
         PromptTemplate expansionPromptTemplate = PromptTemplate.builder()
                 .template(messageSource.getMessage("prompt.retrieval.expansion", null, Locale.KOREAN))
                 .build();
+        // §6.29 — 확장기는 자기 ChatClient 로 프롬프트를 직접 만들어 호출부가 옵션에 사이트를 표시할 자리가 없다.
+        // 그래서 모델 앞에서 지나가는 프롬프트마다 표시한다(app.llm.thinking.query-expansion).
         this.multiQueryExpander = MultiQueryExpander.builder()
-                .chatClientBuilder(ChatClient.builder(trackedExpansionModel))
+                .chatClientBuilder(ChatClient.builder(
+                        new ThinkingSiteChatModel(trackedExpansionModel, ThinkingSite.QUERY_EXPANSION)))
                 .promptTemplate(expansionPromptTemplate)
                 .includeOriginal(true)
                 .numberOfQueries(2)
@@ -404,7 +411,10 @@ public class RetrievalService {
      * <p>창을 모르면 {@code true} — 늘리는 쪽이 기존 동작이므로, 모르는 상태에서 동작을 바꾸지 않는다.
      */
     private boolean hasContextHeadroomFor(AgentState state, int extraDocs) {
-        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        // 검증 호출의 예산 — 그 검증을 받을 프로바이더(검증 사이트의 라우팅) 기준이다.
+        ThinkingSite evalSite = state.responseMode().evalThinkingSite();
+        String provider = llmRouter.findProviderName(evalSite.taskType(), evalSite.routingMode(state.routingMode()));
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return true;
 
         long docsCost = state.retrievedDocs().stream()
@@ -416,7 +426,9 @@ public class RetrievalService {
         long fixed = TokenEstimator.estimate(state.answer())
                 + TokenEstimator.estimate(state.question())
                 + EVAL_OVERHEAD_TOKENS;
-        long budget = new PromptBudget(window, AnswerService.MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        // 검증 호출이 실제로 잡을 예약 — 기본 예약 + 생각 여유(§6.29 ④). AnswerService 의 발췌 예산과 같은 함수다.
+        long budget = new PromptBudget(window, AnswerService.evalReservation(thinkingBudget, evalSite, provider,
+                props.llmSafe().maxTokens()).tokens()).inputBudget();
         return budget - fixed - docsCost - perDoc * extraDocs > 0;
     }
 

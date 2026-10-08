@@ -5,6 +5,8 @@ import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
+import com.example.ragagent.llm.ProviderThinkingDialects;
+import com.example.ragagent.llm.ThinkingObservations;
 import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -54,7 +56,8 @@ class LlmConfigTest {
     void localProviderRegisteredWithoutApiKey() {
         AppProperties props = propsWith(provider("local", "LOCAL", "BOTH", ""));
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.hasLocalProvider()).isTrue();
         assertThat(router.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local");
@@ -65,7 +68,8 @@ class LlmConfigTest {
     void cloudProviderStillDroppedWithoutApiKey() {
         AppProperties props = propsWith(provider("gemini", "NORMAL", "TEXT", ""));
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.hasLocalProvider()).isFalse();
         assertThat(router.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("unknown");
@@ -76,7 +80,8 @@ class LlmConfigTest {
     void explicitApiKeyPreserved() {
         AppProperties props = propsWith(provider("local", "LOCAL", "BOTH", "real-key"));
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local");
     }
@@ -89,7 +94,8 @@ class LlmConfigTest {
                 provider("gemini", "NORMAL",  "TEXT", ""),   // 빈 클라우드 키 → 드롭
                 provider("openai", "PREMIUM", "TEXT", ""));  // 빈 클라우드 키 → 드롭
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration(),
+                new ProviderThinkingDialects(), new ThinkingObservations());
 
         assertThat(router.hasLocalProvider()).isTrue();
         // 외부 provider는 애초에 등록되지 않으므로 어떤 라우팅 모드에서도 선택될 수 없다.

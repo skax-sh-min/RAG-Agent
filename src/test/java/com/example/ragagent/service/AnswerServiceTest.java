@@ -14,6 +14,8 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,6 +69,24 @@ class AnswerServiceTest {
 
     private static final int MAX_RETRY = 2;
 
+    /**
+     * 이 테스트의 전역 {@code app.llm.max-tokens}. 입력 예산 테스트의 산식(N 답변 예약 = 70% = 7,000 등)이 이 값에서 나오므로
+     * 앱의 기본값이 바뀌어도 산식이 흔들리지 않게 여기서 고정한다 — {@code app.llm} 이 없을 때의 폴백에 기대면 기본값을 바꿀
+     * 때마다 주석의 숫자와 창 크기를 다시 맞춰야 한다.
+     */
+    private static final int MAX_TOKENS = 10_000;
+
+    /** 전역 max-tokens 를 {@link #MAX_TOKENS} 로 고정한 설정 — 나머지 {@code app.llm} 은 폴백이고, 생각 수준은 {@code thinking} 의 줄이다. */
+    private static AppProperties props(Map<String, String> thinking) {
+        AppProperties.LlmConfig llm = new AppProperties.LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
+                null, null, null, null, null, MAX_TOKENS, null, null, thinking);
+        return new AppProperties(
+                "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
+                null, llm, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
     private LlmRouter llmRouter;
     private MessageSource messageSource;
     private ProviderContextWindows contextWindows;
@@ -75,11 +95,7 @@ class AnswerServiceTest {
     @BeforeEach
     void setUp() {
         llmRouter = mock(LlmRouter.class);
-        AppProperties props = new AppProperties(
-                "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
-                true, false, 3,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        AppProperties props = props(Map.of());
         contextWindows = new ProviderContextWindows();   // 비어 있음 = 창 모름 → 예산 축소 없음
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
@@ -276,6 +292,57 @@ class AnswerServiceTest {
         // 창 4,096 → 예산 4,096 − 2,048 − 409 = 1,639. 첫 문서(1,503)만 들어간다.
         assertThat(evalPrompt).as("첫 발췌는 예산을 넘어도 남는다").contains("첫번째");
         assertThat(evalPrompt).as("좁은 창에서는 하위 순위 발췌가 빠진다").doesNotContain("두번째");
+    }
+
+    /** 검증 프롬프트의 발췌 수 — 발췌마다 {@code [Dn]} 번호가 붙는다. */
+    private static long excerptCount(String evalPrompt) {
+        return java.util.regex.Pattern.compile("\\[D\\d+]").matcher(evalPrompt).results().count();
+    }
+
+    /** {@code budget} 으로 한 턴을 돌려 검증 프롬프트(두 번째 호출)를 돌려준다. */
+    private String evalPromptWith(com.example.ragagent.llm.ThinkingBudget budget, List<Document> docs) {
+        AppProperties props = props(Map.of());
+        AnswerService svc = new AnswerService(llmRouter, props, messageSource, contextWindows,
+                AnswerStreamer.withoutThinkingControl(), budget);
+        var prompts = new java.util.ArrayList<String>();
+        // doAnswer — 같은 테스트에서 두 번 스텁한다. when(...) 은 앞 스텁의 답을 null 인자로 한 번 불러 버린다.
+        org.mockito.Mockito.doAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe = mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        }).when(llmRouter).executeGatedWithUsage(any(), any(), any());
+        svc.execute(newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+        return prompts.get(1);
+    }
+
+    @Test
+    @DisplayName("§6.29 ④ — 검증 프로바이더에서 생각이 켜지면 예약이 늘어난 만큼 발췌 예산이 준다(같은 함수가 요청에도 더한다)")
+    void thinkingHeadroomShrinksTheEvalExcerpts() {
+        // 창 12,000 · max-tokens 10,000 → 프로바이더 상한 10,000, 창 25% 3,000 → 검증 2,048 + 낮게 1,024 = 3,072 이지만
+        // 상한 3,000 에서 멈춰 952 만 받는다. 출하값은 끔이라 검증을 낮게로 "설정한" 배포를 만든다.
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        com.example.ragagent.llm.ProviderThinkingDialects dialects = new com.example.ragagent.llm.ProviderThinkingDialects();
+        dialects.record("lm", com.example.ragagent.llm.ThinkingDialect.AUTO, true);   // LOCAL — 낮게가 켬으로 나간다
+        com.example.ragagent.llm.ThinkingBudget thinking = new com.example.ragagent.llm.ThinkingBudget(
+                props(Map.of("eval", "low")), dialects, contextWindows);
+        List<Document> docs = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) docs.add(new Document("문서" + i + "번" + "가".repeat(300)));   // 발췌 하나 ~305 토큰
+
+        long withoutThinking = excerptCount(evalPromptWith(com.example.ragagent.llm.ThinkingBudget.none(), docs));
+        long withThinking = excerptCount(evalPromptWith(thinking, docs));
+
+        assertThat(withoutThinking).as("전제 — 예산에 묶여 일부만 실린다").isBetween(2L, 29L);
+        assertThat(withThinking).as("952 토큰이면 ~305 토큰짜리 발췌가 하나 이상 빠진다").isLessThan(withoutThinking);
     }
 
     @Test
@@ -840,14 +907,13 @@ class AnswerServiceTest {
         // 전체가 예약된다 — 좁은 컨텍스트에서 n_ctx 를 넘기는 것은 근거가 아니라 이 예약이다.
         Integer evalMax = promptCaptor.getAllValues().get(1).getOptions().getMaxTokens();
         assertThat(evalMax).as("검증 호출 출력 상한").isEqualTo(2_048);
+        // §6.29 — 답변은 그 모드의 RAG 사이트, 검증은 검증 사이트로 표시한다(생각 수준을 따로 정한다).
+        assertThat(ThinkingControl.siteOf(promptCaptor.getAllValues().get(0))).isEqualTo(ThinkingSite.ANSWER_RAG_N);
+        assertThat(ThinkingControl.siteOf(promptCaptor.getAllValues().get(1))).isEqualTo(ThinkingSite.EVAL);
         // 답변 호출은 모드 예산(N = max-tokens의 70% 또는 5,000자 바닥) 그대로여야 한다.
         Integer answerMax = promptCaptor.getAllValues().get(0).getOptions().getMaxTokens();
         assertThat(answerMax).as("답변 호출은 영향 없음")
-                .isEqualTo(ResponseMode.N.maxTokens(new AppProperties(
-                        "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
-                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                        null, null).llmSafe().maxTokens()));
+                .isEqualTo(ResponseMode.N.maxTokens(MAX_TOKENS));
     }
 
     @Test

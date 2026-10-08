@@ -12,6 +12,8 @@ import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -182,6 +184,26 @@ class DirectAnswerServiceTest {
         org.springframework.ai.chat.prompt.ChatOptions opts = promptCaptor.getValue().getOptions();
         assertThat(opts).isNotNull();
         assertThat(opts.getTemperature()).isEqualTo(0.1); // llmSafe().directTemperature() (setUp의 mock)
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — meta 답변 사이트")
+                .isEqualTo(ThinkingSite.ANSWER_META);
+    }
+
+    @Test
+    @DisplayName("§6.29 — Direct 답변은 응답 모드의 Direct 사이트로 표시한다(S → answer-direct-s)")
+    @SuppressWarnings("unchecked")
+    void execute_directMode_marksTheModesDirectSite() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        service.execute(newState(true).toBuilder().responseMode(ResponseMode.S).build());
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
+        callCaptor.getValue().apply(chatModel);
+
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).isEqualTo(ThinkingSite.ANSWER_DIRECT_S);
     }
 
     @Test
@@ -290,7 +312,8 @@ class DirectAnswerServiceTest {
             windows.record("local", windowTokens,
                     com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
         }
-        return new DirectAnswerService(llmRouter, messageSource, props, windows);
+        return new DirectAnswerService(llmRouter, messageSource, props, windows,
+                AnswerStreamer.withoutThinkingControl(), com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     private static AgentState stateWithHistory(String history) {

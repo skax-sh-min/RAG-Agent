@@ -3,8 +3,8 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -51,7 +51,9 @@ public class VisionDescriptionService {
 
     /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
     private OpenAiChatOptions indexingOptions() {
-        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
+        // §6.29 — 이미지 설명 사이트(app.llm.thinking.image-describe). 지연 Vision(LazyVisionService)도 여기로 온다.
+        return ThinkingControl.mark(OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()),
+                ThinkingSite.IMAGE_DESCRIBE).build();
     }
 
     public String describe(byte[] imageBytes, String mimeType) {
@@ -62,7 +64,8 @@ public class VisionDescriptionService {
         try {
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
             UserMessage userMessage = UserMessage.builder().text(prompt).media(media).build();
-            String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.COST_FIRST,
+            String response = llmRouter.executeWithTracking(ThinkingSite.IMAGE_DESCRIBE.taskType(),
+                    ThinkingSite.IMAGE_DESCRIBE.fixedRoutingMode(),
                     model -> model.call(new Prompt(userMessage, indexingOptions())));
             return response == null ? "" : response;
         } catch (LlmProviderExhaustedException e) {

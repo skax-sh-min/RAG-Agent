@@ -3,10 +3,11 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.llm.TokenEstimator;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.repository.MemoryRepository;
@@ -41,21 +42,24 @@ public class MemoryService {
     private final MemoryRepository repository;
     private final LlmRouter llmRouter;
     private final ProviderContextWindows contextWindows;
+    /** Direct 이력 예산의 출력 예약에 생각 여유를 더한다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     // The history budget derives from the single "LLM max tokens" source (app.llm.max-tokens /
-    // LLM_MAX_TOKENS, default 10000) — see maxConversationChars() below.
+    // LLM_MAX_TOKENS, default 12000) — see maxConversationChars() below.
     @org.springframework.beans.factory.annotation.Autowired
     public MemoryService(MemoryRepository repository, AppProperties props,
-                         LlmRouter llmRouter, ProviderContextWindows contextWindows) {
+                         LlmRouter llmRouter, ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.props = props;
         this.repository = repository;
         this.llmRouter = llmRouter;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
     }
 
     /** 이력 예산의 창 인지 부분을 쓰지 않는 호출부(테스트)를 위한 축약 — 예산은 고정값으로 떨어진다. */
     public MemoryService(MemoryRepository repository, AppProperties props) {
-        this(repository, props, null, null);
+        this(repository, props, null, null, ThinkingBudget.none());
     }
 
     public String getHistory(String userId, String threadId) {
@@ -86,7 +90,15 @@ public class MemoryService {
      * 만들어진다.
      */
     public int maxConversationChars() {
-        return Math.max(1_000, props.llmSafe().maxTokens() / 2);
+        return conversationChars(props.llmSafe().maxTokens());
+    }
+
+    /**
+     * {@link #maxConversationChars()} 의 식 — {@code /settings} 의 생각 수준 미리보기가 "이력이 상한일 때 문서가 몇 개
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     */
+    static int conversationChars(int maxTokens) {
+        return Math.max(1_000, maxTokens / 2);
     }
 
     /**
@@ -107,15 +119,19 @@ public class MemoryService {
      * 나오지 않았다. 아는 것만 쓴다.
      *
      * @param streaming 이 턴이 스트리밍으로 답하는가 — 출력 예약이 달라진다
-     *                  ({@code AnswerService.outputReservation})
+     *                  ({@code AnswerService.answerReservation} — 기본 예약 + 생각 여유, §6.29 ④)
      */
     public int maxConversationChars(boolean askingDirect, ResponseMode mode,
                                     RoutingMode routingMode, boolean streaming, String question) {
         int fallback = maxConversationChars();
         if (!askingDirect || llmRouter == null || contextWindows == null) return fallback;
-        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, routingMode));
+        // Direct 답변을 받을 프로바이더 — 그 모드의 Direct 사이트(없는 모드는 요청 단계에서 N 으로 정규화된다).
+        ThinkingSite site = mode.directThinkingSite() != null ? mode.directThinkingSite() : ThinkingSite.ANSWER_DIRECT_N;
+        String provider = llmRouter.findProviderName(site.taskType(), site.routingMode(routingMode));
+        int window = contextWindows.tokensOrZero(provider);
         return HistoryPolicy.budgetChars(window,
-                AnswerService.outputReservation(mode, streaming, props.llmSafe().maxTokens()),
+                AnswerService.answerReservation(thinkingBudget, site, provider, mode, streaming,
+                        props.llmSafe().maxTokens()).tokens(),
                 0,   // Direct — 검색이 돌지 않으므로 문서가 가져갈 자리가 없다
                 TokenEstimator.estimate(question), fallback);
     }

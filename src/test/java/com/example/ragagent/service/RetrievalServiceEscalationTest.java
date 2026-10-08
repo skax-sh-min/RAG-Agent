@@ -70,7 +70,8 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     /**
@@ -149,7 +150,8 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(bigList));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
-                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     @Test

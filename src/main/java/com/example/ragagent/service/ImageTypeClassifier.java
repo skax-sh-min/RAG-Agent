@@ -2,8 +2,8 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -49,9 +49,10 @@ public class ImageTypeClassifier {
         try {
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
             UserMessage userMessage = UserMessage.builder().text(PROMPT).media(media).build();
-            OpenAiChatOptions options = OpenAiChatOptions.builder()
-                    .temperature(props.llmSafe().indexingTemperature()).build();
-            String response = llmRouter.executeWithTracking(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST,
+            ThinkingSite site = ThinkingSite.IMAGE_TYPE;   // §6.29
+            OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().indexingTemperature()), site).build();
+            String response = llmRouter.executeWithTracking(site.taskType(), site.fixedRoutingMode(),
                     model -> model.call(new Prompt(userMessage, options)));
             String type = response == null ? "other" : response.strip().toLowerCase();
             return VALID_TYPES.contains(type) ? type : "other";

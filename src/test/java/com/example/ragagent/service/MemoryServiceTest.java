@@ -25,9 +25,14 @@ class MemoryServiceTest {
     private final MemoryRepository repository = mock(MemoryRepository.class);
 
     private static AppProperties propsWithMaxTokens(int maxTokens) {
+        return propsWithMaxTokens(maxTokens, java.util.Map.of());
+    }
+
+    /** {@code thinking} 은 app.llm.thinking.* 줄 — 출하값과 다른 수준을 가정할 때 쓴다. */
+    private static AppProperties propsWithMaxTokens(int maxTokens, java.util.Map<String, String> thinking) {
         AppProperties props = mock(AppProperties.class);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, maxTokens, 1, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, maxTokens, 1, true, thinking));
         return props;
     }
 
@@ -63,7 +68,8 @@ class MemoryServiceTest {
             windows.record(provider, windowTokens,
                     com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
         }
-        return new MemoryService(repository, propsWithMaxTokens(maxTokens), router, windows);
+        return new MemoryService(repository, propsWithMaxTokens(maxTokens), router, windows,
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     @Test
@@ -108,5 +114,29 @@ class MemoryServiceTest {
 
         assertThat(service.maxConversationChars(true, n, mode, true, "질문"))
                 .isGreaterThan(service.maxConversationChars(true, n, mode, false, "질문"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock("global-state")   // 수준을 정적 오버라이드 계층을 거쳐 읽는다
+    @DisplayName("§6.29 ④ — Direct 답변 프로바이더에서 생각이 켜지면 그 여유만큼 이력 자리가 준다(N 스트리밍 5,000 + 1,024)")
+    void thinkingHeadroomComesOutOfTheHistoryBudget() {
+        MemoryService plain = withWindow(repository, 10_000, "local", 40_960);
+        var dialects = new com.example.ragagent.llm.ProviderThinkingDialects();
+        dialects.record("local", com.example.ragagent.llm.ThinkingDialect.AUTO, true);
+        com.example.ragagent.llm.LlmRouter router = mock(com.example.ragagent.llm.LlmRouter.class);
+        when(router.findProviderName(eq(com.example.ragagent.llm.TaskType.TEXT),
+                org.mockito.ArgumentMatchers.any())).thenReturn("local");
+        var windows = new com.example.ragagent.llm.ProviderContextWindows();
+        windows.record("local", 40_960, com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
+        AppProperties props = propsWithMaxTokens(10_000, java.util.Map.of("answer-direct-n", "low"));   // 출하값은 끔 — 낮게를 명시한다
+        MemoryService thinking = new MemoryService(repository, props, router, windows,
+                new com.example.ragagent.llm.ThinkingBudget(props, dialects, windows));
+        var n = com.example.ragagent.model.ResponseMode.N;
+        var mode = com.example.ragagent.llm.RoutingMode.COST_FIRST;
+
+        // answer-direct-n 을 낮게로 → 40,960 창의 상한(min(10,000, 10,240))까지 자리가 있어 1,024 를 그대로 받는다
+        assertThat(plain.maxConversationChars(true, n, mode, true, "질문")
+                - thinking.maxConversationChars(true, n, mode, true, "질문"))
+                .isEqualTo(1_024);
     }
 }

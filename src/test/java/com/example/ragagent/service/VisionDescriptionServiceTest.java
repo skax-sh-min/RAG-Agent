@@ -5,6 +5,8 @@ import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -123,5 +125,7 @@ class VisionDescriptionServiceTest {
 
         assertThat(promptCaptor.getValue().getUserMessage().getText()).isEqualTo("커스텀 프롬프트");
         assertThat(promptCaptor.getValue().getUserMessage().getMedia()).hasSize(1);
+        assertThat(ThinkingControl.siteOf(promptCaptor.getValue())).as("§6.29 — 이미지 설명 사이트")
+                .isEqualTo(ThinkingSite.IMAGE_DESCRIBE);
     }
 }

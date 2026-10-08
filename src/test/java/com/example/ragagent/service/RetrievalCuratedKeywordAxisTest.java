@@ -71,7 +71,8 @@ class RetrievalCuratedKeywordAxisTest {
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService,
                 props, Optional.empty(), Optional.empty(), stubMessageSource(),
-                new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
     }
 
     /** MultiQueryExpander 의 모델을 빈 생성 시점에 꺼내므로 라우터는 실제 프로바이더를 줘야 한다. */

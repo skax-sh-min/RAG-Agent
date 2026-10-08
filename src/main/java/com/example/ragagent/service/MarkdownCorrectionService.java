@@ -8,8 +8,9 @@ import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -175,6 +176,8 @@ public class MarkdownCorrectionService {
     private final LlmRouter llmRouter;
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
+    /** 재작성의 생각 여유 — 섹션 크기에서 미리 비워 둔다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
     private final String defaultCodeLanguage;
 
     /**
@@ -190,12 +193,13 @@ public class MarkdownCorrectionService {
     }
 
     // Section sizing derives from the single "LLM max tokens" source (app.llm.max-tokens /
-    // LLM_MAX_TOKENS, default 10000) — see maxSectionChars()/sectionCharBudget() below.
+    // LLM_MAX_TOKENS, default 12000) — see maxSectionChars()/sectionCharBudget() below.
     public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
-                                     ProviderContextWindows contextWindows) {
+                                     ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
@@ -213,15 +217,41 @@ public class MarkdownCorrectionService {
      * 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다.
      *
      * <p>창을 모르면 {@link #maxSectionChars()} 그대로다(예전 동작).
+     *
+     * <p><b>생각이 켜지면 섹션이 작아진다</b>(§6.29 ④) — 재작성은 출력이 입력의 1.5배라 생각 여유를 예약 상한으로 깎을
+     * 수 없으므로, 그 여유만큼 본문 자리를 비워 둔다. 요청에는 {@code ThinkingControlChatModel} 이 같은 여유를 더한다.
+     * 대가는 문서당 교정 호출 수가 느는 것이다.
      */
     private int sectionCharBudget() {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
-        int configured = maxSectionChars();
+        String provider = llmRouter.findProviderName(
+                ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode());
+        return sectionChars(props.llmSafe().maxTokens(), contextWindows.tokensOrZero(provider),
+                thinkingBudget.rewriteHeadroom(ThinkingSite.MD_CORRECT, provider));
+    }
+
+    /**
+     * {@link #sectionCharBudget()} 의 식 — 순수 함수다. {@code /settings} 의 생각 수준 미리보기가 수준마다 "조각이 몇 글자까지
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     *
+     * @param window   받을 프로바이더의 창. 0 이하 = 모름(→ {@code max-tokens} 파생값 그대로)
+     * @param headroom 생각 여유 — 켬으로 나가지 않으면 0
+     */
+    static int sectionChars(int configuredMaxTokens, int window, int headroom) {
+        int configured = Math.max(MIN_SECTION_CHARS, (configuredMaxTokens - MIN_SECTION_CHARS) / 2);
         if (window <= 0) return configured;
-        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS);
+        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS, headroom);
         if (fromWindow <= 0) return configured;   // 창이 지시 프롬프트도 못 담는다 — 판단 불가
         return Math.min(configured, Math.max(MIN_SECTION_CHARS, fromWindow));
+    }
+
+    /** 교정 지시 프롬프트(본문 제외)의 토큰 추정 — 미리보기의 "지시" 칸. */
+    static int promptOverheadTokens() {
+        return CORRECTION_PROMPT_TOKENS;
+    }
+
+    /** 이미지 설명(비전 패스)의 <b>기본</b> 출력 예약 — 요청 옵션과 미리보기가 같은 함수를 지난다. */
+    static int visionReservation(int configuredMaxTokens) {
+        return IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, configuredMaxTokens);
     }
 
     /**
@@ -233,9 +263,10 @@ public class MarkdownCorrectionService {
      * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
      * 같은 프로퍼티가 {@link #maxSectionChars()} 까지 정하므로 입력과 예약이 함께 커진다.
      */
-    private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+    private OpenAiChatOptions indexingOptions(ThinkingSite site, int maxTokens) {
+        // §6.29 — 교정 본문(md-correct)과 비전 패스(md-correct-vision)가 이 옵션을 함께 쓰므로 사이트를 받는다.
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), site);
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
@@ -804,8 +835,9 @@ public class MarkdownCorrectionService {
                 [/DOCUMENT]""").formatted(defaultCodeLanguage, boundaryNote, tableExtraction.protectedText());
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions(
+                    ThinkingSite.MD_CORRECT.taskType(), ThinkingSite.MD_CORRECT.fixedRoutingMode(),
+                    BackgroundUsage.MDCORRECT_PREFIX,
+                    model -> model.call(new Prompt(prompt, indexingOptions(ThinkingSite.MD_CORRECT,
                             // 재작성이라 출력은 이 섹션 크기에 묶인다 — 지시문은 입력일 뿐 출력이 아니다.
                             IndexingOutputCap.forRewrite(tableExtraction.protectedText(),
                                     props.llmSafe().maxTokens())))));
@@ -990,7 +1022,8 @@ public class MarkdownCorrectionService {
         if (md == null || md.isBlank()) return md;
         // Gate: skip entirely when no LOCAL vision provider is registered (don't scan/spawn tasks).
         try {
-            llmRouter.routeProvider(TaskType.VISION, RoutingMode.LOCAL_ONLY);
+            llmRouter.routeProvider(ThinkingSite.MD_CORRECT_VISION.taskType(),
+                    ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode());
         } catch (Exception e) {
             return md;
         }
@@ -1192,9 +1225,10 @@ public class MarkdownCorrectionService {
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
             // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
-            int cap = IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, props.llmSafe().maxTokens());
-            String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions(cap))));
+            int cap = visionReservation(props.llmSafe().maxTokens());
+            String response = llmRouter.executeWithTracking(ThinkingSite.MD_CORRECT_VISION.taskType(),
+                    ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode(), BackgroundUsage.IMAGE_PREFIX,
+                    model -> model.call(new Prompt(userMessage, indexingOptions(ThinkingSite.MD_CORRECT_VISION, cap))));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)

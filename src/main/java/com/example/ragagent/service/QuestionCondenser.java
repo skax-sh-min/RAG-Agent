@@ -2,9 +2,8 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.llm.ThinkingOffChatModel;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -144,7 +143,7 @@ public class QuestionCondenser {
                     .replace("{history}", material)
                     .replace("{query}", PromptInjectionGuard.wrap(question));
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST,
+                    ThinkingSite.CONDENSE.taskType(), ThinkingSite.CONDENSE.fixedRoutingMode(),
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(question)),
                             options())));
@@ -221,14 +220,23 @@ public class QuestionCondenser {
 
     /**
      * 분류기와 같은 일반 temperature — 재작성은 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다.
-     * 생각은 끈다({@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는 프로바이더가 정한다({@code ThinkingOffChatModel}).
+     * 생각 수준은 {@code app.llm.thinking.condense}(출하값 끔, {@link #MAX_OUTPUT_TOKENS}) — 실을지는 받는 프로바이더가
+     * 정한다({@code ThinkingControlChatModel}).
      */
     private OpenAiChatOptions options() {
-        OpenAiChatOptions.Builder builder = ThinkingOffChatModel.requestOff(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature()));
-        int configured = props.llmSafe().maxTokens();
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature()), ThinkingSite.CONDENSE);
         // 0 이하 = "프로바이더 기본값 유지" (AnswerService.evalOptions 와 같은 규약).
-        if (configured > 0) builder.maxTokens(Math.min(configured, MAX_OUTPUT_TOKENS));
+        int base = baseReservation(props.llmSafe().maxTokens());
+        if (base > 0) builder.maxTokens(base);
         return builder.build();
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — {@link #MAX_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더
+     * 기본값). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens) {
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, MAX_OUTPUT_TOKENS) : 0;
     }
 }

@@ -457,4 +457,54 @@ class StreamingAgentServiceTest {
         verify(emitter).complete();
         verify(emitter, never()).completeWithError(any());
     }
+
+    /** 보낸 SSE 이벤트를 와이어 텍스트로 — {@code event:stage\ndata:{...}} 꼴. */
+    private List<String> sentEvents() throws java.io.IOException {
+        ArgumentCaptor<SseEmitter.SseEventBuilder> captor = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, org.mockito.Mockito.atLeast(0)).send(captor.capture());
+        return captor.getAllValues().stream()
+                .map(b -> b.build().stream().map(d -> String.valueOf(d.getData()))
+                        .collect(java.util.stream.Collectors.joining()))
+                .toList();
+    }
+
+    @Test
+    @DisplayName("§6.29 — 생각 델타는 진행이다: 토큰 없이 생각만 이어져도 끊지 않고, '생각 중' 표시는 처음 + 1초마다만 보낸다")
+    void run_onThinking_countsAsProgressAndThrottlesTheStage() throws Exception {
+        assertThinkingIsProgressAndThrottled();
+    }
+
+    @Test
+    @DisplayName("§6.29 — System.nanoTime() 은 음수일 수 있다: 시계 원점이 음수여도 '생각 중' 표시는 1초마다만 나간다")
+    void run_onThinking_throttlesWithANegativeClockOrigin() throws Exception {
+        fakeNanos.set(-TimeUnit.SECONDS.toNanos(30));
+        assertThinkingIsProgressAndThrottled();
+    }
+
+    private void assertThinkingIsProgressAndThrottled() throws Exception {
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            // 생각만 2.5초 — 토큰은 하나도 없다. 델타 사이(250ms)는 유휴 창(600ms) 안이지만 합은 그 네 배다.
+            for (int i = 0; i < 10; i++) {
+                advanceMs(250);
+                listener.onThinking();
+            }
+            letWatchdogTick();   // 생각이 진행으로 세어지지 않으면 여기서 인터럽트된다(마지막 활동 = 시작 시각)
+            listener.onToken("답");
+            return resultState("답");
+        });
+
+        service.run("u1", form(true, null), emitter);   // Direct — answer 노드 진입이 없는 경로
+
+        assertThat(Thread.currentThread().isInterrupted()).as("생각 중인 답변을 끊으면 안 된다").isFalse();
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+        List<String> thinkingStages = sentEvents().stream().filter(e -> e.contains("\"id\":\"thinking\"")).toList();
+        assertThat(thinkingStages).as("델타 10개마다가 아니라 처음(0초) + 1초 + 2초").hasSize(3);
+        assertThat(thinkingStages.get(0)).contains("모델이 생각하는 중...").doesNotContain("초)");
+        assertThat(thinkingStages.get(2)).contains("모델이 생각하는 중... (2초)");
+        assertThat(sentEvents()).as("생각이 끝나고 첫 답 토큰에서 단계 표시를 되돌린다")
+                .anySatisfy(e -> assertThat(e).contains("답변 생성 중..."));
+    }
 }

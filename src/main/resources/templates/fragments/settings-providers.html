@@ -64,6 +64,7 @@
             <th th:text="#{settings.col.base-url}">Endpoint URL</th>
             <th th:text="#{settings.col.key}">API Key</th>
             <th th:text="#{settings.col.status}">Status</th>
+            <th th:if="${isAdmin}" th:text="#{settings.col.thinking-control}">Thinking control</th>
             <th class="pe-3" th:text="#{settings.col.enabled}">Enabled</th>
         </tr>
         </thead>
@@ -89,6 +90,21 @@
                       th:text="#{llm.status.blocked}">Blocked</span>
                 <span th:if="${p.configured and !p.blocked}" class="badge bg-success"
                       th:text="#{llm.status.normal}">Normal</span>
+            </td>
+            <!-- 생각 제어(PLAN §6.29 ⑦-나) — 이 프로바이더가 생각 수준을 어떻게 받는가. 관리자에게만 보인다. -->
+            <td th:if="${isAdmin}" class="small">
+                <th:block th:if="${p.thinking != null}">
+                    <span th:text="#{__${p.thinking.supportKey()}__}">on/off</span>
+                    <code th:if="${p.thinking.field != null}" class="d-block text-secondary"
+                          th:text="${p.thinking.field}">chat_template_kwargs.enable_thinking</code>
+                    <span th:if="${p.thinking.auto}" class="text-secondary"
+                          th:text="#{settings.thinking.dialect.auto(${p.thinking.resolved.value()})}">(AUTO)</span>
+                    <span th:unless="${p.thinking.auto}" class="text-secondary"
+                          th:text="${p.thinking.configured.value()}">template-kwargs</span>
+                    <span th:if="${p.thinking.hasRejected()}" class="badge bg-warning text-dark d-block"
+                          th:title="${#strings.setJoin(p.thinking.rejected, ', ')}"
+                          th:text="#{settings.thinking.rejected-badge}">rejected</span>
+                </th:block>
             </td>
             <td class="pe-3">
                 <!-- name travels with the toggle button via hx-include; unique id avoids clashes
@@ -118,7 +134,7 @@
             </td>
         </tr>
         <tr th:if="${providers.isEmpty()}">
-            <td colspan="8" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
+            <td colspan="10" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
                 No providers configured.
             </td>
         </tr>

@@ -138,7 +138,7 @@ Direct(검색 없음) 경로도 같은 규칙으로 `prompt.direct.system.{s,n}`
 
 - **블로킹 호출에만 걸린다**(REST `/api/v1/chat`, JS 미사용 폴백). 채팅 화면의 스트리밍 답변에는 토큰 상한이 없다(§4.1).
 - **예산은 프롬프트 상한보다 넉넉해야 한다.** S는 프롬프트가 1,000자인데 예산이 2,000~2,400이다 — 지시를 잘 따른 답변이 블로킹 경로에서 문장 중간에 잘리지 않게 하려는 의도된 여유다. **S의 프롬프트 상한을 올린다면 `minChars`도 함께 올려야 한다**(한글 1토큰≈1글자라 2,000자 지시 + 2,000 예산은 여유가 0이다).
-- `/settings`의 "응답 예산" 행이 모드별 실효값과 **어느 항이 이겼는지**를 함께 보여준다(`2,000 (최소 보장)` / `11,200 (상한의 70%)` / `3,000 (설정 상한)`). 전환점이 모드마다 다르기 때문이다 — S는 `max-tokens` 13,334, N·C는 7,143.
+- `/settings` 의 생각(추론) 수준 카드(관리자 전용)가 답변 사이트마다 계산 근거에 모드별 블로킹 예산과 **어느 항이 이겼는지**를 함께 적는다(`응답 예산 2,000(최소 보장)` / `11,200(상한의 70%)` / `3,000(설정 상한)`) — 예전에는 "LLM 튜닝" 그룹의 읽기 전용 "응답 예산" 행이 했다. 전환점이 모드마다 다르기 때문이다 — S는 `max-tokens` 13,334, N·C는 7,143.
 
 #### S 모드에서는 좋아요 버튼이 비활성이다
 
@@ -161,7 +161,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 
 "문서를 조합해 새로 만들었다"는 통과, "문서에 없는 함수를 발명했다"는 실패. 응답 형식이 다르므로 파서도 둘이다(`EvalOutput` / `CreativeEvalOutput`) — 한 레코드에 `inventedSymbols`를 얹으면 N의 응답 스키마에도 그 필드가 실려 표준 검증이 흔들린다.
 
-**온도도 다른 것을 쓴다.** 일반/RAG 온도(`app.llm.temperature`)는 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄돼 있어, C만 `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], `/settings`에서 핫 수정)를 쓴다. 이 분기는 **블로킹과 스트리밍 양쪽**에 걸려야 한다 — 채팅 화면의 유일한 전송 경로가 스트리밍이라, `streamDirect()`를 빠뜨리면 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
+**온도도 다른 것을 쓴다.** 일반/RAG 온도(`app.llm.temperature`)는 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄돼 있어, C만 `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], `/settings`에서 핫 수정)를 쓴다. 이 분기는 **블로킹과 스트리밍 양쪽**에 걸려야 한다 — 채팅 화면의 유일한 전송 경로가 스트리밍이라, 스트리밍 갈래(`AnswerStreamer` 로 넘기는 온도)를 빠뜨리면 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
 
 #### 검증 배지는 무엇을 검증했는지를 말한다
 
@@ -236,15 +236,15 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 
 **`max_tokens`(completion 상한) ≠ 컨텍스트 윈도우(n_ctx, 입력+출력 합계).** `LLM_MAX_TOKENS`가 `OpenAiChatOptions.maxTokens()`로 들어가는 값은 LLM이 한 번에 생성할 수 있는 **출력** 토큰 상한일 뿐, 로컬 LLM 서버(예: llama-server)의 컨텍스트 크기(`--ctx-size`, 흔히 기본 8192)와는 별개다. 입력(system prompt + RAG 검색 결과 + 대화 히스토리 + 질문)이 이미 컨텍스트의 상당 부분을 차지하므로, `max_tokens`를 크게 잡아도 실제로 생성 가능한 토큰 수는 `n_ctx - 입력토큰수`로 물리적으로 제한된다 — 서버 구현에 따라 조용히 잘리거나, 입력이 이미 크면 "context length exceeded" 류의 에러가 난다. **컨텍스트 윈도우 자체는 로컬 서버 설정(`--ctx-size`)으로 조절 가능**하므로, 완성 상한을 늘리고 싶다면 `LLM_MAX_TOKENS`만 올리기보다 로컬 서버의 컨텍스트 크기를 함께(또는 우선) 늘리는 것이 근본적인 해법이다.
 
-**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)`, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑦ 및 인덱싱 계열(분류·쿼리확장·충분도/근거 통합평가·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
+**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `AnswerStreamer`를 거쳐 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)` — 생각 수준 필드만 `ThinkingControl.applyTo()`로 더한다 —, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑦ 및 인덱싱 계열(분류·쿼리확장·충분도/근거 통합평가·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
 
 **§6.18 이후, 이 값 하나가 서로 다른 3곳에 결합돼 있다**(그 위에 §6.26 이후로는 검증·인덱싱 호출의 출력 예약까지 여기서 파생된다 — 아래 예외 참고) — `AppProperties.llmSafe().maxTokens()`를 공유하므로 하나를 올리면 셋이 함께 커진다:
 
-| 소비처 | 공식 | 2000 | 6000 | 10000(기본) |
+| 소비처 | 공식 | 2000 | 6000 | 12000(기본) |
 |---|---|---|---|---|
-| 블로킹 LLM completion 상한 | `LLM_MAX_TOKENS` 그대로 | 2000 | 6000 | 10000 |
-| 대화 히스토리 문자 예산(`MemoryService`) | `LLM_MAX_TOKENS × 0.5` | 1000자 | 3000자 | **5000자** |
-| MD 교정 섹션 크기(`MarkdownCorrectionService`, §6.3 6번) | `(LLM_MAX_TOKENS-500)/2` — **창을 모를 때** | 750자 | 2750자 | **4750자** |
+| 블로킹 LLM completion 상한 | `LLM_MAX_TOKENS` 그대로 | 2000 | 6000 | 12000 |
+| 대화 히스토리 문자 예산(`MemoryService`) | `LLM_MAX_TOKENS × 0.5` | 1000자 | 3000자 | **6000자** |
+| MD 교정 섹션 크기(`MarkdownCorrectionService`, §6.3 6번) | `(LLM_MAX_TOKENS-500)/2` — **창을 모를 때** | 750자 | 2750자 | **5750자** |
 
 > 마지막 행은 **상한**이다. 프로바이더 창을 알면(§4.0) 거기서 나온 값과 비교해 **작은 쪽**을 쓴다 — 예컨대 창 20,480 에서는 4,750자가 아니라 6,852자 계산값과 비교해 4,750자가 그대로 이기지만, 창 8,192 라면 2,429자로 내려간다. txt→md 구조화(`TextToMarkdownService`, 상수 6,000자)도 같은 규칙을 따른다.
 
@@ -281,8 +281,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 합니다 — 후자에서 재검색은 임베딩과 MultiQuery 확장 호출을 쓰고 사실상 같은 집합을 받아옵니다.
 
 재시도가 실제로 다른 결과를 낼 수 있게 하는 것은 **`[직전 시도 메모]`** 입니다. 질문·시스템 프롬프트·
-대화 이력이 그대로이고 일반/RAG 온도가 기본 `0.0`이라, 프롬프트가 달라지지 않으면 같은 답변이 그대로
-재생성됩니다. 평가가 낸 반려 사유 한 문장(`evalReason`)이 답변 프롬프트에 들어가며, 추가 LLM 왕복은
+대화 이력이 그대로이고 일반/RAG 온도가 낮아(범위 `[0, 0.3]`, 출하 기본 `0.2`), 프롬프트가 달라지지 않으면 거의 같은
+답변이 재생성됩니다. 평가가 낸 반려 사유 한 문장(`evalReason`)이 답변 프롬프트에 들어가며, 추가 LLM 왕복은
 없습니다. 지시("이 지적을 만족시켜라")가 아니라 관찰로 넣습니다 — 지적을 채우려고 지어내면 근거
 지표가 오히려 나빠지기 때문입니다.
 
@@ -484,7 +484,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     a) H2/H3/H4 챕터 헤딩(줄이 "## "·"### "·"#### "로 시작) — 펜스 안의 "### Job ID : ..." 같은
        로그/배치 실행 결과 줄은 헤딩처럼 보여도 분할 트리거로 취급하지 않음
     b) 섹션 길이가 maxSectionChars 초과 시 강제 분할
-       (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 10,000토큰 기준 4,750자 —
+       (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 12,000토큰 기준 5,750자 —
         §6.18 이전에는 별도의 죽은 프로퍼티를 통해 기본값 8,000을 읽어 3,750자였음. 이제
         실제 LLM 응답 상한과 동일한 소스(app.llm.max-tokens)를 공유). 실제 상한은
         `sectionCharBudget()` = min(이 값, 프로바이더 컨텍스트 창에서 역산한 값) — 창을 알면 더

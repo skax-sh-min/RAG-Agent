@@ -13,8 +13,8 @@ import java.util.function.Consumer;
 /**
  * LLM 토큰 스트림을 <b>취소 가능하게</b> 소비한다 — 중지 버튼, SSE 연결 끊김, 유휴 타임아웃.
  *
- * <p><b>왜 있는가.</b> 두 스트리밍 경로({@code AnswerService.streamDirect()},
- * {@code DirectAnswerService.callOrStream()})는 {@code flux.toIterable().forEach(sink)} 로 토큰을
+ * <p><b>왜 있는가.</b> 두 스트리밍 경로({@code AnswerService} · {@code DirectAnswerService} — 지금은 둘 다
+ * {@code AnswerStreamer} 를 지난다)는 {@code flux.toIterable().forEach(sink)} 로 토큰을
  * 소비했다. 사용자가 중지를 누르면 브라우저가 fetch 를 abort 하고, 서버의 다음
  * {@code emitter.send()} 가 {@code IOException} → {@code UncheckedIOException} 으로 터진다. 그
  * 예외는 {@code forEach} 밖으로 전파되는데, <b>그때 반복자를 그냥 버릴 뿐 업스트림을 취소하지
@@ -44,8 +44,11 @@ final class CancellableTokenStream {
      * {@code tokens} 를 호출 스레드에서 소비한다. 소비자가 던지거나 스레드가 인터럽트되면
      * 업스트림 구독을 취소한 뒤 예외를 그대로 올려보낸다 — 즉 <b>호출부의 예외 처리는 예전과
      * 똑같고</b>, 달라지는 것은 LLM 쪽 연결이 실제로 끊긴다는 점뿐이다.
+     *
+     * <p>항목은 문자열 토큰일 수도, 청크 그 자체일 수도 있다 — 채팅 답변({@code AnswerStreamer})은 답 토큰과 생각
+     * 델타를 갈라 읽어야 해서 청크를 받는다. 인터럽트 검사는 항목마다 하므로, 생각 델타만 흐르는 동안에도 중지가 먹는다.
      */
-    static void consume(Flux<String> tokens, Consumer<String> tokenSink) {
+    static <T> void consume(Flux<T> tokens, Consumer<T> tokenSink) {
         AtomicReference<Subscription> subscription = new AtomicReference<>();
         try {
             tokens.doOnSubscribe(subscription::set)

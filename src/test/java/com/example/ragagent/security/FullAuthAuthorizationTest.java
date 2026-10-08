@@ -91,6 +91,7 @@ class FullAuthAuthorizationTest {
     @MockitoBean com.example.ragagent.service.ChunkReportService chunkReportService;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean SettingsService settingsService;
+    @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;   // §6.29 — 생각 수준 카드
 
     @BeforeEach
     void setUp() {
@@ -129,6 +130,44 @@ class FullAuthAuthorizationTest {
                         .param("key", "app.search-top-k").param("value", "10")
                         .with(csrf()).with(user("u").roles("USER")))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * §6.29 ⑦-가 — 생각 수준 카드는 <b>읽기까지</b> 관리자만 한다(프로바이더 이름·창 크기·관측값이 드러난다). 화면에서 감추는 것은
+     * 보안이 아니므로 그 읽기 경로가 {@code /admin/**} 게이트 뒤에 있어야 한다.
+     */
+    @Test
+    @DisplayName("ROLE_USER GET /admin/settings/thinking — 403 (읽기도 관리자만)")
+    void user_thinkingCard_forbidden() throws Exception {
+        mvc.perform(get("/admin/settings/thinking").with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER POST /admin/settings/update (생각 수준 키) + CSRF — 403")
+    void user_thinkingLevelUpdate_forbidden() throws Exception {
+        mvc.perform(post("/admin/settings/update")
+                        .param("key", "llm.thinking.eval").param("value", "high")
+                        .with(csrf()).with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 GET /admin/settings/thinking — 로그인 리다이렉트")
+    void anonymous_thinkingCard_redirectsToLogin() throws Exception {
+        mvc.perform(get("/admin/settings/thinking"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN GET /admin/settings/thinking — 200")
+    void admin_thinkingCard_ok() throws Exception {
+        when(thinkingPreview.preview()).thenReturn(new com.example.ragagent.model.ThinkingPreview(
+                java.time.Instant.now(),
+                new com.example.ragagent.model.ThinkingPreview.Basis(10_000, 10, 1_500, 2, 600, 200, 3_000, 5_000, null, 0),
+                java.util.List.of()));
+        mvc.perform(get("/admin/settings/thinking").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk());
     }
 
     @Test

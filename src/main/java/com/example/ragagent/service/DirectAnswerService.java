@@ -2,12 +2,13 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.ProviderContextWindows;
-import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -17,7 +18,6 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
@@ -36,23 +36,34 @@ public class DirectAnswerService {
     private final MessageSource messageSource;
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
+    /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — {@code AnswerService} 와 공유한다(§6.29 3단계). */
+    private final AnswerStreamer answerStreamer;
+    /** 이력 안전망의 출력 예약에 생각 여유를 더한다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     @org.springframework.beans.factory.annotation.Autowired
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props,
-                               ProviderContextWindows contextWindows) {
+                               ProviderContextWindows contextWindows, AnswerStreamer answerStreamer,
+                               ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.answerStreamer = answerStreamer;
+        this.thinkingBudget = thinkingBudget;
     }
 
-    /** 창을 모르는 것과 같게 동작하는 축약 — 이력 절단이 no-op 이 된다. */
+    /**
+     * 창을 모르는 것과 같게 동작하는 축약 — 이력 절단이 no-op 이 되고, 스트리밍은 생각 제어 없이 나간다(아무 필드도
+     * 싣지 않는다). 테스트용.
+     */
     public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
-        this(llmRouter, messageSource, props, null);
+        this(llmRouter, messageSource, props, null, AnswerStreamer.withoutThinkingControl(), ThinkingBudget.none());
     }
 
     public AgentState execute(AgentState state) {
-        state = withFittedHistory(state);
+        // 블로킹 — 모드의 maxTokens 를 실어 보내므로 그만큼이 실제로 예약된다.
+        state = withFittedHistory(state, false);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -62,8 +73,9 @@ public class DirectAnswerService {
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
         int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
-        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
+        ThinkingSite site = site(state);
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(state.routingMode()),
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens, site)));
         String rawAnswer = result.text();
         String normalized = rawAnswer == null ? null : enforceSummaryOnly(rawAnswer, state.responseMode());
         String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
@@ -74,18 +86,19 @@ public class DirectAnswerService {
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        state = withFittedHistory(state);
+        // 스트리밍 — 두 갈래(직행·stream=false 의 ChatClient) 모두 maxTokens 를 싣지 않는다.
+        state = withFittedHistory(state, true);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
 
         double directTemp = props.llmSafe().directTemperature();
-        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
+        LlmProvider provider = llmRouter.routeProvider(site(state).taskType(), site(state).routingMode(state.routingMode()));
 
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
             callOrStream(provider, state, systemPrompt, directTemp,
-                    t -> { listener.onToken(t); full.append(t); });
+                    t -> { listener.onToken(t); full.append(t); }, listener::onThinking);
         }
 
         String answer = full.toString();
@@ -112,12 +125,23 @@ public class DirectAnswerService {
         return messageSource.getMessage(key, null, state.locale());
     }
 
+    /**
+     * 이 턴의 호출 지점(§6.29) — Direct 답변은 응답 모드의 Direct 사이트, 분류가 meta(인사/잡담)로 판정해 여기로 온
+     * 답변은 {@code answer-meta}. 프롬프트를 고르는 {@link #resolveSystemPrompt} 와 같은 갈림이다. Direct 를 쓸 수
+     * 없는 모드(C)는 요청 단계에서 N 으로 정규화되지만({@code ChatRequest}), 여기까지 왔다면 N 의 사이트를 쓴다.
+     */
+    private static ThinkingSite site(AgentState state) {
+        if (!state.directMode()) return ThinkingSite.ANSWER_META;
+        ThinkingSite site = state.responseMode().directThinkingSite();
+        return site != null ? site : ThinkingSite.ANSWER_DIRECT_N;
+    }
+
     private static Prompt buildPrompt(String systemPrompt, String userPrompt,
-                                      double temperature, int maxTokens) {
+                                      double temperature, int maxTokens, ThinkingSite site) {
         // Attach temperature + the response mode's token budget as runtime options —
         // OpenAiChatModel merges them over the provider's defaultOptions field-by-field, so only
         // these two are overridden (model etc. stay). maxTokens<=0 leaves the provider default.
-        OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().temperature(temperature);
+        OpenAiChatOptions.Builder opts = ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site);
         if (maxTokens > 0) opts.maxTokens(maxTokens);
         return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
                 opts.build());
@@ -159,15 +183,22 @@ public class DirectAnswerService {
      * <p>프로바이더는 {@code findProviderName()} 으로 <b>먼저 묻는다</b> — 실제 호출 사이에 답이
      * 달라질 수 있지만 {@code AnswerService.buildAnswerPrompt()} 가 같은 근사를 쓰고 같은 이유로
      * 받아들인다(대체되는 것은 대개 창이 더 큰 다른 역할이라 "덜 잘랐어야 했는데 더 잘랐다" 쪽이다).
+     *
+     * <p>출력 예약은 {@code AnswerService.answerReservation} — 모드의 기본 예약 + 생각 여유(§6.29 ④). 예전에는 블로킹
+     * 경로({@link #execute})에서도 스트리밍 예약(N 5,000)을 빼서, 실제로 실어 보내는 7,000 과 2,000 토큰이 어긋났다.
+     *
+     * @param streaming 이 호출이 {@code maxTokens} 를 싣지 않는가 — 출력 예약이 달라진다
      */
-    private AgentState withFittedHistory(AgentState state) {
+    private AgentState withFittedHistory(AgentState state, boolean streaming) {
         String history = state.conversationHistory();
         if (contextWindows == null || history == null || history.isBlank()) return state;
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        ThinkingSite site = site(state);
+        String provider = llmRouter.findProviderName(site.taskType(), site.routingMode(state.routingMode()));
+        int window = contextWindows.tokensOrZero(provider);
         if (window <= 0) return state;
         int budget = HistoryPolicy.budgetChars(window,
-                AnswerService.outputReservation(state.responseMode(), true, props.llmSafe().maxTokens()),
+                AnswerService.answerReservation(thinkingBudget, site, provider, state.responseMode(), streaming,
+                        props.llmSafe().maxTokens()).tokens(),
                 0, TokenEstimator.estimate(state.question()), Integer.MAX_VALUE);
         String fitted = HistoryPolicy.trimToBudget(history, budget);
         if (fitted.length() >= history.length()) return state;
@@ -185,44 +216,29 @@ public class DirectAnswerService {
 
     /**
      * Unified streaming handler for both provider.stream()=true/false.
-     * When stream=true, calls OpenAiApi.chatCompletionStream() directly to bypass
-     * OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens until LLM finishes.
+     * When stream=true, streams through {@link AnswerStreamer} — {@code OpenAiApi.chatCompletionStream()}
+     * directly, to bypass OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens
+     * until LLM finishes. That also bypasses the ChatModel decorator chain, so the streamer applies the
+     * site's thinking level itself (§6.29 3단계).
+     *
+     * @param onThinking 생각 델타마다 — {@code stream=true} 갈래만 부른다
      */
     private void callOrStream(LlmProvider provider, AgentState state,
                               String systemPrompt, double temperature,
-                              java.util.function.Consumer<String> tokenSink) {
+                              java.util.function.Consumer<String> tokenSink, Runnable onThinking) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            String userPrompt = buildUserPrompt(state);
-            List<OpenAiApi.ChatCompletionMessage> messages = List.of(
-                    new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
-                    new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
-            );
-            OpenAiApi.ChatCompletionRequest request =
-                    new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
-            logDirectRequest(provider, request);
-            // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
-            // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
-            CancellableTokenStream.consume(
-                    provider.openAiApi().chatCompletionStream(request)
-                            .mapNotNull(chunk -> {
-                                if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                                return chunk.choices().get(0).delta().content();
-                            })
-                            .filter(t -> !t.isEmpty())
-                            .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
-                                    provider.name(), state.threadId(), state.routingMode()))
-                            .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
-                            .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
-                                    signal, provider.name(), state.threadId())),
-                    tokenSink);
+            answerStreamer.stream(provider, site(state), systemPrompt, buildUserPrompt(state), temperature,
+                    tokenSink, onThinking,
+                    new AnswerStreamer.Trace(log, "[DirectAnswer]", state.threadId(), state.routingMode()));
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();
             ChatClient.builder(provider.chatModel()).build()
                     .prompt()
-                    .options(OpenAiChatOptions.builder().temperature(temperature).build())
+                    // stream=false 프로바이더 — 체인(ThinkingControlChatModel)을 지나므로 사이트 표시가 그대로 먹는다.
+                    .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site(state)).build())
                     .system(systemPrompt)
                     .user(buildUserPrompt(state))
                     .stream()
@@ -235,24 +251,6 @@ public class DirectAnswerService {
                     .doOnNext(buf::append)
                     .blockLast();
             if (!buf.isEmpty()) tokenSink.accept(buf.toString());
-        }
-    }
-
-    /**
-     * The provider.stream()=true branch above calls {@link OpenAiApi} directly, bypassing
-     * {@code ChatModel} (and therefore {@code LoggingChatModel}) entirely to avoid
-     * {@code OpenAiChatModel.internalStream()}'s buffering — so it never showed up in logs at any
-     * level. Mirrors LoggingChatModel's TRACE(full curl)/DEBUG(endpoint+body) split via the shared
-     * {@link LlmCurlLogger}.
-     */
-    private void logDirectRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request) {
-        if (!log.isDebugEnabled()) return;
-        try {
-            String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
-            String json = LlmCurlLogger.toCurlBodyJson(request);
-            LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
-        } catch (Exception e) {
-            log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }
     }
 

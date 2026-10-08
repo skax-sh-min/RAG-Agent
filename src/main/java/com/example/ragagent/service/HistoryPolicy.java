@@ -104,8 +104,8 @@ public final class HistoryPolicy {
      * 안전망은 {@code DirectAnswerService.withFittedHistory()} 가 따로 맡는다.
      *
      * @param contextWindow      이 호출을 받을 프로바이더의 창(토큰). {@code <= 0} 이면 모름
-     * @param outputReservation  이 호출이 출력에 잡아 둘 자리
-     *                           ({@code AnswerService.outputReservation()})
+     * @param outputReservation  이 호출이 출력에 잡아 둘 자리 — 생각 여유까지 더한 값
+     *                           ({@code AnswerService.answerReservation(…).tokens()}, §6.29 ④)
      * @param documentTokens     이 턴에서 검색 문서가 가져갈 자리. Direct 는 0
      * @param questionTokens     질문의 토큰 추정
      * @param fallbackChars      창을 모를 때 쓸 값

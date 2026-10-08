@@ -98,7 +98,8 @@ class RetrievalServiceMultiQueryParallelTest {
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
         RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
+                com.example.ragagent.llm.ThinkingBudget.none());
 
         AgentState result = svc.execute(
                 AgentState.of("이것은 확장 대상이 되는 충분히 긴 질문입니다", "latest", "t1", "", RoutingMode.COST_FIRST));

@@ -5,8 +5,6 @@ import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
@@ -14,6 +12,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import com.example.ragagent.llm.IndexingOutputCap;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
+import com.example.ragagent.llm.TokenEstimator;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 
@@ -69,14 +70,29 @@ public class KeywordExtractor {
      * ({@link IndexingOutputCap}).
      */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        // §6.29 — 인덱싱과 지식 제안의 "빈 칸 자동 생성"(enrich)이 같은 사이트를 쓴다(app.llm.thinking.keyword-context).
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.KEYWORD_CONTEXT);
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
 
     /** 청크 하나의 키워드+맥락이 {@code app.llm.max-tokens} 중 쓸 몫 — 배치는 건수를 곱한다. */
     private static final double ENRICHMENT_OUTPUT_RATIO_PER_CHUNK = 0.05;
+
+    /**
+     * 청크 {@code chunks}개를 한 호출로 보낼 때의 <b>기본</b> 출력 예약 — 응답은 키워드 몇 개와 1~2문장이라 청크 수에만
+     * 비례한다({@link IndexingOutputCap#forFixed}). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를
+     * 지난다(§6.29 ⑦-바).
+     */
+    public static int enrichmentReservation(int chunks, int configuredMaxTokens) {
+        return IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK * Math.max(1, chunks), configuredMaxTokens);
+    }
+
+    /** 배치 프롬프트에서 청크 본문을 뺀 고정 머리말의 토큰 추정 — 미리보기가 "배치가 창에 들어가는가"를 재는 데 쓴다. */
+    public static long batchPromptOverheadTokens(int chunks) {
+        return TokenEstimator.estimate(BATCH_PROMPT_HEADER.formatted(Math.max(1, chunks)));
+    }
 
     public List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate,
                                           String filename, Consumer<IndexingProgressEvent> onProgress) {
@@ -174,10 +190,10 @@ public class KeywordExtractor {
             // §10.1 — one call now yields keywords + context together; tracked under context:
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
             String response = llmRouter.executeWithTracking(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    ThinkingSite.KEYWORD_CONTEXT.taskType(), ThinkingSite.KEYWORD_CONTEXT.fixedRoutingMode(),
+                    BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt, indexingOptions(
-                            IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK,
-                                    props.llmSafe().maxTokens())))));
+                            enrichmentReservation(1, props.llmSafe().maxTokens())))));
             log.debug("[ENRICH] LLM 응답: [{}]", response);
             ParsedEnrichment parsed = parseEnrichment(response);
             // No "키워드:" marker → legacy plain-response shape, treat the whole reply as keywords.
@@ -229,11 +245,11 @@ public class KeywordExtractor {
         }, timeoutSec, TimeUnit.SECONDS);
         try {
             String response = llmRouter.executeWithTracking(
-                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    ThinkingSite.KEYWORD_CONTEXT.taskType(), ThinkingSite.KEYWORD_CONTEXT.fixedRoutingMode(),
+                    BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt.toString(), indexingOptions(
                             // 배치는 청크 수만큼 결과가 늘어난다 — 몫도 그만큼 곱한다.
-                            IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK * n,
-                                    props.llmSafe().maxTokens())))));
+                            enrichmentReservation(n, props.llmSafe().maxTokens())))));
             log.debug("[ENRICH-BATCH] LLM 응답({}개 청크): [{}]", n, response);
             Map<Integer, String> sections = splitBatchSections(response);
             if (sections.size() < n) {

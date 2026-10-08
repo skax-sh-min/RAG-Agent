@@ -5,14 +5,15 @@ import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
-import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.PromptBudget;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.ThinkingBudget;
+import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.llm.ThinkingControl;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
@@ -59,12 +60,15 @@ public class TextToMarkdownService {
     private final AppProperties props;
 
     private final ProviderContextWindows contextWindows;
+    /** 재작성의 생각 여유 — 블록 크기에서 미리 비워 둔다(§6.29 ④). */
+    private final ThinkingBudget thinkingBudget;
 
     public TextToMarkdownService(LlmRouter llmRouter, AppProperties props,
-                                 ProviderContextWindows contextWindows) {
+                                 ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.llmRouter = llmRouter;
         this.props = props;
         this.contextWindows = contextWindows;
+        this.thinkingBudget = thinkingBudget;
     }
 
     /**
@@ -74,13 +78,32 @@ public class TextToMarkdownService {
      *
      * <p>MD 교정과 같은 이유로 <b>줄이기만 한다</b> — 창이 넉넉하다고 블록을 키우면 구조화 결과가
      * 달라지고, 그건 초과를 막으러 온 변경이 할 일이 아니다.
+     *
+     * <p>생각이 켜지면 그 여유만큼 블록이 작아진다 — MD 교정과 같은 재작성 규칙이다(§6.29 ④).
      */
     private int blockCharBudget() {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        String provider = llmRouter.findProviderName(
+                ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode());
+        return blockChars(contextWindows.tokensOrZero(provider),
+                thinkingBudget.rewriteHeadroom(ThinkingSite.TXT_TO_MD, provider));
+    }
+
+    /**
+     * {@link #blockCharBudget()} 의 식 — 순수 함수다. {@code /settings} 의 생각 수준 미리보기가 수준마다 "블록이 몇 글자까지
+     * 들어가는가"를 이 함수로 잰다(§6.29 ⑦-바: 미리보기 = 런타임).
+     *
+     * @param window   받을 프로바이더의 창. 0 이하 = 모름
+     * @param headroom 생각 여유 — 켬으로 나가지 않으면 0
+     */
+    static int blockChars(int window, int headroom) {
         if (window <= 0) return MAX_BLOCK_CHARS;
-        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS);
+        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS, headroom);
         return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
+    }
+
+    /** 구조화 지시 프롬프트(본문 제외)의 토큰 추정 — 미리보기의 "지시" 칸. */
+    static int promptOverheadTokens() {
+        return STRUCTURING_PROMPT_TOKENS;
     }
 
     /**
@@ -88,8 +111,8 @@ public class TextToMarkdownService {
      * + 출력 상한. 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}).
      */
     private OpenAiChatOptions indexingOptions(int maxTokens) {
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature());
+        OpenAiChatOptions.Builder b = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.TXT_TO_MD);   // §6.29
         if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
         return b.build();
     }
@@ -202,7 +225,8 @@ public class TextToMarkdownService {
                 [/DOCUMENT]""".formatted(safeBlock);
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.TXT2MD_PREFIX,
+                    ThinkingSite.TXT_TO_MD.taskType(), ThinkingSite.TXT_TO_MD.fixedRoutingMode(),
+                    BackgroundUsage.TXT2MD_PREFIX,
                     model -> model.call(new Prompt(prompt, indexingOptions(
                             // 구조화도 재작성이라 출력이 이 블록 크기에 묶인다.
                             IndexingOutputCap.forRewrite(safeBlock, props.llmSafe().maxTokens())))));

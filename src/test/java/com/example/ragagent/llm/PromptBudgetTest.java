@@ -78,7 +78,7 @@ class PromptBudgetTest {
     @DisplayName("재작성 입력 = (창 − 지시 프롬프트 − 여유) / 2.5 — 본문과 그 예약이 함께 들어가야 하므로")
     void rewriteInputSolvesTheCircularReservation() {
         // 사고가 났던 배포와 같은 창: 20,480 − 지시 1,300 − 여유 2,048 = 17,132 → /2.5 = 6,852
-        assertThat(PromptBudget.rewriteInputChars(20_480, 1_300)).isEqualTo(6_852);
+        assertThat(PromptBudget.rewriteInputChars(20_480, 1_300, 0)).isEqualTo(6_852);
     }
 
     @Test
@@ -86,7 +86,7 @@ class PromptBudgetTest {
     void rewriteInputAndItsOwnReservationFitTheWindow() {
         int window = 20_480;
         int overhead = 1_300;
-        int chars = PromptBudget.rewriteInputChars(window, overhead);
+        int chars = PromptBudget.rewriteInputChars(window, overhead, 0);
         // 한글 1글자 = 1토큰(TokenEstimator 가정)이라 글자 수가 곧 토큰 수인 최악의 경우로 잰다.
         String body = "가".repeat(chars);
 
@@ -101,7 +101,31 @@ class PromptBudgetTest {
     @Test
     @DisplayName("창이 지시 프롬프트와 여유도 못 담으면 0 — 호출부가 '판단 불가'로 읽는다")
     void rewriteInputIsZeroWhenTheWindowCannotEvenHoldThePrompt() {
-        assertThat(PromptBudget.rewriteInputChars(1_500, 1_300)).isZero();
-        assertThat(PromptBudget.rewriteInputChars(0, 1_300)).isZero();
+        assertThat(PromptBudget.rewriteInputChars(1_500, 1_300, 0)).isZero();
+        assertThat(PromptBudget.rewriteInputChars(0, 1_300, 0)).isZero();
+    }
+
+    @Test
+    @DisplayName("§6.29 — 생각 여유가 있으면 그만큼 본문 자리를 비운다: (창 − 지시 − 여유 − h) / 2.5")
+    void rewriteInputGivesUpRoomForThinking() {
+        // 20,480 − 1,300 − 2,048 − 512 = 16,620 → /2.5 = 6,648 (생각 없이 6,852 — 204자 줄어든다)
+        assertThat(PromptBudget.rewriteInputChars(20_480, 1_300, 512)).isEqualTo(6_648);
+        assertThat(PromptBudget.rewriteInputChars(20_480, 1_300, -5)).as("음수 여유는 0 으로 본다").isEqualTo(6_852);
+    }
+
+    @Test
+    @DisplayName("§6.29 — 그 크기로 넣으면 본문 + 자기 예약(1.5배) + 생각 여유 + 지시 + 여유가 창 안에 들어간다")
+    void rewriteInputItsReservationAndThinkingFitTheWindow() {
+        int window = 16_384;
+        int overhead = 1_300;
+        int headroom = ThinkingBudget.headroom(ThinkingLevel.HIGH);
+        int chars = PromptBudget.rewriteInputChars(window, overhead, headroom);
+        String body = "가".repeat(chars);
+
+        long total = overhead + TokenEstimator.estimate(body)
+                + IndexingOutputCap.forRewrite(body, 10_000) + headroom
+                + PromptBudget.marginFor(window);
+
+        assertThat(total).isLessThanOrEqualTo(window);
     }
 }
