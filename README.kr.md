@@ -197,7 +197,7 @@ container system stop
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 큐레이션 Q&A 축(승인된 지식 제안이 예약 version `"curated"` 네임스페이스에 임베딩됨)을 RRF 융합에 포함할지 여부. `false`면 해당 검색 자체를 생략 |
 | `SEARCH_CURATED_QA_WEIGHT` | `1.0` | 0.5 ~ 5.0 | §10.10 — 큐레이션 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`). 기본값 **`1.0`** — 정규화된 벡터 축 그룹과 동등하다는 뜻이다. §10.11 에서 좋아요/제안 두 축이 이 값 하나로 합쳐졌다. 그보다 높이면 질문과 크게 관련 없는 항목이 올라온다: 이 축들은 후보가 적어 웬만하면 자기 축에서 상위 랭크를 받는데 거기에 가산점까지 주면 "이 축에 무엇이든 있으면 끌어올린다"에 가까워진다. 신뢰할 만하다는 것과 지금 이 질문에 관련이 있다는 것은 다른 문제이고, 관련성은 이미 RRF 랭크가 재고 있다. 올릴 근거가 생기면 그때 올린다(핫 수정). |
-| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed:<model>` usage도 기록 안 됨 |
+| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed` usage도 기록 안 됨 |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 쿼리 임베딩 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 쿼리 임베딩 캐시 TTL(초, write 기준 만료) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
@@ -274,7 +274,7 @@ rag_java/
     │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel 데코레이터 — executeGated()를 우회하는 프레임워크 내부 호출자(MultiQueryExpander)에 동시성 게이트 적용
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
-    │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
+    │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed)
     │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
     │   │   └── LoadBalancingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 다중 임베딩 엔드포인트 least-in-flight 분산 (§6.21 E1)
     │   ├── model/                         # Java 21 record
@@ -331,7 +331,7 @@ rag_java/
         ├── messages_ko.properties         # UI 문자열 — 한국어
         ├── static/
         │   ├── css/
-        │   │   ├── app.css                # 커스텀 스타일 (버블·애니메이션·반응형 오프캔버스/dvh/16px/44px)
+        │   │   ├── app.css                # 커스텀 스타일 (채팅 글자 크기 단계·버블·애니메이션·반응형 오프캔버스/dvh/16px/44px)
         │   │   └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
         │   ├── manifest.webmanifest       # PWA 매니페스트 (이름·아이콘·standalone)
         │   ├── sw.js                      # 서비스 워커 (NETWORK-FIRST, 오프라인 fallback 전용)
@@ -381,8 +381,9 @@ rag_java/
 - **문서 관리는 두 인증 모드 모두 관리자 전용** — 업로드·삭제·동기화·태그 수정·내보내기가 공유 목록 하나(`SecurityConfig.gateDocumentManagement`)의 `hasRole("ADMIN")` 뒤에 있고, UI 경로뿐 아니라 REST 짝도 함께 묶인다. `/signup`이 열려 있는 모드에서 "로그인한 사용자 누구나"는 곧 가입만 하면 코퍼스를 갈아치울 수 있다는 뜻이었고, 무인증 `curl -X DELETE /api/v1/documents/{id}` 한 줄은 UI 게이트를 통째로 우회했다. 읽기(`GET /api/v1/documents`·채팅·태그·이미지)는 그 모드가 원래 허용하던 대상에게 그대로 열려 있다. 스크립트 자동화는 `/login`으로 세션 쿠키를 한 번 받아 재사용하면 되고, `/api/v1/**`은 CSRF 예외가 유지되므로 토큰은 필요 없다
 - **API 크로스 오리진 차단** — `/api/**`에 CORS 매핑을 두지 않는다. 인증 없는 두 모드에서 그 접두사는 `permitAll` + CSRF 예외라, 와일드카드 오리진은 곧 "방문자가 연 아무 페이지나 그 브라우저를 통해 코퍼스를 읽는다"가 된다. 이 앱의 API 소비자는 전부 같은 오리진이고 스크립트는 브라우저가 아니므로 아무도 이 매핑을 필요로 하지 않는다
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
-- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시 (`chat-stream.js`, fetch + ReadableStream). response mode가 S이면 critic 단계는 건너뜀. 마지막 이벤트와 함께 붙는 검증 배지는 N이 초록 `검증됨`, C가 파랑 `생성`이며(통과한 검증의 질문 자체가 다르다), 평가가 지목한 발명된 이름이 있으면 노랑 `문서 밖 이름` 경고가 함께 붙는다. 같은 배지가 턴별로 저장돼 새로고침 후에도 그대로 복원된다
+- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시 — 쓰이는 동안에도 마크다운으로 렌더 (`chat-stream.js`, fetch + ReadableStream). response mode가 S이면 critic 단계는 건너뜀. 마지막 이벤트와 함께 붙는 검증 배지는 N이 초록 `검증됨`, C가 파랑 `생성`이며(통과한 검증의 질문 자체가 다르다), 평가가 지목한 발명된 이름이 있으면 노랑 `문서 밖 이름` 경고가 함께 붙는다. 같은 배지가 턴별로 저장돼 새로고침 후에도 그대로 복원된다
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
+- **채팅 글자 크기** — `/settings` 맨 위 "화면 표시"에서 최소·작게·보통·크게(12·14·16·18px) 선택. 서버 설정이 아니라 이 브라우저의 `localStorage` 에만 저장돼 누구나 바꿀 수 있고, 첫 렌더 전에 적용되며 열린 다른 탭에도 새로고침 없이 반영됨. 말풍선 안 제목·코드·표·메타데이터가 같은 비율(em)로 따라가고 작은 글자는 8.5px 아래로 내려가지 않음. 입력창은 iOS 자동 확대 방지를 위해 16px 고정
 - **모바일 & PWA** — 반응형 오프캔버스 대화 드로어, `100dvh` 하단 고정 입력창, `table-responsive` 가로 넘침 처리, iOS 16px 자동 확대 방지; 설치형 PWA(`manifest.webmanifest`, 인증/RAG/SSE 응답을 캐시하지 않는 오프라인 fallback 서비스 워커, iOS "홈 화면에 추가" 힌트); 아이콘 버튼 i18n `aria-label`·44px 터치 영역·`:focus-visible` 표시
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
@@ -421,12 +422,12 @@ rag_java/
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
-- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 600자 미리보기. 새 스트리밍 답변뿐 아니라 재사용 답변(`db-reuse`)과 `/chat/{threadId}` 재진입 시 복원되는 과거 turn에도 동일하게 렌더링됨. 모바일이 아닌 화면에서는 팝오버 폭을 기존 대비 10% 더 넓히고(기본 Bootstrap 대비 약 2.2배) 글자 크기를 살짝 줄여 줄바꿈을 줄임
+- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 600자 미리보기. 새 스트리밍 답변뿐 아니라 재사용 답변(`db-reuse`)과 `/chat/{threadId}` 재진입 시 복원되는 과거 turn에도 동일하게 렌더링됨. 모바일이 아닌 화면에서는 팝오버 폭을 기존 대비 10% 더 넓히고(기본 Bootstrap 대비 약 2.2배) 글자 크기를 살짝 줄여 줄바꿈을 줄임. 글자 크기는 채팅 글자 크기 설정을 함께 따름
 - **청크 편집기 실시간 미리보기** — 넓은 PC 화면에서는 `/admin` 청크 편집 오프캔버스가 마크다운(이미지·표 포함) 실시간 미리보기와 텍스트 편집창으로 나뉘어 표시되며, 입력하는 대로 미리보기가 갱신됨. 좁은 화면은 기존처럼 편집창만 표시
 - **소제목 번호 생성 기본값 자동 조정** — 업로드 시 "소제목 숫자 생성" 체크박스가 PPTX를 선택하면 자동으로 해제됨(PPTX에는 서버에서 애초에 적용되지 않음; PDF는 영향 없이 체크 유지), PPTX와 다른 형식을 함께 선택하면 옵션이 파일별이 아니라 배치 전체에 하나만 적용되는 구조상 나눠서 업로드하라는 경고가 표시됨
 - **문서 내보내기 (MD/TXT/DOCX)** — 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)이 저장된 변환 MD가 아니라 현재 색인된 청크를 기준으로 문서를 재구성함 — `/admin` 청크 편집이 그대로 반영됨. `ChunkReassembler`가 `ChunkSplitter`가 검색을 위해 일부러 벌여 놓은 중복(재주입된 소제목, 부모 챕터 breadcrumb, 잘린 코드펜스 마커, 반복된 표 헤더, 슬라이딩 윈도우 overlap)을 렌더링 전에 걷어내 원문에 가까운 결과를 만듦 — 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%. MD는 이미지가 있으면 ZIP으로 함께 받고(원본 파일이 사라진 이미지는 깨진 링크 대신 `(이미지 없음: …)` 안내), DOCX는 POI로 이미지를 위치에 맞게 임베드함 — 글머리표 뒤·문장 중간 마커는 가운데 정렬된 그림 문단으로 내려가고, 표 셀 안 마커는 그 칸 안에 칸 너비로 삽입됨. 코드 블록은 테두리가 있는 1×1 표 안에 좌측 정렬·고정폭으로 렌더링되며 `//`·`#`·`/* … */` 주석만 초록색으로 표시(문자열 리터럴을 추적하므로 `"http://…"`는 칠하지 않음). 문서별 실제 인덱싱 당시 `CHUNK_OVERLAP` 값이 `doc_registry`에 기록되어(기존 문서는 기동 시 자동 백필) 이후 설정을 바꿔도 예전 문서의 내보내기 결과가 틀어지지 않음. PPTX 내보내기는 아직 미지원
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
-- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed:<model>`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
+- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
 - **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별). sqlite-vec에서는 토큰 서브배치가 임베딩되는 즉시 그 서브배치만 삽입하며 문서 전체 분량을 버퍼링하지 않아, 대용량 문서 인덱싱 시 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례
 - **키워드 추출 배치화** — 인덱싱 시 청크 N개(기본 2, `INDEXING_KEYWORD_BATCH_SIZE`)를 하나의 LLM 호출로 묶어 처리, 청크당 1콜이던 왕복 횟수를 대략 1/N로 절감. 배치 호출/파싱 실패 시 해당 청크는 개별 TF 키워드 추출로 폴백
@@ -447,7 +448,7 @@ rag_java/
 | `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 | `GET` | `/admin` | 벡터 스토어 관리 — 청크 브라우저, 큐레이션 Q&A, 제안 검토 (관리자 전용) |
-| `GET` | `/settings` | 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
+| `GET` | `/settings` | 화면 표시(채팅 글자 크기 — 누구나, 브라우저별 저장) + 적용 중인 LLM/RAG 설정 조회. 핫 편집 값의 변경은 관리자만 |
 | `GET` | `/ui/documents/{docId}/export` | 인덱싱된 청크로 문서를 재조립해 내려받기 (MD/TXT/DOCX, 관리자 전용) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | 채팅 답변 썸네일에서 특정 이미지를 현재 대화 기록에서만 제외 |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | 그 턴의 출처 목록에서 청크 하나를 숨김 (표시 전용 — 재사용 검증은 계속 그 청크를 본다) |

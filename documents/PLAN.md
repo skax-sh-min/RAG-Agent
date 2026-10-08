@@ -215,7 +215,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.5 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
-`TrackingEmbeddingModel`이 `EmbeddingModel`을 데코레이트해 `embed:<model>` 이름으로 채팅과 분리 기록, `/llm-usage` 카드·표·차트 3경로 모두 `type=EMBEDDING`으로 표시. 부수로 `/api/llm/usage` 경로 오타(항상 404) 발견·수정.
+`TrackingEmbeddingModel`이 `EmbeddingModel`을 데코레이트해 `embed:<model>` 이름으로 채팅과 분리 기록, `/llm-usage` 카드·표·차트 3경로 모두 `type=EMBEDDING`으로 표시. 부수로 `/api/llm/usage` 경로 오타(항상 404) 발견·수정. 이후(2026-09-30) 기록 이름을 모델명 없는 `embed` 하나로 바꿨다 — 임베딩 모델은 배포마다 고정(바꾸면 전체 재인덱싱)이라 모델별 구분은 모델 변경 뒤 옛 모델의 ORPHAN 카드만 남겼다. 기존 `embed:<model>` 행은 Flyway V5 가 날짜별로 합쳐 옮긴다.
 
 ### 6.6 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
 

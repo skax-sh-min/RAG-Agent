@@ -32,7 +32,7 @@ src/main/resources/
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
-│   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
+│   ├── settings.html                      # 화면 표시(채팅 글자 크기, 브라우저별) + LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
 │       ├── message-user.html              # 사용자 메시지 버블
 │       ├── message-assistant.html         # 어시스턴트 버블 (메타데이터 포함)
@@ -123,7 +123,7 @@ src/main/resources/
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
-| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(`embed:<model>`, `EMBEDDING` 배지) + orphan(설정에 없는 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
+| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(제목 `embed`, `EMBEDDING` 배지, 모델명은 본문 — 표·차트도 같은 이름) + orphan(설정에 없는 채팅 프로바이더 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 | GET | `/api/v1/llm/ping` | JSON `{"available","ok","deep","checkedAt","providers":[{"name","model","reachable","latencyMs","modelListed","modelState","circuitBlockedSeconds","inference","error","ok"}]}` — 전부 통과면 200, 하나라도 실패면 503 | 로컬 LLM 생사 확인. `?deep=true` 면 `max_tokens=1` 완성을 실제로 보낸다(서버는 살았는데 엔진이 죽은 경우를 잡는 유일한 검사). 라우터·브레이커를 우회하는 날것의 HTTP 라 결과가 상태를 바꾸지 않는다. `baseUrl` 은 관리자 응답에만 실린다 |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N,"blockedSeconds":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |
@@ -265,9 +265,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
 
+**맨 위의 "화면 표시" 카드는 예외다** — 채팅 글자 크기(최소·작게·보통·크게)를 고르는 카드로, 서버에 아무것도 보내지 않고 이 브라우저에만 저장하므로 누구나 바꿀 수 있다(§9.4). 그래서 "관리자만 값을 변경할 수 있습니다" 안내는 카드 아래 **서버 설정** 제목 밑에 둔다.
+
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/settings` | `settings.html` | LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
+| GET | `/settings` | `settings.html` | 화면 표시(채팅 글자 크기, 브라우저별 — §9.4) + LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
@@ -619,8 +621,11 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               → ReadableStream으로 SSE 이벤트 파싱
               → stage 이벤트: 단계 배지 교체 (classifier/retrieval/answer/critic/upgrade)
               → sources 이벤트: Bootstrap Popover 출처 배지 삽입
-              → token 이벤트: 텍스트 실시간 누적
-              → done 이벤트: marked.js 마크다운 렌더 + 메타데이터 footer 표시
+              → token 이벤트: 원문 누적 + 마크다운 실시간 렌더. 새로 들어온 블록만 그린다 — 끝난 블록은
+                             한 번 그려 고정하고 쓰이는 중인 마지막 블록만 다시 그린다(열린 채 남을 수 있는
+                             날 HTML 이 든 블록부터는 고정하지 않고 함께 다시 그린다). 묶어서 — 간격은 50ms 와
+                             직전 렌더(어휘 분석+레이아웃) 시간의 4배 중 큰 값. 원문은 DOM 이 아니라 liveAnswers 에 있다
+              → done 이벤트: 최종 렌더(전체를 한 번에 — finalAnswer 반영 + 코드 하이라이트) + 메타데이터 footer 표시
                              + htmx.trigger(body, "refreshThreadList")
               → error 이벤트: 오류 버블 교체
               hx-post="/ui/chat" 속성은 JS 비활성 시 fallback으로 유지
@@ -726,18 +731,18 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 |-------|------|------|
 | `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
-| `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
-| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 완료 시 마크다운 렌더 |
+| `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 — 원문 버퍼(`liveAnswers`)에 쌓이고 묶어서 마크다운으로 렌더된다. 다시 그리는 것은 새로 들어온 블록뿐(코드 하이라이트 제외) |
+| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 최종 렌더(`finalAnswer` 가 있으면 그것으로 교체 + 코드 하이라이트) |
 | `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내. **`reason`이 다음에 무슨 일이 일어나는지를 가른다** — `answer`(근거 부족)는 재검색까지 하므로 `sources`가 다시 오지만, `critic`(근거 이탈)은 검색을 건너뛰고 답변만 다시 쓰므로 출처가 재발행되지 않는다(클라이언트는 이미 갖고 있다) |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
 > **검증 배지는 '무엇을 검증했는가'로 갈린다**: 같은 통과라도 `N`의 `grounded`는 "답변이 문서에 근거하는가"를, `C`의 `apiGrounded`는 "문서 유래라고 제시한 이름이 실재하는가"를 물었다. 그래서 통과 배지가 `N`은 초록 **검증됨**, `C`는 파랑 **생성**이다 — 같은 초록을 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는데, 창의 모드에서 가장 비싼 오해다. 판정은 클라이언트가 모드 문자열을 비교하는 게 아니라 서버가 `ResponseMode.generative()`로 계산해 `done`의 `generative` 필드로 내려준다. 평가가 지목한 발명된 이름(`inventedSymbols`)이 있으면 노랑 **문서 밖 이름 N** 배지와 펼친 목록이 함께 붙고, 이것은 **재시도를 걸지 않는 경고 전용 값**이라 통과한 답변에도 나타난다(`envNote`와 같은 규칙).
 >
-> **렌더러가 셋이라 규칙은 `model/VerificationSnapshot` 한 곳에 있다** — 방금 보낸 메시지를 그리는 no-JS HTMX 폴백(`fragments/message-assistant.html`), 새로고침 후의 대화 기록(`chat.html`의 자체 루프), 그리고 스트리밍(`chat-stream.js`). 서버 렌더러 둘은 그 레코드의 `verdictLabel()`/`verdictClass()`/`verdictTitle()`/`hasInventedSymbols()`를 그대로 읽고, JS는 SSE 이벤트가 템플릿을 거치지 않아 같은 규칙을 한 번 더 구현한다 — **바꾸면 양쪽을 함께 고쳐야 한다**(`SourceRef.staleBadge()`와 같은 구조).
+> **렌더러가 셋이라 규칙은 `model/VerificationSnapshot` 한 곳에 있다** — 방금 보낸 메시지를 그리는 no-JS HTMX 폴백(`fragments/message-assistant.html`), 새로고침 후의 대화 기록(`chat.html`의 자체 루프), 그리고 스트리밍(`chat-stream.js`). 서버 렌더러 둘은 그 레코드의 `verdictLabel()`/`verdictClass()`/`verdictTitle()`/`hasInventedSymbols()`를 그대로 읽고, JS는 SSE 이벤트가 템플릿을 거치지 않아 같은 규칙을 한 번 더 구현한다 — **바꾸면 양쪽을 함께 고쳐야 한다**(`SourceRef.staleBadge()`와 같은 구조). **자리도 셋이 같다**: 배지는 본문 위, 안내 줄(미통과 사유·발명된 이름·환경 값·축소 안내·검색어 재작성)은 본문 아래, 피드백+메타데이터(`.bubble-meta`)는 맨 아래 한 줄. 배지·안내 줄을 `.bubble-meta` 안에 넣지 말 것 — `.badge`(0.75em)·`.small`(0.875em)은 부모 기준이라 한 번 더 줄어, 예전 스트리밍 경로에서는 같은 답변이 새로고침 전후로 배지 8.6px↔12px, 안내 줄 10px↔14px 였다.
 >
 > **배지는 새로고침 후에도 남는다**: 같은 레코드가 `conversation_turns.verification`에 JSON으로 저장된다(컬럼은 Flyway V4, `retrieval_metrics` 선례). 예전에는 기록 루프가 검증 배지를 아예 그리지 않아 새로고침 한 번으로 배지가 사라졌는데, C의 "문서 밖 이름"은 안전 신호라 그렇게 둘 수 없다. 컬럼이 `NULL`이면 검증 기록이 없는 턴(이 컬럼 이전의 모든 턴 + meta/Direct·S)이고 배지를 띄우지 않는 예전 동작 그대로다.
 
-> **검증 미통과 사유(`detail` / `evalReason`)**: `AnswerService.evaluate()`의 평가 LLM 호출이 `sufficient`/`grounded`와 함께 `reason`(한 문장)을 돌려주고, 그 값이 `AgentState.evalReason` → `GraphListener.onRetry(reason, retryCount, detail)` → `retry` 이벤트의 `detail`, 그리고 최종 `done` 이벤트의 `evalReason`으로 흐른다. 두 게이트가 모두 통과하면 `null`이라 UI가 알아서 생략한다. 표시 지점은 세 곳 — 재시도 안내 줄 아래("사유: …"), 접힌 미검증 블록의 요약줄, 그리고 재시도를 다 쓰고도 통과하지 못한 최종 답변의 메타데이터 줄(배지 `title` + 경고 한 줄). **툴팁만으로 끝내지 않는 이유**는 모바일에서 hover가 없기 때문이다. 블로킹/REST 경로도 같은 값을 `ChatResponse.grounded`/`eval_reason`으로 내보내고 `fragments/message-assistant.html`이 동일하게 렌더한다.
+> **검증 미통과 사유(`detail` / `evalReason`)**: `AnswerService.evaluate()`의 평가 LLM 호출이 `sufficient`/`grounded`와 함께 `reason`(한 문장)을 돌려주고, 그 값이 `AgentState.evalReason` → `GraphListener.onRetry(reason, retryCount, detail)` → `retry` 이벤트의 `detail`, 그리고 최종 `done` 이벤트의 `evalReason`으로 흐른다. 두 게이트가 모두 통과하면 `null`이라 UI가 알아서 생략한다. 표시 지점은 세 곳 — 재시도 안내 줄 아래("사유: …"), 접힌 미검증 블록의 요약줄, 그리고 재시도를 다 쓰고도 통과하지 못한 최종 답변(본문 위 **미검증** 배지의 `title` + 본문 아래 경고 한 줄). **툴팁만으로 끝내지 않는 이유**는 모바일에서 hover가 없기 때문이다. 블로킹/REST 경로도 같은 값을 `ChatResponse.grounded`/`eval_reason`으로 내보내고 `fragments/message-assistant.html`이 동일하게 렌더한다.
 
 > **이미지 분석 진행 표시도 `stage` 이벤트를 재사용한다**: RETRIEVAL 중 쿼리 시점 Lazy Vision이 실행되면
 > `{"id":"image_analysis","text":"이미지 분석 중 (2/5)"}`가 여러 번 발행된다 — 새 이벤트 타입을 만들지 않고
@@ -798,3 +803,20 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 - 아이콘 전용 버튼(햄버거·드로어 닫기·전송·테마·로그아웃·navbar 토글)에 i18n `aria-label`(`th:attr="aria-label=#{...}"`).
 - 모바일 `pointer:coarse`에서 아이콘 버튼 최소 44×44px 터치 영역.
 - `:focus-visible` 키보드 포커스 인디케이터, `prefers-color-scheme` 자동 감지(기존 유지).
+- 채팅 글자 크기를 사용자가 고른다(§9.4).
+
+### 9.4 채팅 글자 크기 (최소·작게·보통·크게)
+
+`/settings` 맨 위 **화면 표시** 카드에서 고른다. 고르는 즉시 적용되고 **이 브라우저의 `localStorage.chatFontSize` 에만** 저장된다(서버 설정이 아니다 — 누구나 바꿀 수 있고, 기기마다 따로다). 카드에는 같은 클래스로 그린 미리보기 말풍선이 있어 설정 화면에서도 차이가 보인다.
+
+| 단계 | 기준 | 메타 단계 (0.75em) | 미세 단계 (0.625em) | 출처 미리보기 팝오버 본문 (데스크톱) |
+|---|---|---|---|---|
+| 최소 | 12px | 9px | 8.5px (하한, 원래 7.5) | 8.5px (하한, 원래 8.4) |
+| 작게 | 14px | 10.5px | 8.75px | 9.8px |
+| **보통** (기본) | 16px | 12px | 10px | 11.2px |
+| 크게 | 18px | 13.5px | 11.25px | 12.6px |
+
+- **적용 범위**: 메시지 목록(질문·답변 말풍선 전부), 출처 미리보기 팝오버, 원문 보기 모달. 말풍선 안은 전부 기준에 대한 em 이라 함께 움직인다 — 본문 1, 제목 1.3125→1, 안내 줄·인라인 코드 0.875, 코드 블록 0.85, 표 0.9, **메타 단계 0.75**(메타데이터 줄·배지·출처 수치·질문 시각·👍👎·고추론 배지·건너뛰기), **미세 단계 0.625**(미사용·변경 배지). 팝오버는 기준의 0.8배(좁은 화면 0.875배)이고 그 안의 코드 블록·표는 본문과 같은 크기다.
+- **작은 글자 하한 8.5px** — 실제로 닿는 것은 최소 단계의 미세 배지와 팝오버 글자뿐이다.
+- **따르지 않는 것**: 입력창(모바일에서 16px 미만이면 iOS 가 화면을 확대하므로 고정 — 최소에서는 입력 글자가 메시지보다 크다), 태그 칩·질문 추천, 질문 내비게이션, 사이드바·상단 바, 관리 화면.
+- **동작**: `base.html` `<head>` 가 테마와 같은 자리에서 `<html data-chat-font>` 를 걸어 첫 렌더부터 적용한다(보통은 속성 없음). 이미 열려 있는 다른 탭도 `storage` 이벤트로 새로고침 없이 따라온다. 크기는 `app.css` '채팅 글자 크기' 섹션 한 곳에만 있다 — 채팅 렌더러에 인라인 `font-size` 를 쓰면 `ChatFontSizeConventionTest` 가 실패한다. 배경과 함정은 [PITFALLS § 채팅 글자 크기](PITFALLS.md#채팅-글자-크기-최소작게보통크게).

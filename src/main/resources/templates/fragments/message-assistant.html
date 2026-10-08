@@ -114,12 +114,12 @@
                     <!-- 프롬프트에서 빠진 출처 — 모델이 읽지 '못한' 것이라, 읽고도 안 쓴
                          (answerShare 0) 것과 구별해서 보여야 한다. -->
                     <span th:if="${src.promptExcluded}"
-                          class="badge ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
-                          style="font-size:0.62rem; vertical-align:middle; cursor:help;"
+                          class="badge source-flag ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
+                          style="cursor:help;"
                           th:title="'컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다. 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.'">미사용</span>
                     <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
                          켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
-                    <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
+                    <span class="source-metrics text-muted d-none"
                           th:if="${src.similarity != null or src.axisRanks != null or src.answerShare != null}">
                         <!-- 근거 품질 한 칸 — 유사도 우선, 없으면 축 표기로 대체(chat-stream.js의
                              renderSourceMetrics()와 같은 폴백 체인). 검색기여는 순위 기반이라
@@ -153,7 +153,7 @@
                 <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE"
                         th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
             </div>
-            <div class="text-muted" style="font-size: 0.72rem;">
+            <div class="text-muted bubble-meta">
                 <span th:if="${usedProvider != null}">🤖 <span th:text="${usedProvider}"></span>
                       &nbsp;·&nbsp;</span>
                 <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>

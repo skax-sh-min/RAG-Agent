@@ -54,7 +54,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * QA — OperationsController LLM/embedding usage reporting (§6.6) + inactive-provider
  * filtering (§6.7) + orphan surfacing/deletion (§6.8)
  *
- * Verifies the embedding pseudo-provider ("embed:&lt;model&gt;", type=EMBEDDING) appears
+ * Verifies the embedding pseudo-provider ("embed", no model in the name, type=EMBEDDING) appears
  * alongside chat providers in all three usage surfaces without disturbing the existing
  * chat provider entries, that unconfigured chat providers are hidden unless they have
  * historical usage, and that genuinely orphaned provider names (not in config at all) are
@@ -108,14 +108,18 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("GET /api/v1/llm/usage — 채팅 프로바이더 + embed:<model> 행(type=EMBEDDING) 포함")
+    @DisplayName("GET /api/v1/llm/usage — 임베딩 행은 이름·집계 키 모두 embed, 모델명은 model 에만")
     void usageReport_includesEmbeddingRow() throws Exception {
+        when(usageRepo.getDaily("embed"))
+                .thenReturn(new LlmUsageRepository.PeriodSummary(42, 0, 3));
+
         mvc.perform(get("/api/v1/llm/usage"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].provider").value("local"))
-                .andExpect(jsonPath("$[1].provider").value("embed:nomic-embed"))
+                .andExpect(jsonPath("$[1].provider").value("embed"))
                 .andExpect(jsonPath("$[1].type").value("EMBEDDING"))
                 .andExpect(jsonPath("$[1].model").value("nomic-embed"))
+                .andExpect(jsonPath("$[1].daily.inputTokens").value(42))
                 .andExpect(jsonPath("$[1].blockedUntil").doesNotExist());
     }
 
@@ -199,20 +203,25 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("GET /api/v1/llm/usage/history — 맵에 chat provider 키 + embed:<model> 키 모두 포함")
+    @DisplayName("GET /api/v1/llm/usage/history — 차트 항목 이름은 embed(모델명 없음)")
     void usageHistory_includesEmbeddingKey() throws Exception {
+        when(usageRepo.getDailyHistory(eq("embed"), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(List.of(new LlmUsageRepository.DailyRow("2026-09-30", 42, 0, 3)));
+
         mvc.perform(get("/api/v1/llm/usage/history"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.local").exists())
-                .andExpect(jsonPath("$['embed:nomic-embed']").exists());
+                .andExpect(jsonPath("$.embed[0].inputTokens").value(42));
     }
 
     @Test
-    @DisplayName("GET /ui/llm-usage/cards — EMBEDDING 배지 + embed:<model> 카드 렌더")
+    @DisplayName("GET /ui/llm-usage/cards — EMBEDDING 카드 제목은 모델명 없이 embed, 모델명은 본문에만")
     void usageCards_rendersEmbeddingCard() throws Exception {
         mvc.perform(get("/ui/llm-usage/cards"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("embed:nomic-embed")))
+                .andExpect(content().string(not(containsString("embed:nomic-embed"))))
+                .andExpect(content().string(containsString(">embed<")))
+                .andExpect(content().string(containsString("nomic-embed")))
                 .andExpect(content().string(containsString("EMBEDDING")));
     }
 
@@ -343,14 +352,21 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("§6.8 — 과거 EMBED_MODEL의 embed:* 는 ORPHAN, 현재 embed:* 는 EMBEDDING 유지")
-    void staleEmbeddingRow_isOrphan_liveEmbeddingRow_isNot() throws Exception {
-        when(usageRepo.usedProviders()).thenReturn(Set.of("embed:nomic-embed", "embed:old-model"));
+    @DisplayName("§6.8 — 임베딩 이력은 ORPHAN 이 되지 않는다: 모델명이 바뀌어도 같은 embed 한 줄")
+    void embeddingUsage_isNeverOrphan_evenAfterModelChange() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("embed"));
+        // 이력은 옛 모델 시절에 쌓였고 지금 설정은 다른 모델 — 예전에는 이 차이가 ORPHAN 카드를 만들었다.
+        when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
+                "http://localhost:1234/v1", null, "bge-m3", 1024, 10, 120, true, 0, List.of(), 1));
 
         mvc.perform(get("/api/v1/llm/usage"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.provider=='embed:nomic-embed')].type").value("EMBEDDING"))
-                .andExpect(jsonPath("$[?(@.provider=='embed:old-model')].type").value("ORPHAN"));
+                .andExpect(jsonPath("$[?(@.provider=='embed')].type").value("EMBEDDING"))
+                .andExpect(jsonPath("$[?(@.provider=='embed')].model").value("bge-m3"))
+                .andExpect(jsonPath("$[?(@.type=='ORPHAN')]").isEmpty());
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("ORPHAN"))));
     }
 
     @Test
@@ -383,9 +399,11 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("§6.8 — 현재 활성 embed:<model> 은 삭제 거부(400), repo 삭제 미호출")
+    @DisplayName("§6.8 — 임베딩 이력(embed)은 삭제 거부(400), repo 삭제 미호출")
     void deleteLiveEmbeddingRow_rejected() throws Exception {
-        mvc.perform(delete("/admin/llm-usage/embed:nomic-embed")
+        when(usageRepo.usedProviders()).thenReturn(Set.of("embed"));
+
+        mvc.perform(delete("/admin/llm-usage/embed")
                         .with(csrf())
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
                 .andExpect(status().isBadRequest());

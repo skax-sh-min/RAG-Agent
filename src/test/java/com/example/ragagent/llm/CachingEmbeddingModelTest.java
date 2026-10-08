@@ -78,7 +78,7 @@ class CachingEmbeddingModelTest {
         cached.call(new EmbeddingRequest(List.of("hello"), null));
         cached.call(new EmbeddingRequest(List.of("hello"), null));
 
-        verify(usageRepo, org.mockito.Mockito.times(1)).record("embed:nomic", 10, 0);
+        verify(usageRepo, org.mockito.Mockito.times(1)).record("embed", 10, 0);
         verify(raw, org.mockito.Mockito.times(1)).call(any());
     }
 

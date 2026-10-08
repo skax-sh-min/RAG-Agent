@@ -43,6 +43,10 @@ import java.util.stream.Stream;
 @Controller
 public class OperationsController {
 
+    /** The embedding entry's usage key and displayed name on all three usage surfaces (card,
+     *  table, chart). llm-usage.html's chart matches it literally to stack embedding separately. */
+    private static final String EMBED = TrackingEmbeddingModel.PROVIDER_NAME;
+
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
     private final LlmUsageRepository usageRepo;
@@ -385,14 +389,13 @@ public class OperationsController {
                             until != null ? until.toString() : null
                     );
                 });
-        String embedName = embeddingProviderName();
         UsageReport embedUsage = new UsageReport(
-                embedName,
+                EMBED,
                 "EMBEDDING",
                 props.embeddingSafe().model(),
-                usageRepo.getDaily(embedName),
-                usageRepo.getWeekly(embedName),
-                usageRepo.getMonthly(embedName),
+                usageRepo.getDaily(EMBED),
+                usageRepo.getWeekly(EMBED),
+                usageRepo.getMonthly(EMBED),
                 null
         );
         Stream<UsageReport> backgroundUsage = backgroundCategories().stream()
@@ -429,8 +432,7 @@ public class OperationsController {
         for (AppProperties.ProviderConfig cfg : visibleChatProviders()) {
             history.put(cfg.name(), usageRepo.getDailyHistory(cfg.name(), safeDays));
         }
-        String embedName = embeddingProviderName();
-        history.put(embedName, usageRepo.getDailyHistory(embedName, safeDays));
+        history.put(EMBED, usageRepo.getDailyHistory(EMBED, safeDays));
         for (String prefix : backgroundCategories()) {
             history.put(BackgroundUsage.label(prefix), usageRepo.getDailyHistoryByPrefix(prefix, safeDays));
         }
@@ -442,8 +444,8 @@ public class OperationsController {
 
     /**
      * Deletes all llm_usage rows for a genuinely orphaned provider name (§6.8) — one that
-     * isn't in the current chat provider config and isn't the currently active embedding
-     * model. Rejects (400) any name still live in config so an operator can never wipe an
+     * isn't in the current chat provider config and isn't the embedding row. Rejects (400)
+     * any name still live in config so an operator can never wipe an
      * active provider's history through this endpoint. Scoped under /admin/** so it inherits
      * ROLE_ADMIN gating (SecurityConfig) and no-auth mode's automatic admin identity for
      * /admin/** paths (NoAuthAutoLoginFilter) with no new plumbing.
@@ -498,15 +500,14 @@ public class OperationsController {
                         isConfigured(cfg),
                         false
                 ));
-        String embedName = embeddingProviderName();
         LlmProviderReport embedReport = new LlmProviderReport(
-                embedName,
+                EMBED,
                 "EMBEDDING",
                 null,
                 props.embeddingSafe().model(),
-                usageRepo.getDaily(embedName),
-                usageRepo.getWeekly(embedName),
-                usageRepo.getMonthly(embedName),
+                usageRepo.getDaily(EMBED),
+                usageRepo.getWeekly(EMBED),
+                usageRepo.getMonthly(EMBED),
                 null,
                 true,
                 false
@@ -565,12 +566,6 @@ public class OperationsController {
         return cfg.isEnabled();
     }
 
-    /** {@code "embed:" + model} — matches the key TrackingEmbeddingModel records under. */
-    private String embeddingProviderName() {
-        String model = props.embeddingSafe().model();
-        return TrackingEmbeddingModel.PROVIDER_PREFIX + (model != null ? model : "unknown");
-    }
-
     /**
      * {@link BackgroundUsage} categories (prefix, e.g. {@code "title:"}) with at least one recorded
      * call — conversation summarization, indexing keyword extraction/format correction, thread
@@ -611,16 +606,16 @@ public class OperationsController {
 
     /**
      * Provider names with historical usage that don't correspond to any live config today
-     * (§6.8) — a chat provider removed entirely from app.llm.providers, or a stale
-     * embed:&lt;old-model&gt; row left behind after EMBED_MODEL was changed. Background usage
-     * is excluded — it's expected, ongoing usage, not stale config. Unlike §6.7's plain
+     * (§6.8) — a chat provider removed entirely from app.llm.providers. Embedding and background
+     * usage are excluded — they're expected, ongoing usage, not stale config (embedding is one
+     * model-less name, so there is no "old embedding model" row to orphan). Unlike §6.7's plain
      * inactive filter (which only hides/shows names still present in config), these are
      * actively surfaced so an operator can review and delete them.
      */
     private Set<String> orphanProviderNames() {
         Set<String> orphans = new HashSet<>(usageRepo.usedProviders());
         props.llmSafe().providers().forEach(cfg -> orphans.remove(cfg.name()));
-        orphans.remove(embeddingProviderName());
+        orphans.remove(EMBED);
         orphans.removeIf(BackgroundUsage::isBackground);
         return orphans;
     }

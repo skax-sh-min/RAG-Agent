@@ -100,7 +100,7 @@ public class EmbeddingBeanConfig {
                         .build(),
                 shortRetry
         );
-        return new LoggingEmbeddingModel(raw, TrackingEmbeddingModel.PROVIDER_PREFIX + model,
+        return new LoggingEmbeddingModel(raw, TrackingEmbeddingModel.PROVIDER_NAME,
                 rawUrl, effectiveApiKey, model);
     }
 }

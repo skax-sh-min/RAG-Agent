@@ -154,8 +154,9 @@
             }),
             backgroundColor: CHART_COLORS[idx % CHART_COLORS.length],
             // Embedding usage gets its own stack group so it renders as a separate bar
-            // cluster per day instead of summing into the chat token stack.
-            stack: name.startsWith('embed:') ? 'embedding' : 'tokens'
+            // cluster per day instead of summing into the chat token stack. 'embed' is
+            // TrackingEmbeddingModel.PROVIDER_NAME — the one model-less name it is recorded under.
+            stack: name === 'embed' ? 'embedding' : 'tokens'
         }));
 
         if (chartInstance) chartInstance.destroy();

@@ -195,7 +195,7 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | Weighted RRF (Phase 7-A) — rank-fusion constant k (original paper default) |
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — include the curated-Q&A axis (admin-approved knowledge proposals, embedded under the reserved `"curated"` version namespace) in RRF fusion. `false` skips that search entirely |
 | `SEARCH_CURATED_QA_WEIGHT` | `1.0` | 0.5 ~ 5.0 | §10.10 — curated axis weight, applied flat like the keyword axis (not group-normalized with the vector axes). Defaults to **`1.0`** — parity with the group-normalized vector group. §10.11 merged the former 👍/제안 split into this one knob. Above that they surfaced loosely-related entries: these axes hold few candidates, so almost anything in them ranks high on its own axis, and a bonus on top of that amounts to "boost whatever exists here". Trustworthy and *relevant to this question* are different claims; relevance is what the RRF rank already measures. Raise one only with a reason (hot-editable). |
-| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | Query embedding cache (Phase 7-A) — caches normalized-query → vector (Caffeine, in-memory) so repeated/similar questions skip the embedding round-trip; a cache hit also records no `embed:<model>` usage |
+| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | Query embedding cache (Phase 7-A) — caches normalized-query → vector (Caffeine, in-memory) so repeated/similar questions skip the embedding round-trip; a cache hit also records no `embed` usage |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | Query embedding cache entry cap |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | Query embedding cache TTL (seconds, write-based expiry) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
@@ -275,7 +275,7 @@ rag_java/
     │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel decorator — applies the concurrency gate to framework-internal callers (MultiQueryExpander) that bypass executeGated()
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
-    │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
+    │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed)
     │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
     │   │   └── LoadBalancingEmbeddingModel.java  # EmbeddingModel decorator — least-in-flight across multiple embedding endpoints (§6.21 E1)
     │   ├── model/                     # Java 21 records
@@ -332,7 +332,7 @@ rag_java/
         ├── messages_ko.properties         # UI strings — Korean
         ├── static/
         │   ├── css/
-        │   │   ├── app.css                # Custom styles (bubbles, animations, responsive offcanvas/dvh/16px/44px)
+        │   │   ├── app.css                # Custom styles (chat text-size tiers, bubbles, animations, responsive offcanvas/dvh/16px/44px)
         │   │   └── theme.css              # Light/dark CSS variables + Bootstrap dark mode overrides
         │   ├── manifest.webmanifest       # PWA manifest (name, icon, standalone)
         │   ├── sw.js                      # Service worker (NETWORK-FIRST, offline fallback only)
@@ -346,7 +346,7 @@ rag_java/
             ├── documents.html             # Document management page
             ├── admin.html                 # Vector store admin (chunk browser + submissions + curated Q&A
             │                              #   + cross-user conversation list + retrieval diagnostics)
-            ├── settings.html              # Effective LLM/RAG config — view + hot edit
+            ├── settings.html              # Display (chat text size, per browser) + effective LLM/RAG config — view + hot edit
             ├── curated-submissions.html   # Knowledge-proposal board (post form + "my proposals" status list)
             ├── llm-usage.html             # LLM usage statistics page
             ├── auth/                      # login.html, signup.html, setup.html
@@ -389,8 +389,9 @@ User question
 - **Document management is admin-only in both authenticated modes** — upload, delete, sync, retag and export sit behind one shared `hasRole("ADMIN")` list (`SecurityConfig.gateDocumentManagement`), covering the REST endpoints as well as the UI ones: with `/signup` open, "any logged-in user" would have meant signing up was enough to replace the corpus, and an unauthenticated `curl -X DELETE /api/v1/documents/{id}` used to walk past the UI gate entirely. Reads (`GET /api/v1/documents`, chat, tags, images) stay open to whoever the mode already lets in. Scripted automation authenticates once at `/login` and reuses the session cookie — `/api/v1/**` stays CSRF-exempt, so no token is needed
 - **No cross-origin access to the API** — `/api/**` registers no CORS mapping. In the two no-auth modes that prefix is `permitAll` and CSRF-exempt, so a wildcard origin would have let any page a visitor opened read the corpus through their browser. Every consumer in this app is same-origin, and scripts are not browsers, so nothing needs it
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
-- **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream). In response mode S the critic stage is skipped; the verification badge that lands with the final event is green `검증됨` for N, blue `생성` for C (they passed different questions), plus an amber `문서 밖 이름` warning when the evaluator flagged invented identifiers. The same badges are stored per turn and restored on reload
+- **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream), rendered as markdown while it streams. In response mode S the critic stage is skipped; the verification badge that lands with the final event is green `검증됨` for N, blue `생성` for C (they passed different questions), plus an amber `문서 밖 이름` warning when the evaluator flagged invented identifiers. The same badges are stored per turn and restored on reload
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
+- **Chat text size** — pick Smallest / Small / Normal / Large (12 / 14 / 16 / 18px) under "Display" at the top of `/settings`. Stored only in this browser's `localStorage` (not a server setting, so anyone can change it), applied before first paint and picked up by other open tabs without a reload. Headings, code, tables and metadata inside a bubble follow at the same ratios (em), and small text never drops below 8.5px. The input box stays at 16px to avoid iOS auto-zoom
 - **Mobile & PWA** — responsive offcanvas thread drawer, `100dvh` bottom-pinned input, `table-responsive` overflow handling, iOS 16px no-zoom inputs; installable PWA (`manifest.webmanifest`, service worker with offline fallback that never caches authenticated/RAG/SSE responses, iOS "Add to Home Screen" hint); icon buttons carry i18n `aria-label`, 44px touch targets, `:focus-visible` outlines
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
@@ -430,12 +431,12 @@ User question
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
-- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 600-char chunk text preview on hover. This is rendered consistently for new streaming answers, reused answers (`db-reuse`), and restored history when reopening `/chat/{threadId}`; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
+- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 600-char chunk text preview on hover. This is rendered consistently for new streaming answers, reused answers (`db-reuse`), and restored history when reopening `/chat/{threadId}`; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping. Its font size follows the chat text size setting
 - **Editor live preview** — on wide desktop screens, the `/admin` chunk-edit **and curated-Q&A-edit** offcanvases split into a live Markdown preview (rendering images and tables) alongside the text editor, updating as you type; narrow screens keep the existing single-column editor. Both use the same width threshold and the same renderer, so a curated answer's tables, code blocks and image markers are checked the same way a chunk's are — which matters because that markdown goes straight into an answer prompt as grounding evidence
 - **Smart heading-number default** — the upload "generate heading numbers" checkbox auto-unchecks whenever a PPTX is selected (the option is never applied to PPTX server-side; PDF is unaffected and stays checked) and warns when PPTX is mixed with other formats in one upload, since the option applies per-batch, not per-file
 - **Document export (MD/TXT/DOCX)** — the document list's per-row **Export** button (admin-only) rebuilds a document from its currently indexed chunks (not the saved converted MD), so `/admin` chunk edits are reflected; `ChunkReassembler` undoes the retrieval-oriented duplication `ChunkSplitter` introduces (reinjected subheadings, parent-chapter breadcrumbs, split code-fence markers, repeated table headers, sliding-window overlap) before rendering, so the result reads like the original document rather than concatenated search chunks — validated against a real 335-chunk document at 0.001% character-count deviation from the source. MD downloads bundle images as a ZIP when present (an image file that no longer exists degrades to a `(이미지 없음: …)` note rather than a broken link). DOCX embeds images via POI wherever they sit — a marker after a bullet or mid-sentence gets its own centered picture paragraph, one inside a table cell is embedded in place at column width — and renders fenced code blocks as a bordered 1×1 table, left-aligned and monospaced, with `//`, `#` and `/* … */` comments colored (string literals are tracked, so `"http://…"` stays uncolored). Each document's actual `CHUNK_OVERLAP` at index time is recorded in `doc_registry` (backfilled at startup for older rows) so later retuning the setting can't corrupt an older document's export. PPTX export isn't supported yet
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
-- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
+- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (shared storage — `DocRegistry.SHARED`, no per-user isolation). On sqlite-vec, embeddings are inserted per token sub-batch as soon as each one is embedded rather than buffered for the whole document, so peak memory during a large-document index scales with sub-batch size, not document size
 - **Batched keyword extraction** — chunks are bundled N-at-a-time (default 2, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
@@ -456,7 +457,7 @@ User question
 | `POST` | `/curated/submissions/images` | Upload a proposal body image → returns the `[이미지: …]` marker to splice in at the caret |
 | `GET` | `/llm-usage` | LLM usage statistics page |
 | `GET` | `/admin` | Vector store admin — chunk browser, curated Q&A, submission review (admin-only) |
-| `GET` | `/settings` | Effective LLM/RAG configuration; hot-editable values are admin-only to change |
+| `GET` | `/settings` | Display (chat text size — anyone, stored per browser) + effective LLM/RAG configuration; hot-editable values are admin-only to change |
 | `GET` | `/ui/documents/{docId}/export` | Rebuild + download a document from its indexed chunks (MD/TXT/DOCX; admin-only) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | Exclude one thumbnail image from the current conversation record only |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | Hide one source chunk from that turn's source list (display only — reuse validation still checks it) |

@@ -20,6 +20,20 @@
     let stickToBottom = true;
     const NEAR_BOTTOM_PX = 80;
 
+    // ── Live markdown ────────────────────────────────────────────────────────
+    // 답변은 스트리밍 중에도 마크다운으로 렌더된다(renderLive). 그래서 답변 칸의 DOM 은 더 이상 원문을 들고
+    // 있지 않다 — 원문은 여기(bubbleId → { raw, timer, delay })에 쌓이고, 재시도·재분석·완료·중단은 전부
+    // 여기서 원문을 읽는다. 예전처럼 contentEl.textContent 를 읽으면 렌더된 화면의 글자(표 칸·목록 기호가
+    // 사라진 것)가 나온다.
+    // 다시 그리는 것은 새로 들어온 블록뿐이다(renderNewBlocks) — 이미 끝난 문단·표·코드 블록은 한 번 그린 DOM
+    // 을 그대로 둔다. 매번 전체를 다시 그리던 때는 표·코드 블록이 촘촘한 2만 자 답변에서 렌더 한 번이 100ms 를
+    // 넘었다(살균과 레이아웃이 답변 전체에 걸렸다). 남는 비용은 브라우저의 레이아웃이다 — 끝에 블록 하나만
+    // 붙여도 답변 전체를 다시 배치해서 표·코드 블록이 촘촘한 2만 자면 30~40ms 가 든다(contain: layout 으로
+    // 감싸도, 컨테이너 쿼리·flex 를 빼도 줄지 않았다). 렌더는 토큰마다가 아니라 묶어서 하고, 간격은 50ms 와 직전
+    // 렌더(어휘 분석+레이아웃) 시간의 4배 중 큰 값이다(렌더가 CPU 의 1/5 를 넘지 않게).
+    const LIVE_RENDER_MIN_DELAY_MS = 50;
+    const liveAnswers = new Map();
+
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
@@ -154,18 +168,22 @@
         const wrap = document.createElement('div');
         wrap.id = `bubble-${bubbleId}`;
         wrap.className = 'd-flex align-items-end mb-3';
+        // 배지(본문 위) → 본문 → 안내 줄 → 이미지 → 출처 → 피드백+메타데이터 — 서버 렌더러 둘(chat.html 기록
+        // 루프 · fragments/message-assistant.html)과 같은 순서다. 배지·안내 줄은 done 에서야 채워진다.
         wrap.innerHTML = `
             <div class="bubble-assistant p-3 flex-grow-1">
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
                     <button type="button" id="stream-skip-images-${bubbleId}"
-                            class="btn btn-sm btn-link p-0 ms-2 d-none" style="font-size:0.75rem; vertical-align:baseline;">건너뛰기</button>
+                            class="btn btn-sm btn-link p-0 ms-2 d-none stream-skip-btn">건너뛰기</button>
                 </div>
-                <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
+                <div id="stream-badges-${bubbleId}"></div>
+                <div id="stream-content-${bubbleId}" class="md-content stream-content"><span class="stream-caret"></span></div>
+                <div id="stream-notices-${bubbleId}"></div>
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
-                <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
+                <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2"></div>
             </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
 
@@ -206,10 +224,7 @@
         const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
         if (skipBtn) skipBtn.classList.toggle('d-none', data.id !== 'image_analysis');
         // PROGRESSIVE upgrade: clear accumulated content so premium answer re-fills
-        if (data.id === 'upgrade') {
-            const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-            if (contentEl) contentEl.textContent = '';
-        }
+        if (data.id === 'upgrade') resetLiveText(bubbleId);
         // RETRIEVAL (re)entry: clear the prior search's images/sources first. A retry that
         // finds no images doesn't send an "images" event at all (see onImages), so without
         // this the previous search's now-unrelated thumbnails/badges would linger.
@@ -233,8 +248,7 @@
     function onRetry(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl) return;
-        removeVerifyingIndicator(bubbleId); // strip before reading raw text below
-        const rawText = contentEl.textContent || '';
+        const rawText = liveText(bubbleId);
 
         // Superseded-answers container, kept above the live content.
         let container = document.getElementById(`stream-superseded-${bubbleId}`);
@@ -263,9 +277,7 @@
             (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
         const body = document.createElement('div');
         body.className = 'md-content p-2 pt-0';
-        // textContent → renderMarkdown sanitizes
-        body.textContent = emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText;
-        renderMarkdown(body);
+        renderMarkdown(body, emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText, true);
         details.appendChild(summary);
         details.appendChild(body);
         container.appendChild(details);
@@ -290,8 +302,8 @@
             // (ca68b6a에서 무관한 리팩토링에 휩쓸려 이 줄이 사라졌던 회귀를 복구)
             (data.detail ? `<div class="ms-4">사유: ${escHtml(data.detail)}</div>` : '');
 
-        // Clear the live area for the fresh attempt.
-        contentEl.textContent = '';
+        // Clear the live area for the fresh attempt (this also drops the "verifying" indicator).
+        resetLiveText(bubbleId);
         scrollToBottom();
     }
 
@@ -329,7 +341,7 @@
             ? `유사도 ${s.similarity.toFixed(2)}`
             : (s.axis_ranks ? escHtml(s.axis_ranks) : '');
         if (!quality) return '';
-        return `<span class="source-metrics text-muted" style="font-size:0.72rem;">${quality}</span>`;
+        return `<span class="source-metrics text-muted">${quality}</span>`;
     }
 
     /* 출처 표시 순서 비교 — 1순위 응답 참여도, 2순위 유사도, 둘 다 내림차순이며 값이 없는
@@ -404,8 +416,8 @@
             if (!item || item.dataset.hasExcluded === '1') return;   // 재진입 방지(멱등)
             item.dataset.hasExcluded = '1';
             badge.insertAdjacentHTML('afterend',
-                ` <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"`
-                + ` style="font-size:0.62rem; vertical-align:middle; cursor:help;"`
+                ` <span class="badge source-flag bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"`
+                + ` style="cursor:help;"`
                 + ` title="컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다.`
                 + ` 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.">미사용</span>`);
         });
@@ -455,6 +467,8 @@
             html: true,
             sanitize: false,
             trigger: 'manual',
+            // 채팅 글자 크기 설정을 따르게 하는 표식 — app.css '채팅 글자 크기'. 관리 화면 팝오버는 달지 않는다.
+            customClass: 'source-preview-popover',
             content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
         });
         let hideTimer = null;
@@ -474,48 +488,216 @@
         });
     }
 
-    function renderMarkdown(el) {
+    /**
+     * 원문 마크다운을 el 에 렌더한다 — marked·DOMPurify 가 둘 다 있을 때만. 하나라도 없으면 평문으로 떨어진다
+     * (renderSourcePreviewHtml() 과 같은 게이트 — 살균기 없이 렌더하느니 렌더하지 않는다). 평문에는 원문
+     * 줄바꿈을 살리는 md-plain 을 단다.
+     * highlight=false 는 스트리밍 중의 중간 렌더다: 코드 하이라이트는 블록 전체를 다시 칠해 비싸고, 다음 렌더가
+     * 그 블록을 어차피 새로 만든다. 완료·중단·접힌 이전 답변처럼 마지막 렌더에서만 칠한다.
+     */
+    function renderMarkdown(el, raw, highlight) {
         if (!el) return;
-        const raw = el.textContent || '';
-        // 살균기가 없으면 렌더하지 않는다(el 의 textContent 가 그대로 남는다) —
-        // renderSourcePreviewHtml() 의 게이트와 같은 규칙.
-        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-            el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
-            if (typeof hljs !== 'undefined') {
-                el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
-            }
+        const text = raw || '';
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            el.textContent = text;
+            el.classList.add('md-plain');
+            return;
+        }
+        el.classList.remove('md-plain');
+        el.innerHTML = DOMPurify.sanitize(marked.parse(text));
+        if (highlight && typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }
     }
 
-    function onToken(bubbleId, text) {
+    function newCaret() {
+        const caret = document.createElement('span');
+        caret.className = 'stream-caret';
+        return caret;
+    }
+
+    /**
+     * 깜빡이는 커서(▋)를 본문 마지막 글자 바로 뒤에 둔다 — 그 글자가 든 요소 안에(코드 블록이면 코드 안,
+     * 표면 마지막 칸 안). 답변 칸 자체의 ::after 로 두면 렌더된 본문에서는 마지막 문단·목록 같은 블록
+     * '뒤'에 붙어 늘 다음 줄로 떨어진다.
+     */
+    function placeCaret(el) {
+        el.querySelectorAll('.stream-caret').forEach(c => c.remove());
+        // 마지막 글자는 뒤에서부터 찾는다 — 앞에서부터 훑으면 렌더마다 답변 전체를 지나간다(2만 자면 텍스트
+        // 노드 7천 개, 렌더 한 번에 6ms).
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+            acceptNode: n => (n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+        });
+        let end = el;
+        while (end.lastChild) end = end.lastChild;
+        walker.currentNode = end;
+        const last = end.nodeType === Node.TEXT_NODE && end.nodeValue.trim() ? end : walker.previousNode();
+        if (last) last.parentNode.insertBefore(newCaret(), last.nextSibling);
+        else el.appendChild(newCaret());
+    }
+
+    /**
+     * blocks: 이미 그려서 고정한 블록들의 원문(앞에서부터), blockNodes: 그 블록들이 답변 칸 맨 앞에서 차지하는
+     * 자식 노드 수 — 그 뒤의 노드(쓰이는 중인 마지막 블록·커서·검증 중 표시)는 렌더마다 걷어내고 다시 만든다.
+     */
+    function liveState(bubbleId) {
+        let s = liveAnswers.get(bubbleId);
+        if (!s) {
+            s = { raw: '', timer: null, delay: LIVE_RENDER_MIN_DELAY_MS, blocks: [], blockNodes: 0 };
+            liveAnswers.set(bubbleId, s);
+        }
+        return s;
+    }
+
+    /** 블록 단위로 그릴 수 있는가 — 렌더 게이트(marked·DOMPurify)에 더해 어휘 분석기·파서를 따로 쓴다. */
+    function canRenderBlocks() {
+        return typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
+            && typeof marked.lexer === 'function' && typeof marked.parser === 'function';
+    }
+
+    // 닫는 태그가 없는 요소 — 열린 채로 남아 뒤 블록을 감쌀 수 없다(LLM 이 표 칸에 흔히 쓰는 <br> 등).
+    const VOID_HTML_TAG = /^<\/?(br|hr|img|wbr)\b[^>]*>$/i;
+
+    /**
+     * 블록에 열린 채로 남을 수 있는 날 HTML(블록·인라인 어느 쪽이든)이 있는가. 그런 블록은 따로 그리면 브라우저가
+     * 그 자리에서 요소를 닫아 버려서(<details> 를 홀로 넣으면 바로 </details>), 뒤 블록이 그 안에 들어가는
+     * 전체 렌더와 달라진다. 코드 블록·인라인 코드 안의 <...> 는 HTML 토큰이 아니라서 걸리지 않는다.
+     */
+    function hasOpenableHtml(node) {
+        if (Array.isArray(node)) return node.some(hasOpenableHtml);
+        if (!node || typeof node !== 'object') return false;
+        if (node.type === 'html' && !VOID_HTML_TAG.test(String(node.raw || '').trim())) return true;
+        return Object.keys(node).some(k => typeof node[k] === 'object' && hasOpenableHtml(node[k]));
+    }
+
+    /** 블록 토큰들을 그려 el 끝에 붙이고, 붙은 자식 노드 수를 돌려준다. 붙이는 HTML 은 전부 DOMPurify 를 지난다. */
+    function appendBlocks(el, tokens) {
+        const before = el.childNodes.length;
+        el.insertAdjacentHTML('beforeend', DOMPurify.sanitize(marked.parser(tokens)));
+        return el.childNodes.length - before;
+    }
+
+    /**
+     * 새로 들어온 블록만 그린다. 원문 전체를 매번 어휘 분석하되(답변 전체를 다시 그리는 것보다 훨씬 싸다 —
+     * 2만 자에 수 ms), 마지막 블록 앞의 것들은 다음 블록이 시작됐으니 끝난 것으로 보고 한 번만 그려 고정한다.
+     * 마지막 블록은 아직 쓰이는 중이라 매번 다시 그린다 — 빈 줄로 끝났어도 그렇다(목록은 빈 줄 뒤에도 항목이
+     * 이어 붙는다). 고정한 블록의 원문이 이번 분석 결과의 앞부분과 다르면(뒤에 온 글자가 앞 블록의 해석을
+     * 바꿨다) 처음부터 다시 그린다 — 그래서 화면이 원문 전체를 한 번에 렌더한 결과와 어긋나지 않는다(예외
+     * 하나: 참조식 링크 [글][1] 의 정의가 나중에 오면 앞 블록은 원문이 같아 그대로라, 완료 렌더에서야 링크가 된다).
+     * 완료 시점의 최종 렌더는 이와 별개로 전체를 한 번에 다시 그린다(renderMarkdown).
+     */
+    function renderNewBlocks(el, s) {
+        // 커서는 마지막 블록에 글자가 없으면(구분선 등) 고정 블록 안에 들어가 있다 — 노드를 세기 전에 뺀다.
+        el.querySelectorAll('.stream-caret').forEach(c => c.remove());
+        const tokens = marked.lexer(s.raw);
+        let last = tokens.length;
+        while (last > 0 && tokens[last - 1].type === 'space') last--;
+        last = Math.max(0, last - 1);   // 쓰이는 중인 마지막 블록 — 그 앞까지가 끝난 블록이다
+
+        let sameStart = s.blocks.length <= last;
+        for (let i = 0; sameStart && i < s.blocks.length; i++) sameStart = s.blocks[i] === tokens[i].raw;
+        if (!sameStart) {
+            el.textContent = '';
+            s.blocks = [];
+            s.blockNodes = 0;
+        }
+        el.classList.remove('md-plain');
+        while (el.childNodes.length > s.blockNodes) el.lastChild.remove();
+
+        // 고정은 열린 채로 남을 수 있는 HTML 이 든 첫 블록 앞에서 멈춘다 — 그 블록부터 끝까지는 매번 한 번에
+        // 그려야 브라우저가 전체 렌더와 같은 맥락에서 해석한다.
+        let i = s.blocks.length;
+        for (; i < last && !hasOpenableHtml(tokens[i]); i++) {
+            s.blockNodes += appendBlocks(el, [tokens[i]]);
+            s.blocks.push(tokens[i].raw);
+        }
+        appendBlocks(el, tokens.slice(i));
+    }
+
+    /** 지금까지 스트리밍된 원문 — 렌더된 화면이 아니라. */
+    function liveText(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        return s ? s.raw : '';
+    }
+
+    function renderLive(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
         const el = document.getElementById(`stream-content-${bubbleId}`);
-        if (el) el.textContent += text;
+        if (!s || !el) return;
+        const started = performance.now();
+        if (canRenderBlocks()) renderNewBlocks(el, s);
+        else renderMarkdown(el, s.raw, false);   // 게이트에 막히면 평문 — 블록으로 나눌 것이 없다
+        placeCaret(el);
+        // 레이아웃을 여기서 끝내 간격 계산에 넣는다. 긴 답변에서는 파싱보다 레이아웃이 비싼데, 이 줄이 없으면
+        // 레이아웃은 바닥에 붙어 있을 때만(scrollToBottom 이 scrollHeight 를 읽을 때) 재는 구간에 들어와서,
+        // 사용자가 위로 올려 읽는 동안에는 간격이 실제 비용보다 짧게 잡혔다. 어차피 다음 프레임에 할 일이라
+        // 앞당길 뿐 더하지 않는다.
+        void el.offsetHeight;
+        s.delay = Math.max(LIVE_RENDER_MIN_DELAY_MS, (performance.now() - started) * 4);
         scrollToBottom();
+    }
+
+    /** 걸려 있는 렌더를 지금 한다 — 이 뒤에 덧붙이는 것(검증 중 표시)을 늦게 돈 렌더가 지우지 않도록. */
+    function flushLiveRender(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        if (!s) return;
+        if (s.timer != null) {
+            clearTimeout(s.timer);
+            s.timer = null;
+        }
+        renderLive(bubbleId);
+    }
+
+    /** 새 시도(검증 실패 재시도·고추론 재분석)를 위해 비운다 — 커서만 남는다. */
+    function resetLiveText(bubbleId) {
+        liveState(bubbleId).raw = '';
+        flushLiveRender(bubbleId);
+    }
+
+    /**
+     * 스트리밍이 끝났다(완료·중단·오류) — 원문을 돌려주고 상태를 지운다. 걸려 있던 중간 렌더도 취소한다:
+     * 최종 렌더 뒤에 돌면 하이라이트 없는 본문과 커서를 되살린다.
+     */
+    function endLive(bubbleId) {
+        const s = liveAnswers.get(bubbleId);
+        liveAnswers.delete(bubbleId);
+        if (!s) return '';
+        if (s.timer != null) clearTimeout(s.timer);
+        return s.raw;
+    }
+
+    function onToken(bubbleId, text) {
+        if (!text) return;
+        const s = liveState(bubbleId);
+        s.raw += text;
+        if (s.timer == null) {
+            s.timer = setTimeout(() => {
+                s.timer = null;
+                renderLive(bubbleId);
+            }, s.delay);
+        }
     }
 
     /**
      * Streaming has finished but the turn isn't done — a blocking sufficiency+grounded LLM
      * check (several seconds to tens of seconds) runs before the next event. Append a small
-     * indicator as the last child of the content element so the existing .stream-cursor
-     * ::after pseudo-element (still on the parent) keeps blinking right after it, same as
-     * during token streaming. The indicator is a real DOM node (not raw text appended to
-     * contentEl directly) precisely so removeVerifyingIndicator() can strip it cleanly before
-     * onRetry()/onDone()/onAborted() read/render the raw answer text.
+     * indicator after the answer and move the blinking caret behind it, same as during token
+     * streaming. The indicator lives only in the DOM, never in the raw answer text, so the
+     * next render of that text — onRetry()/onStage('upgrade') resetting it, onDone()/onAborted()
+     * rendering it for good — drops it without any cleanup.
      */
     function onVerifying(bubbleId) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl || document.getElementById(`stream-verifying-${bubbleId}`)) return;
+        flushLiveRender(bubbleId);
+        contentEl.querySelectorAll('.stream-caret').forEach(c => c.remove());
         const indicator = document.createElement('span');
         indicator.id = `stream-verifying-${bubbleId}`;
         indicator.className = 'text-muted small ms-1';
         indicator.textContent = '(응답결과 검증 중)';
         contentEl.appendChild(indicator);
+        contentEl.appendChild(newCaret());
         scrollToBottom();
-    }
-
-    /** Strips the "verifying" indicator span before anything reads contentEl's raw text. */
-    function removeVerifyingIndicator(bubbleId) {
-        document.getElementById(`stream-verifying-${bubbleId}`)?.remove();
     }
 
     function onDone(bubbleId, data) {
@@ -523,26 +705,23 @@
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
 
-        // 1. Remove streaming cursor + the "verifying" indicator (if the turn ended right after
-        //    a verification pass, before markdown rendering picks up contentEl's raw text below).
-        if (contentEl) contentEl.classList.remove('stream-cursor');
-        removeVerifyingIndicator(bubbleId);
+        // 1. End the live stream — cancels a pending intermediate render and hands back the raw
+        //    text. The final render below replaces the caret and the "verifying" indicator too.
+        const streamed = endLive(bubbleId);
 
         // 1-bis. 서버가 스트리밍 이후 답변을 손봤으면(요약 전용 가드, 20,000자 절단, PROGRESSIVE
         //    재생성) 그 최종본으로 교체한다. 이 신호가 없던 시절엔 화면엔 스트리밍된 원본이 남고
         //    DB엔 손본 답변이 저장돼, 새로고침해야 비로소 달라진 것이 드러났다 — 그 사이 사용자는
         //    화면의 답변을 보고 좋아요를 눌렀고 저장된 건 다른 텍스트였다.
-        //    같으면 서버가 키 자체를 안 보내므로 여기서 아무 일도 일어나지 않는다.
-        if (contentEl && typeof data.finalAnswer === 'string') {
-            contentEl.textContent = data.finalAnswer;   // 아래 renderMarkdown 이 이 원문을 렌더한다
-        }
+        //    같으면 서버가 키 자체를 안 보내므로 스트리밍된 원문을 그대로 쓴다.
+        const answer = typeof data.finalAnswer === 'string' ? data.finalAnswer : streamed;
 
-        // Capture raw (pre-render) answer length for the char-count metadata below —
-        // must happen before markdown rendering replaces textContent with rendered HTML.
-        const answerLen = (contentEl?.textContent || '').length;
+        // Raw answer length for the char-count metadata below (not the rendered text, which
+        // has lost the markdown syntax).
+        const answerLen = answer.length;
 
-        // 2. Render markdown
-        renderMarkdown(contentEl);
+        // 2. Final render — the live render's pipeline plus code highlighting.
+        renderMarkdown(contentEl, answer, true);
 
         // 3. Hide stage spinner + drop any superseded (unverified) retry answers — a final
         //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
@@ -555,9 +734,90 @@
         applyAttribution(bubbleId, data.attribution);
         applyPromptExcluded(bubbleId, data.promptExcluded);
 
-        // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
-        //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
-        //    click handler listens for on #chat-messages.
+        // 4. 배지는 본문 위, 안내 줄은 본문 아래, 피드백+메타데이터는 맨 아래 한 줄 — 서버 렌더러 둘(chat.html
+        //    기록 루프 · fragments/message-assistant.html)과 같은 자리·같은 클래스다. 예전에는 배지와 안내 줄까지
+        //    font-size:0.72rem 인 메타 줄 안에 넣었는데, .badge(0.75em)·.small(0.875em)은 부모 기준이라 한 번 더
+        //    줄어 같은 답변이 새로고침 전후로 배지 8.6px↔12px, 안내 줄 10px↔14px 로 달랐다.
+        const invented = Array.isArray(data.inventedSymbols) ? data.inventedSymbols : [];
+        const badgesEl = document.getElementById(`stream-badges-${bubbleId}`);
+        if (badgesEl) {
+            const qt = data.questionType;
+            const badges = [];
+            if (qt)                   badges.push(`<span class="badge badge-${escHtml(qt)} me-1 mb-2">${escHtml(qt)}</span>`);
+            if (data.premiumUpgraded) badges.push(`<span class="badge-upgraded me-1 mb-2">⬆ 고추론 재분석 → ${escHtml(data.premiumUpgraded)}</span>`);
+            // 통과 배지는 '무엇을 검증했는가'에 따라 갈린다 — 표준 모드의 grounded 는 "답변이 문서에
+            // 근거하는가"를, 창의 모드의 apiGrounded 는 "문서 유래라고 제시한 이름이 실재하는가"를
+            // 물었다. 같은 초록 배지를 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는다.
+            // 판정(generative)은 서버가 ResponseMode.generative() 로 계산해 내려준다 — 여기서 모드
+            // 문자열을 비교하지 않는다(message-assistant.html 도 같은 필드를 쓴다).
+            if (data.grounded === true && data.generative) badges.push(
+                `<span class="badge bg-primary me-1 mb-2" title="문서를 재료로 생성된 답변입니다. 문서에 없는 이름을 지어내지 않았는지만 검증했습니다.">생성</span>`);
+            else if (data.grounded === true) badges.push(`<span class="badge bg-success me-1 mb-2">검증됨</span>`);
+            // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
+            // (네이티브 title. 사유는 본문 아래 안내 줄에도 한 번 더 나온다).
+            else if (data.grounded === false) badges.push(
+                `<span class="badge bg-warning text-dark me-1 mb-2"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
+            // 발명된 이름 경고 — 재시도를 걸지 않는 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다.
+            // 그래서 grounded 조건을 걸지 않는다(envNote 와 같은 규칙).
+            if (invented.length) badges.push(
+                `<span class="badge bg-warning text-dark me-1 mb-2" style="cursor:help;" title="${escHtml(invented.join(', '))}">문서 밖 이름 ${invented.length}</span>`);
+            badgesEl.innerHTML = badges.join('');
+        }
+
+        const noticesEl = document.getElementById(`stream-notices-${bubbleId}`);
+        if (noticesEl) {
+            let notices = '';
+            // 미검증으로 확정된 답변의 사유는 배지 툴팁에만 두지 않고 한 줄로도 보여준다 —
+            // 마우스를 올려봐야 알 수 있으면 모바일에서는 확인할 방법이 없다.
+            if (data.grounded === false && data.evalReason) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                        +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
+            }
+
+            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
+            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
+            // 발명된 이름 목록 — 배지 툴팁만으로는 모바일에서 확인할 방법이 없다(evalReason 과 같은
+            // 이유). C 에서는 이것이 안전 신호라 통과·미통과와 무관하게 항상 펼쳐 보여준다.
+            if (invented.length) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                        +  `문서에서 확인되지 않은 이름: ${escHtml(invented.join(', '))}</div>`;
+            }
+
+            if (data.envNote) {
+                notices += `<div class="small text-info mt-2">`
+                        +  `<i class="bi bi-info-circle me-1"></i>`
+                        +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
+            }
+
+            /* 축소 안내 — 서버가 문구를 통째로 만들어 내려주므로 여기서 조립하지 않는다.
+               출처 목록은 검색된 전부를 그대로 그리므로, 이 줄이 빠지면 사용자는 모델이
+               그 출처를 다 봤다고 믿게 된다(서버 렌더러 둘과 같은 규칙). */
+            if (data.budgetNote) {
+                notices += `<div class="small text-warning mt-2">`
+                        +  `<i class="bi bi-scissors me-1"></i>`
+                        +  `${escHtml(data.budgetNote)}</div>`;
+            }
+
+            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
+               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
+               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
+               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
+            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
+                && window.isRetrievalMetricsEnabled();
+            if (data.condensedQuestion && condenseVisible) {
+                notices += `<div class="small text-muted mt-2">`
+                        +  `<i class="bi bi-search me-1"></i>`
+                        +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
+            }
+            noticesEl.innerHTML = notices;
+        }
+
+        // Feedback buttons (like/dislike) + metadata, same line — feedback first (left).
+        // Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
+        // click handler listens for on #chat-messages.
         if (metaEl) {
             let html = '';
             if (data.turnId != null) {
@@ -577,27 +837,7 @@
                 </div>`;
             }
 
-            const qt = data.questionType;
             const parts = [];
-            if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
-            // 통과 배지는 '무엇을 검증했는가'에 따라 갈린다 — 표준 모드의 grounded 는 "답변이 문서에
-            // 근거하는가"를, 창의 모드의 apiGrounded 는 "문서 유래라고 제시한 이름이 실재하는가"를
-            // 물었다. 같은 초록 배지를 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는다.
-            // 판정(generative)은 서버가 ResponseMode.generative() 로 계산해 내려준다 — 여기서 모드
-            // 문자열을 비교하지 않는다(message-assistant.html 도 같은 필드를 쓴다).
-            if (data.grounded === true && data.generative) parts.push(
-                `<span class="badge bg-primary me-1" title="문서를 재료로 생성된 답변입니다. 문서에 없는 이름을 지어내지 않았는지만 검증했습니다.">생성</span>`);
-            else if (data.grounded === true) parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
-            // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
-            // (네이티브 title: 메타데이터 줄이라 상시 노출하면 길어진다. 사유는 아래 줄에도 한 번 더 나온다).
-            else if (data.grounded === false) parts.push(
-                `<span class="badge bg-warning text-dark me-1"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
-            // 발명된 이름 경고 — 재시도를 걸지 않는 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다.
-            // 그래서 grounded 조건을 걸지 않는다(envNote 와 같은 규칙).
-            const invented = Array.isArray(data.inventedSymbols) ? data.inventedSymbols : [];
-            if (invented.length) parts.push(
-                `<span class="badge bg-warning text-dark me-1" style="cursor:help;" title="${escHtml(invented.join(', '))}">문서 밖 이름 ${invented.length}</span>`);
-            if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
             if (data.usedProvider)        parts.push(`🤖 ${escHtml(data.usedProvider)}`);
             if (data.elapsedMs != null)   parts.push(`⏱ ${(data.elapsedMs / 1000).toFixed(1)}s`);
             const inp = data.inputTokens  || 0;
@@ -606,54 +846,7 @@
             if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
             if (answerLen)                parts.push(`📝 ${answerLen}자`);
             parts.push(`🕐 ${nowTimeStr()}`);
-            html += `<span class="text-muted">${parts.join(' · ')}</span>`;
-
-            // 미검증으로 확정된 답변의 사유는 배지 툴팁에만 두지 않고 한 줄로도 보여준다 —
-            // 마우스를 올려봐야 알 수 있으면 모바일에서는 확인할 방법이 없다.
-            if (data.grounded === false && data.evalReason) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
-                     +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
-            }
-
-            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
-            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
-            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
-            // 발명된 이름 목록 — 배지 툴팁만으로는 모바일에서 확인할 방법이 없다(evalReason 과 같은
-            // 이유). C 에서는 이것이 안전 신호라 통과·미통과와 무관하게 항상 펼쳐 보여준다.
-            if (invented.length) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
-                     +  `문서에서 확인되지 않은 이름: ${escHtml(invented.join(', '))}</div>`;
-            }
-
-            if (data.envNote) {
-                html += `<div class="small text-info mt-1">`
-                     +  `<i class="bi bi-info-circle me-1"></i>`
-                     +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
-            }
-
-            /* 축소 안내 — 서버가 문구를 통째로 만들어 내려주므로 여기서 조립하지 않는다.
-               출처 목록은 검색된 전부를 그대로 그리므로, 이 줄이 빠지면 사용자는 모델이
-               그 출처를 다 봤다고 믿게 된다(서버 렌더러 둘과 같은 규칙). */
-            if (data.budgetNote) {
-                html += `<div class="small text-warning mt-1">`
-                     +  `<i class="bi bi-scissors me-1"></i>`
-                     +  `${escHtml(data.budgetNote)}</div>`;
-            }
-
-            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
-               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
-               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
-               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
-            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
-                && window.isRetrievalMetricsEnabled();
-            if (data.condensedQuestion && condenseVisible) {
-                html += `<div class="small text-muted mt-1">`
-                     +  `<i class="bi bi-search me-1"></i>`
-                     +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
-            }
-
+            html += `<span class="text-muted bubble-meta">${parts.join(' · ')}</span>`;
             metaEl.innerHTML = html;
         }
 
@@ -679,6 +872,7 @@
     }
 
     function onError(bubbleId, message) {
+        endLive(bubbleId);
         const bubble = document.getElementById(`bubble-${bubbleId}`);
         if (bubble) {
             bubble.outerHTML =
@@ -692,20 +886,21 @@
 
     /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
     function onAborted(bubbleId) {
-        clearRetryArtifacts(bubbleId);
-        removeVerifyingIndicator(bubbleId);
+        // The stage line lives exactly as long as the stream: onDone() removes it and onError()
+        // replaces the bubble. Gone means the turn already ended — the server completes the
+        // emitter right after "done", and a stop pressed in those last milliseconds used to
+        // re-render the answer from the already-emptied live text (a blank bubble) and swap the
+        // feedback buttons for "사용자가 중단함".
         const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
-        if (stageEl) stageEl.remove();
+        if (!stageEl) return;
+        clearRetryArtifacts(bubbleId);
+        stageEl.remove();
 
-        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-        if (contentEl) {
-            contentEl.classList.remove('stream-cursor');
-            renderMarkdown(contentEl);
-        }
+        renderMarkdown(document.getElementById(`stream-content-${bubbleId}`), endLive(bubbleId), true);
 
         const metaEl = document.getElementById(`stream-meta-${bubbleId}`);
         if (metaEl) {
-            metaEl.innerHTML = `<span class="text-muted"><i class="bi bi-stop-circle me-1"></i>사용자가 중단함 · ${escHtml(nowTimeStr())}</span>`;
+            metaEl.innerHTML = `<span class="text-muted bubble-meta"><i class="bi bi-stop-circle me-1"></i>사용자가 중단함 · ${escHtml(nowTimeStr())}</span>`;
         }
     }
 
