@@ -82,7 +82,7 @@ public class ClassifierService {
 
     /**
      * 출력 예약. 응답은 JSON 한 줄인데, 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본
-     * 10,000) 전체가 예약됐다 — 16k 창이면 그것만으로 입력 자리가 4,746 토큰으로 줄고, {@code /settings} 의
+     * 12,000) 전체가 예약됐다 — 16k 창이면 그것만으로 입력 자리가 2,746 토큰으로 줄고, {@code /settings} 의
      * {@code max-tokens} 를 바꿔도 따라가지 않았다(PLAN §6.29 열린 항목 (d)).
      *
      * <p>한 줄짜리치고 큰 이유는 {@code PostAnswerService.MAX_OUTPUT_TOKENS} 와 같다 — 생각은 끄고 부르지만(출하값),

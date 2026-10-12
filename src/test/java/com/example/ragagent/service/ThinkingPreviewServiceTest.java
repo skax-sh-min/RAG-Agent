@@ -375,7 +375,7 @@ class ThinkingPreviewServiceTest {
     }
 
     @Test
-    @DisplayName("분류·리랭크·제목·이미지 설명·이미지 유형은 자기 상한 2,048 을 싣는다 — 16k 창의 분류: 예약 2,048 · 3,072 · 4,096 · 4,096 (예전엔 넷 다 10,000)")
+    @DisplayName("분류·리랭크·제목·이미지 설명·이미지 유형은 자기 상한 2,048 을 싣는다 — 16k 창의 분류: 예약 2,048 · 3,072 · 4,096 · 4,096 (예전엔 넷 다 프로바이더 기본값 = 이 하네스의 max-tokens 10,000)")
     void shortSitesCarryTheirOwnCap() {
         ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().window(16_384).build();
 

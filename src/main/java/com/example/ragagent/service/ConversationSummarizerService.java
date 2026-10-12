@@ -246,7 +246,7 @@ public class ConversationSummarizerService {
      * 이 호출의 <b>기본</b> 출력 예약 — 남길 요약 분량({@code maxSummaryChars}, 토큰 추정은 한글 1자 = 1토큰)에
      * {@link #THINKING_SLACK_TOKENS} 를 더하고 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더 기본값).
      *
-     * <p>상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본 10,000) 전체가 예약됐다 — 이 호출의
+     * <p>상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본 12,000) 전체가 예약됐다 — 이 호출의
      * 입력은 대화 이력이라 그 예약이 이력이 들어갈 자리를 먹고, {@code /settings} 의 {@code max-tokens} 도 따라가지 않았다
      * (PLAN §6.29 열린 항목 (d)). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
      */

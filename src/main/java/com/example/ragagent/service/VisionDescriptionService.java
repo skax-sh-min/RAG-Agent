@@ -51,7 +51,7 @@ public class VisionDescriptionService {
 
     /**
      * 출력 예약 — 설명은 최대 4문장({@link #PROMPTS})인데 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진
-     * {@code max-tokens}(기본 10,000) 전체가 예약됐다 — 이미지 입력 토큰이 큰 비전 호출에서 그 예약이 이미지 자리를 먹는다
+     * {@code max-tokens}(기본 12,000) 전체가 예약됐다 — 이미지 입력 토큰이 큰 비전 호출에서 그 예약이 이미지 자리를 먹는다
      * (PLAN §6.29 열린 항목 (d)). 값의 근거는 {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같다.
      */
     static final int MAX_OUTPUT_TOKENS = 2_048;

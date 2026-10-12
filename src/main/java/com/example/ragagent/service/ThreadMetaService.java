@@ -38,7 +38,7 @@ public class ThreadMetaService {
 
     /**
      * 출력 예약 — 제목은 {@value #TITLE_MAX_CHARS}자인데 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진
-     * {@code max-tokens}(기본 10,000) 전체가 예약됐다(PLAN §6.29 열린 항목 (d)). 값의 근거는
+     * {@code max-tokens}(기본 12,000) 전체가 예약됐다(PLAN §6.29 열린 항목 (d)). 값의 근거는
      * {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같다(스위치를 받지 않는 서버의 생각까지 받아 준다).
      */
     static final int MAX_OUTPUT_TOKENS = 2_048;
