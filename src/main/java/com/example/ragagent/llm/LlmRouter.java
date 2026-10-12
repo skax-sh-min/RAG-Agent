@@ -899,8 +899,11 @@ public class LlmRouter {
      *
      * <p>블로킹 경로는 이 판정이 필요 없다 — 거기서는 읽기 타임아웃과 중단만 빼고 모든 실패가 차단 대상이라 연결 계열이 그 안에
      * 이미 들어 있다. 스트리밍은 알 수 없는 예외까지 차단하면 안 돼서 근거가 되는 모양을 하나씩 세어야 한다.
+     *
+     * <p>라우터 밖의 두 자리도 같은 정의를 쓴다 — 임베딩 엔드포인트 전환({@code LoadBalancingEmbeddingModel})과 기동 검증의
+     * 복제본 예외({@code LlmConfig.isOutage}). "닿지 못했다"의 정의가 자리마다 갈리면 한쪽에서만 전환되는 장애가 생긴다.
      */
-    static boolean isConnectionFailure(Throwable t) {
+    public static boolean isConnectionFailure(Throwable t) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             if (cur instanceof java.net.ConnectException
                     || cur instanceof java.net.UnknownHostException
