@@ -312,7 +312,15 @@ public class ThinkingPreviewService {
                     case POST_ANSWER -> PostAnswerService.baseReservation(c.maxTokens);
                     case CURATED_SUGGEST -> CuratedQuestionSuggester.baseReservation(c.maxTokens);
                     case MD_CORRECT_VISION -> MarkdownCorrectionService.visionReservation(c.maxTokens);
-                    default -> 0;   // 출력 상한을 싣지 않는 호출 — 프로바이더 기본값이 예약된다(열린 항목 (d))
+                    case CLASSIFY -> ClassifierService.baseReservation(c.maxTokens);
+                    case RERANK -> RerankerService.baseReservation(c.maxTokens);
+                    case TITLE -> ThreadMetaService.baseReservation(c.maxTokens);
+                    case SUMMARY -> ConversationSummarizerService.baseReservation(c.maxTokens, c.summaryChars);
+                    case IMAGE_DESCRIBE -> VisionDescriptionService.baseReservation(c.maxTokens);
+                    case IMAGE_TYPE -> ImageTypeClassifier.baseReservation(c.maxTokens);
+                    // 출력 상한을 싣지 않는 호출 — 프로바이더 기본값이 예약된다. 남은 것은 질의 확장 하나다: 프레임워크
+                    // (MultiQueryExpander)가 프롬프트를 스스로 만들어 호출부가 옵션을 실을 자리가 없다.
+                    default -> 0;
                 };
                 d.reservation = budget.reservation(site, level, provider, base);
                 d.expectedOutput = site.expectedOutputTokens();
@@ -769,6 +777,8 @@ public class ThinkingPreviewService {
         final long questionTokens = koreanTokens(QUESTION_CHARS);
         /** 대화 이력이 상한일 때의 길이 — 폴백 경로가 자르는 그 값({@code MemoryService.maxConversationChars}). */
         final int historyChars = MemoryService.conversationChars(maxTokens);
+        /** 요약이 남기는 분량 상한 — 요약 호출의 출력 예약이 여기서 나온다({@code ConversationSummarizerService.baseReservation}). */
+        final int summaryChars = props.summarySafe().maxSummaryChars();
         private final Map<String, Long> promptTokens = new HashMap<>();
         private final Map<String, Double> speeds = new HashMap<>();
         private final Map<Boolean, Long> schemaTokens = new HashMap<>();

@@ -37,8 +37,22 @@ public class ImageTypeClassifier {
             다른 설명 없이 단어 하나만 출력하세요.
             """;
 
+    /**
+     * 출력 예약 — 답은 단어 하나인데 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본 10,000)
+     * 전체가 예약됐다(PLAN §6.29 열린 항목 (d)). 값의 근거는 {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같다.
+     */
+    static final int MAX_OUTPUT_TOKENS = 2_048;
+
     private final LlmRouter llmRouter;
     private final AppProperties props;
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — {@link #MAX_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더
+     * 기본값). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens) {
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, MAX_OUTPUT_TOKENS) : 0;
+    }
 
     public ImageTypeClassifier(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
@@ -50,8 +64,11 @@ public class ImageTypeClassifier {
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
             UserMessage userMessage = UserMessage.builder().text(PROMPT).media(media).build();
             ThinkingSite site = ThinkingSite.IMAGE_TYPE;   // §6.29
-            OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-                    .temperature(props.llmSafe().indexingTemperature()), site).build();
+            OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().indexingTemperature()), site);
+            int base = baseReservation(props.llmSafe().maxTokens()); // 0 = 프로바이더 기본값 유지
+            if (base > 0) builder.maxTokens(base);
+            OpenAiChatOptions options = builder.build();
             String response = llmRouter.executeWithTracking(site.taskType(), site.fixedRoutingMode(),
                     model -> model.call(new Prompt(userMessage, options)));
             String type = response == null ? "other" : response.strip().toLowerCase();

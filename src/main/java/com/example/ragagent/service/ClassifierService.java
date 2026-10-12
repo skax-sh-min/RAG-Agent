@@ -80,13 +80,34 @@ public class ClassifierService {
     /** §6.29 — 이 호출 지점. 생각 수준(app.llm.thinking.classify)과 라우팅이 여기서 나온다. */
     private static final ThinkingSite SITE = ThinkingSite.CLASSIFY;
 
+    /**
+     * 출력 예약. 응답은 JSON 한 줄인데, 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본
+     * 10,000) 전체가 예약됐다 — 16k 창이면 그것만으로 입력 자리가 4,746 토큰으로 줄고, {@code /settings} 의
+     * {@code max-tokens} 를 바꿔도 따라가지 않았다(PLAN §6.29 열린 항목 (d)).
+     *
+     * <p>한 줄짜리치고 큰 이유는 {@code PostAnswerService.MAX_OUTPUT_TOKENS} 와 같다 — 생각은 끄고 부르지만(출하값),
+     * 그 스위치를 받지 않는 서버에서는 모델이 여전히 생각한다(낮게 실측 p95 420~970). 그 생각이 상한에 걸리면 본문이
+     * 비고 분류가 {@code concept} 로 떨어진다.
+     */
+    static final int MAX_OUTPUT_TOKENS = 2_048;
+
     /** §6.18 — general/RAG temperature, hot (read fresh per call so a /settings change applies
      *  without a restart). */
     private Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature()), SITE)
-                .build();
-        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)), options);
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature()), SITE);
+        // 0 이하 = "프로바이더 기본값 유지" (AnswerService.evalOptions 와 같은 규약). 핫 — 매 호출 다시 읽는다.
+        int base = baseReservation(props.llmSafe().maxTokens());
+        if (base > 0) builder.maxTokens(base);
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)), builder.build());
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — {@link #MAX_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더
+     * 기본값). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens) {
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, MAX_OUTPUT_TOKENS) : 0;
     }
 
     private String parseType(String response) {

@@ -163,6 +163,47 @@ class ThinkingPreviewParityTest {
         assertThat(maxTokensOf(sent.get(0))).isEqualTo(h.row(ThinkingSite.CONDENSE).savedCell().reservedTokens()).isEqualTo(256);
     }
 
+    // ── 분류·리랭크 — 상한을 싣게 된 짧은 호출(PLAN §6.29 열린 항목 (d)) ─────────────────────────────
+
+    @Test
+    @DisplayName("분류 — 요청의 max_tokens 가 미리보기의 예약과 같다(끔 2,048 · 낮게는 거기에 여유) — 예전엔 아무것도 싣지 않아 프로바이더 기본값이 예약됐다")
+    void classifyRequestMatchesThePreview() {
+        for (ThinkingLevel level : List.of(ThinkingLevel.OFF, ThinkingLevel.LOW)) {
+            ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()
+                    .file(ThinkingPreviewHarness.levels(ThinkingSite.CLASSIFY, level)).build();
+            List<Prompt> sent = new ArrayList<>();
+            String json = "{\"question_type\":\"usage\"}";
+            routeBlockingCallsThrough(h, chain(h, server(sent, json)), json);
+
+            new ClassifierService(h.router, bundle(), h.props)
+                    .execute(AgentState.of("설정은 어떻게 바꿔?", "v1", "t1", "", RoutingMode.COST_FIRST));
+
+            assertThat(sent).as(level.name()).hasSize(1);
+            assertThat(maxTokensOf(sent.get(0))).as(level.name())
+                    .isEqualTo(h.row(ThinkingSite.CLASSIFY).cell(level).reservedTokens());
+            if (level == ThinkingLevel.OFF) assertThat(maxTokensOf(sent.get(0))).isEqualTo(2_048);
+        }
+    }
+
+    @Test
+    @DisplayName("리랭크 — 요청의 max_tokens 가 미리보기의 예약(끔 2,048)과 같다")
+    void rerankRequestMatchesThePreview() {
+        ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().build();
+        List<Prompt> sent = new ArrayList<>();
+        ChatModel chain = chain(h, server(sent, "[1, 0, 2]"));
+        when(h.router.executeGated(any(TaskType.class), any(RoutingMode.class), any())).thenAnswer(inv -> {
+            Function<ChatModel, ChatResponse> call = inv.getArgument(2);
+            return call.apply(chain).getResult().getOutput().getText();
+        });
+        List<Document> candidates = List.of(new Document("가"), new Document("나"), new Document("다"));
+
+        new RerankerService(h.router, bundle(), h.props).rerank("질문", candidates, 2);
+
+        assertThat(sent).hasSize(1);
+        assertThat(maxTokensOf(sent.get(0)))
+                .isEqualTo(h.row(ThinkingSite.RERANK).savedCell().reservedTokens()).isEqualTo(2_048);
+    }
+
     // ── 채팅 답변 + 검증 — 실제 AnswerService 를 돌려서 ────────────────────────────────────────────
 
     private AnswerService answerService(ThinkingPreviewHarness h) {

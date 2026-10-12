@@ -54,6 +54,13 @@ public class ConversationSummarizerService {
      */
     private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
+    /**
+     * 출력 예약의 생각 몫 — 요약 자체는 {@code app.summary.max-summary-chars} 를 넘으면 잘려 버려지므로 그만큼만
+     * 받으면 되고, 그 위에 이만큼을 더 둔다. 생각은 끄고 부르지만(출하값) 그 스위치를 받지 않는 서버에서는 모델이
+     * 여전히 생각한다(낮게 실측 p95 420~970) — {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같은 이유다.
+     */
+    static final int THINKING_SLACK_TOKENS = 1_024;
+
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -223,13 +230,29 @@ public class ConversationSummarizerService {
 
         String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
         ThinkingSite site = ThinkingSite.SUMMARY;   // §6.29 — 생각 수준과 라우팅(LOCAL_ONLY)이 여기서 나온다
-        OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()), site).build();
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), site);
+        int base = baseReservation(props.llmSafe().maxTokens(), maxSummaryChars); // 0 = 프로바이더 기본값 유지
+        if (base > 0) builder.maxTokens(base);
+        OpenAiChatOptions options = builder.build();
         return llmRouter.executeWithTracking(site.taskType(), site.fixedRoutingMode(),
                 BackgroundUsage.SUMMARY_PREFIX,
                 model -> model.call(new Prompt(List.of(
                         new SystemMessage(systemPrompt),
                         new UserMessage(input.text())), options)));
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — 남길 요약 분량({@code maxSummaryChars}, 토큰 추정은 한글 1자 = 1토큰)에
+     * {@link #THINKING_SLACK_TOKENS} 를 더하고 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더 기본값).
+     *
+     * <p>상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본 10,000) 전체가 예약됐다 — 이 호출의
+     * 입력은 대화 이력이라 그 예약이 이력이 들어갈 자리를 먹고, {@code /settings} 의 {@code max-tokens} 도 따라가지 않았다
+     * (PLAN §6.29 열린 항목 (d)). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens, int maxSummaryChars) {
+        if (configuredMaxTokens <= 0) return 0;
+        return Math.min(configuredMaxTokens, Math.max(0, maxSummaryChars) + THINKING_SLACK_TOKENS);
     }
 
     /**

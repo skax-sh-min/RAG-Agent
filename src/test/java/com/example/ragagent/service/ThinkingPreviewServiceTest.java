@@ -211,15 +211,16 @@ class ThinkingPreviewServiceTest {
     @Test
     @DisplayName("블로킹 사이트의 응답 자리 없음은 ⛔ — 프로바이더 상한이 응답 필요분보다 작으면 생각을 켜는 순간 빈 응답이다")
     void noRoomIsDangerousForBlockingCalls() {
-        // 프로바이더 자신의 max-tokens 256 — 상한을 싣지 않는 요약(응답 필요분 800)은 그 값이 그대로 예약된다.
-        Row summary = ThinkingPreviewHarness.builder().providerMaxTokens(256).build().row(ThinkingSite.SUMMARY);
+        // 프로바이더 자신의 max-tokens 40 — 상한을 싣지 않는 질의 확장(응답 필요분 60)은 그 값이 그대로 예약된다.
+        // (전역 max-tokens 는 하한 1,000 이 있어 자기 상한을 싣는 사이트로는 이 상황을 만들 수 없다.)
+        Row expansion = ThinkingPreviewHarness.builder().providerMaxTokens(40).build().row(ThinkingSite.QUERY_EXPANSION);
 
-        Cell low = summary.cell(ThinkingLevel.LOW);
-        assertThat(low.reservedTokens()).isEqualTo(256);
-        assertThat(low.thinkingRoom()).isEqualTo(256 - 800);
+        Cell low = expansion.cell(ThinkingLevel.LOW);
+        assertThat(low.reservedTokens()).isEqualTo(40);
+        assertThat(low.thinkingRoom()).isEqualTo(40 - 60);
         assertThat(low.badges()).filteredOn(b -> b.kind() == Badge.Kind.NO_ROOM)
                 .singleElement().extracting(Badge::severity).isEqualTo(Badge.Severity.DANGER);
-        assertThat(summary.cell(ThinkingLevel.OFF).has(Badge.Kind.NO_ROOM)).as("끔이면 생각 자리가 없는 게 아니라 필요 없다").isFalse();
+        assertThat(expansion.cell(ThinkingLevel.OFF).has(Badge.Kind.NO_ROOM)).as("끔이면 생각 자리가 없는 게 아니라 필요 없다").isFalse();
     }
 
     // ── 창을 모를 때 ─────────────────────────────────────────────────────────────────────────────
@@ -362,15 +363,41 @@ class ThinkingPreviewServiceTest {
     // ── 사이트 종류별 "뜻하는 것" ─────────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("상한을 싣지 않는 호출(분류·리랭크·제목…)은 프로바이더 기본값이 예약된다 — 여유는 더하지 않고, 입력 예산은 그 값으로 잰다")
+    @DisplayName("상한을 싣지 않는 호출(질의 확장 — 프레임워크가 프롬프트를 만든다)은 프로바이더 기본값이 예약된다 — 여유는 더하지 않고, 입력 예산은 그 값으로 잰다")
     void callsWithoutACapReserveTheProviderDefault() {
-        Row classify = ThinkingPreviewHarness.builder().window(16_384).build().row(ThinkingSite.CLASSIFY);
+        Row expansion = ThinkingPreviewHarness.builder().window(16_384).build().row(ThinkingSite.QUERY_EXPANSION);
 
-        assertThat(reserved(classify)).containsExactly(10_000, 10_000, 10_000, 10_000);
-        assertThat(inputs(classify)).containsExactly(4_746, 4_746, 4_746, 4_746);
-        assertThat(classify.cell(ThinkingLevel.LOW).use()).isEqualTo(ThinkingPreview.Use.PROVIDER_DEFAULT);
-        assertThat(classify.cell(ThinkingLevel.LOW).reservation().requested()).as("요구하지도 않는다 — 기본 예약이 이미 상한 위다").isZero();
-        assertThat(classify.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(10_000 - 20);
+        assertThat(reserved(expansion)).containsExactly(10_000, 10_000, 10_000, 10_000);
+        assertThat(inputs(expansion)).containsExactly(4_746, 4_746, 4_746, 4_746);
+        assertThat(expansion.cell(ThinkingLevel.LOW).use()).isEqualTo(ThinkingPreview.Use.PROVIDER_DEFAULT);
+        assertThat(expansion.cell(ThinkingLevel.LOW).reservation().requested()).as("요구하지도 않는다 — 기본 예약이 이미 상한 위다").isZero();
+        assertThat(expansion.cell(ThinkingLevel.LOW).thinkingRoom()).isEqualTo(10_000 - 60);
+    }
+
+    @Test
+    @DisplayName("분류·리랭크·제목·이미지 설명·이미지 유형은 자기 상한 2,048 을 싣는다 — 16k 창의 분류: 예약 2,048 · 3,072 · 4,096 · 4,096 (예전엔 넷 다 10,000)")
+    void shortSitesCarryTheirOwnCap() {
+        ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().window(16_384).build();
+
+        Row classify = h.row(ThinkingSite.CLASSIFY);
+        assertThat(reserved(classify)).containsExactly(2_048, 3_072, 4_096, 4_096);
+        assertThat(inputs(classify)).as("16k 창의 입력 자리가 4,746 에서 12,698 로").containsExactly(12_698, 11_674, 10_650, 10_650);
+        assertThat(classify.cell(ThinkingLevel.LOW).use()).isEqualTo(ThinkingPreview.Use.REQUEST);
+        assertThat(classify.cell(ThinkingLevel.LOW).thinkingRoom()).as("예약 3,072 − 응답 필요분 20").isEqualTo(3_052);
+
+        for (ThinkingSite site : List.of(ThinkingSite.RERANK, ThinkingSite.TITLE,
+                ThinkingSite.IMAGE_DESCRIBE, ThinkingSite.IMAGE_TYPE)) {
+            Cell off = h.row(site).cell(ThinkingLevel.OFF);
+            assertThat(off.reservedTokens()).as(site.name()).isEqualTo(2_048);
+            assertThat(off.use()).as(site.name()).isEqualTo(ThinkingPreview.Use.REQUEST);
+        }
+        Cell summary = h.row(ThinkingSite.SUMMARY).cell(ThinkingLevel.OFF);
+        assertThat(summary.reservedTokens()).as("요약은 남길 분량(2,000자) + 1,024").isEqualTo(3_024);
+        assertThat(summary.use()).isEqualTo(ThinkingPreview.Use.REQUEST);
+
+        // 전역 max-tokens 를 내리면 따라온다(핫 편집) — 예전에는 기동 때 구워진 값이라 따라오지 않았다.
+        Row lowered = ThinkingPreviewHarness.builder().window(16_384).maxTokens(1_000).build().row(ThinkingSite.CLASSIFY);
+        assertThat(lowered.cell(ThinkingLevel.OFF).reservedTokens()).isEqualTo(1_000);
     }
 
     @Test
@@ -403,9 +430,13 @@ class ThinkingPreviewServiceTest {
     @Test
     @DisplayName("짧은 응답 사이트의 위험은 입력이 아니라 생각 자리 — 입력 예산이 모자랄 때만 '입력 초과 위험' 으로 말한다")
     void shortSitesReportInputRiskOnlyWhenItExists() {
-        Cell tight = ThinkingPreviewHarness.builder().window(16_384).build().row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
-        assertThat(tight.meaning().text()).as("요약은 이력 상한(5,000자)을 통째로 넣고, 16k 창에서 기본 예약 10,000 이 입력 예산을 4,746 으로 만든다")
+        Cell tight = ThinkingPreviewHarness.builder().window(8_192).build().row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
+        assertThat(tight.meaning().text()).as("요약은 이력 상한(5,000자)을 통째로 넣고, 8k 창에서 예약 3,024 가 입력 예산을 4,349 로 만든다")
                 .contains("초과 위험");
+
+        Cell middle = ThinkingPreviewHarness.builder().window(16_384).build().row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
+        assertThat(middle.meaning().text()).as("16k 창은 이제 들어간다 — 예전엔 기본값 10,000 예약 때문에 초과 위험이었다")
+                .contains("걱정 없음");
 
         Cell roomy = ThinkingPreviewHarness.builder().window(32_768).build().row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
         assertThat(roomy.meaning().text()).contains("걱정 없음");
@@ -472,8 +503,9 @@ class ThinkingPreviewServiceTest {
     @Test
     @DisplayName("관측이 없을 때의 '잘림 가능' — 생각 자리가 있되 요구한 여유보다 작을 때만")
     void withoutObservationsPossibleTruncationComparesToTheHeadroom() {
-        // 프로바이더 max-tokens 1,000 → 요약은 1,000 을 예약하고 응답 필요분 800 을 빼면 생각 자리 200 < 낮게의 여유 512
-        Cell low = ThinkingPreviewHarness.builder().providerMaxTokens(1_000).build()
+        // 전역 max-tokens 1,000 → 요약은 1,000 을 예약하고(상한도 1,000 이라 여유를 못 받는다) 응답 필요분 800 을 빼면
+        // 생각 자리 200 < 낮게의 여유 1,024
+        Cell low = ThinkingPreviewHarness.builder().maxTokens(1_000).build()
                 .row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
 
         assertThat(low.thinkingRoom()).isEqualTo(200);
@@ -517,7 +549,7 @@ class ThinkingPreviewServiceTest {
         assertThat(h.row(ThinkingSite.EVAL).cell(ThinkingLevel.HIGH).worstCaseText()).isEqualTo("1분 22초");
 
         Cell classify = h.row(ThinkingSite.CLASSIFY).cell(ThinkingLevel.LOW);
-        assertThat(classify.worstCaseSeconds()).as("기본값 10,000 ÷ 50").isEqualTo(200L);
+        assertThat(classify.worstCaseSeconds()).as("예약 3,072 ÷ 50").isEqualTo(62L);
         assertThat(classify.has(Badge.Kind.LONG_WAIT)).as("대화형 호출이 60초 이상").isTrue();
         assertThat(h.row(ThinkingSite.KEYWORD_CONTEXT).cell(ThinkingLevel.LOW).has(Badge.Kind.LONG_WAIT))
                 .as("인덱싱은 사용자가 기다리는 호출이 아니다").isFalse();
