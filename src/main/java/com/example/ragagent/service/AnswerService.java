@@ -542,9 +542,12 @@ public class AnswerService {
         // instead of going silent between the last answer token and the next event.
         if (listener != null) listener.onVerifying();
         AgentState resultState = evaluate(state, answer, state.locale());
+        // 재시도를 다 썼거나, 그래프가 곧 멈출 반려(같은 청크로 같은 이유 — AgentGraph 의 조기 종료)면 상위 모델로 올린다.
+        // 두 번째 조건이 없으면 조기 종료가 PROGRESSIVE 의 업그레이드를 건너뛴다 — 업그레이드는 "소진" 뒤에만 오기 때문이다.
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
-                && state.retryCount() >= maxRetryCount) {
+                && (state.retryCount() >= maxRetryCount
+                    || state.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT))) {
             return progressiveUpgrade(state, resultState, listener);
         }
         return resultState;

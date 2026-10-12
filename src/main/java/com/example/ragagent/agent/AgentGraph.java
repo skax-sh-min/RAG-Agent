@@ -22,6 +22,11 @@ import org.springframework.stereotype.Component;
  * 못했다"이므로 재료를 바꿔야 하고, {@code grounded=false} 는 "문서 밖으로 나갔다"이므로 재료는
  * 그대로 두고 답변만 다시 써야 한다 — 후자에서 재검색은 임베딩·확장 호출을 쓰고 사실상 같은
  * 집합을 받아오는 낭비다. 예전에는 둘 다 RETRIEVAL 로 갔다.
+ *
+ * <p><b>조기 종료(§6.27).</b> 같은 게이트로, 같은 청크 집합을 보고 두 번 반려되면 {@code max-retry-count} 가 남아
+ * 있어도 멈춘다({@link AgentState#repeatsLastRejection}) — 다음 시도도 같은 재료를 본다. 예전에는 끝까지 소진해 최악의
+ * 턴이 답변·검증 호출을 {@code 1 + max-retry-count} 번씩 썼다. PROGRESSIVE 는 같은 판정을 {@code AnswerService} 가
+ * "소진"으로 읽어 곧바로 상위 모델로 올린다(멈추면 업그레이드를 건너뛰게 되므로).
  */
 @Component
 public class AgentGraph {
@@ -124,11 +129,20 @@ public class AgentGraph {
                     // 것이므로 검색을 다시 한다. retrievalRetries 가 함께 오르고, 그 값이
                     // RetrievalService 의 escalation·교체 입력이 된다.
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
-                        state = state.toBuilder().incrementRetry().incrementRetrievalRetry().build();
-                        log.info("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={} detail={}",
-                                state.retryCount(), state.threadId(), state.evalReason());
-                        listener.onRetry("answer", state.retryCount(), state.evalReason());
-                        yield Node.RETRIEVAL;
+                        if (state.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)) {
+                            // 재검색이 청크를 하나도 바꾸지 못한 채 같은 이유로 또 반려됐다 — 한 바퀴 더 돌아도 같은
+                            // 재료다. 소진과 같이 다룬다(아래로 내려가 CRITIC — 그 게이트는 다른 실패라 따로 판단한다).
+                            log.info("[AgentGraph] retry stopped early reason=ANSWER_INSUFFICIENT thread={} — rejected again "
+                                    + "on the same {} chunk(s) after retry #{}; another search round would bring the same material (detail={})",
+                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                        } else {
+                            state = state.toBuilder().incrementRetry().incrementRetrievalRetry()
+                                    .rememberRejection(AgentState.RetryGate.INSUFFICIENT).build();
+                            log.info("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={} detail={}",
+                                    state.retryCount(), state.threadId(), state.evalReason());
+                            listener.onRetry("answer", state.retryCount(), state.evalReason());
+                            yield Node.RETRIEVAL;
+                        }
                     }
                     // CRITIC은 ANSWER의 eval이 남긴 grounded 플래그만 소비하므로, 검증을 건너뛴
                     // 모드에서는 판단할 재료가 없다 — 값이 아니라 성질로 묻는다(§6.24 Step 0-b).
@@ -149,7 +163,16 @@ public class AgentGraph {
                     // retrievalRetries 는 올리지 않는다: 검색을 다시 하지 않았으므로 escalation 이
                     // 한 칸 앞서 나가면 안 된다.
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
-                        state = state.toBuilder().incrementRetry().build();
+                        if (state.repeatsLastRejection(AgentState.RetryGate.UNGROUNDED)) {
+                            // 같은 근거로 다시 썼는데 또 문서 밖으로 나갔다 — 메모를 보고 한 번 고쳐 쓴 뒤의 반려라
+                            // 같은 재료로 한 번 더 써 봐야 같은 쪽으로 기운다.
+                            log.info("[AgentGraph] retry stopped early reason=CRITIC_UNGROUNDED thread={} — ungrounded again "
+                                    + "on the same {} chunk(s) after retry #{} (detail={})",
+                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                            yield Node.FINALIZE;
+                        }
+                        state = state.toBuilder().incrementRetry()
+                                .rememberRejection(AgentState.RetryGate.UNGROUNDED).build();
                         log.info("[AgentGraph] retry #{} reason=CRITIC_UNGROUNDED thread={} detail={} (재검색 없이 답변만 재생성)",
                                 state.retryCount(), state.threadId(), state.evalReason());
                         listener.onRetry("critic", state.retryCount(), state.evalReason());

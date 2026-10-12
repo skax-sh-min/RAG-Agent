@@ -13,6 +13,7 @@ import com.example.ragagent.service.RetrievalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.document.Document;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -264,6 +265,25 @@ class AgentGraphTest {
         assertThat(result.retrievalRetries()).isZero();
     }
 
+    /** 검색이 부를 때마다 다른 청크를 돌려준다(재검색이 재료를 바꾸는 정상적인 경우). */
+    private void retrievalReturnsFreshChunksEachTime() {
+        int[] calls = {0};
+        when(retrievalService.execute(any(), any())).thenAnswer(inv -> {
+            calls[0]++;
+            return ((AgentState) inv.getArgument(0)).toBuilder()
+                    .retrievedDocs(List.of(new Document("c" + calls[0], "본문" + calls[0], java.util.Map.of())))
+                    .build();
+        });
+    }
+
+    /** 검색이 매번 같은 청크를 돌려준다(교체·증가가 아무것도 바꾸지 못한 경우). */
+    private void retrievalReturnsTheSameChunks() {
+        when(retrievalService.execute(any(), any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder()
+                .retrievedDocs(List.of(new Document("same-1", "본문", java.util.Map.of()),
+                        new Document("same-2", "본문", java.util.Map.of())))
+                .build());
+    }
+
     @Test
     @DisplayName("maxRetryCount(2) 도달 후 retry 종료 — answer 3회 호출 후 CRITIC → FINALIZE")
     void retry_capped_at_maxRetryCount() {
@@ -271,6 +291,7 @@ class AgentGraphTest {
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
         when(answerService.execute(any()))
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
+        retrievalReturnsFreshChunksEachTime();
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
@@ -279,6 +300,80 @@ class AgentGraphTest {
         verify(answerService, times(3)).execute(any());
         verify(criticService, times(1)).execute(any());
         verify(finalizeService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("조기 종료 — 재검색이 같은 청크를 돌려주고 또 불충분이면 상한이 남아도 멈춘다(answer 2회, 검색 2회)")
+    void insufficientAgainOnTheSameChunks_stopsEarly() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
+        when(criticService.execute(any()))   // 근거는 맞다 — 불충분만 반복된다
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+        retrievalReturnsTheSameChunks();
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST));
+
+        verify(retrievalService, times(2)).execute(any(), any());
+        verify(answerService, times(2)).execute(any());
+        verify(criticService, times(1)).execute(any());   // 소진과 같이 — CRITIC 을 거쳐 끝난다
+        verify(finalizeService, times(1)).execute(any());
+        assertThat(result.retryCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("조기 종료 — 같은 근거로 다시 썼는데 또 근거 이탈이면 두 번째 반려에서 멈춘다(answer 2회)")
+    void ungroundedAgainOnTheSameChunks_stopsEarly() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+        when(criticService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
+        retrievalReturnsTheSameChunks();
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST));
+
+        verify(retrievalService, times(1)).execute(any(), any());
+        verify(answerService, times(2)).execute(any());
+        verify(criticService, times(2)).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+        assertThat(result.retryCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("게이트가 다르면 같은 청크여도 '같은 반려'가 아니다 — 불충분 뒤의 근거 이탈은 재시도한다")
+    void differentGateOnTheSameChunks_stillRetries() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        int[] answerCalls = {0};
+        when(answerService.execute(any())).thenAnswer(inv -> {
+            answerCalls[0]++;
+            return ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(answerCalls[0] == 1).build();
+        });
+        int[] criticCalls = {0};
+        when(criticService.execute(any())).thenAnswer(inv -> {
+            criticCalls[0]++;
+            return ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(criticCalls[0] == 1).build();
+        });
+        retrievalReturnsTheSameChunks();
+
+        graph.run(newState(RoutingMode.COST_FIRST));
+
+        // ANSWER 불충분(→ 재검색, 같은 청크) → ANSWER 통과 → CRITIC 이탈(다른 게이트 — 재시도) → ANSWER → CRITIC 통과
+        verify(answerService, times(3)).execute(any());
+        verify(criticService, times(2)).execute(any());
+    }
+
+    @Test
+    @DisplayName("반려 서명은 순서를 보지 않는다 — 순위만 바뀐 같은 집합은 같은 재료다")
+    void rejectionKeyIgnoresOrder() {
+        Document a = new Document("a", "x", java.util.Map.of());
+        Document b = new Document("b", "y", java.util.Map.of());
+        assertThat(AgentState.rejectionKey(AgentState.RetryGate.INSUFFICIENT, List.of(a, b)))
+                .isEqualTo(AgentState.rejectionKey(AgentState.RetryGate.INSUFFICIENT, List.of(b, a)))
+                .isNotEqualTo(AgentState.rejectionKey(AgentState.RetryGate.UNGROUNDED, List.of(a, b)));
     }
 
     @Test
