@@ -6,6 +6,7 @@
 > 대부분이 실제로 한 번 깨졌던 것의 기록이라, 불필요해 보이는 코드가 왜 거기 있는지를 설명한다.
 > 테이블·컬럼·벡터 메타데이터 키는 [documents/DATABASE.md](documents/DATABASE.md) 에 있다 — 스키마나 메타데이터 키를 바꾸면 그 표도 함께 고칠 것.
 > 호출 지점별 생각(추론) 수준의 출하값·상수를 **측정으로 정한 결과**(환경·방법·표·재현 방법)는 [documents/THINKING_EVALUATION.md](documents/THINKING_EVALUATION.md) — 그 값을 바꾸려면 다시 재고 그 문서도 고칠 것.
+> 검색 품질(골든셋 recall@k · 질의 확장 · 후속 질문 독립화)의 측정 결과는 [documents/SEARCH_EVALUATION.md](documents/SEARCH_EVALUATION.md) — 검색 튜닝 기본값을 바꾸거나 문서를 크게 바꿨으면 같은 하네스로 다시 재고 그 문서도 고칠 것.
 
 ## Stack
 
