@@ -1,0 +1,119 @@
+{
+  "version": "latest",
+  "topK": 10,
+  "note": "후속 질문 세트 — 앞 질문(previousIds, 골든셋 id)을 이력으로 두고 짧은 후속 질문(question)을 검색한다. 정답은 targetId 골든 케이스의 mustContainAny 다. 길이는 독립화 게이트(search-multiquery-min-length) 앞뒤로 퍼뜨렸다.",
+  "cases": [
+    {
+      "id": "fu-01",
+      "previousIds": [
+        "batch-03"
+      ],
+      "question": "처리일자는 어떻게 꺼내?",
+      "targetId": "batch-04"
+    },
+    {
+      "id": "fu-02",
+      "previousIds": [
+        "batch-01"
+      ],
+      "question": "beforeExecute에서 에러 나면?",
+      "targetId": "batch-02"
+    },
+    {
+      "id": "fu-03",
+      "previousIds": [
+        "batch-05"
+      ],
+      "question": "SQL 직접 실행이랑 공유 FM 호출은 뭐가 나아?",
+      "targetId": "batch-06"
+    },
+    {
+      "id": "fu-04",
+      "previousIds": [
+        "arch-01"
+      ],
+      "question": "프레임워크 자체는 무슨 기술이야?",
+      "targetId": "arch-02"
+    },
+    {
+      "id": "fu-05",
+      "previousIds": [
+        "arch-04"
+      ],
+      "question": "XA 타입이면?",
+      "targetId": "arch-12"
+    },
+    {
+      "id": "fu-06",
+      "previousIds": [
+        "arch-05"
+      ],
+      "question": "catch 에서 새로 만들 땐 뭘 넣어?",
+      "targetId": "arch-06"
+    },
+    {
+      "id": "fu-07",
+      "previousIds": [
+        "arch-08"
+      ],
+      "question": "로그는 파일에 어떻게 남아?",
+      "targetId": "arch-09"
+    },
+    {
+      "id": "fu-08",
+      "previousIds": [
+        "arch-10"
+      ],
+      "question": "노드매니저는?",
+      "targetId": "arch-11"
+    },
+    {
+      "id": "fu-09",
+      "previousIds": [
+        "arch-07"
+      ],
+      "question": "예외는 뭘로 던져?",
+      "targetId": "arch-05"
+    },
+    {
+      "id": "fu-10",
+      "previousIds": [
+        "sample-01"
+      ],
+      "question": "DM 끼리는 호출돼?",
+      "targetId": "sample-02"
+    },
+    {
+      "id": "fu-11",
+      "previousIds": [
+        "sample-02"
+      ],
+      "question": "FM 간은?",
+      "targetId": "sample-03"
+    },
+    {
+      "id": "fu-12",
+      "previousIds": [
+        "sample-04"
+      ],
+      "question": "업무별 영역은 무슨 타입이야?",
+      "targetId": "sample-05"
+    },
+    {
+      "id": "fu-13",
+      "previousIds": [
+        "arch-03"
+      ],
+      "question": "DU 이름은 어떻게 지어?",
+      "targetId": "sample-06"
+    },
+    {
+      "id": "fu-14",
+      "previousIds": [
+        "sample-07"
+      ],
+      "question": "숫자는 어떻게 표현돼?",
+      "targetId": "sample-08"
+    }
+  ]
+}

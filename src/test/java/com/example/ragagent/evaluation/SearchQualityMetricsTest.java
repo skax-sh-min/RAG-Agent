@@ -64,4 +64,21 @@ class SearchQualityMetricsTest {
         assertThat(SearchQualityMetrics.firstRelevantRank(List.of(false, true, true), 10)).isEqualTo(2);
         assertThat(SearchQualityMetrics.firstRelevantRank(List.of(false, false), 10)).isEqualTo(-1);
     }
+
+    @Test
+    @DisplayName("containsAnyMarker: 재교정으로 붙은 마크다운 장식·줄바꿈은 정답을 놓치게 하지 않는다")
+    void containsAnyMarker_ignoresFormattingDrift() {
+        String chunk = "* 업무별 영역은 **IDataSet 타입**으로 구성하여\n  업무팀에서 주관";
+        assertThat(SearchQualityMetrics.containsAnyMarker(chunk, List.of("IDataSet 타입으로 구성"))).isTrue();
+        assertThat(SearchQualityMetrics.containsAnyMarker("NOTX로 실행된\n값은 본 거래", List.of("NOTX로 실행된 값은"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("containsAnyMarker: 표현이 바뀐 경우는 잡지 않는다(골든셋에 지금 표현을 더할 일) · 빈 정답은 아무것도 맞히지 않는다")
+    void containsAnyMarker_doesNotGuessWording() {
+        assertThat(SearchQualityMetrics.containsAnyMarker("어플리케이션 소스 분석 후 DB 화", List.of("애플리케이션 소스 분석 후 DB화")))
+                .isFalse();
+        assertThat(SearchQualityMetrics.containsAnyMarker("아무 내용", List.of("  "))).isFalse();
+        assertThat(SearchQualityMetrics.containsAnyMarker(null, List.of("x"))).isFalse();
+    }
 }

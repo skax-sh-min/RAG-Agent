@@ -89,13 +89,13 @@
     {
       "id": "arch-09",
       "question": "업무 로그와 프레임워크 로그는 파일에 어떻게 저장되는가?",
-      "mustContainAny": ["쓰레드별로 별도 파일에 로깅"],
+      "mustContainAny": ["쓰레드별로 별도 파일에 로깅", "배치 프레임워크 로그와 배치 업무 로그로 파일이 구분"],
       "sourceHint": "아키텍처 로그 파일"
     },
     {
       "id": "arch-10",
       "question": "NEXCORE 메타 로더는 어떤 역할을 하는가?",
-      "mustContainAny": ["애플리케이션 소스 분석 후 DB화"],
+      "mustContainAny": ["애플리케이션 소스 분석 후 DB화", "어플리케이션 소스 분석 후 DB 화"],
       "sourceHint": "아키텍처 8.2 프레임워크 구성도"
     },
     {
@@ -107,13 +107,13 @@
     {
       "id": "arch-12",
       "question": "타 DB DataSource가 XA 타입일 경우 2-PC 사용을 권장하는가?",
-      "mustContainAny": ["2-PC가 가능하지만, 성능을 고려하여 권장하지 않습니다"],
+      "mustContainAny": ["2-PC가 가능하지만, 성능을 고려하여 권장하지 않습니다", "2-PC 가능하지만, 성능을 고려하여 권장하지 않음"],
       "sourceHint": "아키텍처 트랜잭션 처리"
     },
     {
       "id": "sample-01",
       "question": "컴포넌트 내 계층 구조에서 최초 입력 전문을 수신하는 단위는 무엇인가?",
-      "mustContainAny": ["최초 입력 전문을 수신하는 단위는 PM"],
+      "mustContainAny": ["최초 입력 전문을 수신하는 단위는 PM", "최초 입력 전문 수신하는 단위는 PM"],
       "sourceHint": "샘플_v2 Layered 아키텍처"
     },
     {

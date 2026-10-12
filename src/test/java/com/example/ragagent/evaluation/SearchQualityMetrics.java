@@ -1,6 +1,7 @@
 package com.example.ragagent.evaluation;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * §10.7.5 검색 품질 평가 하네스 — recall@k / nDCG@k 계산.
@@ -32,5 +33,26 @@ final class SearchQualityMetrics {
             if (Boolean.TRUE.equals(relevanceInRankOrder.get(i))) return i + 1;
         }
         return -1;
+    }
+
+    /** 공백·마크다운 장식 문자 — 정답 문자열과 청크를 비교하기 전에 양쪽에서 걷어낸다. */
+    private static final Pattern NOISE = Pattern.compile("[\\s*`#>_|~\\-]+");
+
+    /**
+     * {@code text} 가 정답 문자열({@code markers}) 중 하나를 담고 있는가 — <b>공백과 마크다운 장식을 걷어낸 뒤</b> 비교한다.
+     *
+     * <p>골든셋의 정답 문자열은 색인된 원문에서 떠 온 것인데, 문서를 다시 교정·인덱싱하면 같은 문장이
+     * {@code **IDataSet 타입**으로} 처럼 장식이 붙거나 줄바꿈·공백이 달라진다. 그대로 비교하면 내용은 그대로인데 "정답 없음"이
+     * 돼 recall 이 문서 서식 때문에 떨어진다(2026-10-12 재측정 때 26건 중 2건). 표현 자체가 바뀐 경우(애플리케이션 →
+     * 어플리케이션)는 여기서 잡지 않는다 — 골든셋에 지금 표현을 정답 후보로 더한다.
+     */
+    static boolean containsAnyMarker(String text, List<String> markers) {
+        if (text == null || markers == null) return false;
+        String flat = normalize(text);
+        return markers.stream().map(SearchQualityMetrics::normalize).anyMatch(m -> !m.isEmpty() && flat.contains(m));
+    }
+
+    static String normalize(String s) {
+        return s == null ? "" : NOISE.matcher(s).replaceAll("");
     }
 }
