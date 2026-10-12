@@ -296,7 +296,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 > `retryCount`는 최초 RETRIEVAL 진입 시 증가하지 않습니다.  
 > ANSWER 또는 CRITIC이 재시도를 결정할 때만 증가합니다(S 모드는 CRITIC 단계 자체가 없음).  
-> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.
+> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.  
+> **조기 종료**: 같은 게이트(불충분/근거 이탈)로, **같은 청크 집합**을 보고 두 번 반려되면 상한이 남아도 멈춥니다 — 다음 시도도 같은 재료를 보기 때문입니다(불충분은 재검색이 청크를 하나도 바꾸지 못했을 때, 근거 이탈은 재검색이 없으므로 두 번째 반려에서). 로그 `[AgentGraph] retry stopped early`. PROGRESSIVE 는 멈추는 대신 그 자리에서 상위 모델로 올립니다.
 
 ### 5.1 재검색 에스컬레이션 — 두 축
 

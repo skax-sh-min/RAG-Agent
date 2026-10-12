@@ -380,7 +380,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
   | 블로킹 호출(분류·독립화·재순위·검증·요약·제목·인덱싱 chore, **질의 확장**) | 차단 + 같은 호출 안에서 다음 서버 | 같음 | 전환 없음, 예외 |
   | 채팅 답변 스트리밍(RAG·Direct·PROGRESSIVE 2차) | **첫 토큰 전이면** 차단 + 다음 서버로 스트림을 다시 연다(`StreamFailover`) | 같음 | 전환 없음 |
 
-  스트리밍은 `executeGated` 의 순회를 우회하므로 `StreamFailover` 가 같은 규칙을 따로 건다(판정·차단은 `LlmRouter.failOver()` — 블로킹 경로와 같은 함수). **첫 토큰이 나간 뒤**·사용자 중단·컨텍스트 초과(축소 재시도 몫)·4xx·알 수 없는 오류는 어느 쪽에서도 차단·전환하지 않는다. 질의 확장은 `RoutedChatModel` 이 호출마다 라우터를 지나 블로킹 열과 같다(예전에는 기동 때 고른 프로바이더에 고정). **남는 한계**: 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝난다 — 느린 생성과 구분할 수 없다. 기동 시 검증(G3)은 한 대라도 안 떠 있으면 앱이 시작되지 않는다(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false` 로 우회). 임베딩도 이 경로 밖이다 — `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)이 죽은 서버를 향하면 채팅 모델이 전환돼도 질문 임베딩에서 검색이 실패한다.
+  스트리밍은 `executeGated` 의 순회를 우회하므로 `StreamFailover` 가 같은 규칙을 따로 건다(판정·차단은 `LlmRouter.failOver()` — 블로킹 경로와 같은 함수). **첫 토큰이 나간 뒤**·사용자 중단·컨텍스트 초과(축소 재시도 몫)·4xx·알 수 없는 오류는 어느 쪽에서도 차단·전환하지 않는다. 질의 확장은 `RoutedChatModel` 이 호출마다 라우터를 지나 블로킹 열과 같다(예전에는 기동 때 고른 프로바이더에 고정). **남는 한계**: 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝난다 — 느린 생성과 구분할 수 없다. 기동 시 검증(G3)은 복제본 중 한 대만 안 떠 있으면 그 서버를 차단한 채 기동하고, 둘 다 안 떠 있어야 앱이 시작되지 않는다. 임베딩은 이 경로 밖이고 자기 목록(`EMBED_BASE_URL` + `EMBED_ADDITIONAL_BASE_URLS`) 안에서 따로 전환한다 — 닿지 않는 엔드포인트를 30초 건너뛴다(`LoadBalancingEmbeddingModel`). 다른 서버를 그 목록에 적지 않았으면 `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)이 죽었을 때 채팅 모델이 전환돼도 질문 임베딩에서 검색이 실패한다(기동 로그 `[EMBED CONFIG]` 경고).
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - **차단으로 요청이 막히면 사용자에게 남은 초를 말한다** — `LlmProviderExhaustedException.retryAfterSeconds()` 로 실리고, REST 에는 예외 메시지
   (`AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`)와 같은 값의 `Retry-After` 헤더가 나간다. 채팅 화면(SSE·HTMX)은
