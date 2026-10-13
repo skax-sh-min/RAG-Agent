@@ -48,7 +48,9 @@ for label in labels:
     ceiling = sum(1 for r in rows if r.get('inCorpus', True))
     print(f"  {label:<12} n={len(rows):>2}  recall@10 {mean([r['recall'] for r in rows]):.3f}"
           f"  nDCG@10 {mean([r['ndcg'] for r in rows]):.3f}  상한 {ceiling}/{len(rows)}"
-          f"  검색 ms 중앙 {sorted(r['ms'] for r in rows)[len(rows) // 2]:>5}  놓침 {', '.join(misses) or '-'}")
+          f"  검색 ms 중앙 {sorted(r['ms'] for r in rows)[len(rows) // 2]:>5}  놓침 {', '.join(misses) or '-'}"
+          + (f"  | BM25 축 단독 recall@10 {mean([1.0 if r['bm25Rank'] > 0 else 0.0 for r in rows]):.3f}"
+             if all('bm25Rank' in r for r in rows) else ''))
 
 cases = []
 for label in labels:

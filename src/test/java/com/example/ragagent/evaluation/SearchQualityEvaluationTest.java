@@ -9,6 +9,7 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionCondenser;
+import com.example.ragagent.service.RagService;
 import com.example.ragagent.service.RetrievalService;
 import com.example.ragagent.service.SettingsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -107,6 +108,7 @@ class SearchQualityEvaluationTest {
     }
 
     @Autowired RetrievalService retrievalService;
+    @Autowired RagService ragService;
     @Autowired AppProperties props;
     @Autowired QuestionCondenser condenser;
     @Autowired MemoryService memory;
@@ -159,6 +161,9 @@ class SearchQualityEvaluationTest {
             row.put("inCorpus", inCorpus);
             row.put("ms", ms);
             row.put("top", topFiles(results, k));
+            // 키워드(BM25) 축 단독의 순위 — 융합 전 그 축이 정답을 상위 k 안에 가져오는가(질의 → MATCH 식의 변화를 잴 때).
+            row.put("bm25Rank", SearchQualityMetrics.firstRelevantRank(ragService.keywordSearch(goldSet.version(), gq.question(), k)
+                    .stream().map(d -> SearchQualityMetrics.containsAnyMarker(d.getText(), gq.mustContainAny())).toList(), k));
             emit("gold", row);
         }
 
