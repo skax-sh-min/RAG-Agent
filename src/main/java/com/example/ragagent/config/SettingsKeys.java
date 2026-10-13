@@ -76,6 +76,18 @@ public final class SettingsKeys {
 
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
+            LLM_TEMPERATURE,
+            LLM_DIRECT_TEMPERATURE,
+            LLM_INDEXING_TEMPERATURE,
+            LLM_CREATIVE_TEMPERATURE,
+            LLM_CREATIVE_MODE_ENABLED,
+            LLM_CLARIFIED_QUESTION_ENABLED,
+            LLM_FOLLOW_UP_QUESTIONS_ENABLED,
+            LLM_FOLLOW_UP_QUESTIONS_COUNT,
+            LLM_SHRINK_STEP,
+            LLM_MAX_TOKENS,
+            UI_SOURCE_PREVIEW_ENABLED,
+            UI_RETRIEVAL_METRICS_ENABLED,
             SEARCH_SIMILARITY_THRESHOLD,
             SEARCH_RRF_KEYWORD_WEIGHT,
             SEARCH_RRF_K,
@@ -94,18 +106,6 @@ public final class SettingsKeys {
             MIN_CHUNK_SIZE,
             CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
-            INDEXING_MAX_CONCURRENT_LLM,
-            LLM_TEMPERATURE,
-            LLM_DIRECT_TEMPERATURE,
-            LLM_INDEXING_TEMPERATURE,
-            LLM_CREATIVE_MODE_ENABLED,
-            LLM_CREATIVE_TEMPERATURE,
-            LLM_MAX_TOKENS,
-            LLM_SHRINK_STEP,
-            LLM_CLARIFIED_QUESTION_ENABLED,
-            LLM_FOLLOW_UP_QUESTIONS_ENABLED,
-            LLM_FOLLOW_UP_QUESTIONS_COUNT,
-            UI_SOURCE_PREVIEW_ENABLED,
-            UI_RETRIEVAL_METRICS_ENABLED
+            INDEXING_MAX_CONCURRENT_LLM
     );
 }

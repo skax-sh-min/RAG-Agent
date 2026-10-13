@@ -289,7 +289,13 @@ class SettingsServiceTest {
         SettingsView view = service.buildView();
 
         assertThat(view.groups()).hasSize(7);
-        assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
+        // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
+        assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
+                "llm_hot", "ui_hot", "search_hot", "indexing", "search_fixed", "storage", "cache");
+        assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
+                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing");
+        assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
+                .containsExactly("search_fixed", "storage", "cache");
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));

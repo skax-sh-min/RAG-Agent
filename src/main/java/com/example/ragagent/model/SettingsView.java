@@ -19,6 +19,16 @@ public record SettingsView(
         List<SettingGroup> groups
 ) {
 
+    /** 편집할 수 있는 항목이 하나라도 있는 그룹 — 화면에서 생각 수준 카드보다 앞에 온다. 순서는 {@link #groups()} 그대로. */
+    public List<SettingGroup> editableGroups() {
+        return groups.stream().filter(SettingGroup::editable).toList();
+    }
+
+    /** 조회 전용 그룹(재기동 필요 등) — 화면 맨 뒤. */
+    public List<SettingGroup> readOnlyGroups() {
+        return groups.stream().filter(g -> !g.editable()).toList();
+    }
+
     /**
      * One registered chat/vision LLM provider. API keys are never included.
      *
@@ -190,6 +200,11 @@ public record SettingsView(
     public record SettingGroup(String id, String title, List<SettingItem> items, String note) {
         public SettingGroup(String id, String title, List<SettingItem> items) {
             this(id, title, items, null);
+        }
+
+        /** 편집할 수 있는 항목이 하나라도 있는가 — 검색 튜닝처럼 조회 전용 항목(리랭크)이 섞여 있어도 편집 그룹이다. */
+        public boolean editable() {
+            return items.stream().anyMatch(SettingItem::editable);
         }
     }
 

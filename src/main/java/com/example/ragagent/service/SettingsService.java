@@ -114,11 +114,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 0.1,  0.05, "settings.item.indexing-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
-            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
             new Spec(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, Kind.BOOL,   0,   0,    0,    "settings.item.clarified-question-enabled"),
             new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED, Kind.BOOL,  0,   0,    0,    "settings.item.follow-up-questions-enabled"),
             new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT,  Kind.INT,
                     MIN_FOLLOW_UP_COUNT, MAX_FOLLOW_UP_COUNT, 1, "settings.item.follow-up-questions-count"),
+            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
             new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
                     AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
@@ -351,12 +351,13 @@ public class SettingsService implements AppProperties.OverrideSource {
     public SettingsView buildView() {
         List<ProviderRow> providers = providerRows(true);
 
-        // Editable groups first, read-only (조회 전용) groups last.
+        // 화면 순서 그대로다: 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹)이 먼저, 조회 전용(재기동 필요)
+        // 그룹이 나중이다. 템플릿은 두 무리 사이에 생각 수준 카드를 끼운다(SettingsView.editableGroups()/readOnlyGroups()).
         List<SettingGroup> groups = List.of(
+                new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
+                new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
-                new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
-            new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
                 new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
                 new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)

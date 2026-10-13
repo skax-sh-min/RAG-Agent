@@ -128,6 +128,11 @@
         </div>
     </div>
 
+    <!-- ── 편집 가능한 그룹 — LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 (SettingsService.buildView() 의 순서) ── -->
+    <th:block th:each="group : ${settings.editableGroups()}">
+        <div th:replace="~{fragments/settings-group :: group(${group})}"></div>
+    </th:block>
+
     <!--/* ── 생각(추론) 수준 — 호출 지점별 (PLAN §6.29 ⑦) ──────────────────────────────────────────────
          (파서 수준 주석 — 렌더 결과에 남지 않는다: 게스트의 페이지에 엔드포인트 경로가 새지 않게 한다)
          관리자에게만 그린다(읽기까지 — 프로바이더 이름·창 크기·관측값이 드러난다). 내용은 /admin/settings/thinking 이 채운다:
@@ -144,22 +149,10 @@
         </div>
     </div>
 
-    <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
-    <div class="card mb-4" th:each="group : ${settings.groups}">
-        <div class="card-header fw-semibold">
-            <span th:text="#{__${group.title}__}">Group</span>
-            <!--/* 그룹 전체에 해당하는 말(예: 재기동 필요)은 제목 옆에 한 번만 — 항목마다 붙이지 않는다 */-->
-            <span th:if="${group.note != null}" class="badge bg-warning text-dark ms-2"
-                  th:text="#{__${group.note}__}">note</span>
-        </div>
-        <div class="card-body py-2" style="font-size:.92rem;">
-            <div class="row">
-                <div class="col-12 col-md-6" th:each="item : ${group.items}">
-                    <div th:replace="~{fragments/settings-item :: item}"></div>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ── 조회 전용 그룹 — 맨 뒤 ─────────────────────────────────────────── -->
+    <th:block th:each="group : ${settings.readOnlyGroups()}">
+        <div th:replace="~{fragments/settings-group :: group(${group})}"></div>
+    </th:block>
 
 <!-- 화면 표시 — 고르는 즉시 적용하고 이 브라우저에 저장한다. 쓰는 함수(getChatFontSize/setChatFontSize)는 base.html 의
      스크립트에 있는데 그 블록이 이 콘텐츠보다 뒤에 오므로 DOMContentLoaded 에서 시작한다. -->
