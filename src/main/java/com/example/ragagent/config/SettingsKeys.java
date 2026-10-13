@@ -62,6 +62,7 @@ public final class SettingsKeys {
     public static final String LLM_SHRINK_STEP                = "llm.shrink-step"; // §6.26-9 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수
     public static final String LLM_CLARIFIED_QUESTION_ENABLED = "llm.clarified-question-enabled"; // 답변 뒤 질문 다듬기(PostAnswerService) on/off
     public static final String LLM_FOLLOW_UP_QUESTIONS_ENABLED = "llm.follow-up-questions-enabled"; // 답변 아래 추가 질문 제안(PostAnswerService) on/off
+    public static final String LLM_FOLLOW_UP_QUESTIONS_COUNT  = "llm.follow-up-questions-count"; // 추가 질문 개수(2~5, 기본 3)
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
@@ -101,6 +102,7 @@ public final class SettingsKeys {
             LLM_SHRINK_STEP,
             LLM_CLARIFIED_QUESTION_ENABLED,
             LLM_FOLLOW_UP_QUESTIONS_ENABLED,
+            LLM_FOLLOW_UP_QUESTIONS_COUNT,
             UI_SOURCE_PREVIEW_ENABLED,
             UI_RETRIEVAL_METRICS_ENABLED
     );

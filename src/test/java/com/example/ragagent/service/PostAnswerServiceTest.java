@@ -63,6 +63,7 @@ class PostAnswerServiceTest {
     @BeforeEach
     void enabledByDefault() {
         when(settings.clarifiedQuestionEnabled()).thenReturn(true);
+        when(settings.followUpQuestionsCount()).thenReturn(SettingsService.DEFAULT_FOLLOW_UP_COUNT);
     }
 
     private static AppProperties mockProps() {
@@ -347,6 +348,7 @@ class PostAnswerServiceTest {
         assertThat(extras.followUps()).containsExactly(
                 "타임아웃 기본값은 얼마인가요?", "재처리는 어떻게 하나요?", "MCI 연동 오류 코드는 무엇이 있나요?");
         verify(memoryService).saveClarifiedQuestion(11L, CLARIFIED);
+        verify(memoryService).saveFollowUps("u1", "t1", 11L, extras.followUps());   // 대화의 마지막 제안으로 저장
         verify(llmRouter).executeWithTracking(any(), any(), any(), any());   // 둘을 한 번에
 
         ChatModel model = mock(ChatModel.class);
@@ -354,8 +356,9 @@ class PostAnswerServiceTest {
         when(model.call(prompt.capture())).thenReturn(chatResponse(EXTRAS_JSON));
         call.getValue().apply(model);
         assertThat(prompt.getValue().getInstructions().get(0).getText())
-                .contains("[SOURCES]", "- 연동 가이드.pdf: 미리보기", "- MCI 연동 구조 알려줘", "응답 대기 시간에서 바꿉니다")
-                .doesNotContain("{sources}", "{history}", "{summary}", "{query}");
+                .contains("[SOURCES]", "- 연동 가이드.pdf: 미리보기", "- MCI 연동 구조 알려줘", "응답 대기 시간에서 바꿉니다",
+                        "질문 3개")
+                .doesNotContain("{sources}", "{history}", "{summary}", "{query}", "{count}");
         assertThat(prompt.getValue().getInstructions().get(1).getText())
                 .as("응답 형식(JSON 스키마)은 사용자 메시지로 붙는다").contains("clarifiedQuestion", "followUps");
     }
@@ -384,6 +387,7 @@ class PostAnswerServiceTest {
 
         assertThat(service.awaitExtras(31L, "u1", "t1", Duration.ZERO)).isEmpty();
         verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        verify(memoryService).saveFollowUps("u1", "t1", 31L, List.of());   // 지난 턴의 제안을 지운다
     }
 
     @Test
@@ -411,6 +415,41 @@ class PostAnswerServiceTest {
 
         assertThat(service.awaitExtras(51L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow().isEmpty()).isTrue();
         verify(memoryService, never()).saveClarifiedQuestion(anyLong(), anyString());
+        verify(memoryService).saveFollowUps("u1", "t1", 51L, List.of());   // 실패해도 지난 턴의 제안은 지운다
+    }
+
+    @Test
+    @DisplayName("추가 질문 개수 설정 — 프롬프트가 그 수를 청하고 정리도 그 수에서 자른다")
+    @SuppressWarnings("unchecked")
+    void followUpCountComesFromSettings() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(settings.followUpQuestionsCount()).thenReturn(2);
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> call = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(any(), any(), any(), call.capture())).thenReturn(EXTRAS_JSON);
+
+        service.afterTurn(81L, "u1", "t1", QUESTION, false, Locale.KOREAN, answered(ResponseMode.N, true, false));
+
+        assertThat(service.awaitExtras(81L, "u1", "t1", Duration.ofSeconds(5)).orElseThrow().followUps())
+                .containsExactly("타임아웃 기본값은 얼마인가요?", "재처리는 어떻게 하나요?");
+        ChatModel model = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        when(model.call(prompt.capture())).thenReturn(chatResponse(EXTRAS_JSON));
+        call.getValue().apply(model);
+        assertThat(prompt.getValue().getInstructions().get(0).getText()).contains("질문 2개");
+    }
+
+    @Test
+    @DisplayName("기다림이 없으면(지났거나 재시작) 저장된 추가 질문을 읽는다 — 설정이 꺼졌으면 저장돼 있어도 내주지 않는다")
+    void storedFollowUpsServeWhenNothingIsPending() {
+        when(settings.followUpQuestionsEnabled()).thenReturn(true);
+        when(memoryService.getFollowUps("u1", "t1", 91L)).thenReturn(List.of("기본값은?", "오류 코드는?"));
+
+        PostAnswerService.Extras extras = service.awaitExtras(91L, "u1", "t1", Duration.ZERO).orElseThrow();
+        assertThat(extras.clarifiedQuestion()).as("다듬은 질문은 서버 렌더가 이미 그렸다").isNull();
+        assertThat(extras.followUps()).containsExactly("기본값은?", "오류 코드는?");
+
+        when(settings.followUpQuestionsEnabled()).thenReturn(false);
+        assertThat(service.awaitExtras(91L, "u1", "t1", Duration.ZERO)).isEmpty();
     }
 
     @Test
@@ -449,14 +488,14 @@ class PostAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("cleanFollowUps — 목록 기호·따옴표를 벗기고, 지금·이전 질문과 같은 것·겹치는 것·너무 긴 것을 버린 뒤 셋까지")
+    @DisplayName("cleanFollowUps — 목록 기호·따옴표를 벗기고, 지금·이전 질문과 같은 것·겹치는 것·너무 긴 것을 버린 뒤 정한 개수까지")
     void cleanFollowUps() {
         assertThat(PostAnswerService.cleanFollowUps(List.of(
                         "1) 재처리는 어떻게 하나요?", "- 재처리는 어떻게 하나요", "“기본값은?”", "그거 어떻게 설정해",
                         "MCI 연동 구조 알려줘", "가".repeat(101), "", "오류 코드는?", "네 번째"),
-                QUESTION, List.of("MCI 연동 구조 알려줘")))
+                QUESTION, List.of("MCI 연동 구조 알려줘"), 3))
                 .containsExactly("재처리는 어떻게 하나요?", "기본값은?", "오류 코드는?");
-        assertThat(PostAnswerService.cleanFollowUps(null, QUESTION, List.of())).isEmpty();
+        assertThat(PostAnswerService.cleanFollowUps(null, QUESTION, List.of(), 3)).isEmpty();
     }
 
     @Test

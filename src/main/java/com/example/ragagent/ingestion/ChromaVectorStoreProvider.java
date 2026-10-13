@@ -99,6 +99,22 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     public List<Document> search(String userId, String query, String version, int topK) {
         double similarityThreshold = props.searchSimilarityThresholdSafe();
         VectorStore store = registry.getStore(userId, version);
+        List<Document> hits = store.similaritySearch(searchRequest(query, version, topK, similarityThreshold));
+        // SimilarityFallback — this path delegates to Spring AI, which asks Chroma for exactly topK and
+        // filters afterwards, so there is no over-fetched pool to re-filter: lowering the threshold
+        // costs one more query (the embedding comes from the query cache), and only on a shortfall.
+        int minWanted = SimilarityFallback.appliesTo(version)
+                ? SimilarityFallback.minWanted(topK, props.searchTopKSafe()) : 0;
+        if (similarityThreshold > 0.0 && hits.size() < minWanted) {
+            double lower = SimilarityFallback.relaxed(similarityThreshold);
+            hits = store.similaritySearch(searchRequest(query, version, topK, lower));
+            log.debug("[SEARCH] 유사도 임계값 {} 통과가 {}개 미만 — {} 로 낮춰 {}개",
+                    similarityThreshold, minWanted, lower, hits.size());
+        }
+        return hits;
+    }
+
+    private static SearchRequest searchRequest(String query, String version, int topK, double similarityThreshold) {
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         SearchRequest.Builder request = SearchRequest.builder()
                 .query(query)
@@ -108,7 +124,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         if (similarityThreshold > 0.0) {
             request.similarityThreshold(similarityThreshold);
         }
-        return store.similaritySearch(request.build());
+        return request.build();
     }
 
     /**
@@ -135,7 +151,9 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         // includes EMBEDDINGS, which at rerank-scale is ~1MB of dead JSON per search).
         var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, RESULT_INCLUDE);
         var response = chromaApi.queryCollection(TENANT, DATABASE, collectionId, request);
-        return mapPerQuery(response, topK, similarityThreshold);
+        int minWanted = SimilarityFallback.appliesTo(version)
+                ? SimilarityFallback.minWanted(topK, props.searchTopKSafe()) : 0;
+        return mapPerQuery(response, topK, similarityThreshold, minWanted);
     }
 
     @Override
@@ -366,7 +384,8 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
      * pre-sorted by ascending distance, so taking the first {@code topK} that pass the threshold
      * is exactly "closest topK above threshold".
      */
-    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK, double similarityThreshold) {
+    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK, double similarityThreshold,
+                                             int minWanted) {
         if (resp == null || resp.ids() == null) return List.of();
         List<List<Document>> out = new ArrayList<>(resp.ids().size());
         for (int i = 0; i < resp.ids().size(); i++) {
@@ -375,22 +394,27 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             List<Map<String, Object>> metas = nth(resp.metadata(), i);
             List<Double> dists = nth(resp.distances(), i);
 
-            List<Document> perQuery = new ArrayList<>();
-            for (int j = 0; ids != null && j < ids.size() && perQuery.size() < topK; j++) {
+            List<Document> all = new ArrayList<>();
+            for (int j = 0; ids != null && j < ids.size(); j++) {
                 double distance = (dists != null && j < dists.size() && dists.get(j) != null) ? dists.get(j) : 0.0;
-                double similarity = 1.0 - distance;
-                if (similarity < similarityThreshold) continue;
                 String text = (docs != null && j < docs.size()) ? docs.get(j) : "";
                 Map<String, Object> meta = (metas != null && j < metas.size() && metas.get(j) != null)
                         ? new HashMap<>(metas.get(j)) : new HashMap<>();
-                perQuery.add(Document.builder()
+                all.add(Document.builder()
                         .id(ids.get(j))
                         .text(text)
                         .metadata(meta)
-                        .score(similarity)
+                        .score(1.0 - distance)
                         .build());
             }
-            out.add(perQuery);
+            // SimilarityFallback — too few above the threshold: lower it once over the same over-fetched rows.
+            SimilarityFallback.Selection<Document> picked =
+                    SimilarityFallback.select(all, SimilarityFallback::scoreOf, topK, similarityThreshold, minWanted);
+            if (picked.relaxed()) {
+                log.debug("[SEARCH] 유사도 임계값 {} 통과가 {}개 미만 — {} 로 낮춰 {}개",
+                        similarityThreshold, minWanted, picked.threshold(), picked.rows().size());
+            }
+            out.add(picked.rows());
         }
         return out;
     }

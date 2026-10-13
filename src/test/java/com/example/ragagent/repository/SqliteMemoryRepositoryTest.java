@@ -460,4 +460,51 @@ class SqliteMemoryRepositoryTest {
         String history = repo.getHistory(UID, "t1", 4000);
         assertThat(history).contains("남길 질문").doesNotContain("지울 질문");
     }
+
+    // ── 추가 질문(V8 thread_follow_up) ─────────────────────────────────────
+
+    @Test
+    @DisplayName("추가 질문 — 대화마다 한 벌, 새 턴이 덮어쓰고 그 턴으로 물을 때만 나온다")
+    void followUpsKeepOnlyTheLatestTurn() {
+        repo.saveFollowUps(UID, "t1", 10L, List.of("기본값은?", "  재처리는\n어떻게?  ", " "));
+        assertThat(repo.findFollowUps(UID, "t1", 10L)).containsExactly("기본값은?", "재처리는 어떻게?");
+
+        repo.saveFollowUps(UID, "t1", 11L, List.of("오류 코드는?"));
+        assertThat(repo.findFollowUps(UID, "t1", 11L)).containsExactly("오류 코드는?");
+        assertThat(repo.findFollowUps(UID, "t1", 10L)).as("지난 턴의 것은 남지 않는다").isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM thread_follow_up", Integer.class)).isEqualTo(1);
+
+        assertThat(repo.findFollowUps("other-user", "t1", 11L)).as("남의 대화").isEmpty();
+        assertThat(repo.findFollowUps(UID, "t2", 11L)).as("다른 대화").isEmpty();
+    }
+
+    @Test
+    @DisplayName("추가 질문 — 빈 목록을 저장하면 그 대화의 행을 지운다(제안 없는 답변 뒤에 지난 제안이 남지 않게)")
+    void emptyFollowUpsDeleteTheRow() {
+        repo.saveFollowUps(UID, "t1", 10L, List.of("기본값은?"));
+        repo.saveFollowUps(UID, "t2", 20L, List.of("다른 대화"));
+
+        repo.saveFollowUps(UID, "t1", 11L, List.of());
+
+        assertThat(repo.findFollowUps(UID, "t1", 10L)).isEmpty();
+        assertThat(repo.findFollowUps(UID, "t2", 20L)).containsExactly("다른 대화");
+    }
+
+    @Test
+    @DisplayName("추가 질문 — 대화 삭제(clearHistory)와 그 턴 삭제(deleteTurn)가 함께 지운다")
+    void followUpsGoWithTheThreadAndTheTurn() {
+        long first = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "N", null);
+        long second = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveFollowUps(UID, "t1", second, List.of("기본값은?"));
+
+        repo.deleteTurn(UID, "t1", first);
+        assertThat(repo.findFollowUps(UID, "t1", second)).as("다른 턴을 지워도 남는다").containsExactly("기본값은?");
+        repo.deleteTurn(UID, "t1", second);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM thread_follow_up", Integer.class)).isZero();
+
+        long third = repo.addTurn(UID, "t3", "Q3", "A3", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveFollowUps(UID, "t3", third, List.of("기본값은?"));
+        repo.clearHistory(UID, "t3");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM thread_follow_up", Integer.class)).isZero();
+    }
 }

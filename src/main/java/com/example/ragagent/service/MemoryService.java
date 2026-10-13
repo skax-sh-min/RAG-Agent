@@ -263,6 +263,28 @@ public class MemoryService {
         }
     }
 
+    /**
+     * 답변 아래 추가 질문을 저장한다(대화마다 마지막 답변의 것만 — {@link MemoryRepository#saveFollowUps}).
+     * 다듬은 질문과 같이 실패해도 삼킨다 — 없어도 되는 제안이다.
+     */
+    public void saveFollowUps(String userId, String threadId, long turnId, List<String> questions) {
+        try {
+            repository.saveFollowUps(userId, threadId, turnId, questions);
+        } catch (Exception e) {
+            log.warn("[FOLLOW-UP] 추가 질문 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
+    /** 그 턴의 추가 질문 — 없거나 이전 턴의 것이면 빈 목록. 읽기 실패도 빈 목록이다(제안이 안 보일 뿐). */
+    public List<String> getFollowUps(String userId, String threadId, long turnId) {
+        try {
+            return repository.findFollowUps(userId, threadId, turnId);
+        } catch (Exception e) {
+            log.warn("[FOLLOW-UP] 추가 질문 조회 실패 turnId={}: {}", turnId, e.toString());
+            return List.of();
+        }
+    }
+
     /** 대화 기록 화면이 질문 아래 줄을 되살리는 데 쓰는 조회 — 값이 있는 턴만 담긴다. */
     public Map<Long, String> getClarifiedQuestions(List<Long> turnIds) {
         return repository.findClarifiedQuestionsByTurnIds(turnIds);

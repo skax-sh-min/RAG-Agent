@@ -36,8 +36,8 @@
 
     // ── 답변 뒤 보강(다듬은 질문 · 추가 질문) ────────────────────────────────
     // 답변이 끝나면 서버가 백그라운드에서 LLM 을 한 번 더 불러 질문을 다듬고 이어서 물어볼 질문을 만든다
-    // (PostAnswerService). 추가 질문은 저장하지 않는 일회성 제안이라 답변 직후 기다렸다 받아 가장 최근 답변
-    // 아래에만 붙이고, 다음 질문을 보내면 지운다. 결과가 없으면 엔드포인트는 204 다(대상이 아니었거나 꺼져 있다).
+    // (PostAnswerService). 추가 질문은 답변 직후 기다렸다 받아 가장 최근 답변 아래에만 붙이고, 다음 질문을
+    // 보내면 지운다(서버는 대화마다 마지막 답변의 것만 저장한다). 결과가 없으면 엔드포인트는 204 다(대상이 아니었거나 꺼져 있다).
     // 대기 상한은 서버의 PostAnswerService.MAX_EXTRAS_WAIT(25초) 안쪽이다.
     const EXTRAS_WAIT_MS = 20000;
     let extrasAbort = null;
@@ -1126,7 +1126,7 @@
             scrollBtn.addEventListener('click', function () { scrollToBottom(true); });
         }
 
-        // 대화를 다시 열었을 때 — 가장 최근 턴의 추가 질문이 아직 서버 메모리에 있으면(10분) 다시 붙인다. 다듬은
+        // 대화를 다시 열었을 때 — 가장 최근 턴의 추가 질문이 저장돼 있으면 다시 붙인다. 다듬은
         // 질문은 서버 렌더가 이미 그렸으므로 칩만 본다. 기록 루프는 질문 버블 바로 뒤에 답변을 둔다.
         if (chatMessages) {
             const turns = chatMessages.querySelectorAll('.user-turn[data-turn-id]');

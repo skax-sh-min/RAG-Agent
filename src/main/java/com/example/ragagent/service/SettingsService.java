@@ -101,6 +101,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
     );
 
+    /** 추가 질문 개수의 허용 범위와 기본값 — 화면 스펙과 followUpQuestionsCount()가 같은 값을 쓴다. */
+    public static final int MIN_FOLLOW_UP_COUNT = 2;
+    public static final int MAX_FOLLOW_UP_COUNT = 5;
+    public static final int DEFAULT_FOLLOW_UP_COUNT = 3;
+
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
             new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.05, "settings.item.temperature"),
@@ -111,6 +116,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
             new Spec(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, Kind.BOOL,   0,   0,    0,    "settings.item.clarified-question-enabled"),
             new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED, Kind.BOOL,  0,   0,    0,    "settings.item.follow-up-questions-enabled"),
+            new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT,  Kind.INT,
+                    MIN_FOLLOW_UP_COUNT, MAX_FOLLOW_UP_COUNT, 1, "settings.item.follow-up-questions-count"),
             new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
                     AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
@@ -776,6 +783,24 @@ public class SettingsService implements AppProperties.OverrideSource {
         return o == null || o;
     }
 
+    /**
+     * 답변 아래에 제안할 추가 질문 수 — 위 스위치와 같은 운영 값이라 같은 이유로 이 캐시만 읽는다. 다음 턴부터
+     * 적용된다. 값이 없거나 읽을 수 없으면 {@value #DEFAULT_FOLLOW_UP_COUNT}, 범위 밖이면 범위 안으로 자른다
+     * (오버라이드는 저장 때 범위 검사를 받지만, 이 읽기가 그 검사에 기대지 않게).
+     */
+    public int followUpQuestionsCount() {
+        String raw = cache.get(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT);
+        int n = DEFAULT_FOLLOW_UP_COUNT;
+        if (raw != null && !raw.isBlank()) {
+            try {
+                n = Integer.parseInt(raw.strip());
+            } catch (NumberFormatException ignored) {
+                // 기본값
+            }
+        }
+        return Math.max(MIN_FOLLOW_UP_COUNT, Math.min(MAX_FOLLOW_UP_COUNT, n));
+    }
+
     private static Boolean parseBool(String value) {
         if (value == null || value.isBlank()) return null;
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
@@ -859,6 +884,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED  -> Boolean.toString(clarifiedQuestionEnabled());
             case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED -> Boolean.toString(followUpQuestionsEnabled());
+            case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT   -> Integer.toString(followUpQuestionsCount());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> ThinkingSite.bySettingsKey(key)

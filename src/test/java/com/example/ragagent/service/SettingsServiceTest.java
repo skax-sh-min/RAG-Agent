@@ -171,6 +171,22 @@ class SettingsServiceTest {
     }
 
     @Test
+    @DisplayName("추가 질문 개수 — 기본 3, 2~5 만 저장되고 다음 턴부터 읽힌다")
+    void followUpQuestionsCount_defaultsToThreeWithinTwoToFive() {
+        assertThat(service.followUpQuestionsCount()).isEqualTo(3);
+
+        assertThat(service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "5")).isEqualTo("5");
+        assertThat(service.followUpQuestionsCount()).isEqualTo(5);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "6"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "1"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        service.reset(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT);
+        assertThat(service.followUpQuestionsCount()).isEqualTo(3);
+    }
+
+    @Test
     @DisplayName("reset — 오버라이드 삭제 시 프로퍼티 기본값으로 정확히 복귀")
     void reset_revertsToPropertyDefault() {
         service.update(SettingsKeys.SEARCH_RRF_K, "80");

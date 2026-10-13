@@ -138,6 +138,28 @@ class SqliteVecVectorStoreProviderTest {
     }
 
     @Test
+    @DisplayName("search — 통과가 top-k 의 70% 미만이면 같은 행을 0.05 낮춘 임계값으로 다시 거른다(큐레이션 축 제외)")
+    void search_relaxesThresholdOnShortfall() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        List<Document> rows = java.util.stream.DoubleStream.of(0.9, 0.28, 0.27, 0.2)
+                .mapToObj(v -> Document.builder().id("d" + v).text("t").metadata(Map.of()).score(v).build())
+                .toList();
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(rows);
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        when(props.searchTopKSafe()).thenReturn(4);
+        SqliteVecVectorStoreProvider provider =
+                new SqliteVecVectorStoreProvider(jdbc, embeddingModel, new ObjectMapper(), props);
+
+        assertThat(provider.search("u", "질문", "latest", 4)).extracting(Document::getScore)
+                .containsExactly(0.9, 0.28, 0.27);
+        assertThat(provider.search("u", "질문", "curated", 4)).extracting(Document::getScore)
+                .as("큐레이션 축은 모자라도 그대로").containsExactly(0.9);
+        verify(jdbc, times(2)).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("toVectorBlob: float[] → little-endian float32 바이트 배열 (§10.9.2)")
     void vectorBlob() {
         byte[] blob = SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1.0f, -2.5f, 0.0f});

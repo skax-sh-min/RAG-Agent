@@ -31,7 +31,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -372,24 +371,30 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
      * §10.7.4 — over-fetches {@code k} when a similarity threshold is active (post-filtering can
      * otherwise shrink the pool below {@code topK}) and caps the filtered result back to
      * {@code topK} — rows arrive pre-sorted by ascending distance, so taking the first
-     * {@code topK} that pass the threshold is exactly "closest topK above threshold".
+     * {@code topK} that pass the threshold is exactly "closest topK above threshold". If too few
+     * pass, the threshold is lowered once over the same rows ({@link SimilarityFallback}).
      */
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {
         double similarityThreshold = props.searchSimilarityThresholdSafe();
         byte[] vector = toVectorBlob(embedding);
         int fetchK = similarityThreshold > 0.0
                 ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
-        List<Document> rows = jdbc.query(SEARCH, (rs, i) -> {
-            double similarity = 1.0 - rs.getDouble("distance");
-            if (similarity < similarityThreshold) return null;          // 0.0 = accept all but negatives
-            return Document.builder()
-                    .id(rs.getString("spring_doc_id"))
-                    .text(rs.getString("content"))
-                    .metadata(parseMetadata(rs.getString("metadata")))
-                    .score(similarity)
-                    .build();
-        }, vector, fetchK, version);
-        return rows.stream().filter(Objects::nonNull).limit(topK).toList();
+        List<Document> rows = jdbc.query(SEARCH, (rs, i) -> Document.builder()
+                .id(rs.getString("spring_doc_id"))
+                .text(rs.getString("content"))
+                .metadata(parseMetadata(rs.getString("metadata")))
+                .score(1.0 - rs.getDouble("distance"))
+                .build(), vector, fetchK, version);
+        // 0.0 = accept all but negatives (similarity < 0 still fails "≥ 0.0").
+        int minWanted = SimilarityFallback.appliesTo(version)
+                ? SimilarityFallback.minWanted(topK, props.searchTopKSafe()) : 0;
+        SimilarityFallback.Selection<Document> picked =
+                SimilarityFallback.select(rows, SimilarityFallback::scoreOf, topK, similarityThreshold, minWanted);
+        if (picked.relaxed()) {
+            log.debug("[SEARCH] 유사도 임계값 {} 통과가 {}개 미만 — {} 로 낮춰 {}개",
+                    similarityThreshold, minWanted, picked.threshold(), picked.rows().size());
+        }
+        return picked.rows();
     }
 
     /** spring_doc_id is the global primary key, so a single delete per table covers every version. */

@@ -152,6 +152,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
+        jdbc.update("DELETE FROM thread_follow_up WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
@@ -163,6 +164,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // conversation_turns row goes last so a failure part-way through can only leave orphaned
         // child rows (invisible to every read path, all of which start from conversation_turns),
         // never a turn whose sources have silently vanished.
+        jdbc.update("DELETE FROM thread_follow_up WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
+                userId, threadId, turnId);
         jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                 userId, threadId, turnId);
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
@@ -376,6 +379,31 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 rs -> { out.put(rs.getLong("id"), rs.getString("clarified_question")); },
                 turnIds.toArray());
         return out;
+    }
+
+    @Override
+    public void saveFollowUps(String userId, String threadId, long turnId, List<String> questions) {
+        List<String> lines = questions == null ? List.of() : questions.stream()
+                .filter(q -> q != null && !q.isBlank())
+                .map(q -> q.strip().replaceAll("\\s+", " "))   // 한 줄씩 — 줄바꿈이 구분자다
+                .toList();
+        if (lines.isEmpty()) {
+            jdbc.update("DELETE FROM thread_follow_up WHERE user_id = ? AND thread_id = ?", userId, threadId);
+            return;
+        }
+        jdbc.update("INSERT INTO thread_follow_up (user_id, thread_id, turn_id, questions) VALUES (?, ?, ?, ?) " +
+                    "ON CONFLICT(user_id, thread_id) DO UPDATE SET turn_id = excluded.turn_id, " +
+                    "questions = excluded.questions, created_at = datetime('now')",
+                userId, threadId, turnId, String.join("\n", lines));
+    }
+
+    @Override
+    public List<String> findFollowUps(String userId, String threadId, long turnId) {
+        List<String> rows = jdbc.queryForList(
+                "SELECT questions FROM thread_follow_up WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
+                String.class, userId, threadId, turnId);
+        if (rows.isEmpty() || rows.get(0) == null) return List.of();
+        return rows.get(0).lines().map(String::strip).filter(s -> !s.isEmpty()).toList();
     }
 
     @Override
