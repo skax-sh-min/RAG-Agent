@@ -37,6 +37,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
       - 6.3.1 [SQLite 파일별 테이블 구성](#631-sqlite-파일별-테이블-구성)
+      - 6.3.2 [DB 백업과 복구](#632-db-백업과-복구)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
@@ -1979,6 +1980,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: 같은 SQLite 파일 `DATA_DIR/memory.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 같은 SQLite 파일 `DATA_DIR/memory.db` | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
+| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -2055,6 +2057,42 @@ Rename-Item data/vector.db memory.db
 > **스키마는 기동 시 자동 정비됩니다** — 운영 테이블은 전부 Flyway 마이그레이션이 만들고 고칩니다. 기동할 때 Flyway 가 아직 적용되지 않은 마이그레이션만 순서대로 적용하고, V4(`V4__Consolidate_runtime_schema`)는 옛 버전이 만든 DB 에 빠진 테이블·컬럼·인덱스만 더합니다(예전에는 각 저장소가 기동할 때마다 `CREATE TABLE IF NOT EXISTS`·`ALTER TABLE` 을 직접 실행했습니다). 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 기본값 또는 `NULL`). 기동 로그의 `[FLYWAY] V4 — 테이블 생성 […], 컬럼 추가 […]` 한 줄이 무엇을 더했는지 알려 줍니다. 검색 색인(`chunk_fts`·`chunk_fts_key`·`vec_*`)은 Flyway 가 아니라 위 표의 컴포넌트가 만듭니다. 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
+
+#### 6.3.2 DB 백업과 복구
+
+앱이 `memory.db` 의 사본을 **매일 03:30** 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
+
+| 설정 | 환경변수 | 기본값 | 설명 |
+|---|---|---|---|
+| `app.backup.enabled` | `DB_BACKUP_ENABLED` | `true` | 정기 백업. `false` 여도 `/admin` 의 수동 백업은 됩니다 |
+| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일) |
+| `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
+| `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
+
+모두 **재기동 필요**입니다.
+
+**어떻게 뜨는가** — 앱의 커넥션 풀이 아닌 별도 연결에서 `VACUUM INTO` 를 실행합니다. 원본에 읽기 트랜잭션 하나만 쥐므로(WAL) **백업 중에도 채팅·인덱싱의 쓰기가 막히지 않고**, 아직 `memory.db-wal` 에만 있는 최근 기록까지 담긴 일관된 한 파일이 나옵니다(파일을 그냥 복사하면 그것을 놓칩니다). 뜬 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 이름을 붙이므로, 그 이름의 파일은 전부 검사를 통과한 완성본입니다(중간에 죽으면 `.partial` 이 남고 다음 실행이 지웁니다). 실측: 54 MB DB 에 약 1초.
+
+**담기는 것** — 대화 기록·계정·설정 오버라이드·큐레이션 Q&A·지식 제안·문서 레지스트리·키워드 색인(`chunk_fts`)·**sqlite-vec 백엔드의 벡터**.
+**담기지 않는 것** — 문서 원본·변환본·이미지(`documents/` · `converted/` · `images/` — 파일이라 따로 복사합니다), **Chroma 백엔드의 벡터**(Chroma 서버/볼륨에 있습니다 — Chroma 배포는 그 볼륨도 함께 백업해야 같은 시점으로 되돌릴 수 있습니다), 감사 로그.
+
+> ⚠️ 기본 위치는 **같은 디스크**입니다. 잘못된 삭제·DB 손상에는 대비가 되지만 디스크 고장에는 아닙니다 — `DB_BACKUP_DIR` 을 다른 디스크로 두거나, `db-backups/` 를 주기적으로 다른 곳에 복사하세요. 사본은 일반 SQLite 파일(저널 모드 `delete`)이라 그대로 복사해도 됩니다.
+
+**복구**
+
+```bash
+# 1) 앱을 멈춘다 (docker compose stop app / 서비스 중지)
+# 2) 지금 DB 를 옆으로 치우고(혹시 모를 되돌리기용) WAL 조각을 지운다
+mv data/memory.db data/memory.db.before-restore
+rm -f data/memory.db-wal data/memory.db-shm
+# 3) 사본을 memory.db 로 놓는다
+cp data/db-backups/memory-20261013-033000.db data/memory.db
+# 4) 앱을 띄운다 — Flyway 가 사본 이후에 추가된 마이그레이션만 적용한다
+```
+
+- **`memory.db-wal` · `-shm` 을 반드시 지웁니다.** 남아 있으면 SQLite 가 그 WAL 을 새 파일 위에 재생하려 해 DB 가 깨질 수 있습니다.
+- 옛 `SQLITE_VEC_DB_PATH` 를 쓰는 배포는 `memory.db` 대신 **그 경로의 파일**이 대상입니다([§6.3.1](#631-sqlite-파일별-테이블-구성)).
+- 사본 시점 이후에 올린 문서는 레지스트리에 없으므로 **디렉터리 동기화**(`/documents` 의 동기화)를 한 번 돌리면 다시 인덱싱됩니다. 사본 이후에 지운 문서는 반대로 목록에 남아 있다가 같은 동기화에서 정리됩니다.
 
 ---
 
