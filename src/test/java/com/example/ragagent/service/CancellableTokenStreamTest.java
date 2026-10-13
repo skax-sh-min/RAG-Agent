@@ -59,12 +59,15 @@ class CancellableTokenStreamTest {
                 .as("구독이 취소돼야 LLM 쪽 HTTP 연결이 닫히고 생성이 멈춘다")
                 .isTrue();
 
-        // 취소가 실제로 생산을 멈췄는지 — 취소 시점 이후로 더 늘지 않아야 한다.
+        // 취소가 실제로 생산을 멈췄는지 — 취소 시점 이후로 계속 늘지 않아야 한다.
+        // 한 개까지는 허용한다: 취소 신호(doOnCancel)는 소비자 쪽 스레드에서 먼저 발화하고, 그 순간 interval 의 타이머
+        // 스레드가 이미 내보내던 항목 하나는 doOnNext 를 지나 카운트를 올릴 수 있다 — 버그가 아니라 경주다(병렬 전체 실행
+        // 에서 기대 6 · 실제 7 로 한 번 깨졌다). 버그가 돌아오면 5ms 간격 생산이 200ms 동안 이어져 수십 개가 는다.
         int atCancel = produced.get();
         Thread.sleep(200);
         assertThat(produced.get())
-                .as("취소 뒤에도 생산이 계속되면 그것이 바로 이 버그다")
-                .isEqualTo(atCancel);
+                .as("취소 뒤에도 생산이 계속되면 그것이 바로 이 버그다 (취소 순간 이미 나오던 한 개만 허용)")
+                .isBetween(atCancel, atCancel + 1);
     }
 
     @Test
