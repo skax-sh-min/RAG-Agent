@@ -117,8 +117,9 @@ public class QuestionCondenser {
      *
      * <p>스위치를 {@code search-multiquery-enabled} 와 공유한다. 둘 다 "검색 전에 질의를 LLM 으로
      * 한 번 손보는" 같은 성질의 호출이고, 길이 임계값도 이미 그 쌍의 경계다 — 여기가
-     * {@code shouldExpand()} 의 여집합이라 한 턴에 둘 중 하나만 돈다. 별도 키를 만드는 판단은
-     * 오탐이 실제로 잦은지 본 뒤로 미뤘다(§10.12 열린 항목 (a)).
+     * {@code shouldExpand()} 의 여집합이라 한 턴에 둘 중 하나만 돈다. 별도 키는 두지 않는다 —
+     * 후속 질문 측정(2026-10-13, documents/SEARCH_EVALUATION.md §3.4)에서 게이트를 10·12·15 로 바꿔도
+     * 결과가 1건 안에서 같았다(§10.12 열린 항목 (a), 닫힘).
      */
     public boolean gateOpen(String question) {
         if (question == null || question.isBlank()) return false;
