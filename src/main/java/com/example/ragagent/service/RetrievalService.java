@@ -275,6 +275,9 @@ public class RetrievalService {
             fallback = filterByTags(fallback, selectedTags, effectiveTopK);
             unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }
+        // 키워드 축으로만 찾힌 청크는 본문이 chunk_fts 의 검색용 파생 텍스트다 — 답변·검증·출처 미리보기로 가기 전에
+        // 저장된 원문으로 되돌린다(최종 컷에 남은 것만, 조회 한 번).
+        unique = withStoredText(unique);
 
         // § 표시 이름 — one batch lookup for the whole turn's retrieved chunks instead of one
         // query per chunk; formatSource() falls back to the real filename for any docId absent
@@ -520,6 +523,55 @@ public class RetrievalService {
             if (seen.add(d.getId())) keywordOnly.add(markCurated(d));
         }
         return new CuratedHits(vectorHits, List.copyOf(keywordOnly));
+    }
+
+    /**
+     * 키워드(BM25) 축으로만 찾힌 청크를 <b>저장된 원문</b>으로 되돌린다.
+     *
+     * <p>{@code chunk_fts.content} 는 원문이 아니라 검색용 파생 텍스트다({@code SearchTextBuilder} — 파일명·LLM 이 쓴
+     * 맥락 요약을 앞에 붙이고 마크다운 장식을 걷은 본문). 키워드 축은 그 텍스트로 {@link Document} 를 만들고, 융합은
+     * 같은 청크가 벡터 축에도 있을 때만 벡터 쪽 문서(원문)로 바꾼다({@link #addRrfAxis}). 그래서 키워드 축에만 있던
+     * 청크는 그 파생 텍스트가 그대로 답변 프롬프트·검증 발췌·출처 미리보기·응답 참여도로 갔다 — LLM 이 만든 요약이 문서
+     * 내용인 것처럼 근거가 됐다(질의 확장으로 벡터 축이 셋으로 나뉘면 키워드 1위가 최종 컷에 들어온다).
+     *
+     * <p>알아보는 법은 점수다: 벡터 축의 문서는 언제나 유사도를 나르고, 키워드 축의 문서는 나르지 않는다(융합도 점수가
+     * 있는 쪽을 남긴다). 원문은 버전별로 한 번에 읽는다. 문서를 식별하는 키({@code doc_id}·{@code chunk_index}·
+     * {@code version} — {@link #docKey} 와 융합 진단의 열쇠)와 큐레이션 표시({@link #markCurated})는 받은 쪽 값을
+     * 지키고, 나머지 메타데이터는 저장본으로 채운다. 원문을 찾지 못한 청크(그사이 지워졌거나 백엔드가 읽기를 지원하지
+     * 않는다)는 받은 그대로 둔다 — 고친 것은 아니지만, 그 때문에 검색을 실패시킬 일도 아니다.
+     */
+    List<Document> withStoredText(List<Document> docs) {
+        Map<String, List<String>> idsByVersion = new LinkedHashMap<>();
+        for (Document d : docs) {
+            if (d.getScore() != null || d.getId() == null) continue;
+            String version = String.valueOf(d.getMetadata().getOrDefault(MetaKey.VERSION, ""));
+            idsByVersion.computeIfAbsent(version, v -> new ArrayList<>()).add(d.getId());
+        }
+        if (idsByVersion.isEmpty()) return docs;
+        Map<String, Document> stored = new HashMap<>();
+        for (Map.Entry<String, List<String>> e : idsByVersion.entrySet()) {
+            try {
+                for (Document s : ragService.findChunksByIds(e.getKey(), e.getValue())) stored.put(s.getId(), s);
+            } catch (Exception ex) {
+                log.warn("[RETRIEVAL] 키워드 축 청크의 원문을 읽지 못했다 — 검색용 텍스트를 그대로 쓴다 version={}: {}",
+                        e.getKey(), ex.getMessage());
+            }
+        }
+        if (stored.isEmpty()) return docs;
+        log.debug("[RETRIEVAL] 키워드 축에만 있던 청크 {}개를 원문으로 되돌림 (요청 {}개)", stored.size(),
+                idsByVersion.values().stream().mapToInt(List::size).sum());
+        return docs.stream().map(d -> {
+            Document s = d.getScore() == null ? stored.get(d.getId()) : null;
+            if (s == null || s.getText() == null) return d;
+            Map<String, Object> meta = new HashMap<>(d.getMetadata());
+            meta.putAll(s.getMetadata());
+            for (String key : List.of(MetaKey.DOC_ID, MetaKey.CHUNK_INDEX, MetaKey.VERSION,
+                    MetaKey.DOC_TYPE, MetaKey.SOURCE_TYPE)) {
+                Object kept = d.getMetadata().get(key);
+                if (kept != null) meta.put(key, kept);
+            }
+            return Document.builder().id(d.getId()).text(s.getText()).metadata(meta).build();
+        }).toList();
     }
 
     /** FTS 에서 온 큐레이션 히트에 이 축임을 알리는 두 키를 찍는다 — {@link #curatedAxis} 참고. */

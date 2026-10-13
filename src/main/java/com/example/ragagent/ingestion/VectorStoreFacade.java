@@ -51,6 +51,11 @@ public class VectorStoreFacade {
         provider.updateTags(userId, safe(version), springDocIds, tagsCsv);
     }
 
+    public List<Document> findByIds(String userId, String version, List<String> springDocIds) {
+        if (springDocIds == null || springDocIds.isEmpty()) return List.of();
+        return provider.findByIds(userId, safe(version), springDocIds);
+    }
+
     static String safe(String version) {
         return (version != null && SAFE_VERSION.matcher(version).matches()) ? version : "latest";
     }
