@@ -8,6 +8,8 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.repository.MemoryRepository;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -17,12 +19,12 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Precomputes a deduped conversation summary, so AgentService/StreamingAgentService can use
@@ -77,7 +79,10 @@ public class ConversationSummarizerService {
     // Bounded to the most recently used threads — access-order LinkedHashMap evicts the
     // least-recently-used entry once size exceeds maxCachedThreads.
     private final Map<String, String> summaryCache;
-    private final Map<String, Long> lastPrecomputeAt = new ConcurrentHashMap<>();
+    // 같은 스레드의 precompute 를 TTL 동안 한 번으로 줄이는 표시. 항목은 TTL 이 지나면 쓸모가 없으므로 그때 사라진다 —
+    // 예전의 ConcurrentHashMap 은 대화마다 마지막 항목이 영원히 남았고, 그 키는 게스트에게 열린
+    // /ui/chat/summary/precompute 가 받는 아무 threadId 라 호출하는 쪽이 크기를 정했다.
+    private final Cache<String, Long> lastPrecomputeAt;
 
     public ConversationSummarizerService(MemoryService memoryService, LlmRouter llmRouter,
                                          MessageSource messageSource, AppProperties props) {
@@ -92,6 +97,9 @@ public class ConversationSummarizerService {
         this.recentRawTurns = cfg.recentRawTurns();
         this.promptTurnCap = HistoryPolicy.promptTurnCap(props.memorySafe().fetchLimitTurns());
         this.precomputeTtlMillis = cfg.precomputeTtlSeconds() * 1_000L;
+        this.lastPrecomputeAt = Caffeine.newBuilder()
+                .expireAfterWrite(Duration.ofMillis(precomputeTtlMillis))
+                .build();
         this.summaryCache = Collections.synchronizedMap(
                 new LinkedHashMap<>(maxCachedThreads + 1, 0.75f, true) {
                     @Override
@@ -138,10 +146,8 @@ public class ConversationSummarizerService {
 
     /** Package-private for unit testing (bypasses the {@link #precomputeAfterTurn} background thread). */
     void precompute(String userId, String threadId, Long turnId, Locale locale) {
-        long now = System.currentTimeMillis();
-        Long last = lastPrecomputeAt.get(threadId);
-        if (last != null && now - last < precomputeTtlMillis) return;
-        lastPrecomputeAt.put(threadId, now);
+        // 확인과 기록을 한 번에 — 두 요청이 동시에 와도 하나만 지나간다(TTL 이 지난 항목은 캐시가 없는 것으로 본다).
+        if (lastPrecomputeAt.asMap().putIfAbsent(threadId, System.currentTimeMillis()) != null) return;
 
         List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return;
@@ -393,7 +399,7 @@ public class ConversationSummarizerService {
     /** Call after a new turn is persisted so the next precompute regenerates a fresh summary. */
     public void invalidate(String threadId) {
         summaryCache.remove(threadId);
-        lastPrecomputeAt.remove(threadId);
+        lastPrecomputeAt.invalidate(threadId);
     }
 
     // Normalizes + keeps only the latest occurrence of each distinct question (drops repeated/

@@ -415,6 +415,26 @@ class ConversationSummarizerServiceTest {
     }
 
     @Test
+    @DisplayName("precompute — 억제 표시는 TTL 이 지나면 사라진다(대화마다 영원히 남지 않는다) · 그 뒤 재호출은 다시 계산한다")
+    void precompute_suppressionExpiresAfterTtl() throws InterruptedException {
+        AppProperties props = mock(AppProperties.class);
+        when(props.summarySafe()).thenReturn(new AppProperties.SummaryConfig(3, 2_000, 2, 1));
+        when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(10));
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
+        ConversationSummarizerService shortTtl = new ConversationSummarizerService(memoryService, llmRouter, messageSource, props);
+        when(memoryService.getRecentTurns(anyString(), anyString())).thenReturn(threeTurns());
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
+
+        shortTtl.precompute(UID, TID, Locale.KOREAN);
+        shortTtl.precompute(UID, TID, Locale.KOREAN);   // TTL 안 — 건너뛴다
+        Thread.sleep(1_100);
+        shortTtl.precompute(UID, TID, Locale.KOREAN);   // TTL 밖 — 다시 계산한다
+
+        verify(llmRouter, times(2)).executeWithTracking(any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("invalidate — 캐시 제거 후 buildContext() 는 다시 null")
     void invalidate_clearsCache() {
         when(memoryService.getRecentTurns(UID, TID)).thenReturn(threeTurns());
