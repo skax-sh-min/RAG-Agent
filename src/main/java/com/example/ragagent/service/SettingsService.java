@@ -632,7 +632,28 @@ public class SettingsService implements AppProperties.OverrideSource {
                 bool || choice ? null : spec.min(),
                 bool || choice ? null : spec.max(),
                 bool || choice ? null : spec.step(),
-                null);   // 편집 가능한 행은 라벨·범위로 충분해 툴팁을 쓰지 않는다
+                choice ? null : descriptionKey(spec.labelKey()));
+    }
+
+    /**
+     * 항목 설명의 메시지 키 — 라벨 키 {@code settings.item.X} 에 짝지은 {@code settings.desc.X}. 라벨은 짧은 이름만 두고 "무엇을
+     * 하는 값인가"는 라벨에 마우스를 올렸을 때 풍선으로 보인다(settings-item.html). 편집 가능한 일반 항목은 전부 설명을 가진다 —
+     * 빠지면 화면에 키가 그대로 보이므로 {@code SettingsServiceTest} 가 번들 두 벌에 다 있는지 확인한다. 생각 수준(CHOICE)은 자기
+     * 카드에서 따로 그려 여기에 오지 않는다.
+     */
+    static String descriptionKey(String labelKey) {
+        return labelKey.startsWith("settings.item.")
+                ? "settings.desc." + labelKey.substring("settings.item.".length())
+                : null;
+    }
+
+    /** 이 화면의 편집 가능한 일반 항목 전부(검색 · 인덱싱 · LLM · 화면 표시) — 설명 키 확인용. */
+    static List<String> hotItemLabelKeys() {
+        List<String> keys = new ArrayList<>();
+        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
+            for (Spec spec : specs) keys.add(spec.labelKey());
+        }
+        return keys;
     }
 
     private List<SettingItem> searchHotItems() {
@@ -645,7 +666,8 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  can't be hot-swapped (topK / multiquery / hybrid moved to the hot group). */
     private List<SettingItem> fixedSearchItems() {
         return List.of(
-                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), null)
+                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), null,
+                        "settings.desc.rerank-enabled")
         );
     }
 

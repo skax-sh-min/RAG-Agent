@@ -512,6 +512,16 @@
    and absorbs whatever the window adds. Just wide enough for 값 + 기본값 + 저장 side by
    side ("Default"/"Save" in English being the longer pair) — every editable setting is a
    short number (0.35, 60, 1500) or a true/false select, so anything more is dead space. */
+/* 설정 항목의 라벨 — 설명 풍선이 붙은 라벨은 점선 밑줄로 "올려 보면 설명이 있다"를 알린다(settings-item.html). */
+.setting-label-tip {
+    cursor: help;
+}
+.setting-label-tip > .fw-semibold {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--bs-secondary-color);
+    text-underline-offset: 3px;
+}
+
 .setting-value-col {
     flex: 0 0 auto;
     width: 12rem;

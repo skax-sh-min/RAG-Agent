@@ -86,7 +86,17 @@
 
     <!-- ── LLM providers ─────────────────────────────────────────────────── -->
     <div class="card mb-4">
-        <div class="card-header fw-semibold" th:text="#{settings.group.llm}">LLM Routing</div>
+        <!--/* 컨텍스트 다시 탐지 버튼은 제목 줄 오른쪽 끝에 둔다(관리자만). 표 조각(#llm-providers)은 토글·재탐지 응답으로
+             통째로 바뀌므로 버튼을 그 바깥에 두어야 자리가 흔들리지 않는다 — 결과는 여전히 조각 안에 그려진다. */-->
+        <div class="card-header d-flex align-items-center">
+            <span class="fw-semibold" th:text="#{settings.group.llm}">LLM Routing</span>
+            <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-outline-secondary ms-auto py-0"
+                    hx-post="/admin/settings/context-window/reprobe"
+                    hx-target="#llm-providers" hx-swap="outerHTML"
+                    th:title="#{settings.btn.reprobe.hint}">
+                <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.btn.reprobe}">Re-detect context</span>
+            </button>
+        </div>
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
         </div>
