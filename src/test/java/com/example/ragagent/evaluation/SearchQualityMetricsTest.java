@@ -81,4 +81,16 @@ class SearchQualityMetricsTest {
         assertThat(SearchQualityMetrics.containsAnyMarker("아무 내용", List.of("  "))).isFalse();
         assertThat(SearchQualityMetrics.containsAnyMarker(null, List.of("x"))).isFalse();
     }
+
+    @Test
+    @DisplayName("rrfFuse: 두 목록에 다 나온 항목이 앞으로, 한쪽에만 있으면 순위대로 · 동점은 먼저 나온 목록이 앞")
+    void rrfFuse_ordersByReciprocalRankSum() {
+        List<String> raw = List.of("a", "b", "c");
+        List<String> concat = List.of("d", "c", "e");
+        // c = 1/63 + 1/62 이 1/61(a·d) 보다 크다. a 와 d 는 동점이라 먼저 나온 목록의 a 가 앞, 그다음 b(1/62) · e(1/63).
+        assertThat(SearchQualityMetrics.rrfFuse(List.of(raw, concat), 60, s -> s))
+                .containsExactly("c", "a", "d", "b", "e");
+        assertThat(SearchQualityMetrics.rrfFuse(List.of(raw, List.of()), 60, s -> s)).containsExactly("a", "b", "c");
+        assertThat(SearchQualityMetrics.rrfFuse(List.<List<String>>of(), 60, s -> s)).isEmpty();
+    }
 }

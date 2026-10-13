@@ -1,6 +1,11 @@
 package com.example.ragagent.evaluation;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -54,5 +59,29 @@ final class SearchQualityMetrics {
 
     static String normalize(String s) {
         return s == null ? "" : NOISE.matcher(s).replaceAll("");
+    }
+
+    /**
+     * 순위 목록 여럿을 RRF(가중치 없음)로 합친다 — 항목마다 {@code Σ 1/(rrfK + 순위)}, 점수 내림차순, 동점은 먼저 나온 목록의
+     * 먼저 나온 항목이 앞. 같은 항목은 {@code key} 로 알아본다.
+     *
+     * <p>후속 질문 절의 {@code fused} 갈래(원문 검색 결과 + 이어 붙인 검색어의 결과)를 만든다. 제품의 융합
+     * ({@code RetrievalService.mergeRrfScored})은 축(벡터·BM25·큐레이션) 단위로 합치고 이것은 그 결과 목록 둘을 합친다 —
+     * "두 검색어로 함께 검색하면 어떻게 되는가"의 근사다.
+     */
+    static <T> List<T> rrfFuse(List<List<T>> rankings, int rrfK, Function<T, String> key) {
+        Map<String, Double> score = new LinkedHashMap<>();
+        Map<String, T> first = new LinkedHashMap<>();
+        for (List<T> ranking : rankings) {
+            for (int i = 0; i < ranking.size(); i++) {
+                T item = ranking.get(i);
+                String id = key.apply(item);
+                score.merge(id, 1.0 / (rrfK + i + 1), Double::sum);
+                first.putIfAbsent(id, item);
+            }
+        }
+        List<String> order = new ArrayList<>(first.keySet());   // 처음 나온 순서 = 동점 규칙
+        order.sort(Comparator.comparingDouble((String id) -> score.get(id)).reversed());
+        return order.stream().map(first::get).toList();
     }
 }

@@ -65,8 +65,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 넣고 짧은 후속 질문을 다섯 갈래로 검색한다 — {@code raw}(후속 질문 그대로, 확장·독립화 없음) · {@code pipeline}(지금의 동작: 길이가
  * 독립화 게이트 안이면 독립화, 밖이면 질의 확장) · {@code condensed}(길이와 무관하게 독립화, 확장 없음 — 게이트를 넓히면 어떻게
  * 되는가) · {@code concat}(LLM 없이 앞 질문과 이어 붙인 검색어, 확장 없음 — 독립화의 값싼 대안) · {@code full}(정답 케이스의 자립적인
- * 원래 질문 = 상한). 이 절은 이력(대화 턴)과 설정을 <b>쓰므로</b>
- * {@code search-eval.data-dir} 가 없으면 돌지 않는다.
+ * 원래 질문 = 상한). 여섯째 {@code fused} 는 검색하지 않고 {@code raw}·{@code concat} 의 결과를 RRF 로 합친다(두 검색어로 함께
+ * 검색하는 방식의 근사, {@link SearchQualityMetrics#rrfFuse}). 케이스는 {@code same-topic}(앞 질문의 맥락에 기댄다)과
+ * {@code topic-switch}(짧지만 다른 주제 — 앞 질문을 섞으면 손해를 보는 쪽) 두 종류다. 이 절은 이력(대화 턴)과 설정을 <b>쓰므로</b>
+ * {@code search-eval.data-dir} 가 없으면 돌지 않는다. 스레드 id 는 실행마다 새로 만든다 — 같은 DB 로 다시 돌려도 이력이 겹치지 않게.
  *
  * <p>정량 비교 예시: {@code -Dsearch-eval.multiquery=false} 로 질의 확장을 끄거나, {@code app.search-hybrid-enabled} 등을
  * 바꿔가며 재실행해 recall@k 변화를 비교한다. 케이스별 결과는 {@code <out>/<label>/gold.jsonl}·{@code followup.jsonl} 에 남는다
@@ -183,8 +185,15 @@ class SearchQualityEvaluationTest {
         assertThat(meanRecall).isGreaterThan(0.3);
     }
 
-    /** 후속 질문 한 건 — 앞 질문과 정답은 골든셋 id 로 가리킨다(정답 문자열을 한 곳에 둔다). */
-    record FollowUpCase(String id, List<String> previousIds, String question, String targetId) {}
+    /**
+     * 후속 질문 한 건 — 앞 질문과 정답은 골든셋 id 로 가리킨다(정답 문자열을 한 곳에 둔다). {@code kind} 는
+     * {@code same-topic}(앞 질문의 맥락에 기댄다) · {@code topic-switch}(짧지만 앞 질문과 다른 주제를 꺼낸다 — 앞 질문을
+     * 검색어에 섞으면 손해를 보는 쪽).
+     */
+    record FollowUpCase(String id, String kind, List<String> previousIds, String question, String targetId) {}
+
+    /** 후속 질문 절의 갈래 — 검색하는 다섯 개 + 그중 둘을 합친 {@code fused}(맨 뒤, 검색하지 않는다). */
+    private static final List<String> FOLLOWUP_VARIANTS = List.of("raw", "pipeline", "condensed", "concat", "full", "fused");
 
     record FollowUpSet(String version, int topK, String note, List<FollowUpCase> cases) {}
 
@@ -204,47 +213,71 @@ class SearchQualityEvaluationTest {
         }
         int k = set.topK();
         boolean multiqueryConfigured = props.searchMultiqueryEnabledSafe();
+        // 스레드 id 에 실행마다 다른 값을 넣는다 — 같은 스크래치 DB 로 다시 돌릴 때 앞 질문이 같은 스레드에 겹겹이 쌓여
+        // 독립화의 재료가 "같은 질문 ×N"이 되던 것을 막는다(2026-10-12 의 재실행들이 그 상태로 쟀다).
+        String runToken = Long.toString(System.currentTimeMillis(), 36);
         Map<String, List<Double>> recallByVariant = new LinkedHashMap<>();
         StringBuilder table = new StringBuilder();
         try {
             for (FollowUpCase fu : set.cases()) {
                 GoldQuery target = gold.get(fu.targetId());
+                String kind = fu.kind() == null ? "same-topic" : fu.kind();
                 boolean gateOpen = condenser.gateOpen(fu.question());
-                StringBuilder line = new StringBuilder("%-6s len=%2d gate=%-5s".formatted(fu.id(), fu.question().length(), gateOpen));
-                for (String variant : List.of("raw", "pipeline", "condensed", "concat", "full")) {
-                    String thread = "se-" + fu.id() + "-" + variant;
-                    for (String prevId : fu.previousIds()) {
-                        memory.addTurn(USER, thread, gold.get(prevId).question(), "답변",
-                                LocalDateTime.now().format(TURN_TIME), 10, 10, 100, "local", 1, "N", "");
+                StringBuilder line = new StringBuilder("%-6s %-12s len=%2d gate=%-5s"
+                        .formatted(fu.id(), kind, fu.question().length(), gateOpen));
+                Map<String, List<Document>> resultsByVariant = new LinkedHashMap<>();
+                for (String variant : FOLLOWUP_VARIANTS) {
+                    String question;
+                    boolean expansion = false;
+                    Optional<QuestionCondenser.Condensed> rewritten = Optional.empty();
+                    Long ms = null;
+                    List<Document> results;
+                    if ("fused".equals(variant)) {
+                        // fused = 원문 검색 결과와 이어 붙인 검색어의 결과를 RRF 로 합친 것(LLM 없음) — 이어 붙이기가 주제를 바꾼
+                        // 질문에서 앞 주제로 끌려가는 손해를 원문 쪽 목록이 막아 주는가.
+                        question = "raw + concat";
+                        results = SearchQualityMetrics.rrfFuse(
+                                List.of(resultsByVariant.get("raw"), resultsByVariant.get("concat")),
+                                props.searchRrfKSafe(), Document::getId);
+                    } else {
+                        String thread = "se-" + runToken + "-" + fu.id() + "-" + variant;
+                        for (String prevId : fu.previousIds()) {
+                            memory.addTurn(USER, thread, gold.get(prevId).question(), "답변",
+                                    LocalDateTime.now().format(TURN_TIME), 10, 10, 100, "local", 1, "N", "");
+                        }
+                        // concat = LLM 없이 앞 질문들과 후속 질문을 이어 붙인 검색어(독립화의 값싼 대안이 되는가).
+                        String previousText = fu.previousIds().stream().map(id -> gold.get(id).question())
+                                .collect(Collectors.joining(" "));
+                        question = switch (variant) {
+                            case "full" -> target.question();
+                            case "concat" -> previousText + " " + fu.question();
+                            default -> fu.question();
+                        };
+                        // 확장 스위치 — raw·condensed·concat 은 확장 없이(검색어의 몫만 본다), pipeline·full 은 설정된 그대로.
+                        expansion = ("pipeline".equals(variant) || "full".equals(variant)) && multiqueryConfigured;
+                        settings.update(SettingsKeys.SEARCH_MULTIQUERY_ENABLED, Boolean.toString(expansion));
+                        boolean condense = "condensed".equals(variant) || ("pipeline".equals(variant) && gateOpen);
+                        long t0 = System.nanoTime();
+                        rewritten = condense
+                                ? condenser.condense(USER, thread, fu.question(), Locale.KOREAN) : Optional.empty();
+                        AgentState state = AgentState.of(question, set.version(), thread, "", RoutingMode.COST_FIRST).toBuilder()
+                                .searchQuestion(rewritten.map(QuestionCondenser.Condensed::searchQuestion).orElse(null))
+                                .build();
+                        results = retrievalService.execute(state).retrievedDocs();
+                        ms = (System.nanoTime() - t0) / 1_000_000;
                     }
-                    // concat = LLM 없이 앞 질문들과 후속 질문을 이어 붙인 검색어(독립화의 값싼 대안이 되는가).
-                    String previousText = fu.previousIds().stream().map(id -> gold.get(id).question())
-                            .collect(Collectors.joining(" "));
-                    String question = switch (variant) {
-                        case "full" -> target.question();
-                        case "concat" -> previousText + " " + fu.question();
-                        default -> fu.question();
-                    };
-                    // 확장 스위치 — raw·condensed·concat 은 확장 없이(검색어의 몫만 본다), pipeline·full 은 설정된 그대로.
-                    boolean expansion = ("pipeline".equals(variant) || "full".equals(variant)) && multiqueryConfigured;
-                    settings.update(SettingsKeys.SEARCH_MULTIQUERY_ENABLED, Boolean.toString(expansion));
-                    boolean condense = "condensed".equals(variant) || ("pipeline".equals(variant) && gateOpen);
-                    Optional<QuestionCondenser.Condensed> rewritten = condense
-                            ? condenser.condense(USER, thread, fu.question(), Locale.KOREAN) : Optional.empty();
-                    AgentState state = AgentState.of(question, set.version(), thread, "", RoutingMode.COST_FIRST).toBuilder()
-                            .searchQuestion(rewritten.map(QuestionCondenser.Condensed::searchQuestion).orElse(null))
-                            .build();
-                    List<Document> results = retrievalService.execute(state).retrievedDocs();
+                    resultsByVariant.put(variant, results);
                     List<Boolean> relevance = results.stream()
                             .map(d -> SearchQualityMetrics.containsAnyMarker(d.getText(), target.mustContainAny()))
                             .toList();
                     double recall = SearchQualityMetrics.recallAtK(relevance, k);
                     int rank = SearchQualityMetrics.firstRelevantRank(relevance, k);
-                    recallByVariant.computeIfAbsent(variant, v -> new ArrayList<>()).add(recall);
+                    recallByVariant.computeIfAbsent(kind + " " + variant, v -> new ArrayList<>()).add(recall);
                     line.append("  %s=%s".formatted(variant, rank > 0 ? rank : "-"));
 
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("case", fu.id());
+                    row.put("kind", kind);
                     row.put("variant", variant);
                     row.put("question", question);
                     row.put("length", fu.question().length());
@@ -254,6 +287,8 @@ class SearchQualityEvaluationTest {
                     row.put("recall", recall);
                     row.put("ndcg", SearchQualityMetrics.ndcgAtK(relevance, k));
                     row.put("rank", rank);
+                    row.put("ms", ms);   // 독립화 호출 포함, fused 는 null(검색하지 않는다)
+                    row.put("top", topFiles(results, k));
                     emit("followup", row);
                 }
                 table.append(line).append("  | ").append(fu.question()).append('\n');
@@ -264,8 +299,8 @@ class SearchQualityEvaluationTest {
         System.out.println("=== §10.12 후속 질문 검색 (" + set.cases().size() + "건, k=" + k + ", 독립화 게이트 = 길이 < "
                 + props.searchMultiqueryMinLengthSafe() + ") — 값은 정답 청크의 순위(- = top-" + k + " 밖) ===");
         System.out.print(table);
-        recallByVariant.forEach((variant, list) -> System.out.printf("mean recall@%d %-9s = %.3f%n", k, variant,
-                list.stream().mapToDouble(Double::doubleValue).average().orElse(0.0)));
+        recallByVariant.forEach((kindVariant, list) -> System.out.printf("mean recall@%d %-22s = %.3f (n=%d)%n", k, kindVariant,
+                list.stream().mapToDouble(Double::doubleValue).average().orElse(0.0), list.size()));
     }
 
     /** 상위 k 개 결과의 문서 이름 — 놓친 케이스에서 무엇이 자리를 차지했는지 본다. */

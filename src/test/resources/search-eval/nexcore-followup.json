@@ -1,10 +1,11 @@
 {
   "version": "latest",
   "topK": 10,
-  "note": "후속 질문 세트 — 앞 질문(previousIds, 골든셋 id)을 이력으로 두고 짧은 후속 질문(question)을 검색한다. 정답은 targetId 골든 케이스의 mustContainAny 다. 길이는 독립화 게이트(search-multiquery-min-length) 앞뒤로 퍼뜨렸다.",
+  "note": "후속 질문 세트 — 앞 질문(previousIds, 골든셋 id)을 이력으로 두고 짧은 후속 질문(question)을 검색한다. 정답은 targetId 골든 케이스의 mustContainAny 다. 길이는 독립화 게이트(search-multiquery-min-length) 앞뒤로 퍼뜨렸다. kind: same-topic = 앞 질문의 맥락에 기대는 질문(fu-01~14) · topic-switch = 짧지만 앞 질문과 다른 문서·주제를 꺼내는 질문(fu-15~21, 앞 질문을 검색어에 섞으면 손해를 보는 쪽).",
   "cases": [
     {
       "id": "fu-01",
+      "kind": "same-topic",
       "previousIds": [
         "batch-03"
       ],
@@ -13,6 +14,7 @@
     },
     {
       "id": "fu-02",
+      "kind": "same-topic",
       "previousIds": [
         "batch-01"
       ],
@@ -21,6 +23,7 @@
     },
     {
       "id": "fu-03",
+      "kind": "same-topic",
       "previousIds": [
         "batch-05"
       ],
@@ -29,6 +32,7 @@
     },
     {
       "id": "fu-04",
+      "kind": "same-topic",
       "previousIds": [
         "arch-01"
       ],
@@ -37,6 +41,7 @@
     },
     {
       "id": "fu-05",
+      "kind": "same-topic",
       "previousIds": [
         "arch-04"
       ],
@@ -45,6 +50,7 @@
     },
     {
       "id": "fu-06",
+      "kind": "same-topic",
       "previousIds": [
         "arch-05"
       ],
@@ -53,6 +59,7 @@
     },
     {
       "id": "fu-07",
+      "kind": "same-topic",
       "previousIds": [
         "arch-08"
       ],
@@ -61,6 +68,7 @@
     },
     {
       "id": "fu-08",
+      "kind": "same-topic",
       "previousIds": [
         "arch-10"
       ],
@@ -69,6 +77,7 @@
     },
     {
       "id": "fu-09",
+      "kind": "same-topic",
       "previousIds": [
         "arch-07"
       ],
@@ -77,6 +86,7 @@
     },
     {
       "id": "fu-10",
+      "kind": "same-topic",
       "previousIds": [
         "sample-01"
       ],
@@ -85,6 +95,7 @@
     },
     {
       "id": "fu-11",
+      "kind": "same-topic",
       "previousIds": [
         "sample-02"
       ],
@@ -93,6 +104,7 @@
     },
     {
       "id": "fu-12",
+      "kind": "same-topic",
       "previousIds": [
         "sample-04"
       ],
@@ -101,6 +113,7 @@
     },
     {
       "id": "fu-13",
+      "kind": "same-topic",
       "previousIds": [
         "arch-03"
       ],
@@ -109,11 +122,75 @@
     },
     {
       "id": "fu-14",
+      "kind": "same-topic",
       "previousIds": [
         "sample-07"
       ],
       "question": "숫자는 어떻게 표현돼?",
       "targetId": "sample-08"
+    },
+    {
+      "id": "fu-15",
+      "kind": "topic-switch",
+      "previousIds": [
+        "batch-03"
+      ],
+      "question": "메타 로더는?",
+      "targetId": "arch-10"
+    },
+    {
+      "id": "fu-16",
+      "kind": "topic-switch",
+      "previousIds": [
+        "arch-08"
+      ],
+      "question": "CommonArea란?",
+      "targetId": "sample-04"
+    },
+    {
+      "id": "fu-17",
+      "kind": "topic-switch",
+      "previousIds": [
+        "sample-07"
+      ],
+      "question": "NOTX 롤백돼?",
+      "targetId": "arch-04"
+    },
+    {
+      "id": "fu-18",
+      "kind": "topic-switch",
+      "previousIds": [
+        "arch-01"
+      ],
+      "question": "처리일자 조회 메소드는?",
+      "targetId": "batch-04"
+    },
+    {
+      "id": "fu-19",
+      "kind": "topic-switch",
+      "previousIds": [
+        "batch-01"
+      ],
+      "question": "업무 예외 클래스는?",
+      "targetId": "arch-05"
+    },
+    {
+      "id": "fu-20",
+      "kind": "topic-switch",
+      "previousIds": [
+        "sample-02"
+      ],
+      "question": "로그 레벨 기본값은?",
+      "targetId": "arch-08"
+    },
+    {
+      "id": "fu-21",
+      "kind": "topic-switch",
+      "previousIds": [
+        "arch-12"
+      ],
+      "question": "UIO 편집돼?",
+      "targetId": "sample-07"
     }
   ]
 }
