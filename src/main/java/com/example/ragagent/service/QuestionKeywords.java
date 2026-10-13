@@ -158,6 +158,15 @@ public final class QuestionKeywords {
         return tokens;
     }
 
+    /**
+     * 토큰 하나의 어간(조사·어미를 뗀 소문자 형태), 또는 의문·기능어라 버릴 토큰이면 {@code null} — {@link #keyword} 와 같다.
+     * 키워드 검색의 MATCH 식({@code KeywordSearchRepository.toMatchQuery})도 이 규칙을 쓴다: 결과가 언제나 원래 토큰의
+     * 접두사라, 부분 문자열로 맞히는 trigram 색인에서 원래 토큰이 맞히던 청크를 전부 맞힌다.
+     */
+    public static String stem(String token) {
+        return token == null ? null : keyword(token);
+    }
+
     /** 토큰 하나 → 키워드, 또는 버릴 때 {@code null}. */
     static String keyword(String raw) {
         String token = trimTrailingPunct(raw).toLowerCase(Locale.ROOT);

@@ -329,6 +329,29 @@ class KeywordSearchRepositoryTest {
         assertThat(KeywordSearchRepository.toMatchQuery("문서 코드확인")).isEqualTo("\"코드확인\""); // 2글자만 제외, 4글자는 유지
     }
 
+    @Test
+    @DisplayName("toMatchQuery — 조사·어미를 뗀 어간을 원래 형태 옆에 더한다(원래 형태는 지우지 않는다), 같은 어간은 한 번")
+    void toMatchQuery_addsTheStemNextToTheSurfaceForm() {
+        // "노드매니저는" 만 찾으면 본문의 "노드매니저" · "노드매니저를" 을 놓친다(구문 일치) — 어간이 접두사라 그것까지 맞힌다.
+        assertThat(KeywordSearchRepository.toMatchQuery("노드매니저는 어떤 역할을 하는가?"))
+                .isEqualTo("\"노드매니저는\" OR \"노드매니저\" OR \"역할을\" OR \"하는가\"");
+        // 흔한 단어의 원래 구문을 남겨 두어야 그 구문이 그대로 있는 청크가 점수를 잃지 않는다. 두 형태가 같은 어간이면 한 번.
+        assertThat(KeywordSearchRepository.toMatchQuery("클래스는 어떤 클래스를"))
+                .isEqualTo("\"클래스는\" OR \"클래스\" OR \"클래스를\"");
+        // 영문 + 조사: 어간은 소문자(trigram 은 대소문자를 가리지 않는다).
+        assertThat(KeywordSearchRepository.toMatchQuery("NOTX로 실행된")).isEqualTo("\"NOTX로\" OR \"notx\" OR \"실행된\"");
+    }
+
+    @Test
+    @DisplayName("matchTerms — 어간이 3글자 미만이면 더하지 않는다(trigram 이 없다) · 의문·기능어는 원래 형태만 · 바뀐 것이 없으면 하나")
+    void matchTerms_edges() {
+        assertThat(KeywordSearchRepository.matchTerms("로그는")).containsExactly("로그는");   // 어간 "로그" 는 2글자
+        assertThat(KeywordSearchRepository.matchTerms("어떻게")).containsExactly("어떻게");   // 기능어 — 예전 그대로
+        assertThat(KeywordSearchRepository.matchTerms("트랜잭션")).containsExactly("트랜잭션");
+        assertThat(KeywordSearchRepository.matchTerms("IDataSet")).containsExactly("IDataSet"); // 소문자 어간은 같은 것으로 본다
+        assertThat(KeywordSearchRepository.matchTerms("값으로")).containsExactly("값으로");   // 어간 "값" 1글자
+    }
+
     // ── §10.7.3 — 3자 미만 질의어 LIKE 폴백 ────────────────────────────────────
 
     @Test

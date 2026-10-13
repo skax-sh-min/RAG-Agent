@@ -50,12 +50,14 @@ public class EmbeddingBeanConfig {
         EmbeddingModel base;
         if (urls.size() == 1) {
             base = buildRawModel(urls.get(0), cfg, model);
+            warnIfSingleEndpointOnReplicatedServer(urls.get(0), props.llmSafe().providers());
         } else {
             List<EmbeddingModel> delegates = urls.stream()
                     .map(u -> buildRawModel(u, cfg, model))
                     .toList();
-            base = new LoadBalancingEmbeddingModel(delegates);
-            log.info("Embedding load balancing (§6.21 E1) across {} endpoints: {}", urls.size(), urls);
+            // 부하 분산 + 닿지 못한 엔드포인트를 건너뛰는 장애 전환(LoadBalancingEmbeddingModel 클래스 주석).
+            base = new LoadBalancingEmbeddingModel(delegates, urls);
+            log.info("Embedding load balancing + failover (§6.21 E1) across {} endpoints: {}", urls.size(), urls);
         }
 
         EmbeddingModel tracked = new TrackingEmbeddingModel(base, usageRepo, model,
@@ -66,6 +68,30 @@ public class EmbeddingBeanConfig {
         // Cache sits outside tracking so a cache hit records no usage — no provider call happened.
         return new CachingEmbeddingModel(tracked, model,
                 props.searchQueryEmbedCacheMaxSizeSafe(), props.searchQueryEmbedCacheTtlSecondsSafe());
+    }
+
+    /**
+     * 채팅은 로컬 서버 두 대로 이중화했는데 임베딩은 그중 한 대에만 걸려 있는 구성을 기동 때 알린다.
+     *
+     * <p>임베딩은 라우터 밖이라 채팅의 장애 전환을 받지 못한다 — 그 한 대가 죽으면 채팅 모델은 다른 서버로 넘어가도 RAG
+     * 턴은 질문 임베딩에서 실패한다. 기본값({@code EMBED_BASE_URL} 이 비면 {@code LOCAL_LLM_URL})이 정확히 그 모양이라
+     * 이중화 배포가 모르는 채 빠지기 쉽다. {@code LOCAL_LLM_URL_2} 에서 엔드포인트를 <b>자동으로 만들지 않는</b> 이유는
+     * 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없어서다(섞이면 인덱스가 깨진다) — 그래서 고치지 않고 알리기만 한다.
+     * 임베딩이 따로 떨어진 서버를 쓰면 이중화와 무관하므로 말하지 않는다.
+     */
+    private static void warnIfSingleEndpointOnReplicatedServer(String embedUrl,
+                                                               List<AppProperties.ProviderConfig> providers) {
+        if (providers == null || !LocalReplicas.anyReplicated(providers)) return;
+        String root = LocalReplicas.normalizedRoot(embedUrl);
+        providers.stream()
+                .filter(p -> p.isEnabled() && !LocalReplicas.peersOf(p, providers).isEmpty())
+                .filter(p -> LocalReplicas.normalizedRoot(p.baseUrl()).equals(root))
+                .findFirst()
+                .ifPresent(p -> log.warn("""
+                        [EMBED CONFIG] chat runs on {} replicated local servers, but embeddings use only {} (provider [{}]) — \
+                        if that server goes down, RAG turns fail at the query embedding even though chat switches over.
+                          -> Set EMBED_ADDITIONAL_BASE_URLS to the other server(s), if they serve the same embedding model (EMBED_MODEL) at the same dimension.""",
+                        1 + LocalReplicas.peersOf(p, providers).size(), embedUrl, p.name()));
     }
 
     /** Builds one raw {@link OpenAiEmbeddingModel} pointed at {@code rawUrl}, sharing {@code cfg}'s

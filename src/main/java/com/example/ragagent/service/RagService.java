@@ -288,6 +288,11 @@ public class RagService {
         return vectorStore.searchBatch(DocRegistry.SHARED, queries, version, topK);
     }
 
+    /** 청크 id 로 저장된 원문·메타데이터 — 없는 id 는 빠진다({@link com.example.ragagent.ingestion.VectorStoreProvider#findByIds}). */
+    public List<Document> findChunksByIds(String version, List<String> springDocIds) {
+        return vectorStore.findByIds(DocRegistry.SHARED, version, springDocIds);
+    }
+
     /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
     public List<String> listTags(String version) {
         return docRegistry.distinctTags(version);

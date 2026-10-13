@@ -53,7 +53,7 @@ class QuestionReuseClarifiedQuestionTest {
         turn(1L, "그거 어떻게 설정해?", "MCI 연동 타임아웃은 어떻게 설정하나요?", null);
 
         List<QuestionReuseRepository.CandidateTurn> found =
-                repo.findSuggestionCandidates(List.of("타임아웃"), false, "u1", null, 10);
+                repo.findSuggestionCandidates(List.of("타임아웃"), "u1", null, 10);
 
         assertThat(found).singleElement().satisfies(c -> {
             assertThat(c.question()).isEqualTo("그거 어떻게 설정해?");
@@ -67,8 +67,8 @@ class QuestionReuseClarifiedQuestionTest {
     void stillMatchesTheOriginalWording() {
         turn(1L, "디비 접속 설정 알려줘", "데이터베이스 접속 설정 방법은?", null);
 
-        assertThat(repo.findSuggestionCandidates(List.of("디비"), false, "u1", null, 10)).hasSize(1);
-        assertThat(repo.findSuggestionCandidates(List.of("데이터베이스"), false, "u1", null, 10)).hasSize(1);
+        assertThat(repo.findSuggestionCandidates(List.of("디비"), "u1", null, 10)).hasSize(1);
+        assertThat(repo.findSuggestionCandidates(List.of("데이터베이스"), "u1", null, 10)).hasSize(1);
     }
 
     @Test
@@ -77,7 +77,7 @@ class QuestionReuseClarifiedQuestionTest {
         turn(1L, "그거 어떻게 설정해?", "MCI 연동 타임아웃은 어떻게 설정하나요?", null);
         turn(2L, "그거 어떻게 설정해?", null, 1L);   // 이 기능 이전에 원문을 그대로 복사한 재사용 턴
 
-        QuestionReuseRepository.CandidateTurn reused = repo.findTurnForReuse(2L, false, "u1");
+        QuestionReuseRepository.CandidateTurn reused = repo.findTurnForReuse(2L);
 
         assertThat(reused).isNotNull();
         assertThat(reused.displayQuestion()).isEqualTo("MCI 연동 타임아웃은 어떻게 설정하나요?");
@@ -88,7 +88,7 @@ class QuestionReuseClarifiedQuestionTest {
     void withoutAClarifiedQuestionTheOriginalIsShown() {
         turn(1L, "sqlite 연결 설정 방법", null, null);
 
-        assertThat(repo.findTurnForReuse(1L, false, "u1").displayQuestion()).isEqualTo("sqlite 연결 설정 방법");
+        assertThat(repo.findTurnForReuse(1L).displayQuestion()).isEqualTo("sqlite 연결 설정 방법");
     }
 
     // ── 과거 질문 다듬기(백필) 대상 ──────────────────────────────────────────

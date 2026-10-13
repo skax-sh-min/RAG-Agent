@@ -32,6 +32,8 @@ public record SettingsView(
      *                   {@code "16,384 (설정됨)"} / {@code "-"}(모름). <b>{@code "-"} 가 정보다</b>:
      *                   선언도 탐지도 없다는 뜻이고, 그 상태에서는 입력 예산을 짤 근거가 없어
      *                   {@code max-tokens} 보정도 돌지 않는다. 기동 로그의 {@code ctx=?} 와 같은 값이다
+     * @param thinking   "생각 제어" 열의 재료 — 등록되지 않은 프로바이더는 {@code null}(= {@link ThinkingControl#UNKNOWN})
+     * @param connection "상태" 열 — 설정(미설정)과 서버에 실제로 물어본 결과(접속불가 · 정상). {@code null} 이면 설정이 갖춰졌느냐로 정한다
      */
     public record ProviderRow(
             String name,
@@ -44,14 +46,99 @@ public record SettingsView(
             String blockedUntil,
             boolean enabled,
             String contextWindow,
-            ProviderThinking thinking
+            ProviderThinking thinking,
+            ProviderConnection connection
     ) {
+        /** 접속 확인 없이 만드는 호출부(테스트 포함)는 설정이 갖춰졌으면 "확인 중", 아니면 "미설정" 이다. */
+        public ProviderRow {
+            if (connection == null) {
+                connection = configured ? ProviderConnection.pending() : ProviderConnection.notConfigured();
+            }
+        }
+
+        /** 접속 확인 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
+        public ProviderRow(String name, String role, int priority, String model, String baseUrl,
+                           boolean configured, boolean blocked, String blockedUntil, boolean enabled,
+                           String contextWindow, ProviderThinking thinking) {
+            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow,
+                    thinking, null);
+        }
+
         /** 생각 제어 열 없이 만드는 형태 — 이 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
         public ProviderRow(String name, String role, int priority, String model, String baseUrl,
                            boolean configured, boolean blocked, String blockedUntil, boolean enabled,
                            String contextWindow) {
-            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow, null);
+            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow, null, null);
         }
+
+        /** "생각 제어" 열의 3단계 — 호출 지점별 생각 수준 설정이 이 프로바이더로 가는 요청에 실리는가. */
+        public ThinkingControl thinkingControl() {
+            return thinking == null ? ThinkingControl.UNKNOWN : thinking.control();
+        }
+    }
+
+    /**
+     * 프로바이더 표의 "상태" 열 — 설정(미설정)과 서버에 실제로 물어본 결과(접속불가 · 정상)를 합친 3단계에, 아직 묻지 않았거나
+     * 묻는 중인 "확인 중" 이 하나 더 있다. 화면을 열 때는 늘 "확인 중" 으로 시작하고, 확인이 끝나면 칸만 바꿔 끼운다
+     * ({@code GET /settings/llm-status}) — 죽은 서버의 연결 타임아웃이 페이지 전체를 붙잡지 않게.
+     *
+     * @param latencyMs   모델 목록 API 가 응답하기까지 걸린 시간 — 정상일 때 설명에 쓴다
+     * @param modelListed 설정한 모델이 서버의 목록에 있는가({@code null} = 목록을 읽지 못했다). 3단계를 바꾸지 않고 설명에만 쓴다
+     * @param error       접속하지 못한 사유 한 줄 — 접속불가일 때 설명에 쓴다
+     */
+    public record ProviderConnection(State state, Long latencyMs, Boolean modelListed, String error) {
+
+        public enum State {
+            /** 주소나 키가 없어 등록되지 않았다 — 물어볼 곳이 없다. */
+            NOT_CONFIGURED,
+            /** 아직 묻지 않았거나 묻는 중이다. */
+            CHECKING,
+            /** 모델 목록 API 가 응답하지 않았다(연결 거부 · 타임아웃 · HTTP 오류). */
+            UNREACHABLE,
+            /** 모델 목록 API 가 응답했다. */
+            OK
+        }
+
+        private static final ProviderConnection NOT_CONFIGURED_CONNECTION = new ProviderConnection(State.NOT_CONFIGURED, null, null, null);
+        private static final ProviderConnection PENDING_CONNECTION = new ProviderConnection(State.CHECKING, null, null, null);
+
+        public static ProviderConnection notConfigured() {
+            return NOT_CONFIGURED_CONNECTION;
+        }
+
+        public static ProviderConnection pending() {
+            return PENDING_CONNECTION;
+        }
+
+        public static ProviderConnection reachable(Long latencyMs, Boolean modelListed) {
+            return new ProviderConnection(State.OK, latencyMs, modelListed, null);
+        }
+
+        public static ProviderConnection unreachable(String error) {
+            return new ProviderConnection(State.UNREACHABLE, null, null, error);
+        }
+
+        public boolean isChecking() {
+            return state == State.CHECKING;
+        }
+
+        /** 서버는 응답했는데 설정한 모델이 목록에 없다 — "정상" 칸의 설명에 덧붙는다. */
+        public boolean isModelMissing() {
+            return Boolean.FALSE.equals(modelListed);
+        }
+    }
+
+    /**
+     * "생각 제어" 열의 3단계 — 호출 지점별 생각 수준({@code app.llm.thinking.*})이 이 프로바이더로 가는 요청에 <b>실리는가</b>.
+     * 서버가 그 필드를 알아듣는지는 이 앱이 알 수 없다(알아듣는 서버에 실었다는 것까지가 이 열의 말이다).
+     */
+    public enum ThinkingControl {
+        /** 요청마다 생각 제어 필드를 실어 호출 지점별 설정을 서버에 알린다. */
+        APPLIED,
+        /** 아무것도 싣지 않는다(지정하지 않은 원격 서버이거나, 서버가 필드를 거부해 뺐다) — 생각 여부는 서버의 자체 설정이 정한다. */
+        SERVER,
+        /** 알 수 없다 — 등록되지 않은 프로바이더라 요청 자체가 가지 않는다. */
+        UNKNOWN
     }
 
     /**
@@ -76,14 +163,35 @@ public record SettingsView(
             return rejected != null && !rejected.isEmpty();
         }
 
+        /**
+         * 실제 전송과 같은 함수로 가른다 — dialect 가 만드는 값에서 서버가 거부한 필드를 뺀 뒤({@code ProviderThinkingDialects#wireFor}
+         * 와 같은 식) 아무것도 남지 않으면 서버가 정하고, 남으면 우리가 정한다. 필드 이름을 문자열로 비교하는 두 번째 규칙을
+         * 두지 않는다.
+         */
+        public ThinkingControl control() {
+            var wire = resolved.wire(com.example.ragagent.llm.ThinkingLevel.OFF)
+                    .without(rejected == null ? java.util.Set.of() : rejected);
+            return wire.sent() == com.example.ragagent.llm.ThinkingWire.Sent.NOTHING
+                    ? ThinkingControl.SERVER : ThinkingControl.APPLIED;
+        }
+
         /** 메시지 키 — {@code settings.thinking.support.on-off} 처럼. */
         public String supportKey() {
             return "settings.thinking.support." + support.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
         }
     }
 
-    /** A titled group of settings on the page (e.g. "검색 튜닝 (핫 수정)"). */
-    public record SettingGroup(String id, String title, List<SettingItem> items) {}
+    /**
+     * A titled group of settings on the page (e.g. "검색 튜닝 (핫 수정)").
+     *
+     * @param note 제목 옆에 붙이는 표시의 메시지 키(nullable) — "재기동 필요" 처럼 그룹 전체에 해당하는 말. 예전에는 항목마다
+     *             붙였는데, 같은 말이 줄마다 반복돼 오히려 어느 값이 그런지 읽히지 않았다
+     */
+    public record SettingGroup(String id, String title, List<SettingItem> items, String note) {
+        public SettingGroup(String id, String title, List<SettingItem> items) {
+            this(id, title, items, null);
+        }
+    }
 
     /**
      * A single setting row.

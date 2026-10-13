@@ -8,7 +8,6 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -93,11 +92,11 @@ class RetrievalServiceMultiQueryParallelTest {
         LlmRouter llmRouter = mock(LlmRouter.class);
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, chatModel, null);
-        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        RouterTestSupport.executeOn(llmRouter, expansionProvider);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
-        RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
+        RetrievalService svc = new RetrievalService(llmRouter, ragService, props,
                 Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows(),
                 com.example.ragagent.llm.ThinkingBudget.none());
 

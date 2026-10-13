@@ -85,8 +85,13 @@ import java.util.stream.Collectors;
  *     -Dthinking-eval.data-dir=C:/scratch/eval-data \
  *     [-Dthinking-eval.sections=classify,condense,retrieval,rerank,answer,answerS,answerC,evalacc,post,title,curated,direct,directS,keyword,md,txt] \
  *     [-Dthinking-eval.n=26] [-Dthinking-eval.stride=2] [-Dthinking-eval.answer-combos=2] \
- *     [-Dthinking-eval.rerank=true] [-Dthinking-eval.out=target/thinking-eval]
+ *     [-Dthinking-eval.rerank=true] [-Dthinking-eval.out=target/thinking-eval] \
+ *     [-Dthinking-eval.reasoning-budgets=256,512,1024] [-Dthinking-eval.upstream=http://127.0.0.1:1234/v1]
  * </pre>
+ *
+ * <p><b>생각 예산 실험</b>({@code -Dthinking-eval.reasoning-budgets}, PLAN §6.29 열린 항목 (a)): {@code evalacc} 절이 같은 짝을 끔 ·
+ * 낮게 · 낮게+예산마다 판정한다. 예산은 제품이 실을 수 없는 필드라 하네스 안의 {@link ReasoningBudgetProxy} 가 {@code LOCAL_LLM_URL}
+ * 을 가로채 생각을 켠 요청에만 {@code reasoning_budget_tokens} 를 얹는다(행의 {@code budgetSent} 가 실제로 실렸는지 남긴다).
  *
  * <p><b>절마다 드는 시간과 옵션</b>(llama.cpp + gemma-4-E2B, 2026-10-07 — 낮게가 생각을 켜 두 배 안팎이다): 한 줄짜리 호출 절
  * (classify·condense·retrieval·title)은 합쳐 30~40분, {@code answer} 는 사례 하나가 2~3분이라 {@code stride=2}(0·2·4… 번째
@@ -133,6 +138,43 @@ class ThinkingLevelEvaluationTest {
         registry.add("app.data-dir", () -> dir);
         // 리랭커는 빈 생성 시점에 결정되는 opt-in 이라 "rerank" 절은 이 스위치를 켠 컨텍스트에서만 의미가 있다.
         if (Boolean.getBoolean("thinking-eval.rerank")) registry.add("app.search-rerank-enabled", () -> "true");
+        // 생각 예산 실험(PLAN §6.29 열린 항목 (a)) — 앱의 LLM 요청을 하네스 안의 프록시로 돌려, 생각을 켠 요청에만 예산을 싣는다.
+        if (!reasoningBudgets().isEmpty()) {
+            String upstream = System.getProperty("thinking-eval.upstream", envValue("LOCAL_LLM_URL"));
+            if (upstream == null || upstream.isBlank()) {
+                throw new IllegalStateException("thinking-eval.reasoning-budgets 에는 서버 주소가 필요하다 — .env 의 LOCAL_LLM_URL "
+                        + "또는 -Dthinking-eval.upstream");
+            }
+            try {
+                if (BUDGET_PROXY == null) BUDGET_PROXY = ReasoningBudgetProxy.start(upstream);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            registry.add("LOCAL_LLM_URL", () -> BUDGET_PROXY.baseUrl() + "/v1");
+        }
+    }
+
+    /** 생각 예산 실험의 프록시 — {@code -Dthinking-eval.reasoning-budgets} 가 있을 때만 뜬다(JVM 하나에 하나). */
+    private static ReasoningBudgetProxy BUDGET_PROXY;
+
+    /** {@code -Dthinking-eval.reasoning-budgets=256,512,1024} — 비었으면 예산 실험을 하지 않는다. */
+    private static List<Integer> reasoningBudgets() {
+        String raw = System.getProperty("thinking-eval.reasoning-budgets", "");
+        return Arrays.stream(raw.split(",")).map(String::strip).filter(v -> !v.isEmpty())
+                .map(Integer::parseInt).filter(v -> v > 0).toList();
+    }
+
+    /** {@code .env} 의 한 값 — 하네스가 컨텍스트를 띄우기 전에(프록시의 위쪽 주소로) 읽어야 해서 직접 연다. */
+    private static String envValue(String key) {
+        try {
+            for (String line : Files.readAllLines(Path.of(".env"), StandardCharsets.UTF_8)) {
+                String t = line.strip();
+                if (t.startsWith(key + "=")) return t.substring(key.length() + 1).strip().replaceAll("^\"|\"$", "");
+            }
+        } catch (IOException ignored) {
+            // .env 가 없으면 -Dthinking-eval.upstream 으로 받는다
+        }
+        return null;
     }
 
     @Autowired AppProperties props;
@@ -245,9 +287,9 @@ class ThinkingLevelEvaluationTest {
         }
     }
 
+    /** 검색 하네스와 같은 판정 — 공백·마크다운 장식을 걷고 비교한다({@link SearchQualityMetrics#containsAnyMarker}). */
     private static boolean relevant(Document doc, List<String> markers) {
-        String text = doc.getText();
-        return text != null && markers.stream().anyMatch(text::contains);
+        return SearchQualityMetrics.containsAnyMarker(doc.getText(), markers);
     }
 
     private static boolean keyHit(String answer, List<String> markers) {
@@ -624,6 +666,17 @@ class ThinkingLevelEvaluationTest {
         return changed == 0 ? null : sb.toString();
     }
 
+    /** 검증 판정 한 번의 조건 — 수준과(켬일 때) 요청 단위 생각 예산. 예산 {@code null} = 싣지 않음(서버 기본 = 무제한). */
+    private record EvalVariant(ThinkingLevel level, Integer budget) {}
+
+    /** 끔 · 낮게(예산 없음) · 낮게 + 예산마다 — 같은 짝을 한 실행 안에서 모두 판정해야 예산끼리 비교할 수 있다. */
+    private static List<EvalVariant> evalVariants() {
+        List<EvalVariant> variants = new ArrayList<>(List.of(
+                new EvalVariant(ThinkingLevel.OFF, null), new EvalVariant(ThinkingLevel.LOW, null)));
+        for (int budget : reasoningBudgets()) variants.add(new EvalVariant(ThinkingLevel.LOW, budget));
+        return variants;
+    }
+
     @Test
     @Order(50)
     void evalAccuracy() throws IOException {
@@ -646,13 +699,25 @@ class ThinkingLevelEvaluationTest {
                 pairs.put("mutated", answerState(gq, "te-ev-m-" + gq.id()).toBuilder().answer(mutated).build());
             }
             for (var entry : pairs.entrySet()) {
-                for (ThinkingLevel level : order(k, ThinkingLevel.OFF, ThinkingLevel.LOW)) {
+                List<EvalVariant> variants = new ArrayList<>(evalVariants());
+                java.util.Collections.rotate(variants, k % variants.size());
+                for (EvalVariant variant : variants) {
+                    ThinkingLevel level = variant.level();
                     use(ThinkingSite.EVAL, level);
+                    if (BUDGET_PROXY != null) BUDGET_PROXY.budget(variant.budget() == null ? 0 : variant.budget());
+                    int injectedBefore = BUDGET_PROXY == null ? 0 : BUDGET_PROXY.injectedCount();
                     AgentState state = entry.getValue();
-                    Timed<AgentState> t = timed(ThinkingSite.EVAL,
-                            () -> ReflectionTestUtils.invokeMethod(answers, "evaluate", state, state.answer(), Locale.KOREAN));
+                    Timed<AgentState> t;
+                    try {
+                        t = timed(ThinkingSite.EVAL,
+                                () -> ReflectionTestUtils.invokeMethod(answers, "evaluate", state, state.answer(), Locale.KOREAN));
+                    } finally {
+                        if (BUDGET_PROXY != null) BUDGET_PROXY.budget(0);
+                    }
                     AgentState verdict = t.value();
                     Map<String, Object> r = row("evalacc", gq.id(), ThinkingSite.EVAL, level);
+                    r.put("budget", variant.budget());
+                    r.put("budgetSent", BUDGET_PROXY != null && BUDGET_PROXY.injectedCount() > injectedBefore);
                     r.put("pair", entry.getKey());
                     r.put("answerHead", state.answer().substring(0, Math.min(160, state.answer().length())));
                     r.put("grounded", verdict == null ? null : verdict.grounded());

@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -562,6 +563,97 @@ class LlmRouterTest {
         assertThat(cb.getBlockedProviders().get("lm"))
                 .as("폴백이 있었으므로 짧게 줄일 이유가 없다")
                 .isAfter(java.time.Instant.now().plusSeconds(10));
+    }
+
+    // ── 연결 타임아웃 vs 읽기 타임아웃 — 같은 로컬 서버 두 대에서 한 대가 "응답 없음"일 때 ─────────────────────────────
+
+    /** RestClient(HttpURLConnection)가 실제로 던지는 모양 — 원인 사슬 끝이 SocketTimeoutException 이다. */
+    private static org.springframework.web.client.ResourceAccessException ioError(String socketTimeoutMessage) {
+        return new org.springframework.web.client.ResourceAccessException(
+                "I/O error on POST request for \"http://dead:1234/v1/chat/completions\": " + socketTimeoutMessage,
+                new java.net.SocketTimeoutException(socketTimeoutMessage));
+    }
+
+    private LlmRouter twoLocalReplicas(ChatModel first, ChatModel second, CircuitBreaker cb) {
+        var local = new LlmProvider("local", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, first, null);
+        var local2 = new LlmProvider("local-2", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, second, null);
+        return new LlmRouter(List.of(local, local2), mock(LlmUsageRepository.class), cb, RoutingMode.LOCAL_ONLY, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+    }
+
+    @Test
+    @DisplayName("연결 타임아웃(호스트 다운) — 그 프로바이더를 차단하고 같은 호출 안에서 다른 서버로 넘어간다")
+    void connectTimeoutBlocksAndFailsOverWithinTheSameCall() {
+        ChatModel dead = mock(ChatModel.class);
+        when(dead.call(any(Prompt.class))).thenThrow(ioError("Connect timed out"));
+        ChatModel alive = mock(ChatModel.class);
+        when(alive.call(any(Prompt.class))).thenReturn(chatResponse("from-local-2"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        LlmRouter r = twoLocalReplicas(dead, alive, cb);
+
+        String answer = r.executeGated(TaskType.TEXT, RoutingMode.LOCAL_ONLY, m -> m.call(new Prompt("x")));
+
+        assertThat(answer).isEqualTo("from-local-2");
+        assertThat(cb.isBlocked("local")).as("떠 있지 않은 서버는 막아 둔다 — 안 막으면 다음 요청도 10초를 물고 같은 곳으로 간다").isTrue();
+        assertThat(cb.isBlocked("local-2")).isFalse();
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local-2");
+    }
+
+    @Test
+    @DisplayName("읽기 타임아웃 — 예전 그대로다: 차단하지 않고, 다른 서버로 넘기지 않고, 예외를 그대로 올린다")
+    void readTimeoutIsStillRethrownWithoutBlockOrFailover() {
+        ChatModel slow = mock(ChatModel.class);
+        when(slow.call(any(Prompt.class))).thenThrow(ioError("Read timed out"));
+        ChatModel alive = mock(ChatModel.class);
+        when(alive.call(any(Prompt.class))).thenReturn(chatResponse("from-local-2"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        LlmRouter r = twoLocalReplicas(slow, alive, cb);
+
+        assertThatThrownBy(() -> r.executeGated(TaskType.TEXT, RoutingMode.LOCAL_ONLY, m -> m.call(new Prompt("x"))))
+                .isInstanceOf(org.springframework.web.client.ResourceAccessException.class)
+                .hasRootCauseMessage("Read timed out");
+
+        assertThat(cb.isBlocked("local")).as("느린 것과 죽은 것은 다르다 — 긴 생성을 기다리다 끊긴 서버를 막으면 연쇄로 소진된다").isFalse();
+        verify(alive, org.mockito.Mockito.never()).call(any(Prompt.class));
+    }
+
+    @Test
+    @DisplayName("폴백이 없는 단일 프로바이더의 연결 타임아웃 — 짧게(몇 초) 차단하고 소진 안내로 끝난다(날것의 타임아웃이 아니라)")
+    void connectTimeoutOfALoneProviderIsBlockedBriefly() {
+        ChatModel dead = mock(ChatModel.class);
+        when(dead.call(any(Prompt.class))).thenThrow(ioError("Connect timed out"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var lone = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, dead, null);
+        var r = new LlmRouter(List.of(lone), null, cb, RoutingMode.LOCAL_ONLY, 180, Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeGated(TaskType.TEXT, RoutingMode.LOCAL_ONLY, m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(cb.isBlocked("lm")).isTrue();
+        assertThat(cb.getBlockedProviders().get("lm")).as("30초가 아니라 몇 초 — 서버가 올라오면 바로 회복")
+                .isBefore(java.time.Instant.now().plusSeconds(10));
+    }
+
+    @Test
+    @DisplayName("스레드가 인터럽트된 채의 연결 타임아웃은 사용자 중단이다 — 차단하지 않고 그대로 올린다")
+    void connectTimeoutWhileInterruptedIsAnAbort() {
+        ChatModel dead = mock(ChatModel.class);
+        when(dead.call(any(Prompt.class))).thenAnswer(inv -> {
+            Thread.currentThread().interrupt();   // 호출 도중 중지·유휴 워치독이 워커를 인터럽트한 상황
+            throw ioError("Connect timed out");
+        });
+        ChatModel alive = mock(ChatModel.class);
+        CircuitBreaker cb = new CircuitBreaker(2);
+        LlmRouter r = twoLocalReplicas(dead, alive, cb);
+        try {
+            assertThatThrownBy(() -> r.executeGated(TaskType.TEXT, RoutingMode.LOCAL_ONLY, m -> m.call(new Prompt("x"))))
+                    .isInstanceOf(org.springframework.web.client.ResourceAccessException.class);
+
+            assertThat(cb.isBlocked("local")).isFalse();
+            verify(alive, org.mockito.Mockito.never()).call(any(Prompt.class));
+        } finally {
+            Thread.interrupted();   // 다음 테스트로 새지 않게
+        }
     }
 
     @Test

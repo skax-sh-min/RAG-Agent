@@ -132,11 +132,12 @@ for sec in ('answer', 'answerS', 'answerC'):
 rows = load('evalacc')
 if rows:
     head('evalacc — 검증 정확도(positive=자기 문서, negative=다른 주제 문서, mutated=식별자를 뒤집은 답변)')
-    for (pair, lv), rs in by(rows, lambda r: (r['pair'], r['level'])).items():
+    # 생각 예산 실험(-Dthinking-eval.reasoning-budgets)의 행은 수준 옆에 예산을 붙여 따로 센다 — low@256 · low@512 …
+    for (pair, lv), rs in by(rows, lambda r: (r['pair'], r['level'] + (f"@{r['budget']}" if r.get('budget') else ''))).items():
         tr = sum(1 for r in rs if r['grounded'] is True)
         fa = sum(1 for r in rs if r['grounded'] is False)
         no = sum(1 for r in rs if r['grounded'] is None)
-        print(f"  {pair:>8}/{lv:>4} n={len(rs):>3} grounded T/F/None {tr}/{fa}/{no} | 지연 s {dist([r['ms'] for r in rs], 1000)} | 출력 tok {dist([r.get('outTok') for r in rs])} | 잘림 {sum(r.get('trunc') or 0 for r in rs)}")
+        print(f"  {pair:>8}/{lv:>9} n={len(rs):>3} grounded T/F/None {tr}/{fa}/{no} | 지연 s {dist([r['ms'] for r in rs], 1000)} | 출력 tok {dist([r.get('outTok') for r in rs])} | 잘림 {sum(r.get('trunc') or 0 for r in rs)}")
 
 for sec in ('post', 'title', 'curated'):
     short_call_table(sec)

@@ -87,14 +87,59 @@ public final class LlmPing {
         String model = provider.model();
 
         // 1. reachable + modelListed — OpenAI 호환 /models
+        Reach reach = reach(baseUrl, apiKey, model, connectTimeoutSeconds, readTimeoutSeconds);
+        boolean reachable = reach.reachable();
+        Long latencyMs = reach.latencyMs();
+        Boolean modelListed = reach.modelListed();
+        String error = reach.error();
+
+        // 2. modelState — 서버별 경로, 어느 것도 안 맞으면 unknown
+        String modelState = reachable ? modelState(root, model, apiKey, connectTimeoutSeconds, readTimeoutSeconds) : "unknown";
+
+        // 3. inference — deep 일 때만, 그리고 닿을 때만(닿지도 않는 서버에 1토큰을 묻는 건 같은 실패를 두 번 적는 것)
+        Inference inference = null;
+        if (deep && reachable) {
+            inference = inference(baseUrl, model, apiKey, connectTimeoutSeconds, inferenceTimeoutSeconds);
+        } else if (deep) {
+            inference = new Inference(false, null, "skipped: server unreachable");
+        }
+
+        Result result = new Result(provider.name(), model, includeBaseUrl ? baseUrl : null,
+                reachable, latencyMs, modelListed, modelState, Math.max(0, circuitBlockedSeconds), inference, error);
+        log.info("[LLM_PING] provider={} reachable={} modelListed={} modelState={} inference={} blocked={}s error={}",
+                result.name(), result.reachable(), result.modelListed(), result.modelState(),
+                inference == null ? "-" : (inference.ok() ? "ok" : "fail"), result.circuitBlockedSeconds(), error);
+        return result;
+    }
+
+    /**
+     * 첫 단계 하나의 결과 — {@code GET {baseUrl}/models}.
+     *
+     * @param reachable   2xx 이고 JSON 이 왔는가. 프로세스와 HTTP 의 생사이지 그 이상이 아니다
+     * @param latencyMs   요청이 끝나기까지(성공이든 실패든)
+     * @param modelListed 설정된 모델이 목록에 있는가 — {@code null} = 목록을 읽지 못했다(그건 모른다는 뜻이지 없다는 뜻이 아니다)
+     * @param error       실패 사유 한 줄. 성공이면 {@code null}(목록 모양이 이상하면 닿았어도 채워진다)
+     */
+    public record Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error) {}
+
+    /**
+     * "닿는가" 한 단계만 — {@link #probe} 의 첫 단계이자 {@code /settings} 프로바이더 표의 상태 열이 쓰는 정의다.
+     * 두 곳이 같은 함수를 부르는 것이 요점이다: 설정 화면이 "정상"이라고 한 서버를 핑이 "안 닿는다"고 하는 일이 없어야 한다.
+     *
+     * @param baseUrl 앱이 실제로 요청을 보내는 {@code .../v1} 까지의 주소(뒤쪽 슬래시는 무시한다)
+     * @param apiKey  Bearer 로 실을 키 — 없으면 {@code null}
+     */
+    public static Reach reach(String baseUrl, String apiKey, String model,
+                              int connectTimeoutSeconds, int readTimeoutSeconds) {
+        String base = baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
         boolean reachable = false;
-        Long latencyMs = null;
+        Long latencyMs;
         Boolean modelListed = null;
         String error = null;
         long t0 = System.nanoTime();
         try {
             JsonNode body = client(connectTimeoutSeconds, readTimeoutSeconds).get()
-                    .uri(baseUrl + "/models")
+                    .uri(base + "/models")
                     .headers(h -> { if (apiKey != null) h.setBearerAuth(apiKey); })
                     .retrieve()
                     .body(JsonNode.class);
@@ -115,24 +160,7 @@ public final class LlmPing {
             latencyMs = elapsedMs(t0);
             error = "models: " + describe(e);
         }
-
-        // 2. modelState — 서버별 경로, 어느 것도 안 맞으면 unknown
-        String modelState = reachable ? modelState(root, model, apiKey, connectTimeoutSeconds, readTimeoutSeconds) : "unknown";
-
-        // 3. inference — deep 일 때만, 그리고 닿을 때만(닿지도 않는 서버에 1토큰을 묻는 건 같은 실패를 두 번 적는 것)
-        Inference inference = null;
-        if (deep && reachable) {
-            inference = inference(baseUrl, model, apiKey, connectTimeoutSeconds, inferenceTimeoutSeconds);
-        } else if (deep) {
-            inference = new Inference(false, null, "skipped: server unreachable");
-        }
-
-        Result result = new Result(provider.name(), model, includeBaseUrl ? baseUrl : null,
-                reachable, latencyMs, modelListed, modelState, Math.max(0, circuitBlockedSeconds), inference, error);
-        log.info("[LLM_PING] provider={} reachable={} modelListed={} modelState={} inference={} blocked={}s error={}",
-                result.name(), result.reachable(), result.modelListed(), result.modelState(),
-                inference == null ? "-" : (inference.ok() ? "ok" : "fail"), result.circuitBlockedSeconds(), error);
-        return result;
+        return new Reach(reachable, latencyMs, modelListed, error);
     }
 
     /** LM Studio {@code /api/v0/models} 의 {@code state} → llama.cpp {@code /health} 의 {@code status} → unknown. */

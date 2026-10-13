@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.service.QuestionKeywords;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -635,14 +636,40 @@ public class KeywordSearchRepository {
      * than an unordered bag of trigrams) and OR-combined for recall. Terms under 3 characters are
      * dropped — the {@code trigram} tokenizer (§10.4) cannot produce a trigram from fewer than 3
      * characters, so shorter terms are guaranteed to match nothing (see {@link #shortTerms} for
-     * the §10.7.3 LIKE-scan fallback that recovers a signal for exactly those terms).
+     * the §10.7.3 LIKE-scan fallback that recovers a signal for exactly those terms). Each token
+     * contributes its surface form and, when it differs, its particle/ending-stripped stem —
+     * see {@link #matchTerms}.
      */
     static String toMatchQuery(String question) {
         List<String> terms = tokenize(question).stream()
-                .filter(t -> t.length() >= 3)
+                .flatMap(t -> matchTerms(t).stream())
+                .distinct()
                 .map(t -> "\"" + t + "\"")
                 .toList();
         return terms.isEmpty() ? null : String.join(" OR ", terms);
+    }
+
+    /**
+     * 토큰 하나가 MATCH 식에 넣는 항 — <b>원래 형태</b>(3글자 이상이면, 예전 그대로)와, 조사·어미를 뗀 <b>어간</b>이
+     * 원래 형태와 다르고 3글자 이상이면 그것도({@link QuestionKeywords#stem} — 추천 후보 검색과 같은 규칙).
+     *
+     * <p>토큰은 따옴표로 묶여 <b>그 글자 그대로의 연속</b>으로 찾아지므로, 조사가 붙은 {@code "노드매니저는"} 은 본문의
+     * {@code 노드매니저} · {@code 노드매니저를} 을 놓친다 — 골든셋 질문의 3글자 이상 토큰 138개 중 36개가 코퍼스에서
+     * 0건이었다(2026-10-13). 어간은 원래 토큰의 접두사라 더 넓게 맞힌다.
+     *
+     * <p><b>원래 형태를 지우지 않고 어간을 더한다.</b> 어간으로 바꾸기만 하면 {@code 클래스는} 처럼 흔한 단어가
+     * {@code 클래스}(1,826개 청크)로 넓어져, 본문에 그 구문이 그대로 있던 정답 청크가 받던 점수를 잃었다(확장을 끈
+     * 골든셋 nDCG 0.808 → 0.803). 둘 다 넣으면 그런 청크는 두 항이 함께 맞아 점수가 오르고(0.808 → 0.835), 결과는
+     * 언제나 예전 MATCH 결과를 포함한다. 의문·기능어({@code stem} 이 null)는 원래 형태만 둔다 — 빼 봐도 결과가 같았다.
+     * 어간이 3글자에 못 미치면({@code 로그는} → {@code 로그}) trigram 이 만들어지지 않으므로 더하지 않는다 — 2글자를
+     * {@link #likeSearch} 로 보내면 코퍼스 전체 스캔이 질문마다 늘어난다. 측정: {@code documents/SEARCH_EVALUATION.md} §3.5.
+     */
+    static List<String> matchTerms(String token) {
+        List<String> out = new ArrayList<>(2);
+        if (token.length() >= 3) out.add(token);
+        String stem = QuestionKeywords.stem(token);
+        if (stem != null && stem.length() >= 3 && !stem.equalsIgnoreCase(token)) out.add(stem);
+        return out;
     }
 
     /**

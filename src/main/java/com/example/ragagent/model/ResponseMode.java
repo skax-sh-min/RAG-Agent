@@ -166,6 +166,30 @@ public enum ResponseMode {
     }
 
     /**
+     * {@link #maxTokens(int)} 의 값을 <b>정한 항</b>. 같은 {@code max-tokens} 변경이 모드마다 다른 폭으로 움직이는
+     * 까닭(전환점이 모드마다 다르다 — S 는 0.15·2,000 이라 13,334, N/C 는 0.70·5,000 이라 7,143)을 화면이 풀어서 적는 데
+     * 쓴다. {@code /settings} 의 생각 수준 카드가 답변 사이트의 계산 근거에 이 항을 적는다(예전에는 "LLM 튜닝"
+     * 그룹의 읽기 전용 "응답 예산" 행이 이 일을 했다).
+     */
+    public enum BudgetTerm {
+        /** {@code app.llm.max-tokens} 가 모드의 요구보다 낮아 설정 상한에서 잘렸다. */
+        CONFIGURED_CAP,
+        /** 비율항({@link ResponseMode#tokenRatio()})이 글자수 바닥보다 크다. */
+        RATIO,
+        /** 비율항이 작아 글자수 바닥({@link ResponseMode#minChars()})이 받쳐 준다. */
+        FLOOR
+    }
+
+    /**
+     * @param configured {@code app.llm.max-tokens}. 0 이하면 의미가 없다({@link #maxTokens(int)} 가 0) — 호출부가 먼저 거른다.
+     */
+    public BudgetTerm budgetTerm(int configured) {
+        int ratioTokens = (int) Math.round(configured * tokenRatio);
+        if (maxTokens(configured) < Math.max(ratioTokens, minChars)) return BudgetTerm.CONFIGURED_CAP;
+        return ratioTokens >= minChars ? BudgetTerm.RATIO : BudgetTerm.FLOOR;
+    }
+
+    /**
      * RAG 답변의 전용 시스템 프롬프트 키.
      *
      * <p>모드마다 프롬프트를 통째로 바꾸는 것이 핵심이다 — 공용 프롬프트에 "위 형식을 쓰지

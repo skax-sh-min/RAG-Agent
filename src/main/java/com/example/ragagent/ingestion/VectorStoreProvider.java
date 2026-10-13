@@ -49,4 +49,15 @@ public interface VectorStoreProvider {
      * com.example.ragagent.model.TagUtils#toMetaValue}); an empty string clears tags.
      */
     void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv);
+
+    /**
+     * 청크 id 로 <b>저장된 원문과 메타데이터</b>를 읽는다(임베딩은 읽지 않는다). 없는 id 는 결과에서 빠지고, 순서는
+     * 보장하지 않는다. 키워드(BM25) 축으로만 찾힌 청크를 원문으로 되돌리는 데 쓴다 — {@code chunk_fts} 에는 원문이
+     * 아니라 검색용 파생 텍스트(맥락 + 장식을 걷은 본문)가 있다({@code RetrievalService#withStoredText}).
+     *
+     * <p>기본 구현은 빈 목록이다 — 호출부는 그때 받은 문서를 그대로 쓴다(되돌리지 못할 뿐 틀리지는 않는다).
+     */
+    default List<Document> findByIds(String userId, String version, List<String> springDocIds) {
+        return List.of();
+    }
 }

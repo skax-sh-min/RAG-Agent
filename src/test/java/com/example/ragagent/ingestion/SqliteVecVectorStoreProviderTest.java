@@ -501,4 +501,29 @@ class SqliteVecVectorStoreProviderTest {
         verify(jdbc).batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
                 anyList());
     }
+
+    // ── 키워드 축 청크의 원문 되돌리기 ───────────────────────────────────────
+
+    @Test
+    @DisplayName("findByIds: 저장된 원문과 메타데이터를 PK 로 읽고, 없는 id 는 빠진다(vec0 없이 일반 테이블만)")
+    void findByIds_readsStoredOriginalByPrimaryKey() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("find-by-ids.db"));
+        JdbcTemplate real = new JdbcTemplate(ds);
+        real.execute("CREATE TABLE vec_document_chunks (spring_doc_id TEXT PRIMARY KEY, content TEXT NOT NULL, "
+                + "metadata TEXT NOT NULL, version TEXT NOT NULL, doc_id TEXT NOT NULL, created_at TEXT NOT NULL)");
+        real.update("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?)", "c1", "## 원문", "{\"doc_id\":\"d1\",\"chunk_index\":3}", "latest", "d1", "t");
+
+        SqliteVecVectorStoreProvider p = new SqliteVecVectorStoreProvider(real, embeddingModel, new ObjectMapper(),
+                mock(AppProperties.class));
+        List<Document> found = p.findByIds("u", "latest", List.of("c1", "gone"));
+
+        assertThat(found).hasSize(1);
+        assertThat(found.get(0).getId()).isEqualTo("c1");
+        assertThat(found.get(0).getText()).isEqualTo("## 원문");
+        assertThat(found.get(0).getMetadata()).containsEntry("doc_id", "d1").containsEntry("chunk_index", 3);
+        assertThat(p.findByIds("u", "latest", List.of())).isEmpty();
+    }
 }

@@ -354,6 +354,41 @@
         </div>
     </details>
 
+    <!-- ── DB 백업 (DatabaseBackupService) ─────────────────────────────────────────── -->
+    <!-- 정기 백업의 상태 확인과 수동 실행. 상태는 JSON 으로 받아 아래 스크립트가 그린다(카드를 열 때 묻는다). -->
+    <details class="card mt-4" id="db-backup-card">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-database-down me-2"></i>
+            <span class="fw-semibold small">DB 백업</span>
+            <span id="db-backup-pill" class="badge bg-danger ms-2 d-none">마지막 백업 실패</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                대화·계정·설정·큐레이션·문서 목록·검색 색인이 든 memory.db 의 사본
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div>정기 백업 <strong id="dbb-schedule">-</strong></div>
+                <div>보관 <strong id="dbb-keep">-</strong>개</div>
+                <div class="text-muted">위치 <code id="dbb-dir">-</code></div>
+                <div class="ms-auto">
+                    <button type="button" class="btn btn-sm btn-primary" id="dbb-run">지금 백업</button>
+                </div>
+            </div>
+            <div id="dbb-last" class="mt-2"></div>
+            <table class="table table-sm mt-2 mb-0">
+                <thead><tr><th>파일</th><th class="text-end">크기</th></tr></thead>
+                <tbody id="dbb-files"><tr><td colspan="2" class="text-muted">-</td></tr></tbody>
+            </table>
+            <div class="text-muted mt-2">
+                앱이 도는 중에도 쓰기를 막지 않고 뜹니다(별도 연결의 <code>VACUUM INTO</code>, 뜬 뒤 무결성 검사).
+                문서 원본·변환본·이미지 파일과 Chroma 백엔드의 벡터는 담지 않습니다. 복구는 앱을 멈추고 이 파일을
+                <code>memory.db</code> 로 바꾼 뒤 다시 띄웁니다 — 절차는 운영 매뉴얼 "DB 백업과 복구".
+                같은 디스크에 있으므로 디스크 고장에 대비하려면 이 폴더를 다른 곳으로도 옮겨 두세요.
+            </div>
+        </div>
+    </details>
+
     <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
          확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
     <details class="card mt-4" id="retrieval-metrics-card"
@@ -2078,6 +2113,61 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
 } else if (OPEN_CHUNK_MISSING) {
     showToast(OPEN_CHUNK_NOTFOUND_MSG, 'warning');
 }
+
+/* ── DB 백업 (DatabaseBackupService) ───────────────────────────────────────────────
+   서버가 상태를 통째로 돌려준다(설정 · 마지막 실행 · 남은 백업). 카드를 열 때와 "지금 백업" 뒤에 그린다. 페이지를 열 때도
+   한 번 물어 마지막 정기 백업이 실패했으면 카드 머리에 표시를 단다 — 실패가 로그에만 남지 않게. */
+(function () {
+    const card = document.getElementById('db-backup-card');
+    if (!card) return;
+    const el = id => document.getElementById(id);
+    const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+    const fmtTime = iso => iso ? new Date(iso).toLocaleString() : '-';
+
+    function render(s) {
+        el('dbb-schedule').textContent = s.enabled ? s.cron : '꺼짐 (app.backup.enabled=false)';
+        el('dbb-keep').textContent = s.keep;
+        el('dbb-dir').textContent = s.dir;
+        const last = s.last;
+        const box = el('dbb-last');
+        if (!last) {
+            box.textContent = '이번 기동 뒤 아직 실행하지 않았습니다.';
+            box.className = 'mt-2 text-muted';
+        } else if (last.error) {
+            box.textContent = '마지막 실행(' + fmtTime(last.finishedAt) + ', ' + last.trigger + ') 실패: ' + last.error;
+            box.className = 'mt-2 text-danger';
+        } else {
+            box.textContent = '마지막 실행(' + fmtTime(last.finishedAt) + ', ' + last.trigger + ') ' + last.file
+                + ' · ' + fmtBytes(last.bytes) + ' · ' + last.millis + ' ms';
+            box.className = 'mt-2 text-success';
+        }
+        el('db-backup-pill').classList.toggle('d-none', !(last && last.error));
+        const rows = (s.backups || []).map(f =>
+            '<tr><td><code>' + escHtml(f.name) + '</code></td><td class="text-end">' + fmtBytes(f.bytes) + '</td></tr>');
+        el('dbb-files').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="2" class="text-muted">백업이 없습니다</td></tr>';
+        el('dbb-run').disabled = !!s.running;
+    }
+
+    function refresh() {
+        return fetch('/admin/db-backup')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('dbb-last').textContent = '상태를 불러오지 못했습니다'; });
+    }
+
+    el('dbb-run').addEventListener('click', () => {
+        el('dbb-run').disabled = true;
+        fetch('/admin/db-backup/run', { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(s => {
+                render(s);
+                showToast(s.last && !s.last.error ? '백업했습니다: ' + s.last.file : '백업이 실패했습니다', s.last && !s.last.error ? 'success' : 'danger');
+            })
+            .catch(status => { el('dbb-run').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
+    });
+    card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
 
 /* ── 과거 질문 다듬기 (ClarifiedQuestionBackfill) ─────────────────────────────────
    서버가 상태를 통째로 돌려주므로(남은 턴 · 이번 실행 수치 · 상태) 여기서는 그리기만 한다. 진행 중이면 2초마다 다시

@@ -8,6 +8,8 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingControl;
 import com.example.ragagent.repository.MemoryRepository;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -17,12 +19,12 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Precomputes a deduped conversation summary, so AgentService/StreamingAgentService can use
@@ -54,6 +56,13 @@ public class ConversationSummarizerService {
      */
     private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
+    /**
+     * 출력 예약의 생각 몫 — 요약 자체는 {@code app.summary.max-summary-chars} 를 넘으면 잘려 버려지므로 그만큼만
+     * 받으면 되고, 그 위에 이만큼을 더 둔다. 생각은 끄고 부르지만(출하값) 그 스위치를 받지 않는 서버에서는 모델이
+     * 여전히 생각한다(낮게 실측 p95 420~970) — {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같은 이유다.
+     */
+    static final int THINKING_SLACK_TOKENS = 1_024;
+
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -70,7 +79,10 @@ public class ConversationSummarizerService {
     // Bounded to the most recently used threads — access-order LinkedHashMap evicts the
     // least-recently-used entry once size exceeds maxCachedThreads.
     private final Map<String, String> summaryCache;
-    private final Map<String, Long> lastPrecomputeAt = new ConcurrentHashMap<>();
+    // 같은 스레드의 precompute 를 TTL 동안 한 번으로 줄이는 표시. 항목은 TTL 이 지나면 쓸모가 없으므로 그때 사라진다 —
+    // 예전의 ConcurrentHashMap 은 대화마다 마지막 항목이 영원히 남았고, 그 키는 게스트에게 열린
+    // /ui/chat/summary/precompute 가 받는 아무 threadId 라 호출하는 쪽이 크기를 정했다.
+    private final Cache<String, Long> lastPrecomputeAt;
 
     public ConversationSummarizerService(MemoryService memoryService, LlmRouter llmRouter,
                                          MessageSource messageSource, AppProperties props) {
@@ -85,6 +97,9 @@ public class ConversationSummarizerService {
         this.recentRawTurns = cfg.recentRawTurns();
         this.promptTurnCap = HistoryPolicy.promptTurnCap(props.memorySafe().fetchLimitTurns());
         this.precomputeTtlMillis = cfg.precomputeTtlSeconds() * 1_000L;
+        this.lastPrecomputeAt = Caffeine.newBuilder()
+                .expireAfterWrite(Duration.ofMillis(precomputeTtlMillis))
+                .build();
         this.summaryCache = Collections.synchronizedMap(
                 new LinkedHashMap<>(maxCachedThreads + 1, 0.75f, true) {
                     @Override
@@ -131,10 +146,8 @@ public class ConversationSummarizerService {
 
     /** Package-private for unit testing (bypasses the {@link #precomputeAfterTurn} background thread). */
     void precompute(String userId, String threadId, Long turnId, Locale locale) {
-        long now = System.currentTimeMillis();
-        Long last = lastPrecomputeAt.get(threadId);
-        if (last != null && now - last < precomputeTtlMillis) return;
-        lastPrecomputeAt.put(threadId, now);
+        // 확인과 기록을 한 번에 — 두 요청이 동시에 와도 하나만 지나간다(TTL 이 지난 항목은 캐시가 없는 것으로 본다).
+        if (lastPrecomputeAt.asMap().putIfAbsent(threadId, System.currentTimeMillis()) != null) return;
 
         List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return;
@@ -223,13 +236,29 @@ public class ConversationSummarizerService {
 
         String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
         ThinkingSite site = ThinkingSite.SUMMARY;   // §6.29 — 생각 수준과 라우팅(LOCAL_ONLY)이 여기서 나온다
-        OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()), site).build();
+        OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()), site);
+        int base = baseReservation(props.llmSafe().maxTokens(), maxSummaryChars); // 0 = 프로바이더 기본값 유지
+        if (base > 0) builder.maxTokens(base);
+        OpenAiChatOptions options = builder.build();
         return llmRouter.executeWithTracking(site.taskType(), site.fixedRoutingMode(),
                 BackgroundUsage.SUMMARY_PREFIX,
                 model -> model.call(new Prompt(List.of(
                         new SystemMessage(systemPrompt),
                         new UserMessage(input.text())), options)));
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — 남길 요약 분량({@code maxSummaryChars}, 토큰 추정은 한글 1자 = 1토큰)에
+     * {@link #THINKING_SLACK_TOKENS} 를 더하고 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더 기본값).
+     *
+     * <p>상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진 {@code max-tokens}(기본 12,000) 전체가 예약됐다 — 이 호출의
+     * 입력은 대화 이력이라 그 예약이 이력이 들어갈 자리를 먹고, {@code /settings} 의 {@code max-tokens} 도 따라가지 않았다
+     * (PLAN §6.29 열린 항목 (d)). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens, int maxSummaryChars) {
+        if (configuredMaxTokens <= 0) return 0;
+        return Math.min(configuredMaxTokens, Math.max(0, maxSummaryChars) + THINKING_SLACK_TOKENS);
     }
 
     /**
@@ -370,7 +399,7 @@ public class ConversationSummarizerService {
     /** Call after a new turn is persisted so the next precompute regenerates a fresh summary. */
     public void invalidate(String threadId) {
         summaryCache.remove(threadId);
-        lastPrecomputeAt.remove(threadId);
+        lastPrecomputeAt.invalidate(threadId);
     }
 
     // Normalizes + keeps only the latest occurrence of each distinct question (drops repeated/

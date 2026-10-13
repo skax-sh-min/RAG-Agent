@@ -40,6 +40,15 @@ public class RerankerService {
     // sees enough of the chunk to judge relevance without a large token-budget increase.
     private static final int PREVIEW_LENGTH = 500;
 
+    /**
+     * 출력 예약. 응답은 후보 번호 배열 하나(끔 실측 p95 150토큰)인데, 상한을 싣지 않던 동안은 프로바이더에 기동 때
+     * 구워진 {@code max-tokens}(기본 12,000) 전체가 예약됐다 — 이 호출은 후보 풀(기본 30개 × 미리보기 500자)을 통째로
+     * 싣는 앱에서 가장 입력이 큰 호출 중 하나라, 16k 창에서는 그 예약 때문에 후보 5개 남짓만 들어갈 자리가 남았고 나머지는
+     * 컨텍스트 초과 → 원래 순서로 조용히 물러났다(PLAN §6.29 열린 항목 (d)). 값의 근거는
+     * {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같다(스위치를 받지 않는 서버의 생각까지 받아 준다).
+     */
+    static final int MAX_OUTPUT_TOKENS = 2_048;
+
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final AppProperties props;
@@ -65,9 +74,11 @@ public class RerankerService {
 
             // §6.18 — general/RAG temperature, hot (read fresh per call). §6.29 — rerank 사이트로 표시한다.
             ThinkingSite site = ThinkingSite.RERANK;
-            OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-                    .temperature(props.llmSafe().temperature()), site)
-                    .build();
+            OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().temperature()), site);
+            int base = baseReservation(props.llmSafe().maxTokens()); // 0 = 프로바이더 기본값 유지
+            if (base > 0) builder.maxTokens(base);
+            OpenAiChatOptions options = builder.build();
             String response = llmRouter.executeGated(site.taskType(), site.fixedRoutingMode(),
                     model -> model.call(new Prompt(List.of(
                             new SystemMessage(systemPrompt), new UserMessage(userContent)), options)));
@@ -90,6 +101,14 @@ public class RerankerService {
             log.warn("[Reranker] Failed, falling back to original order: {}", e.getMessage());
             return candidates.subList(0, Math.min(topK, candidates.size()));
         }
+    }
+
+    /**
+     * 이 호출의 <b>기본</b> 출력 예약 — {@link #MAX_OUTPUT_TOKENS} 를 설정 상한으로 누른 것. 0 = 싣지 않는다(프로바이더
+     * 기본값). 요청 옵션과 {@code /settings} 의 생각 수준 미리보기가 같은 함수를 지난다(§6.29 ⑦-바).
+     */
+    static int baseReservation(int configuredMaxTokens) {
+        return configuredMaxTokens > 0 ? Math.min(configuredMaxTokens, MAX_OUTPUT_TOKENS) : 0;
     }
 
     /**

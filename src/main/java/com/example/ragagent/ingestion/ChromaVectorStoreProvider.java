@@ -307,6 +307,33 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         }
     }
 
+    /** 버전마다 컬렉션이 따로라 {@code version} 의 컬렉션에서 id 로 읽는다. 실패하면 빈 목록(호출부가 받은 문서를 그대로 쓴다). */
+    @Override
+    public List<Document> findByIds(String userId, String version, List<String> springDocIds) {
+        if (springDocIds == null || springDocIds.isEmpty()) return List.of();
+        try {
+            String collectionId = resolveCollectionId(userId, version);
+            if (collectionId == null) return List.of();
+            ChromaApi.GetEmbeddingResponse rows = chromaApi.getEmbeddings(TENANT, DATABASE, collectionId,
+                    new ChromaApi.GetEmbeddingsRequest(springDocIds, null, null, null,
+                            List.of(ChromaApi.QueryRequest.Include.DOCUMENTS,
+                                    ChromaApi.QueryRequest.Include.METADATAS)));
+            if (rows == null || rows.ids() == null) return List.of();
+            List<Document> out = new ArrayList<>(rows.ids().size());
+            for (int i = 0; i < rows.ids().size(); i++) {
+                String text = rows.documents() != null && i < rows.documents().size() ? rows.documents().get(i) : null;
+                Map<String, String> meta = rows.metadata() != null && i < rows.metadata().size() ? rows.metadata().get(i) : null;
+                if (text == null) continue;
+                out.add(Document.builder().id(rows.ids().get(i)).text(text)
+                        .metadata(meta == null ? new HashMap<>() : new HashMap<>(meta)).build());
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("[findByIds] fetch failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** Resolves (and caches) the Chroma collection id. null when the collection does not exist yet. */

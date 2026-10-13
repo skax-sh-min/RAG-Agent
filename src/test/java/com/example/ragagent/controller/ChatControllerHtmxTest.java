@@ -711,7 +711,7 @@ class ChatControllerHtmxTest {
     @Test
     @DisplayName("POST /api/v1/questions/reuse — 턴을 저장하기 전에 thread_meta 를 먼저 보장한다")
     void reuse_createsThreadMetaBeforeSavingTurn() throws Exception {
-        when(questionReuseService.reuseLookup(any(), any(), eq(42L)))
+        when(questionReuseService.reuseLookup(eq(42L)))
                 .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
                         true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1"),
                         "N", false, ""));
@@ -780,7 +780,7 @@ class ChatControllerHtmxTest {
     @Test
     @DisplayName("POST /api/v1/questions/reuse — 원본 턴의 응답 모드·Direct 여부·태그 스코프를 복사해 저장하고 응답에도 싣는다")
     void reuse_copiesTheSourceTurnsAnswerShape() throws Exception {
-        when(questionReuseService.reuseLookup(any(), any(), eq(7L)))
+        when(questionReuseService.reuseLookup(eq(7L)))
                 .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
                         true, null, 7L, "VPN 접속 방법", "학습 지식으로 쓴 답변", "t-old", List.of(),
                         "N", true, "policy,billing"));
@@ -807,7 +807,7 @@ class ChatControllerHtmxTest {
     @Test
     @DisplayName("POST /api/v1/questions/reuse — 원본의 옛 모드 값은 ResponseMode.parse() 를 거쳐 N 으로 저장된다")
     void reuse_normalizesLegacyModeThroughParse() throws Exception {
-        when(questionReuseService.reuseLookup(any(), any(), eq(8L)))
+        when(questionReuseService.reuseLookup(eq(8L)))
                 .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
                         true, null, 8L, "질문", "답변", "t-old", List.of(), "M", false, ""));
         when(memoryService.addTurn(any(), any(), any(), any(), any(),

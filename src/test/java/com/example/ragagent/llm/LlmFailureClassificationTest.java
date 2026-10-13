@@ -5,6 +5,19 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.io.UncheckedIOException;
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.PortUnreachableException;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.UnknownHostException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -140,6 +153,98 @@ class LlmFailureClassificationTest {
         void unrelatedFailuresAreNot() {
             assertThat(LlmRouter.isVisionUnsupported(new RuntimeException("image generation failed"))).isFalse();
             assertThat(LlmRouter.isVisionUnsupported(new RuntimeException("Connection refused"))).isFalse();
+        }
+    }
+
+    /** 다른 HTTP 클라이언트의 전용 타입 — 클래스 이름 끝({@code ConnectTimeoutException})으로 알아본다. */
+    static class ConnectTimeoutException extends IOException {
+        ConnectTimeoutException(String message) { super(message); }
+    }
+
+    /** Reactor Netty 의 응답 전 연결 끊김 — 같은 이유로 클래스 이름으로 알아본다. */
+    static class PrematureCloseException extends IOException {
+        PrematureCloseException(String message) { super(message); }
+    }
+
+    @Nested
+    @DisplayName("연결 타임아웃 — 서버가 떠 있지 않다는 뜻이라 차단하고 넘긴다(읽기 타임아웃과 결론이 반대)")
+    class ConnectTimeout {
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+                "Connect timed out",                         // JDK 21 (HttpURLConnection — 이 앱의 블로킹 클라이언트)
+                "connect timed out",                         // 옛 JDK
+                "Connect to 10.0.0.5:1234 timed out"          // Apache HttpClient 의 SocketTimeoutException 모양
+        })
+        @DisplayName("SocketTimeoutException 의 메시지가 연결을 말하면 연결 타임아웃이다")
+        void jdkMessagesClassify(String message) {
+            assertThat(LlmRouter.isConnectTimeout(new SocketTimeoutException(message))).isTrue();
+            // 실제로는 RestClient 가 ResourceAccessException 으로 감싸 올린다 — 원인 사슬을 탄다
+            assertThat(LlmRouter.isConnectTimeout(
+                    new RuntimeException("I/O error on POST request", new SocketTimeoutException(message)))).isTrue();
+        }
+
+        @Test
+        @DisplayName("읽기 타임아웃은 아니다 — 서버는 연결을 받았고 일하는 중일 수 있다(차단하면 멀쩡한 서버를 막는다)")
+        void readTimeoutIsNot() {
+            assertThat(LlmRouter.isConnectTimeout(new SocketTimeoutException("Read timed out"))).isFalse();
+            assertThat(LlmRouter.isConnectTimeout(new SocketTimeoutException())).as("메시지가 없으면 모른다 — 차단하지 않는 쪽")
+                    .isFalse();
+            assertThat(LlmRouter.isConnectTimeout(new InterruptedIOException("interrupted"))).isFalse();
+        }
+
+        @Test
+        @DisplayName("다른 클라이언트의 전용 타입도 알아본다 — JDK HttpClient · Netty · Apache")
+        void otherClientsTypes() {
+            assertThat(LlmRouter.isConnectTimeout(new java.net.http.HttpConnectTimeoutException("HTTP connect timed out"))).isTrue();
+            assertThat(LlmRouter.isConnectTimeout(new ConnectTimeoutException("connection timed out: /10.0.0.5:1234"))).isTrue();
+            assertThat(LlmRouter.isConnectTimeout(
+                    new RuntimeException("x", new ConnectTimeoutException("connection timed out")))).isTrue();
+        }
+
+        @Test
+        @DisplayName("연결 거부는 연결 '타임아웃'이 아니다 — 그건 원래부터 차단·전환 대상이라 따로 알아보지 않는다")
+        void connectionRefusedIsNotATimeout() {
+            assertThat(LlmRouter.isConnectTimeout(new ConnectException("Connection refused"))).isFalse();
+            assertThat(LlmRouter.isConnectTimeout(new RuntimeException("Connection refused"))).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("연결 계열 실패 — 스트리밍의 장애 전환이 '이 서버는 지금 안 된다'의 근거로 쓴다")
+    class ConnectionFailure {
+
+        @Test
+        @DisplayName("연결 거부·DNS·경로 없음·포트 도달 불가·연결 타임아웃·응답 전 연결 끊김은 연결 계열이다")
+        void serverUnreachableShapes() {
+            assertThat(LlmRouter.isConnectionFailure(new ConnectException("Connection refused"))).isTrue();
+            assertThat(LlmRouter.isConnectionFailure(new UnknownHostException("gpu-a"))).isTrue();
+            assertThat(LlmRouter.isConnectionFailure(new NoRouteToHostException("No route to host"))).isTrue();
+            assertThat(LlmRouter.isConnectionFailure(new PortUnreachableException("ICMP Port Unreachable"))).isTrue();
+            assertThat(LlmRouter.isConnectionFailure(new SocketTimeoutException("Connect timed out"))).isTrue();
+            assertThat(LlmRouter.isConnectionFailure(
+                    new PrematureCloseException("Connection prematurely closed BEFORE response"))).isTrue();
+        }
+
+        @Test
+        @DisplayName("WebClient 가 요청을 보내다 난 I/O 오류(WebClientRequestException)는 그 자체로 연결 계열이다 — 스트리밍의 실제 모양")
+        void webClientRequestException() {
+            var e = new WebClientRequestException(new ConnectException("Connection refused: getsockopt"),
+                    HttpMethod.POST, URI.create("http://127.0.0.1:1234/v1/chat/completions"), new HttpHeaders());
+
+            assertThat(LlmRouter.isConnectionFailure(e)).isTrue();
+        }
+
+        @Test
+        @DisplayName("읽기 타임아웃·SSL·알 수 없는 오류·클라이언트 끊김은 연결 계열이 아니다 — 차단하면 오탐이다")
+        void everythingElseIsNot() {
+            assertThat(LlmRouter.isConnectionFailure(new SocketTimeoutException("Read timed out"))).isFalse();
+            assertThat(LlmRouter.isConnectionFailure(new javax.net.ssl.SSLHandshakeException("PKIX path building failed"))).isFalse();
+            assertThat(LlmRouter.isConnectionFailure(new IllegalStateException("boom"))).isFalse();
+            // 사용자가 중지를 눌렀을 때 emitter.send() 가 터지는 모양 — 서버 탓이 아니다
+            assertThat(LlmRouter.isConnectionFailure(new UncheckedIOException(new IOException("Broken pipe")))).isFalse();
+            assertThat(LlmRouter.isConnectionFailure(
+                    new UncheckedIOException(new InterruptedIOException("토큰 스트림이 중단됐다")))).isFalse();
         }
     }
 

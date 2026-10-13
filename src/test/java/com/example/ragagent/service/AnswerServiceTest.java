@@ -1327,4 +1327,31 @@ class AnswerServiceTest {
         assertThat(result.premiumUpgraded()).isNull();
         assertThat(result.needsRetry()).isTrue();
     }
+
+    @Test
+    @DisplayName("PROGRESSIVE — 상한이 남아도 같은 청크로 또 불충분이면(그래프가 멈출 반려) 곧바로 업그레이드한다 — 조기 종료가 업그레이드를 건너뛰지 않게")
+    @SuppressWarnings("unchecked")
+    void progressive_repeatedRejection_upgradesBeforeTheLimit() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":false}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+        LlmProvider premiumProvider = new LlmProvider(
+                "gemini-pro", TaskType.TEXT, ProviderRole.PREMIUM, 4, "key", null, null, true, null, null);
+        when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST))).thenReturn(premiumProvider);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class)))
+                .thenReturn(new LlmRouter.LlmResult("프리미엄 답변", 200, 90));
+
+        // 1회 재시도 뒤(retryCount=1 < 2), 직전 반려와 같은 청크 — AgentGraph 가 이 반려에서 멈춘다
+        AgentState base = newState(RoutingMode.PROGRESSIVE);
+        AgentState initial = base.toBuilder().incrementRetry()
+                .lastRejection(AgentState.rejectionKey(AgentState.RetryGate.INSUFFICIENT, base.retrievedDocs()))
+                .build();
+
+        AgentState result = service.execute(initial);
+
+        assertThat(result.premiumUpgraded()).isEqualTo("gemini-pro");
+        assertThat(result.answer()).isEqualTo("프리미엄 답변");
+        assertThat(result.needsRetry()).isFalse();
+    }
 }

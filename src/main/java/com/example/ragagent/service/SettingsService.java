@@ -5,6 +5,7 @@ import com.example.ragagent.llm.ContextWindowProbe;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderConnectivity;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderThinkingDialects;
 import com.example.ragagent.llm.ProviderToggle;
@@ -12,6 +13,7 @@ import com.example.ragagent.llm.ThinkingDialect;
 import com.example.ragagent.llm.ThinkingLevel;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SettingsView;
+import com.example.ragagent.model.SettingsView.ProviderConnection;
 import com.example.ragagent.model.SettingsView.ProviderRow;
 import com.example.ragagent.model.SettingsView.ProviderThinking;
 import com.example.ragagent.model.ResponseMode;
@@ -145,11 +147,13 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final StorageQuotaService storageQuotaService;
     /** §6.29 — 프로바이더 표의 "생각 제어" 열이 읽는 dialect·거부 기억. */
     private final ProviderThinkingDialects thinkingDialects;
+    /** 프로바이더 표의 "상태" 열이 읽는, 서버에 실제로 물어본 마지막 결과. */
+    private final ProviderConnectivity connectivity;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
-    /** 생각 제어 열을 쓰지 않는 호출부(테스트)를 위한 축약 — 기록이 없는 프로바이더는 그 열에 "서버가 정함" 으로 나온다. */
+    /** 생각 제어 열을 쓰지 않는 호출부(테스트)를 위한 축약 — 기록이 없는 프로바이더는 그 열에 "서버 설정 사용" 으로 나온다. */
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
                            ProviderToggle providerToggle, ProviderContextWindows contextWindows,
@@ -158,11 +162,22 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new ProviderThinkingDialects());
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    /** 접속 확인을 쓰지 않는 호출부(테스트)를 위한 축약 — 한 번도 묻지 않았으니 설정이 갖춰진 프로바이더는 "확인 중" 으로 나온다. */
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
                            ProviderToggle providerToggle, ProviderContextWindows contextWindows,
                            StorageQuotaService storageQuotaService, ProviderThinkingDialects thinkingDialects) {
+        this(repo, props, audit, circuitBreaker, providerToggle, contextWindows, storageQuotaService,
+                thinkingDialects, new ProviderConnectivity());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SettingsService(SettingsOverrideRepository repo, AppProperties props,
+                           AuditLogger audit, CircuitBreaker circuitBreaker,
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows,
+                           StorageQuotaService storageQuotaService, ProviderThinkingDialects thinkingDialects,
+                           ProviderConnectivity connectivity) {
+        this.connectivity = connectivity;
         this.thinkingDialects = thinkingDialects;
         this.repo = repo;
         this.props = props;
@@ -312,9 +327,21 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     // ── View ─────────────────────────────────────────────────────────────────
 
-    /** Full {@code /settings} model with overrides already applied. */
+    /**
+     * 값이 기동 때 굳어 바꾸려면 재기동이 필요한 그룹의 제목 옆에 붙이는 표시. 예전에는 항목마다 붙였다 — 같은 말이 줄마다
+     * 반복돼 오히려 어느 값이 그런지 읽히지 않았고, 그룹이 통째로 조회 전용이라 줄 단위로 가를 이유도 없었다.
+     */
+    private static final String RESTART_NOTE = "settings.note.restart";
+
+    /**
+     * Full {@code /settings} model with overrides already applied.
+     *
+     * <p>프로바이더의 상태 열은 <b>늘 "확인 중"으로 시작한다</b> — 이 화면을 열 때마다 서버에 새로 물어야 하는데(마지막 확인이
+     * 수 분 전의 것일 수 있다) 물어보는 동안 페이지가 막히면 안 된다. 결과는 {@link #refreshProviderConnections()} 가 칸만
+     * 바꿔 끼운다.
+     */
     public SettingsView buildView() {
-        List<ProviderRow> providers = providerRows();
+        List<ProviderRow> providers = providerRows(true);
 
         // Editable groups first, read-only (조회 전용) groups last.
         List<SettingGroup> groups = List.of(
@@ -322,9 +349,9 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
             new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
-                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
-                new SettingGroup("storage", "settings.group.storage", storageItems()),
-                new SettingGroup("cache", "settings.group.cache", cacheItems())
+                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
+                new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
+                new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
         );
 
         AppProperties.LlmConfig llm = props.llmSafe();
@@ -350,8 +377,19 @@ public class SettingsService implements AppProperties.OverrideSource {
      * would just be confusing config-vs-reality noise (a NORMAL/PREMIUM entry can still be present in
      * {@code application.properties} even when the deployment is pinned to LOCAL_ONLY, e.g. kept around
      * for a future mode switch).
+     *
+     * <p>상태 열은 <b>마지막으로 서버에 물어본 결과</b>를 나이와 무관하게 쓴다 — 토글·재탐지 뒤에 돌아오는 표 조각이 클릭 한 번에
+     * 상태를 "확인 중" 으로 되돌리면 안 된다. 한 번도 안 물었으면 "확인 중" 이다.
      */
     public List<ProviderRow> providerRows() {
+        return providerRows(false);
+    }
+
+    /**
+     * @param recheck {@code true} 면 마지막 확인을 무시하고 설정이 갖춰진 프로바이더를 모두 "확인 중" 으로 둔다 — 화면을 새로
+     *                열 때다(그 뒤 {@link #refreshProviderConnections()} 가 채운다)
+     */
+    private List<ProviderRow> providerRows(boolean recheck) {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
         return visibleProviders().stream()
                 .map(cfg -> {
@@ -367,9 +405,36 @@ public class SettingsService implements AppProperties.OverrideSource {
                             until != null ? until.toString() : null,
                             providerToggle.isEnabled(cfg.name()),
                             contextWindowLabel(cfg.name()),
-                            providerThinking(cfg));
+                            providerThinking(cfg),
+                            connectionOf(cfg, recheck));
                 })
                 .toList();
+    }
+
+    /**
+     * 상태 열의 한 칸 — 미설정(서버를 만들지 못했다) / 확인 중 / 접속불가 / 정상. "미설정" 은 {@code cfg.isEnabled()} 가 정하고,
+     * 나머지는 서버에 물어본 결과다. 서킷 브레이커의 차단은 이 칸에 섞지 않는다 — 별개의 사실(라우터가 지금 건너뛴다)이라 표가
+     * {@code blocked} 로 따로 표시한다.
+     */
+    private ProviderConnection connectionOf(AppProperties.ProviderConfig cfg, boolean recheck) {
+        if (!cfg.isEnabled()) return ProviderConnection.notConfigured();
+        if (recheck) return ProviderConnection.pending();
+        return connectivity.last(cfg.name())
+                .map(r -> r.reachable()
+                        ? ProviderConnection.reachable(r.latencyMs(), r.modelListed())
+                        : ProviderConnection.unreachable(r.error()))
+                .orElseGet(ProviderConnection::pending);
+    }
+
+    /**
+     * 설정이 갖춰진 프로바이더에 <b>지금</b> 모델 목록 API 로 접속해 보고, 결과를 반영한 표의 행을 돌려준다
+     * ({@code GET /settings/llm-status} 가 상태 칸만 바꿔 끼운다). 서버마다 병렬로 묻고 응답이 없는 서버는 연결 타임아웃
+     * (3초)에서 포기한다. 몇 초 안에 끝난 확인은 다시 하지 않는다 — 게스트에게 열린 화면에서 불리므로 새로 고침이 서버를
+     * 두드리는 수단이 되면 안 된다({@link ProviderConnectivity}).
+     */
+    public List<ProviderRow> refreshProviderConnections() {
+        connectivity.refresh(visibleProviders().stream().filter(AppProperties.ProviderConfig::isEnabled).toList());
+        return providerRows();
     }
 
 
@@ -580,7 +645,7 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  can't be hot-swapped (topK / multiquery / hybrid moved to the hot group). */
     private List<SettingItem> fixedSearchItems() {
         return List.of(
-                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), "settings.note.restart")
+                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), null)
         );
     }
 
@@ -607,56 +672,7 @@ public class SettingsService implements AppProperties.OverrideSource {
     private List<SettingItem> llmHotItems() {
         List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
-        items.addAll(responseModeBudgetItems());
         return items;
-    }
-
-    /**
-     * 응답 모드별 <b>유효</b> 답변 예산 — 읽기 전용 파생 행 (PLAN §6.24 Step 0-e).
-     *
-     * <p>{@code max-tokens} 한 줄만 보여주는 것으로는 지금 무슨 값이 적용 중인지 알 수 없다.
-     * 모드 예산은 비율분과 글자수 바닥 중 <b>큰 쪽</b>을 취하되 설정 상한에서 잘리므로, 같은
-     * {@code max-tokens} 변경이 모드마다 다른 폭으로 움직인다 — 전환점이 모드마다 다르기 때문이다
-     * (S 는 0.15·2,000 이라 13,334, N/C 는 0.70·5,000 이라 7,143). 기본 12,000 에서는 S 만 바닥이
-     * 이기고 N/C 는 이미 비율이 이긴다. 어느 구간에 있는지를 값 옆에 함께 적어 그 혼란을 없앤다.
-     *
-     * <p>{@link ResponseMode#values()}를 돌므로 모드가 늘면 행도 저절로 늘어난다. 다만 라벨은
-     * 메시지 키라 번들에 한 줄이 필요하고, 그 누락은 화면에 {@code ??key??}로만 드러나므로
-     * {@code SettingsResponseModeBudgetTest}가 모든 모드의 키 존재를 고정한다.
-     */
-    private List<SettingItem> responseModeBudgetItems() {
-        int configured = props.llmSafe().maxTokens();
-        List<SettingItem> items = new ArrayList<>(ResponseMode.values().length);
-        for (ResponseMode mode : ResponseMode.values()) {
-            items.add(readOnly("settings.item.mode-budget." + mode.name().toLowerCase(),
-                    formatModeBudget(mode, configured), null, "settings.tooltip.mode-budget"));
-        }
-        return items;
-    }
-
-    /** 테스트 전용 접근점 — 표시 공식이 {@link ResponseMode#maxTokens(int)} 와 갈라지지 않는지 고정한다. */
-    static String formatModeBudgetForTest(ResponseMode mode, int configured) {
-        return formatModeBudget(mode, configured);
-    }
-
-    /**
-     * 예: {@code "8,400 (상한의 70%)"} — 값과 함께 <b>어느 항이 이겼는지를 풀어서</b> 적는다.
-     * 축약어(바닥/비율/상한)는 그 자체가 설명을 필요로 해서 표시의 목적을 반쯤 잃는다.
-     */
-    private static String formatModeBudget(ResponseMode mode, int configured) {
-        int effective = mode.maxTokens(configured);
-        if (effective <= 0) return "-";
-        // 비율항은 enum 의 tokenRatio() 에서 파생한다 — 상수를 여기 복제하지 않는다.
-        int ratioTokens = (int) Math.round(configured * mode.tokenRatio());
-        String source;
-        if (effective < Math.max(ratioTokens, mode.minChars())) {
-            source = "설정 상한";                                   // max-tokens 가 모드 요구보다 낮다
-        } else if (ratioTokens >= mode.minChars()) {
-            source = "상한의 %d%%".formatted(Math.round(mode.tokenRatio() * 100));
-        } else {
-            source = "최소 보장";                                   // 비율분이 작아 바닥이 받쳐준다
-        }
-        return "%,d (%s)".formatted(effective, source);
     }
 
     /**
@@ -764,18 +780,18 @@ public class SettingsService implements AppProperties.OverrideSource {
                 readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
                 readOnly("settings.item.storage-limit",
                         limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
-                        "settings.note.restart")
+                        null)
         );
     }
 
     private List<SettingItem> cacheItems() {
         return List.of(
                 readOnly("settings.item.query-embed-cache-enabled",
-                        Boolean.toString(props.searchQueryEmbedCacheEnabledSafe()), "settings.note.restart"),
+                        Boolean.toString(props.searchQueryEmbedCacheEnabledSafe()), null),
                 readOnly("settings.item.query-embed-cache-max-size",
-                        Integer.toString(props.searchQueryEmbedCacheMaxSizeSafe()), "settings.note.restart"),
+                        Integer.toString(props.searchQueryEmbedCacheMaxSizeSafe()), null),
                 readOnly("settings.item.query-embed-cache-ttl",
-                        Integer.toString(props.searchQueryEmbedCacheTtlSecondsSafe()), "settings.note.restart")
+                        Integer.toString(props.searchQueryEmbedCacheTtlSecondsSafe()), null)
         );
     }
 

@@ -276,7 +276,9 @@ public class ThinkingPreviewService {
                 d.use = Use.BUDGET_ONLY;
                 baseKey = "settings.thinking.basis.base.answer";
                 int blocking = AnswerService.answerReservation(budget, site, level, provider, mode, false, c.maxTokens).tokens();
-                baseArgs = new Object[]{d.reservation.base(), mode.minChars(), blocking};
+                // 블로킹 응답 예산(생각 여유 전)과 그 값을 정한 항 — "LLM 튜닝" 그룹에서 빠진 "응답 예산" 행이 말하던 것이다
+                baseArgs = new Object[]{d.reservation.base(), mode.minChars(), blocking,
+                        mode.maxTokens(c.maxTokens), blockingTerm(mode, c.maxTokens)};
                 d.expectedOutput = mode.minChars();
             }
             case EVAL -> {
@@ -310,7 +312,15 @@ public class ThinkingPreviewService {
                     case POST_ANSWER -> PostAnswerService.baseReservation(c.maxTokens);
                     case CURATED_SUGGEST -> CuratedQuestionSuggester.baseReservation(c.maxTokens);
                     case MD_CORRECT_VISION -> MarkdownCorrectionService.visionReservation(c.maxTokens);
-                    default -> 0;   // 출력 상한을 싣지 않는 호출 — 프로바이더 기본값이 예약된다(열린 항목 (d))
+                    case CLASSIFY -> ClassifierService.baseReservation(c.maxTokens);
+                    case RERANK -> RerankerService.baseReservation(c.maxTokens);
+                    case TITLE -> ThreadMetaService.baseReservation(c.maxTokens);
+                    case SUMMARY -> ConversationSummarizerService.baseReservation(c.maxTokens, c.summaryChars);
+                    case IMAGE_DESCRIBE -> VisionDescriptionService.baseReservation(c.maxTokens);
+                    case IMAGE_TYPE -> ImageTypeClassifier.baseReservation(c.maxTokens);
+                    // 출력 상한을 싣지 않는 호출 — 프로바이더 기본값이 예약된다. 남은 것은 질의 확장 하나다: 프레임워크
+                    // (MultiQueryExpander)가 프롬프트를 스스로 만들어 호출부가 옵션을 실을 자리가 없다.
+                    default -> 0;
                 };
                 d.reservation = budget.reservation(site, level, provider, base);
                 d.expectedOutput = site.expectedOutputTokens();
@@ -722,6 +732,16 @@ public class ThinkingPreviewService {
 
     // ── 도우미 ────────────────────────────────────────────────────────────────────────────────────
 
+    /** 블로킹 응답 예산을 어느 항이 정했는가 — {@link ResponseMode#budgetTerm} 을 문구로 푼 것. 설정 상한이 없으면(0 이하) 말할 항이 없다. */
+    private String blockingTerm(ResponseMode mode, int maxTokens) {
+        if (maxTokens <= 0) return "-";
+        return switch (mode.budgetTerm(maxTokens)) {
+            case RATIO -> msg("settings.thinking.basis.blocking.ratio", Math.round(mode.tokenRatio() * 100));
+            case FLOOR -> msg("settings.thinking.basis.blocking.floor");
+            case CONFIGURED_CAP -> msg("settings.thinking.basis.blocking.cap");
+        };
+    }
+
     /** 한글 {@code chars} 자의 토큰 추정 — 화면 기준 줄이 말하는 "한글 1자 = 1토큰" 가정을 그대로 {@link TokenEstimator} 에 맡긴다. */
     static long koreanTokens(int chars) {
         return TokenEstimator.estimate("가".repeat(Math.max(0, chars)));
@@ -757,6 +777,8 @@ public class ThinkingPreviewService {
         final long questionTokens = koreanTokens(QUESTION_CHARS);
         /** 대화 이력이 상한일 때의 길이 — 폴백 경로가 자르는 그 값({@code MemoryService.maxConversationChars}). */
         final int historyChars = MemoryService.conversationChars(maxTokens);
+        /** 요약이 남기는 분량 상한 — 요약 호출의 출력 예약이 여기서 나온다({@code ConversationSummarizerService.baseReservation}). */
+        final int summaryChars = props.summarySafe().maxSummaryChars();
         private final Map<String, Long> promptTokens = new HashMap<>();
         private final Map<String, Double> speeds = new HashMap<>();
         private final Map<Boolean, Long> schemaTokens = new HashMap<>();

@@ -37,6 +37,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
       - 6.3.1 [SQLite 파일별 테이블 구성](#631-sqlite-파일별-테이블-구성)
+      - 6.3.2 [DB 백업과 복구](#632-db-백업과-복구)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
@@ -198,7 +199,7 @@ copy .env.example .env
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(`MICRO_TEXT`는 `local`이 흡수. 단 **대화 요약만은 흡수하지 않고 생략**되어 채팅이 원본 history 폴백으로 동작한다 — 부가 기능인 요약이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
-| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다(설정한 모델명이 그대로 실린다) |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. **예외 하나**: `LOCAL_LLM_URL`·`LOCAL_LLM_URL_2` 처럼 같은 type·priority 로 묶인 복제본 중 **한 대만** 안 뜨면(연결 안 됨·응답 없음·5xx — 4xx 나 모델 목록이 아닌 응답은 설정 오류라 해당하지 않는다) 기동을 이어 가고 그 서버는 30초 차단된 채 시작한다(모델명은 검증하지 못해 설정값 그대로 — 서버가 다른 id 로 부르면 전체 id 로 적을 것). 둘 다 안 뜨거나, 닿은 서버에 모델이 없으면 여전히 기동 실패. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다(설정한 모델명이 그대로 실린다) |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
@@ -210,7 +211,7 @@ copy .env.example .env
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
-| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본). 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱. **모두 `EMBED_MODEL`을 같은 차원으로 서빙해야 함** (섞이면 벡터 인덱스 손상). 상세는 아래 "임베딩 병렬화" |
+| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본). 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱, 그리고 **장애 전환**(닿지 않는 엔드포인트는 30초 건너뛰고 같은 호출을 다음 엔드포인트로). **모두 `EMBED_MODEL`을 같은 차원으로 서빙해야 함** (섞이면 벡터 인덱스 손상). 상세는 아래 "임베딩 병렬화" |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정.<br>Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
@@ -286,8 +287,8 @@ copy .env.example .env
 |------|--------|----------|------|
 | `SSE_IDLE_TIMEOUT_SECONDS` | `300` | 30 ~ 1800 | 에이전트 그래프의 진행 신호(노드 전환·토큰·소스 준비)가 이 시간만큼 전혀 없으면 중단 (`app.sse-idle-timeout-seconds`). 매 신호마다 리셋되므로 느리지만 계속 응답 중인 로컬 LLM은 끊기지 않음 — 실제로 "멈춘" 요청을 감지하는 주 타임아웃 |
 | `SSE_TIMEOUT_SECONDS` | `7200` | 600 ~ 14400 | 브라우저 ↔ 서버 SSE 연결의 절대 상한(활동 여부 무관, `app.sse-timeout-seconds`) — 응답이 영원히 끝나지 않는 극단적 상황에 대한 안전장치일 뿐, 평소엔 `SSE_IDLE_TIMEOUT_SECONDS`가 먼저 작동함 |
-| `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`) |
-| `LLM_READ_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`). 이 시간 안에 TCP 연결을 못 맺으면 서버가 떠 있지 않은 것으로 보고 **그 프로바이더를 차단하고 다음 서버(예: `LOCAL_LLM_URL_2`)로 넘어간다**(블로킹 호출은 같은 호출 안에서, 채팅 답변 스트리밍은 첫 토큰 전이면). 꺼진 호스트를 빨리 포기하려면 LAN 서버 기준 3~5초로 낮춘다 |
+| `LLM_READ_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`). 읽기 타임아웃은 서버가 연결을 받았다는 뜻이라 **차단도 전환도 없이** 오류로 끝난다(느린 생성을 기다리다 끊은 서버를 막지 않으려는 의도) — 멈춘 서버가 있으면 이 값만큼 기다린다 |
 | `EMBED_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | 임베딩 API 연결 타임아웃 (`app.embedding.connect-timeout-seconds`) |
 | `EMBED_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
@@ -305,6 +306,8 @@ copy .env.example .env
 임베딩 처리량을 여러 엔드포인트·병렬 서브배치로 확장한다. 셋 다 **기본 비활성(회귀 0)**인 opt-in이다.
 
 - **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_ADDITIONAL_BASE_URLS`): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 콤마로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
+  - **장애 전환**: 엔드포인트에 **닿지 못하면**(연결 거부·연결 타임아웃·DNS·경로 없음) 그 엔드포인트를 30초 후보에서 빼고 같은 호출을 다음 엔드포인트로 다시 보낸다(로그 `[EMBED-FAILOVER]`). 전부 막혔으면 가장 먼저 풀리는 하나만 한 번 시도한다 — 서버가 돌아오면 차단을 기다리지 않고 바로 낫는다. HTTP 5xx(예: llama.cpp 의 "input is too large")·읽기 타임아웃은 **넘기지 않는다** — 요청 자체의 문제라 다른 엔드포인트도 같은 이유로 거절하고, 넘기면 멀쩡한 서버를 차례로 막는다.
+  - **채팅 로컬 서버를 두 대(`LOCAL_LLM_URL_2`)로 이중화했다면 여기에도 다른 서버를 적을 것** — 임베딩은 LLM 라우터 밖이라 채팅의 장애 전환을 받지 못한다. `EMBED_BASE_URL` 이 비어 `LOCAL_LLM_URL` 로 떨어진 채 그 서버가 죽으면, 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 실패한다. 이 구성을 보면 기동 로그가 `[EMBED CONFIG]` 경고를 남긴다(앱이 `LOCAL_LLM_URL_2` 에서 자동으로 만들지 않는 이유: 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없다).
 - **E2 — 병렬 서브배치 임베딩** (`EMBED_MAX_CONCURRENT_BATCHES`, 기본 1): 한 문서를 인덱싱할 때 토큰 단위 서브배치들을 동시에 임베딩한다. E1과 결합하면 **단일 대용량 문서**도 여러 엔드포인트를 동시에 채운다. 대략 `(엔드포인트 수 × 엔드포인트별 --parallel)`로 설정.
   - **chroma**: 임베딩만 병렬화하고 원래대로 마지막에 1회 upsert → 메모리 프로파일 불변, 저위험.
   - **sqlite-vec**: 병렬 임베딩 후 삽입은 직렬(SQLite `pool=1`). §10.9.3 스트리밍 삽입(서브배치 단위 메모리 상한)을 포기하고 문서 전체 임베딩을 잠깐 메모리에 들고 있게 되는 속도↔메모리 트레이드오프를 아는 상태에서만 켠다(임베딩 벡터는 청크당 수 KB라 실무 부담은 작음).
@@ -1418,6 +1421,8 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 
 G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3는 다르다** — LOCAL 프로바이더의 `base-url`이 설정돼 있는데 서버가 안 떠 있거나 모델명이 틀리면 앱이 아예 뜨지 않는다. 포트 오타나 모델명 오타를 배포 직후 채팅 중 발견하는 대신 기동 시점에 바로 잡기 위함이다. 모델명은 **서버 id 의 일부**여도 통과한다 — 같은 모델을 서버마다 다르게 부르기 때문이다(LM Studio `google/gemma-4-e4b`, llama-server 의 `-a` 별칭이나 파일명, Ollama 의 `:latest` 접미사). 그때는 설정값이 아니라 **서버의 전체 id 가 모든 요청에 실리고**, 기동 로그에 `configured model 'x' is part of server model 'y' … using the server's id` 로 남는다. 정확히 같은 id 가 있으면 언제나 그것이 이기고(다른 id 가 그 이름을 포함해도 모호해지지 않는다), 설정값이 **둘 이상의 id 에 걸리면** 없는 것과 같이 기동 실패다 — 후보를 로그에 나열하니 전체 id 로 고쳐 적으면 된다(앱이 대신 고르지 않는 이유: 어느 모델과 대화 중인지 로그를 뒤져야 알게 되면 G3 의 존재 이유가 사라진다). `app.llm.verify-local-models-on-startup`(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`, 기본 `true`)로 끌 수 있다 — 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있는 환경 등 예외적인 경우에만 `false`로 설정할 것. `NORMAL`/`PREMIUM`(클라우드) 프로바이더는 G3 대상이 아니다.
 
+**복제본 예외** — 같은 `type`·`priority` 의 LOCAL 프로바이더가 둘 이상이면(예: `local` + `local-2`, [§5.4 예제 5](#54-시나리오별-설정-예제)) 그중 **닿지 않는** 서버는 기동을 멈추지 않는다: 다른 복제본이 검증을 통과했으면 `[LLM STARTUP CHECK] provider=[x] is unreachable … but its replica(s) [y] answered` WARN 을 남기고 그 서버를 **30초 차단된 채** 등록한다 — 첫 요청부터 살아 있는 쪽으로 가고, 차단이 풀리면 평소처럼 다시 시도한다. 이중화의 목적이 "한 대가 없어도 돌아간다"인데 하필 기동 시점에 한 대가 꺼져 있으면 아무것도 뜨지 않던 것을 고친 것이다. 이 서버는 모델명을 해석하지 못했으므로 **설정값 그대로** 실리고(서버가 다른 id 로 부르면 돌아온 뒤 "없는 모델"이 될 수 있다 — 전체 id 로 적어 둘 것), 컨텍스트 창은 서버가 돌아온 뒤 컨텍스트 초과(자동 재탐지)나 `/settings` 의 창 재탐지 버튼이 채울 때까지 "모름"이다. 너그러운 것은 **장애 모양의 실패뿐**이다 — 연결이 안 되거나(거부·타임아웃·DNS) 응답이 없거나 5xx(예: 모델을 올리는 중인 llama-server 의 503). 서버가 **답을 했는데** 그것이 4xx(경로·인증 오류)이거나 모델 목록이 아닌 응답(다른 서비스의 HTML 등)이면, 또는 닿은 서버에 모델이 없거나 모호하면 복제본이 있어도 기동 실패다(장애가 아니라 설정 오류 — 로그는 `got no model list`). 다만 **주소·포트 오타는 서버가 꺼진 것과 구분할 수 없어**(둘 다 연결 거부) WARN 한 줄로 넘어가므로, 이중화 배포는 기동 로그의 `[LLM STARTUP CHECK]` 를 확인할 것. `priority` 가 다른 서버(예: 소형 모델 `local-fast`)는 복제본이 아니라 폴백이라 예외에 들지 않는다.
+
 #### stream 플래그
 
 `stream` 속성은 서버 ↔ LLM API 구간의 호출 방식을 제어합니다. 브라우저 ↔ 서버 간 SSE 연결은 이 값과 무관하게 유지됩니다.
@@ -1709,6 +1714,7 @@ app.llm.providers[1].concurrency=4
 - `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
 - 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
 - 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
+- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 기동 시에 한 대가 안 떠 있어도 앱은 뜹니다 — 그 서버는 30초 차단된 채 시작하고 요청은 살아 있는 쪽으로 갑니다(두 대 모두 안 닿으면 기동 실패, [§5.2 G3 의 복제본 예외](#프로바이더-활성화-게이트-llmconfig-g1g3) 참고). **임베딩은 이 라우팅 밖입니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)과 `EMBED_ADDITIONAL_BASE_URLS` 로만 갑니다. 두 서버가 같은 임베딩 모델을 띄우고 있다면 **다른 서버를 `EMBED_ADDITIONAL_BASE_URLS` 에도 적으세요** — 그 목록은 부하 분산과 함께 장애 전환(닿지 않는 엔드포인트를 30초 건너뜀)을 하므로, 그래야 한 대가 죽어도 RAG 질문이 검색 단계에서 실패하지 않습니다. 적지 않은 채 `LOCAL_LLM_URL` 쪽이 죽으면 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 오류가 납니다(기동 로그의 `[EMBED CONFIG]` 경고가 이 구성을 알려 줍니다).
 
 COST_FIRST 흐름:
 ```
@@ -1974,6 +1980,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: 같은 SQLite 파일 `DATA_DIR/memory.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 같은 SQLite 파일 `DATA_DIR/memory.db` | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
+| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -2050,6 +2057,42 @@ Rename-Item data/vector.db memory.db
 > **스키마는 기동 시 자동 정비됩니다** — 운영 테이블은 전부 Flyway 마이그레이션이 만들고 고칩니다. 기동할 때 Flyway 가 아직 적용되지 않은 마이그레이션만 순서대로 적용하고, V4(`V4__Consolidate_runtime_schema`)는 옛 버전이 만든 DB 에 빠진 테이블·컬럼·인덱스만 더합니다(예전에는 각 저장소가 기동할 때마다 `CREATE TABLE IF NOT EXISTS`·`ALTER TABLE` 을 직접 실행했습니다). 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 기본값 또는 `NULL`). 기동 로그의 `[FLYWAY] V4 — 테이블 생성 […], 컬럼 추가 […]` 한 줄이 무엇을 더했는지 알려 줍니다. 검색 색인(`chunk_fts`·`chunk_fts_key`·`vec_*`)은 Flyway 가 아니라 위 표의 컴포넌트가 만듭니다. 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
+
+#### 6.3.2 DB 백업과 복구
+
+앱이 `memory.db` 의 사본을 **매일 03:30** 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
+
+| 설정 | 환경변수 | 기본값 | 설명 |
+|---|---|---|---|
+| `app.backup.enabled` | `DB_BACKUP_ENABLED` | `true` | 정기 백업. `false` 여도 `/admin` 의 수동 백업은 됩니다 |
+| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일) |
+| `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
+| `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
+
+모두 **재기동 필요**입니다.
+
+**어떻게 뜨는가** — 앱의 커넥션 풀이 아닌 별도 연결에서 `VACUUM INTO` 를 실행합니다. 원본에 읽기 트랜잭션 하나만 쥐므로(WAL) **백업 중에도 채팅·인덱싱의 쓰기가 막히지 않고**, 아직 `memory.db-wal` 에만 있는 최근 기록까지 담긴 일관된 한 파일이 나옵니다(파일을 그냥 복사하면 그것을 놓칩니다). 뜬 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 이름을 붙이므로, 그 이름의 파일은 전부 검사를 통과한 완성본입니다(중간에 죽으면 `.partial` 이 남고 다음 실행이 지웁니다). 실측: 54 MB DB 에 약 1초.
+
+**담기는 것** — 대화 기록·계정·설정 오버라이드·큐레이션 Q&A·지식 제안·문서 레지스트리·키워드 색인(`chunk_fts`)·**sqlite-vec 백엔드의 벡터**.
+**담기지 않는 것** — 문서 원본·변환본·이미지(`documents/` · `converted/` · `images/` — 파일이라 따로 복사합니다), **Chroma 백엔드의 벡터**(Chroma 서버/볼륨에 있습니다 — Chroma 배포는 그 볼륨도 함께 백업해야 같은 시점으로 되돌릴 수 있습니다), 감사 로그.
+
+> ⚠️ 기본 위치는 **같은 디스크**입니다. 잘못된 삭제·DB 손상에는 대비가 되지만 디스크 고장에는 아닙니다 — `DB_BACKUP_DIR` 을 다른 디스크로 두거나, `db-backups/` 를 주기적으로 다른 곳에 복사하세요. 사본은 일반 SQLite 파일(저널 모드 `delete`)이라 그대로 복사해도 됩니다.
+
+**복구**
+
+```bash
+# 1) 앱을 멈춘다 (docker compose stop app / 서비스 중지)
+# 2) 지금 DB 를 옆으로 치우고(혹시 모를 되돌리기용) WAL 조각을 지운다
+mv data/memory.db data/memory.db.before-restore
+rm -f data/memory.db-wal data/memory.db-shm
+# 3) 사본을 memory.db 로 놓는다
+cp data/db-backups/memory-20261013-033000.db data/memory.db
+# 4) 앱을 띄운다 — Flyway 가 사본 이후에 추가된 마이그레이션만 적용한다
+```
+
+- **`memory.db-wal` · `-shm` 을 반드시 지웁니다.** 남아 있으면 SQLite 가 그 WAL 을 새 파일 위에 재생하려 해 DB 가 깨질 수 있습니다.
+- 옛 `SQLITE_VEC_DB_PATH` 를 쓰는 배포는 `memory.db` 대신 **그 경로의 파일**이 대상입니다([§6.3.1](#631-sqlite-파일별-테이블-구성)).
+- 사본 시점 이후에 올린 문서는 레지스트리에 없으므로 **디렉터리 동기화**(`/documents` 의 동기화)를 한 번 돌리면 다시 인덱싱됩니다. 사본 이후에 지운 문서는 반대로 목록에 남아 있다가 같은 동기화에서 정리됩니다.
 
 ---
 
@@ -2190,7 +2233,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 칸 | 뜻 |
 |----|----|
 | 실제 전송 | 그 호출을 받을 프로바이더에 **실제로** 실리는 필드와 값 — `켬`/`끔`/`보내지 않음`. 서버가 켬/끔만 받으면(llama.cpp) 낮게·중간·높게가 같은 값으로 나가고 **접힘** 배지가 붙습니다 |
-| 출력 예약 | `max_tokens` 로 잡는 자리 = 기본 예약 + 생각 여유(낮게 1,024 · 중간 2,048 · 높게 4,096, 상한 `min(프로바이더 max-tokens, 창의 25%)`). 스트리밍 답변은 `max_tokens` 를 싣지 않아 **예산 계산에만** 쓰이고, 호출부가 상한을 싣지 않는 호출(분류·리랭크·제목·요약·이미지)은 프로바이더 기본값이 예약됩니다 |
+| 출력 예약 | `max_tokens` 로 잡는 자리 = 기본 예약 + 생각 여유(낮게 1,024 · 중간 2,048 · 높게 4,096, 상한 `min(프로바이더 max-tokens, 창의 25%)`). 스트리밍 답변은 `max_tokens` 를 싣지 않아 **예산 계산에만** 쓰입니다. 짧은 응답의 호출(분류·리랭크·제목·이미지 설명·이미지 유형)은 자기 상한 2,048, 요약은 `max-summary-chars` + 1,024 를 싣고 둘 다 전역 `max-tokens` 를 넘지 않습니다(2026-10-12 — 그전엔 프로바이더 기본값 전체가 예약됐다). 호출부가 상한을 싣지 못하는 질의 확장만 프로바이더 기본값이 예약됩니다 |
 | 입력 예산 | `창 − 출력 예약 − 여유(창의 10%)` 와 끔 대비 증감 %. 창을 모르면 `—` ([컨텍스트 다시 탐지]) |
 | 뜻하는 것 | 그 예산이 이 호출에서 무엇인지 — 답변은 검색 문서 k/top-K(이력이 상한일 때의 값 포함), 검증은 발췌 k/top-K(답변 3,000자·5,000자), Direct 는 이력 최대 글자, 리랭크는 후보 수, MD 교정·TXT 구조화는 **조각 최대 글자**(여유만큼 줄면 문서당 호출 수가 늘어납니다), 키워드는 배치가 창에 들어가는지, 짧은 응답 호출은 입력 걱정 여부 |
 | 생각 자리 | `예약 − 응답 필요분`. 이 값이 0 이하면 생각을 켜는 순간 응답이 들어갈 자리가 없습니다. 아무것도 보내지 않는 프로바이더에서는 `(?)` 가 붙습니다 — 서버가 생각하는지 앱은 모릅니다 |
@@ -2208,7 +2251,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 호출 지점 | 실측 권고 | 반대로 두면 | 실측 근거 |
 |---|---|---|---|
-| 응답 검증 · 응용 검증 | **낮게** | 끄면(현재 출하값) 한 번에 45~60초 → 2~14초, 근거 없는 답을 잡는 비율 44% → 6% | 근거 없는 답 18건 중 잡은 수 8 vs 1, 근거 있는 답은 12/12 통과(둘 다) |
+| 응답 검증 · 응용 검증 | **낮게** | 끄면(현재 출하값) 한 번에 45~60초 → 2~14초, 근거 없는 답을 잡는 비율 26~44% → 5~6%(두 번 잰 범위) | 근거 없는 답 18건 중 잡은 수 8 vs 1(10-12 재측정 19건 중 5 vs 1), 근거 있는 답은 전부 통과(둘 다) |
 | 응용(C) 답변 | **낮게** | 끄면(현재 출하값) 전체 129초 → 78초(중앙값), 첫 글자 29~43초 → 8~10초. 대신 코드가 문서의 API·템플릿을 덜 따른다 | 4건 중 3건 |
 | RAG 답변(S·N) · Direct 답변(S·N) · 메타 답변 | 끔 | 낮게로 올리면 **첫 글자가 11~34초(중앙값 19초) 늦다**. Direct N 은 `## 요약` 첫머리를 더 지킨다(끔 11/16 → 낮게 16/16) | 핵심 사실이 같다 |
 | 분류 · 독립화 · 질의 확장 · 제목 | 끔 | 낮게면 10~15배 느리다(독립화는 원문을 그대로 돌려주는 일이 는다 · 확장은 검색 +24초) | 품질 이득 없음 |
@@ -2934,7 +2977,9 @@ time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: applic
 | 첫 요청만 매우 느리고 이후 정상 | 최초 요청이 모델 로딩(JIT)을 유발 | 기동 후 워밍업 요청을 한 번 보내두기 |
 | 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 모드를 S(간단히)로, 또는 더 빠른 모델 사용 |
 | 로그에 `[TIMEOUT:SSE_IDLE]` | 300초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
-| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
+| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음(다른 서버로 넘기지도 않음) |
+| 로그에 `[CONNECT-TIMEOUT]` | `LLM_CONNECT_TIMEOUT_SECONDS`(기본 10초) 안에 연결을 못 맺음 — 호스트가 꺼졌거나 방화벽/네트워크 문제 | 그 서버를 차단하고 같은 호출 안에서 다음 서버로 넘어간 것이다. 서버 상태·주소(`LOCAL_LLM_URL`)를 확인 |
+| 로그에 `[STREAM-FAILOVER]` | 채팅 답변 스트리밍이 첫 토큰 전에 서버 장애(연결 거부·연결 타임아웃·5xx·429/503)를 만나 다음 서버로 다시 열었다 | 사용자에게는 보이지 않는다. 반복되면 해당 서버(`provider=`)를 확인 |
 
 ---
 
@@ -2958,7 +3003,7 @@ docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | 
 | **배지가 아예 없음** (검증됨/생성도, 미검증도 아님) | 평가 응답이 비었거나 JSON 파싱에 실패해 **판정 없음**으로 내려감 | 실패가 아니라 "검증을 못 했다"는 표시입니다. 아래 *검증 배지가 사라짐* 항목으로 |
 | 로그에 `[EVAL] 발췌 한도(글자 … / 토큰 …)로 N개 중 M개만 검증에 사용 — 하위 순위 문서 제외` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 글자 상한(32,000)이나 프로바이더 창에서 파생된 토큰 예산을 넘어 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
 
-> 검증은 답변을 **버리지 않습니다** — 미검증 배지는 "직접 출처를 확인하라"는 표시이지 실패가 아닙니다. 재시도 자체를 줄이려면 `MAX_RETRY_COUNT`를 낮추세요(`0`이면 재시도 없이 첫 답변을 그대로 전달).
+> 검증은 답변을 **버리지 않습니다** — 미검증 배지는 "직접 출처를 확인하라"는 표시이지 실패가 아닙니다. 재시도 자체를 줄이려면 `MAX_RETRY_COUNT`를 낮추세요(`0`이면 재시도 없이 첫 답변을 그대로 전달). 상한을 다 쓰지 않고 끝났다면 조기 종료입니다 — 같은 이유로, 같은 청크를 보고 두 번 반려되면 더 돌지 않습니다(로그 `[AgentGraph] retry stopped early … on the same N chunk(s)`). 그때 고칠 것은 재시도 횟수가 아닙니다: `reason=ANSWER_INSUFFICIENT` 면 검색이 다른 청크를 가져오게 하는 쪽(`SEARCH_TOP_K`·태그 범위·문서 자체), `reason=CRITIC_UNGROUNDED` 면 문서 밖으로 나가는 답변 쪽(위 표의 사유별 조치 — 답변 모델·응답 모드)입니다.
 
 ---
 

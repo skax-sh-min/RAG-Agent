@@ -67,7 +67,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> suggestionIds() {
-        return repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50).stream()
+        return repo.findSuggestionCandidates(List.of("sqlite"), "u1", null, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .sorted()
                 .toList();
@@ -81,8 +81,8 @@ class QuestionReuseModeFilterTest {
 
         // "다시 만들어줘"에 저장된 코드를 그대로 돌려주면 요청한 바로 그것을 하지 않는 셈이 된다.
         assertThat(suggestionIds()).containsExactly(1L);
-        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNull();
-        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNotNull();
+        assertThat(repo.findTurnForReuse(2L)).isNull();
+        assertThat(repo.findTurnForReuse(1L)).isNotNull();
     }
 
     @Test
@@ -90,7 +90,7 @@ class QuestionReuseModeFilterTest {
     void summaryTurn_staysExcluded() {
         insertTurn(1L, ResponseMode.S.name());
         assertThat(suggestionIds()).isEmpty();
-        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(1L)).isNull();
     }
 
     @Test
@@ -146,7 +146,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> suggestionIdsInOrder(String userId, String threadId) {
-        return repo.findSuggestionCandidates(List.of("sqlite"), false, userId, threadId, 50).stream()
+        return repo.findSuggestionCandidates(List.of("sqlite"), userId, threadId, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .toList();
     }
@@ -162,7 +162,7 @@ class QuestionReuseModeFilterTest {
 
         assertThat(suggestionIdsInOrder("u1", "t-here")).containsExactly(2L, 1L, 5L);
         // 실제 재사용 조회는 여전히 엄격하다 — 현재 대화의 S 턴 id 로 불러도 나오지 않는다.
-        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(1L)).isNull();
         // 대화 id 없이(REST) 부르면 그 면제는 없다.
         assertThat(suggestionIdsInOrder("u1", null)).containsExactly(5L);
     }
@@ -196,17 +196,17 @@ class QuestionReuseModeFilterTest {
 
         // 예전 조인(`src.user_id = t.user_id`)이었다면 두 조회 모두 "참조 원문 삭제됨" 을 답변으로 냈다 —
         // 재사용의 재사용에서는 그 문구가 그대로 사용자에게 답변으로 나갔다.
-        QuestionReuseRepository.CandidateTurn forReuse = repo.findTurnForReuse(2L, false, "u1");
+        QuestionReuseRepository.CandidateTurn forReuse = repo.findTurnForReuse(2L);
         assertThat(forReuse).isNotNull();
         assertThat(forReuse.answer()).isEqualTo("원본 답변");
 
-        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::answer)
                 .containsOnly("원본 답변");
 
         // 원본이 실제로 지워지면 폴백은 그대로다.
         jdbc.update("DELETE FROM conversation_turns WHERE id = 1");
-        assertThat(repo.findTurnForReuse(2L, false, "u1").answer()).isEqualTo("참조 원문 삭제됨");
+        assertThat(repo.findTurnForReuse(2L).answer()).isEqualTo("참조 원문 삭제됨");
     }
 
     /**
@@ -227,19 +227,19 @@ class QuestionReuseModeFilterTest {
         activeSource(1L, "u2", "t-src");
         activeSource(2L, "u1", "t-reuse");
 
-        QuestionReuseRepository.CandidateTurn viaReuse = repo.findTurnForReuse(2L, false, "u1");
+        QuestionReuseRepository.CandidateTurn viaReuse = repo.findTurnForReuse(2L);
         assertThat(viaReuse).isNotNull();
         assertThat(viaReuse.responseMode()).isEqualTo("N");
         assertThat(viaReuse.directMode()).isFalse();
         assertThat(viaReuse.selectedTags()).isEqualTo("policy,billing");
 
         // 원본이 아닌 보통 턴은 자기 행 그대로다.
-        QuestionReuseRepository.CandidateTurn plain = repo.findTurnForReuse(1L, false, "u2");
+        QuestionReuseRepository.CandidateTurn plain = repo.findTurnForReuse(1L);
         assertThat(plain.responseMode()).isEqualTo("N");
         assertThat(plain.selectedTags()).isEqualTo("policy,billing");
 
         // 추천 목록도 같은 열을 싣는다.
-        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::selectedTags)
                 .containsOnly("policy,billing");
     }
@@ -273,16 +273,16 @@ class QuestionReuseModeFilterTest {
         activeSource(3L, "u1", "t-c");
         activeSource(4L, "u1", "t-d");
 
-        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::turnId)
                 .containsExactly(4L);
-        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
-        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNull();
-        assertThat(repo.findTurnForReuse(3L, false, "u1")).isNull();
-        assertThat(repo.findTurnForReuse(4L, false, "u1")).isNotNull();
+        assertThat(repo.findTurnForReuse(1L)).isNull();
+        assertThat(repo.findTurnForReuse(2L)).isNull();
+        assertThat(repo.findTurnForReuse(3L)).isNull();
+        assertThat(repo.findTurnForReuse(4L)).isNotNull();
 
         // 현재 대화의 Direct 턴은 여전히 목록에 오른다 — 재사용이 아니라 그 자리로의 이동이므로.
-        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", "t-a", 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), "u1", "t-a", 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::turnId)
                 .containsExactly(1L, 4L);
     }
@@ -321,8 +321,8 @@ class QuestionReuseModeFilterTest {
         assertThat(suggestionIdsInOrder("u1", null)).containsExactly(3L);
 
         // 재사용 조회는 이 술어를 타지 않는다 — 사유("출처 청크가 없어…")는 validateTurn() 이 낸다.
-        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNotNull();
-        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNotNull();
+        assertThat(repo.findTurnForReuse(1L)).isNotNull();
+        assertThat(repo.findTurnForReuse(2L)).isNotNull();
 
         // 현재 대화의 턴은 이동 대상이라 출처가 없어도 오른다.
         assertThat(suggestionIdsInOrder("u1", "t-a")).containsExactly(1L, 3L);
@@ -337,7 +337,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> idsFor(List<String> keywords) {
-        return repo.findSuggestionCandidates(keywords, false, "u1", null, 50).stream()
+        return repo.findSuggestionCandidates(keywords, "u1", null, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .sorted()
                 .toList();

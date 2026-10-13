@@ -246,7 +246,7 @@ public class QuestionReuseRepository {
      *
      * @param keywords 비어 있으면 빈 목록을 돌려준다(아무 행도 맞히지 않는 술어 대신)
      */
-    public List<CandidateTurn> findSuggestionCandidates(List<String> keywords, boolean meOnly, String userId,
+    public List<CandidateTurn> findSuggestionCandidates(List<String> keywords, String userId,
                                                         String threadId, int limit) {
         if (keywords == null || keywords.isEmpty()) return List.of();
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
@@ -265,7 +265,6 @@ public class QuestionReuseRepository {
             "        AND " + REUSABLE_MODE_PREDICATE +
             NOT_DIRECT_PREDICATE +
             HAS_ACTIVE_SOURCE_PREDICATE + ") ) " +
-            (meOnly ? "AND t.user_id = ? " : "") +
             "ORDER BY CASE WHEN t.thread_id = ? AND t.user_id = ? THEN 0 ELSE 1 END, " +
             "         CASE WHEN t.user_id = ? THEN 0 ELSE 1 END, " +
             "         t.id DESC " +
@@ -275,7 +274,6 @@ public class QuestionReuseRepository {
         for (String k : keywords) args.add("%" + escapeLike(k) + "%");
         args.add(currentThread);
         args.add(userId);
-        if (meOnly) args.add(userId);
         args.add(currentThread);
         args.add(userId);
         args.add(userId);
@@ -309,7 +307,8 @@ public class QuestionReuseRepository {
         return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
-    public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
+    /** 재사용할 턴 하나 — 추천과 같은 재사용 술어를 그대로 건다(누구의 턴이든; 범위는 언제나 공유). */
+    public CandidateTurn findTurnForReuse(long turnId) {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
@@ -320,11 +319,8 @@ public class QuestionReuseRepository {
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +
             NOT_DIRECT_PREDICATE +
-            (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
-        List<CandidateTurn> rows = meOnly
-                ? jdbc.query(sql, CANDIDATE_MAPPER, turnId, userId)
-                : jdbc.query(sql, CANDIDATE_MAPPER, turnId);
+        List<CandidateTurn> rows = jdbc.query(sql, CANDIDATE_MAPPER, turnId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 

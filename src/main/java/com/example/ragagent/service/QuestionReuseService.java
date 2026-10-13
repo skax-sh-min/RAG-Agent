@@ -220,10 +220,14 @@ public class QuestionReuseService {
      * <p>질문 매칭은 입력 문장 통째가 아니라 {@link QuestionKeywords#extract} 가 뽑은 내용어
      * 전부의 부분 일치다 — 어순·조사·의문 표현이 달라도 같은 질문을 찾는다.
      *
+     * <p>범위는 언제나 공유(모든 사용자의 턴)다 — "내 질문만" 범위는 화면에서 고를 수 없었고, 기본 배포의 공유 게스트 id
+     * 에서는 그 필터가 아무것도 거르지 못해 2026-10-12 에 걷어냈다(PLAN §10.15). 출처 구분은 필터가 아니라 항목마다 붙는
+     * {@link Origin} 이 한다.
+     *
      * @param threadId 지금 열려 있는 대화. {@code null}/공백이면 어떤 항목도 현재 대화로 분류되지
      *                 않는다(REST 호출)
      */
-    public List<Suggestion> suggest(String userId, String threadId, Scope scope, String q, int limit) {
+    public List<Suggestion> suggest(String userId, String threadId, String q, int limit) {
         String query = q == null ? "" : q.strip();
         if (query.length() < 2) return List.of();
 
@@ -233,9 +237,8 @@ public class QuestionReuseService {
         if (keywords.isEmpty()) keywords = List.of(query);
 
         int fetch = Math.max(limit * 4, 20);
-        boolean meOnly = scope == Scope.ME;
         List<QuestionReuseRepository.CandidateTurn> candidates =
-                repository.findSuggestionCandidates(keywords, meOnly, userId, threadId, fetch);
+                repository.findSuggestionCandidates(keywords, userId, threadId, fetch);
 
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();
@@ -256,8 +259,7 @@ public class QuestionReuseService {
             }
             String key = normalizeQuestionKey(shown);
             if (!seenQuestions.add(key)) continue;
-            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()),
-                    scope == Scope.ME ? "me" : "shared", origin));
+            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin));
             if (out.size() >= limit) break;
         }
         return out;
@@ -281,9 +283,9 @@ public class QuestionReuseService {
         return sameUser ? Origin.MINE : Origin.OTHERS;
     }
 
-    public ReuseLookup reuseLookup(String userId, Scope scope, long turnId) {
-        boolean meOnly = scope == Scope.ME;
-        QuestionReuseRepository.CandidateTurn turn = repository.findTurnForReuse(turnId, meOnly, userId);
+    /** 추천 항목 하나를 재사용할 수 있는가 — 범위는 {@link #suggest} 와 같이 언제나 공유다(누구의 턴이든). */
+    public ReuseLookup reuseLookup(long turnId) {
+        QuestionReuseRepository.CandidateTurn turn = repository.findTurnForReuse(turnId);
         if (turn == null) {
             return ReuseLookup.notReusable("선택한 항목을 찾을 수 없거나 접근 권한이 없습니다.", null);
         }
@@ -493,17 +495,6 @@ public class QuestionReuseService {
     }
 
     /**
-     * 재사용 후보를 고르는 범위. <b>오늘 {@link #ME} 를 만드는 경로는 없다</b> — 채팅의 두
-     * 엔드포인트가 {@link #SHARED} 로 고정이라(ChatController) 요청 문자열을 이 enum 으로
-     * 옮기던 {@code parse()} 도 호출자가 없어 지웠다. 되살리려면 화면 토글과 공유 게스트 id
-     * 문제를 함께 풀어야 한다.
-     */
-    public enum Scope {
-        ME,
-        SHARED
-    }
-
-    /**
      * 추천 항목이 어디서 온 질문인가. JSON 으로는 소문자 코드({@code thread}/{@code mine}/
      * {@code others}/{@code elsewhere})로 나가고, 화면은 이 값으로 배지와 클릭 동작을 가른다 —
      * {@code thread} 만 이동이고 나머지는 재사용이다.
@@ -526,8 +517,7 @@ public class QuestionReuseService {
         public String code() { return code; }
     }
 
-    public record Suggestion(long turnId, String question, String answerPreview, String scope,
-                             Origin origin) {}
+    public record Suggestion(long turnId, String question, String answerPreview, Origin origin) {}
 
     /**
      * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는

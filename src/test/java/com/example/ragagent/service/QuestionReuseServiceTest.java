@@ -10,7 +10,6 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -96,7 +95,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(12L, "u1", "t1", "Spring Boot 설정 방법", "a1", "2026-08-05 10:00:00"),
                         new QuestionReuseRepository.CandidateTurn(11L, "u1", "t2", "spring   boot   설정 방법", "a2", "2026-08-05 09:00:00"),
@@ -110,7 +109,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "spring", 10);
+                service.suggest("u1", null, "spring", 10);
 
         assertThat(suggestions).hasSize(2);
         assertThat(suggestions.get(0).question()).isEqualTo("Spring Boot 설정 방법");
@@ -127,7 +126,7 @@ class QuestionReuseServiceTest {
                 + "특히 인증서 갱신, 비밀값 교체, 감사 로그 보존 기간까지 운영자가 매달 확인해야 할 항목을 빠짐없이 정리해 주세요";
         assertThat(longQuestion.length()).isGreaterThan(QuestionReuseService.MAX_SUGGESTION_QUESTION_LENGTH);
 
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(20L, "u1", "t1", longQuestion, "a1", "2026-08-05 10:00:00"),
                         new QuestionReuseRepository.CandidateTurn(19L, "u1", "t2", "로그인 오류 401 원인", "a2", "2026-08-05 09:00:00")
@@ -140,7 +139,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "로그인", 10);
+                service.suggest("u1", null, "로그인", 10);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
@@ -155,11 +154,11 @@ class QuestionReuseServiceTest {
         String question = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차와 확인 항목을 알려주세요";
         assertThat(question.length()).isBetween(51, 100);
         stubReusable(repo, 21L);
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
                         21L, "u1", "t1", question, "a1", "2026-08-05 10:00:00")));
 
-        assertThat(service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "보안 설정", 10))
+        assertThat(service.suggest("u1", null, "보안 설정", 10))
                 .extracting(QuestionReuseService.Suggestion::question).containsExactly(question);
     }
 
@@ -173,14 +172,14 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
         stubReusable(repo, 22L);
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
                         22L, "u1", "t1", "그거 왜 안 돼?", "a1", "2026-08-05 10:00:00",
                         "N", false, "", "MCI 연동 타임아웃 오류는 왜 발생하나요?")));
 
         assertThat(QuestionReuseService.isDirectiveOnlyQuestion("그거 왜 안 돼?"))
                 .as("원문만으로는 지시어뿐이라 추천에서 빠지던 질문").isTrue();
-        assertThat(service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "타임아웃", 10))
+        assertThat(service.suggest("u1", null, "타임아웃", 10))
                 .extracting(QuestionReuseService.Suggestion::question)
                 .containsExactly("MCI 연동 타임아웃 오류는 왜 발생하나요?");
     }
@@ -192,11 +191,11 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
         stubReusable(repo, 23L);
-        when(repo.findTurnForReuse(23L, false, "u1")).thenReturn(new QuestionReuseRepository.CandidateTurn(
+        when(repo.findTurnForReuse(23L)).thenReturn(new QuestionReuseRepository.CandidateTurn(
                 23L, "u1", "t1", "그거 어떻게 설정해?", "답변", "2026-08-05 10:00:00",
                 "N", false, "", "MCI 연동 타임아웃은 어떻게 설정하나요?"));
 
-        QuestionReuseService.ReuseLookup lookup = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 23L);
+        QuestionReuseService.ReuseLookup lookup = service.reuseLookup(23L);
 
         assertThat(lookup.reusable()).isTrue();
         assertThat(lookup.question()).isEqualTo("MCI 연동 타임아웃은 어떻게 설정하나요?");
@@ -216,7 +215,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(30L, "u1", "t1", "캐시 설정 방법", "원본 답변", "2026-08-06 10:00:00")
                 ));
@@ -228,7 +227,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("admin", null, QuestionReuseService.Scope.SHARED, "캐시", 8);
+                service.suggest("admin", null, "캐시", 8);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("캐시 설정 방법");
@@ -240,7 +239,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findTurnForReuse(55L, false, "admin"))
+        when(repo.findTurnForReuse(55L))
                 .thenReturn(new QuestionReuseRepository.CandidateTurn(
                         55L, "u1", "t9", "배포 절차", "원본 turn 답변", "2026-08-06 10:00:00"));
         when(repo.findSourceRefs(55L))
@@ -251,7 +250,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         QuestionReuseService.ReuseLookup lookup =
-                service.reuseLookup("admin", QuestionReuseService.Scope.SHARED, 55L);
+                service.reuseLookup(55L);
 
         assertThat(lookup.reusable()).isTrue();
         assertThat(lookup.answer()).isEqualTo("원본 turn 답변");
@@ -269,7 +268,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findTurnForReuse(56L, false, "admin"))
+        when(repo.findTurnForReuse(56L))
                 .thenReturn(new QuestionReuseRepository.CandidateTurn(
                         56L, "u1", "t9", "VPN 접속 방법", "답변", "2026-08-06 10:00:00",
                         "N", true, "policy,billing"));
@@ -281,7 +280,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         QuestionReuseService.ReuseLookup lookup =
-                service.reuseLookup("admin", QuestionReuseService.Scope.SHARED, 56L);
+                service.reuseLookup(56L);
 
         assertThat(lookup.reusable()).isTrue();
         assertThat(lookup.responseMode()).isEqualTo("N");
@@ -457,7 +456,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         // 현재 대화 — 출처 행이 하나도 없다(Direct 턴). 재사용이라면 탈락할 자리.
                         new QuestionReuseRepository.CandidateTurn(40L, "u1", "t-here",  "포트 설정 방법", "a1", "2026-09-19 10:00:00"),
@@ -467,7 +466,7 @@ class QuestionReuseServiceTest {
         when(repo.findAllSourceRefs(anyLong())).thenReturn(List.of());
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "포트", 10);
+                service.suggest("u1", "t-here", "포트", 10);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).turnId()).isEqualTo(40L);
@@ -484,7 +483,7 @@ class QuestionReuseServiceTest {
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
         // 리포지토리는 현재 대화를 먼저 준다(ORDER BY) — 서비스의 중복 제거는 그 순서를 믿는다.
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(50L, "u1", "t-here",  "캐시 설정 방법", "a1", "2026-09-19 09:00:00"),
                         new QuestionReuseRepository.CandidateTurn(51L, "u2", "t-x",     "캐시  설정 방법", "a2", "2026-09-19 10:00:00")
@@ -495,7 +494,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "캐시", 10);
+                service.suggest("u1", "t-here", "캐시", 10);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).turnId()).isEqualTo(50L);
@@ -507,7 +506,7 @@ class QuestionReuseServiceTest {
     /** 다른 대화의 후보 하나: 출처 c1 이 스냅샷 h1 에서 바뀌었다(통지 없이 — 해시 대조에서만 드러나는 실패). */
     private static QuestionReuseRepository stubChangedChunkCandidate(long turnId) {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
                         turnId, "u2", "t-other", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00")));
         when(repo.findAllSourceRefs(turnId))
@@ -523,12 +522,12 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = stubChangedChunkCandidate(60L);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", "sqlite", 10)).isEmpty();
         assertThat(service.isRecentlyInvalid(60L)).isTrue();
 
         // 두 번째·세 번째 입력 — 결과는 같고, 출처 조회는 처음 한 번뿐이다.
-        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite 연", 10)).isEmpty();
-        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite 연결", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", "sqlite 연", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", "sqlite 연결", 10)).isEmpty();
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).findAllSourceRefs(60L);
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).currentChunkHashes(java.util.Set.of("c1"));
     }
@@ -544,18 +543,18 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = stubChangedChunkCandidate(61L);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class), nanos::get);
 
-        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", "sqlite", 10)).isEmpty();
 
         // 청크가 원래 내용으로 돌아왔다 — TTL 안에서는 캐시가 그걸 아직 모른다.
         when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
         nanos.addAndGet(QuestionReuseService.INVALID_TURN_TTL.minusSeconds(1).toNanos());
-        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", "sqlite", 10)).isEmpty();
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).findAllSourceRefs(61L);
 
         // TTL 을 넘기면 다시 확인한다 — 이제 통과하므로 추천에 오른다.
         nanos.addAndGet(java.time.Duration.ofSeconds(2).toNanos());
         List<QuestionReuseService.Suggestion> back =
-                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10);
+                service.suggest("u1", "t-here", "sqlite", 10);
         assertThat(back).extracting(QuestionReuseService.Suggestion::turnId).containsExactly(61L);
         assertThat(service.isRecentlyInvalid(61L)).isFalse();
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(2)).findAllSourceRefs(61L);
@@ -566,7 +565,7 @@ class QuestionReuseServiceTest {
     void reuseLookup_neverReadsTheCache_fillsOnFailure_clearsOnSuccess() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
-        when(repo.findTurnForReuse(62L, false, "u1")).thenReturn(new QuestionReuseRepository.CandidateTurn(
+        when(repo.findTurnForReuse(62L)).thenReturn(new QuestionReuseRepository.CandidateTurn(
                 62L, "u2", "t-other", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00"));
         when(repo.findAllSourceRefs(62L))
                 .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
@@ -575,14 +574,14 @@ class QuestionReuseServiceTest {
         when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "CHANGED"));
 
         // 클릭 → 실패: 사유는 그대로 전달되고 캐시에 남는다.
-        QuestionReuseService.ReuseLookup failed = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 62L);
+        QuestionReuseService.ReuseLookup failed = service.reuseLookup(62L);
         assertThat(failed.reusable()).isFalse();
         assertThat(failed.reason()).contains("청크 내용이 변경");
         assertThat(service.isRecentlyInvalid(62L)).isTrue();
 
         // 청크가 되돌아온 직후의 클릭 — 캐시가 아니라 저장소를 본다(최종 관문). 성공은 캐시를 지운다.
         when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
-        QuestionReuseService.ReuseLookup ok = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 62L);
+        QuestionReuseService.ReuseLookup ok = service.reuseLookup(62L);
         assertThat(ok.reusable()).isTrue();
         assertThat(service.isRecentlyInvalid(62L)).isFalse();
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(2)).findAllSourceRefs(62L);
@@ -595,16 +594,16 @@ class QuestionReuseServiceTest {
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
         QuestionReuseRepository.CandidateTurn here = new QuestionReuseRepository.CandidateTurn(
                 63L, "u1", "t-here", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00");
-        when(repo.findTurnForReuse(63L, false, "u1")).thenReturn(here);
+        when(repo.findTurnForReuse(63L)).thenReturn(here);
         when(repo.findAllSourceRefs(63L)).thenReturn(List.of());   // 출처 없음 → 재사용 불가
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(here));
 
-        assertThat(service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 63L).reusable()).isFalse();
+        assertThat(service.reuseLookup(63L).reusable()).isFalse();
         assertThat(service.isRecentlyInvalid(63L)).isTrue();
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10);
+                service.suggest("u1", "t-here", "sqlite", 10);
         assertThat(suggestions).extracting(QuestionReuseService.Suggestion::turnId).containsExactly(63L);
         assertThat(suggestions.get(0).origin()).isEqualTo(QuestionReuseService.Origin.THREAD);
     }
@@ -616,14 +615,14 @@ class QuestionReuseServiceTest {
     void suggest_passesExtractedKeywordsToTheRepository() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of());
 
-        service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "sqlite 연결은 어떻게 설정하나요?", 10);
+        service.suggest("u1", null, "sqlite 연결은 어떻게 설정하나요?", 10);
 
         org.mockito.Mockito.verify(repo).findSuggestionCandidates(
                 org.mockito.ArgumentMatchers.eq(List.of("sqlite", "연결", "설정")),
-                anyBoolean(), anyString(), any(), anyInt());
+                anyString(), any(), anyInt());
     }
 
     @Test
@@ -631,13 +630,13 @@ class QuestionReuseServiceTest {
     void suggest_fallsBackToTheWholeInputWhenNoKeywordSurvives() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
-        when(repo.findSuggestionCandidates(anyList(), anyBoolean(), anyString(), any(), anyInt()))
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt()))
                 .thenReturn(List.of());
 
-        service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "이거 왜 안 돼요", 10);
+        service.suggest("u1", null, "이거 왜 안 돼요", 10);
 
         org.mockito.Mockito.verify(repo).findSuggestionCandidates(
                 org.mockito.ArgumentMatchers.eq(List.of("이거 왜 안 돼요")),
-                anyBoolean(), anyString(), any(), anyInt());
+                anyString(), any(), anyInt());
     }
 }

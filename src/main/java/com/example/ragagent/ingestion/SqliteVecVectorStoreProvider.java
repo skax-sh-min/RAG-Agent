@@ -351,6 +351,21 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         jdbc.batchUpdate("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?", updates);
     }
 
+    /** spring_doc_id 가 전역 기본키라 버전과 무관하게 한 번에 읽는다(PK 조회). */
+    @Override
+    public List<Document> findByIds(String userId, String version, List<String> springDocIds) {
+        if (springDocIds == null || springDocIds.isEmpty()) return List.of();
+        String placeholders = springDocIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        return jdbc.query(
+                "SELECT spring_doc_id, content, metadata FROM vec_document_chunks WHERE spring_doc_id IN (" + placeholders + ")",
+                (rs, i) -> Document.builder()
+                        .id(rs.getString("spring_doc_id"))
+                        .text(rs.getString("content"))
+                        .metadata(parseMetadata(rs.getString("metadata")))
+                        .build(),
+                springDocIds.toArray());
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
