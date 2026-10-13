@@ -56,8 +56,73 @@ public record AppProperties(
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
-        UploadConfig upload                      // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
+        UploadConfig upload,                     // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
+        Double searchCuratedQaMinSimilarity      // 큐레이션 축 벡터 절반의 최소 유사도 — 문서 축의 임계값보다 높게 둔다(큐레이션 풀은 작아서 문턱만 넘으면 RRF 1위를 받는다). 0 = 문서 임계값만. 핫에디터블 — searchCuratedQaMinSimilaritySafe()
 ) {
+    /**
+     * MANDATORY once this record has more than one constructor — see {@link AuthConfig}: without it Spring Boot
+     * cannot tell which one to bind with.
+     */
+    @ConstructorBinding
+    public AppProperties {
+    }
+
+    /** Back-compat form without {@code searchCuratedQaMinSimilarity} (its shipped default applies). Test convenience;
+     *  never used for property binding (see {@code @ConstructorBinding} above). */
+    public AppProperties(String dataDir,
+                         int maxRetryCount,
+                         int chunkSize,
+                         int chunkOverlap,
+                         int minChunkSize,
+                         int searchTopK,
+                         double searchSimilarityThreshold,
+                         boolean searchMultiqueryEnabled,
+                         int searchMultiqueryMinLength,
+                         boolean searchHybridEnabled,
+                         boolean searchRetryEscalate,
+                         boolean searchRerankEnabled,
+                         int searchCandidateMultiplier,
+                         Integer sseTimeoutSeconds,
+                         LlmConfig llm,
+                         IndexingConfig indexing,
+                         ChromaHttpConfig chroma,
+                         ImageDescriptionProperties imageDescription,
+                         EmbeddingConfig embedding,
+                         RateLimitConfig rateLimit,
+                         AuditConfig audit,
+                         AuthConfig auth,
+                         VectorStoreConfig vectorstore,
+                         MemoryConfig memory,
+                         SummaryConfig summary,
+                         Integer searchTagCandidateMultiplier,
+                         Integer sseIdleTimeoutSeconds,
+                         Double searchRrfKeywordWeight,
+                         Integer searchRrfK,
+                         Boolean searchQueryEmbedCacheEnabled,
+                         Integer searchQueryEmbedCacheMaxSize,
+                         Integer searchQueryEmbedCacheTtlSeconds,
+                         PptxShapeExtractionConfig pptxImage,
+                         String mdCorrectionDefaultCodeLanguage,
+                         DocxShapeExtractionConfig docxImage,
+                         Boolean pptxRemoveDuplicateSlides,
+                         Boolean pptxDropDividerSlides,
+                         Boolean searchCuratedQaEnabled,
+                         Double searchCuratedQaWeight,
+                         Boolean pptxDropRedundantTitleSlides,
+                         Boolean pptxDropEndingSlide,
+                         Boolean chunkSplitGranular,
+                         UploadConfig upload) {
+        this(dataDir, maxRetryCount, chunkSize, chunkOverlap, minChunkSize, searchTopK, searchSimilarityThreshold,
+                searchMultiqueryEnabled, searchMultiqueryMinLength, searchHybridEnabled, searchRetryEscalate,
+                searchRerankEnabled, searchCandidateMultiplier, sseTimeoutSeconds, llm, indexing, chroma,
+                imageDescription, embedding, rateLimit, audit, auth, vectorstore, memory, summary,
+                searchTagCandidateMultiplier, sseIdleTimeoutSeconds, searchRrfKeywordWeight, searchRrfK,
+                searchQueryEmbedCacheEnabled, searchQueryEmbedCacheMaxSize, searchQueryEmbedCacheTtlSeconds, pptxImage,
+                mdCorrectionDefaultCodeLanguage, docxImage, pptxRemoveDuplicateSlides, pptxDropDividerSlides,
+                searchCuratedQaEnabled, searchCuratedQaWeight, pptxDropRedundantTitleSlides, pptxDropEndingSlide,
+                chunkSplitGranular, upload, null);
+    }
+
     public record LlmConfig(
             List<ProviderConfig> providers,
             int circuitBreakerMinutes,
@@ -591,6 +656,22 @@ public record AppProperties(
         Double o = overrideDouble(SettingsKeys.SEARCH_CURATED_QA_WEIGHT);
         Double effective = (o != null) ? o : searchCuratedQaWeight;
         return (effective != null && effective > 0) ? effective : 1.0;
+    }
+
+    /** 출하 기본값 — application.properties 의 {@code app.search-curated-qa-min-similarity} 와 같아야 한다. */
+    public static final double DEFAULT_CURATED_QA_MIN_SIMILARITY = 0.5;
+
+    /**
+     * 큐레이션 축 벡터 절반의 최소 유사도(코사인). 문서 축의 {@link #searchSimilarityThresholdSafe()} 는 벡터 저장소 안에서
+     * 이미 걸리고, 이 값은 그 위에 한 번 더 건다 — 큐레이션 풀은 작아서(실제 배포 1건) 문턱만 넘으면 그 축의 1위가 되고, RRF 는
+     * 순위만 보므로 1위는 상위 문서와 비슷한 점수를 받는다. bge-m3 에서는 무관한 한국어 질문도 0.35~0.44 를 낸다
+     * (SEARCH_EVALUATION §3.7). 0 이면 문서 임계값만 걸린다. [0, 1] 로 자른다. 핫에디터블.
+     */
+    public double searchCuratedQaMinSimilaritySafe() {
+        Double o = overrideDouble(SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY);
+        Double v = (o != null) ? o : searchCuratedQaMinSimilarity;
+        if (v == null) return DEFAULT_CURATED_QA_MIN_SIMILARITY;
+        return Math.max(0.0, Math.min(1.0, v));
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */

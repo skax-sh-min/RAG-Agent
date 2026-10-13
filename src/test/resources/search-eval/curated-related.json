@@ -1,0 +1,102 @@
+{
+  "version": "latest",
+  "topK": 10,
+  "cases": [
+    {
+      "id": "cur-01",
+      "question": "디버그 로그 쓸 때 주의할 점은?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-02",
+      "question": "log.isDebugEnabled()는 왜 써야 하나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-03",
+      "question": "디버그 로그 때문에 OutOfMemoryError가 날 수 있나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-04",
+      "question": "로그 메시지를 문자열 더하기로 만들면 어떤 문제가 있나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-05",
+      "question": "운영에서 debug 로그가 꺼져 있어도 메모리를 쓰나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-06",
+      "question": "파라미터화된 로깅은 어떻게 하나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-07",
+      "question": "log.debug에 {0} 형식으로 인자를 넘기는 방법은?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-08",
+      "question": "디버그 로그가 성능 저하를 일으키는 이유는?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-09",
+      "question": "로그 레벨 체크를 안 하면 어떻게 되나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-10",
+      "question": "큰 레코드셋을 디버그 로그로 찍으면 문제가 되나요?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-11",
+      "question": "로그 찍을 때 GC 부하를 줄이는 방법은?",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    },
+    {
+      "id": "cur-12",
+      "question": "debug 로그 작성 권장 방식 알려줘",
+      "mustContainAny": [
+        "pmEDU04R6002"
+      ],
+      "sourceHint": "큐레이션 Q&A \"디버그 로그 API 사용시 주의사항\" — 표식은 그 항목의 예제 코드에만 있다"
+    }
+  ]
+}

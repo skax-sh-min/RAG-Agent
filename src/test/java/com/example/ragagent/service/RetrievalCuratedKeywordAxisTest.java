@@ -103,7 +103,8 @@ class RetrievalCuratedKeywordAxisTest {
         meta.put(MetaKey.VERSION, CURATED);
         meta.put(MetaKey.FILENAME, "curated_qa");
         meta.put(MetaKey.TAGS, tags);
-        return Document.builder().id(id).text("배포는 ArgoCD 로 한다").metadata(meta).build();
+        // 질문("배포 절차")의 내용어 둘이 다 들어 있다 — 키워드로만 찾힌 큐레이션 항목은 그래야 받는다(gateCurated).
+        return Document.builder().id(id).text("배포 절차: ArgoCD 로 한다").metadata(meta).build();
     }
 
     @Test

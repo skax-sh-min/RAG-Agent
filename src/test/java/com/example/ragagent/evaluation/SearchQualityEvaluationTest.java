@@ -74,6 +74,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>정량 비교 예시: {@code -Dsearch-eval.multiquery=false} 로 질의 확장을 끄거나, {@code app.search-hybrid-enabled} 등을
  * 바꿔가며 재실행해 recall@k 변화를 비교한다. 케이스별 결과는 {@code <out>/<label>/gold.jsonl}·{@code followup.jsonl} 에 남는다
  * ({@code -Dsearch-eval.out}, 기본 {@code target/search-eval} · {@code -Dsearch-eval.label}, 기본 {@code run}).
+ * 골든셋 대신 다른 질문 묶음을 돌리려면 {@code -Dsearch-eval.gold=<클래스패스 자원>} — 예: {@code search-eval/curated-related.json}
+ * (큐레이션 항목 하나를 겨냥한 질문들, 그 항목이 상위에 오는지를 본다 — SEARCH_EVALUATION §3.7).
  *
  * <pre>
  * mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true \
@@ -332,7 +334,7 @@ class SearchQualityEvaluationTest {
     }
 
     private static GoldQuery.GoldSet loadGoldSet() throws IOException {
-        try (var in = new ClassPathResource(GOLD_RESOURCE).getInputStream()) {
+        try (var in = new ClassPathResource(System.getProperty("search-eval.gold", GOLD_RESOURCE)).getInputStream()) {
             return JSON.readValue(in, GoldQuery.GoldSet.class);
         }
     }
