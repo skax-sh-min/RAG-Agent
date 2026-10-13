@@ -127,7 +127,7 @@ src/main/resources/
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(제목 `embed`, `EMBEDDING` 배지, 모델명은 본문 — 표·차트도 같은 이름) + orphan(설정에 없는 채팅 프로바이더 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 | GET | `/api/v1/llm/ping` | JSON `{"available","ok","deep","checkedAt","providers":[{"name","model","reachable","latencyMs","modelListed","modelState","circuitBlockedSeconds","inference","error","ok"}]}` — 전부 통과면 200, 하나라도 실패면 503 | 로컬 LLM 생사 확인. `?deep=true` 면 `max_tokens=1` 완성을 실제로 보낸다(서버는 살았는데 엔진이 죽은 경우를 잡는 유일한 검사). 라우터·브레이커를 우회하는 날것의 HTTP 라 결과가 상태를 바꾸지 않는다. `baseUrl` 은 관리자 응답에만 실린다 |
-| GET | `/ui/threads/{threadId}/turns/{turnId}/extras` | JSON `{"clarifiedQuestion","followUps":[…]}` 또는 204 | 답변 뒤 보강(다듬은 질문·추가 질문)을 `?waitMs`(기본 20000, 서버 상한 25초) 동안 기다렸다 돌려준다(`PostAnswerService.awaitExtras`). 대상이 아니던 턴·설정 꺼짐·아직 없음·메모리에서 지남(10분)·남의 턴은 전부 204 — 화면이 하는 일이 같고, 남의 턴이라고 알려 주지 않는다. 대화를 다시 열 때는 `waitMs=0` |
+| GET | `/ui/threads/{threadId}/turns/{turnId}/extras` | JSON `{"clarifiedQuestion","followUps":[…]}` 또는 204 | 답변 뒤 보강(다듬은 질문·추가 질문)을 `?waitMs`(기본 20000, 서버 상한 25초) 동안 기다렸다 돌려준다(`PostAnswerService.awaitExtras`). 대상이 아니던 턴·설정 꺼짐·아직 없음·마지막 답변이 아닌 턴·남의 턴은 전부 204 — 화면이 하는 일이 같고, 남의 턴이라고 알려 주지 않는다. 대화를 다시 열 때는 `waitMs=0` — 기다림이 없으면 저장된 추가 질문(`thread_follow_up`)이 나온다 |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N,"blockedSeconds":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
@@ -501,11 +501,11 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 ### 이어서 물어보기 (답변 아래 추가 질문 칩)
 
-답변이 끝나면 서버가 LLM 을 한 번 더 불러 **이어서 물어볼 만한 질문 셋**을 만든다(`PostAnswerService`, 질문 다듬기와 한 번의 호출). 저장하지 않는 일회성 제안이다.
+답변이 끝나면 서버가 LLM 을 한 번 더 불러 **이어서 물어볼 만한 질문**(`llm.follow-up-questions-count` 개, 2~5·기본 3)을 만든다(`PostAnswerService`, 질문 다듬기와 한 번의 호출). 대화마다 마지막 답변의 것만 DB(`thread_follow_up`)에 저장한다.
 
 - **가장 최근 답변 아래에만** 붙는다 — `onDone` 이 턴 id 를 받으면 `GET /ui/threads/{threadId}/turns/{turnId}/extras` 를 한 번 기다리고(20초), 결과의 칩을 그 답변 버블 바로 뒤(`.follow-up-questions`)에 넣는다. 새 질문을 보내는 순간(`submit`)·재사용 답변이 붙는 순간(`appendReusedTurn()` → `window.clearChatFollowUps()`) 칩을 치우고 기다리던 요청도 끊는다(`AbortController`) — 늦게 온 결과가 엉뚱한 답변 아래에 붙지 않는다.
 - **누르면 입력창에 넣을 뿐 보내지 않는다** — 비었으면 그 질문으로, 쓰던 글이 있으면 다음 줄에 덧붙인다(같은 질문이 이미 한 줄로 있으면 다시 넣지 않는다). 포커스·커서 끝 이동 후 `input` 이벤트를 쏴서 높이 맞춤·질문 추천이 사람이 친 것과 똑같이 돈다. 사용자가 고쳐서 직접 보낸다.
-- **대화를 다시 열 때**는 마지막 턴에 대해 `waitMs=0` 으로 한 번 묻는다 — 서버 메모리에 남아 있으면(10분) 칩이 다시 붙는다. 그 뒤로는 없다(DB 에 저장하지 않는다).
+- **대화를 다시 열 때**는 마지막 턴에 대해 `waitMs=0` 으로 한 번 묻는다 — 저장된 제안이 그 턴의 것이면 칩이 다시 붙는다(서버 재시작 뒤에도). 설정을 끈 뒤에는 저장돼 있어도 내주지 않는다.
 - 응답이 204 면(대상이 아니었거나 설정이 꺼졌다) 아무것도 붙이지 않는다. 검색 0건 정형 답변·인사처럼 근거 없는 답변 뒤에는 처음부터 만들지 않는다.
 - 크기는 채팅 글자 크기의 비율(`.follow-up-chip` 0.875em, 라벨 메타 단계) — 인라인 크기를 쓰지 않는다(`ChatFontSizeConventionTest`).
 - 풍선 표시 규칙은 `qnavUpdateFloat()` 하나에 있다: 목록 상단에서 `QNAV_ANCHOR_PX`(48px) 아래를 기준선으로 잡아 그 위로 시작점이 올라간 **마지막** 턴이 "지금 읽는 턴"이고, 그 질문 버블이 아직 화면에 남아 있으면 풍선은 숨는다(같은 문구를 두 번 보여줄 이유가 없다). 기준선을 상단 딱 그 지점이 아니라 조금 아래로 잡는 이유는 목록에서 이동했을 때 질문이 상단 12px 아래에 놓이기 때문 — 상단 기준이면 방금 이동해 온 질문이 '다음 턴'으로 분류돼 풍선이 바로 앞 질문을 가리킨다.
