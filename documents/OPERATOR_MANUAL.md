@@ -2120,6 +2120,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 > **맨 위 "화면 표시" 카드는 서버 설정이 아닙니다** — 채팅 글자 크기(최소 12 · 작게 14 · 보통 16 · 크게 18px)를 고르는 곳으로, 값은 각 사용자의 **브라우저에만** 저장되고 누구나 바꿀 수 있습니다. 서버·다른 사용자에게는 영향이 없고 운영자가 기본값을 정하는 설정도 없습니다(기본은 보통). 자세한 동작은 [UI.md §9.4](UI.md#94-채팅-글자-크기-최소작게보통크게).
 
 **조회 항목 (그룹별)**:
+- **항목 이름과 설명**: 검색·인덱싱·LLM·화면 표시 그룹의 항목은 짧은 이름만 보이고, 이름(점선 밑줄 · ⓘ)에 마우스를 올리면 그 값이 무엇을 하는지 설명이 풍선으로 뜹니다. 이름 아래의 `app.…` 은 설정 키입니다.
 - **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드. 일반/RAG temperature와 **max-tokens**는 아래 "LLM 튜닝" 핫 수정 그룹으로 옮겨졌습니다. **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
@@ -2151,18 +2152,18 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 항목 | 키 | 범위 |
 |------|----|------|
 | 유사도 임계값 | `app.search-similarity-threshold` | 0.0 ~ 1.0 |
-| RRF 키워드 가중치 | `app.search-rrf-keyword-weight` | 0.0 ~ 10.0 |
+| 키워드 검색 가중치 | `app.search-rrf-keyword-weight` | 0.0 ~ 10.0 |
 | RRF 상수 k | `app.search-rrf-k` | 1 ~ 1000 |
-| 후보 배수(리랭크) | `app.search-candidate-multiplier` | 1 ~ 20 |
+| 리랭크 후보 배수 | `app.search-candidate-multiplier` | 1 ~ 20 |
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
-| 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
+| 질의 확장 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
 | ↳ **이 값은 경계다** — 길이가 이 값 **이상**이면 멀티쿼리 확장, **미만**이면 §10.12 질의 독립화(짧은 후속 질문 재작성)가 돈다. 둘은 여집합이라 한 턴의 질의 전처리 LLM 호출은 어느 쪽이든 최대 1회다. 0 으로 두면 확장만 돌고 독립화는 영영 돌지 않는다 | | |
-| 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
-| topK (검색 상위 K) | `app.search-top-k` | 1 ~ 50 |
-| 멀티쿼리 확장 (+ §10.12 질의 독립화) | `app.search-multiquery-enabled` | true/false |
+| 재시도 후보 확대 | `app.search-retry-escalate` | true/false |
+| 검색 문서 수 (topK) | `app.search-top-k` | 1 ~ 50 |
+| 질의 확장 · 독립화 (§10.12) | `app.search-multiquery-enabled` | true/false |
 | 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
-| 큐레이션 Q&A 검색 반영 (§10.10) | `app.search-curated-qa-enabled` | true/false |
-| 큐레이션 Q&A 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |
+| 큐레이션 검색 (§10.10) | `app.search-curated-qa-enabled` | true/false |
+| 큐레이션 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |
 
 **핫 수정 가능 — 인덱싱/청킹 (재기동 불필요, 다음 인덱싱/↺ 재인덱싱부터 반영)** — 검색 튜닝과 달리 즉시가 아니라 **다음 인덱싱**부터 적용되며, 이미 색인된 청크를 소급 재분할하지는 않습니다(값을 바꾼 뒤 재업로드하거나 `/admin` ↺ 재인덱싱을 눌러야 반영):
 
@@ -2171,8 +2172,8 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
 | 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
 | 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
-| 청크 분할 전략(소제목 최대 분할) | `app.chunk-split-granular` (`CHUNK_SPLIT_GRANULAR`) | true/false — [§6.10](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
-| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
+| 소제목 분할 | `app.chunk-split-granular` (`CHUNK_SPLIT_GRANULAR`) | true/false — [§6.10](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
+| 동시 파일 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
 | 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 8 |
 
 > **프로바이더별로 따로 줄 수 있는 값 3종**(환경변수 없음, `application.properties` 직접 편집, 재기동 필요):
@@ -2192,15 +2193,15 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 항목 | 키 | 범위 |
 |------|----|------|
-| 일반/RAG temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
-| Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
-| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 0.1 |
-| C(응용) 응답 temperature | `app.llm.creative-temperature` (`CREATIVE_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
-| C(응용) 응답 모드 사용 | `app.llm.creative-mode-enabled` (`CREATIVE_MODE_ENABLED`) | true/false (기본 ON) |
-| 컨텍스트 초과 재시도당 제외할 문서 수 | `app.llm.shrink-step` (`LLM_SHRINK_STEP`) | 1 ~ 10 (기본 1) |
-| 블로킹 호출 출력 상한 | `app.llm.max-tokens` (`LLM_MAX_TOKENS`) | 1000 ~ 32000 |
-| 답변 뒤 질문 다듬기 (재사용 추천용) | `llm.clarified-question-enabled` (화면 설정 전용 — 환경변수 없음) | true/false (기본 ON) |
-| 답변 아래 추가 질문 제안 | `llm.follow-up-questions-enabled` (화면 설정 전용 — 환경변수 없음) | true/false (기본 ON) |
+| 일반 temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
+| Direct temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+| 인덱싱 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 0.1 |
+| 응용(C) temperature | `app.llm.creative-temperature` (`CREATIVE_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+| 응용(C) 모드 | `app.llm.creative-mode-enabled` (`CREATIVE_MODE_ENABLED`) | true/false (기본 ON) |
+| 초과 시 제외 문서 수 | `app.llm.shrink-step` (`LLM_SHRINK_STEP`) | 1 ~ 10 (기본 1) |
+| 출력 상한 (max-tokens) | `app.llm.max-tokens` (`LLM_MAX_TOKENS`) | 1000 ~ 32000 |
+| 질문 다듬기 (재사용 추천용) | `llm.clarified-question-enabled` (화면 설정 전용 — 환경변수 없음) | true/false (기본 ON) |
+| 추가 질문 제안 | `llm.follow-up-questions-enabled` (화면 설정 전용 — 환경변수 없음) | true/false (기본 ON) |
 
 > **답변 뒤 질문 다듬기·추가 질문**은 답변이 끝날 때마다 소형 모델 계층(`MICRO_TEXT`)으로 LLM 을 **한 번 더** 부릅니다. 둘 다 켜져 있으면 **한 번의 호출**로 다듬은 질문과 추가 질문 셋을 함께 받고(JSON), 추가 질문만 켜져 있으면 같은 호출에서 추가 질문만 쓰며, 질문 다듬기만 켜져 있으면 재사용될 수 있는 턴(문서를 검색한 N 답변)에서만 한 줄을 받습니다. 다듬은 질문은 `conversation_turns.clarified_question` 에 저장되고 질문 추천·재사용이 그 문장을 씁니다(§6.11) — 추가 질문이 켜져 있으면 S·C·Direct 턴에도 저장되지만 화면 표시용이고 재사용 후보가 되지는 않습니다. **추가 질문은 저장하지 않습니다** — 서버 메모리에 10분 두었다가 채팅 화면이 가장 최근 답변 아래에 칩으로 보여 줍니다. 검색 0건 정형 답변·인사 뒤에는 부르지 않습니다. 사용량은 `/llm-usage` 에 `postanswer` 카드로 따로 잡힙니다. 출력이 짧아 **모델의 생각(thinking)을 끄고** 부르며, llama.cpp + gemma-4-E2B 실측으로 다듬기만은 턴마다 1초 안팎, 추가 질문까지 받으면 3~4초입니다. 응답을 JSON 으로 읽지 못하면 그 턴은 아무것도 저장하지 않으며(다듬은 질문은 NULL 로 남아 다시 시도할 수 있다) Spring AI 가 `BeanOutputConverter` ERROR 한 줄을 남깁니다. 다만 이 스위치는 **LOCAL 프로바이더에만** 실리고(아래 "추론 모델의 생각 끄기"), LM Studio 의 OpenAI 호환 경로처럼 스위치를 모르는 서버에서는 모델이 여전히 생각합니다 — 켠 채로는 턴마다 400~700 토큰, 10~17초의 백그라운드 생성이었습니다. 그 사이에 보낸 다음 질문은 같은 서버를 나눠 쓰므로(병렬 1 이면 기다리므로) 답이 그만큼 늦어질 수 있습니다. 소형 모델을 `type=MICRO_TEXT` 로 따로 등록하면 답변 모델에는 영향이 없고, 부담되면 끄십시오. 끄면 다음 턴부터 호출하지 않습니다(이미 다듬은 질문은 그대로 쓰입니다).
 
@@ -2210,7 +2211,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 항목 | 키 | 범위 |
 |------|----|------|
-| 출처 미리보기 표시 | `ui.source-preview-enabled` | true/false (기본 ON) |
+| 출처 미리보기 | `ui.source-preview-enabled` | true/false (기본 ON) |
 | 출처 검색 수치 표시 | `ui.retrieval-metrics-enabled` | true/false (기본 **OFF**) |
 
 - `ui.source-preview-enabled` 기본값은 `true`(ON)이며, 관리자 설정으로 시스템 전체에 적용됩니다. `false`면 채팅의 출처 배지 팝오버 미리보기를 초기화하지 않습니다.
@@ -3096,7 +3097,7 @@ grep -E "threw |blocked for |NO-FALLBACK|REPEATED-FAILURE|LLM_PING" logs/rag-age
 
 **피해가 방향에 따라 다릅니다.** 창을 *줄인* 경우는 컨텍스트 초과로 요란하게 드러나고 축소 재시도가 받아냅니다. 문제는 창을 *키운* 경우입니다 — 앱은 옛 창 기준으로 계속 문서를 자르고, 사용자에게는 `컨텍스트 한도로 … 6개만 사용했습니다` 만 뜰 뿐 **왜 그런지는 아무 데도 안 나옵니다.** 창을 키웠는데 답변 품질이 그대로라면 이걸 의심하세요.
 
-**해결**: `/settings` 프로바이더 표 위의 **컨텍스트 다시 탐지** 버튼(관리자만 보입니다). 등록된 LOCAL 프로바이더에게 지금 다시 물어보고, 프로바이더마다 결과를 표 위에 남깁니다.
+**해결**: `/settings` 의 **LLM 라우팅** 카드 제목 줄 오른쪽 끝의 **컨텍스트 다시 탐지** 버튼(관리자만 보입니다). 등록된 LOCAL 프로바이더에게 지금 다시 물어보고, 프로바이더마다 결과를 표 위에 남깁니다.
 
 | 결과 | 뜻 |
 |---|---|
