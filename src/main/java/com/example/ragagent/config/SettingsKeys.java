@@ -43,6 +43,7 @@ public final class SettingsKeys {
     public static final String SEARCH_HYBRID_ENABLED          = "search-hybrid-enabled";
     public static final String SEARCH_CURATED_QA_ENABLED      = "search-curated-qa-enabled"; // §10.10
     public static final String SEARCH_CURATED_QA_WEIGHT       = "search-curated-qa-weight";  // §10.10
+    public static final String SEARCH_CURATED_QA_MIN_SIMILARITY = "search-curated-qa-min-similarity"; // 큐레이션 축 벡터 절반의 최소 유사도
 
     // ── Indexing / chunking (apply on the next indexing / ↺ re-index) ────────
     public static final String CHUNK_SIZE                     = "chunk-size";
@@ -62,6 +63,7 @@ public final class SettingsKeys {
     public static final String LLM_SHRINK_STEP                = "llm.shrink-step"; // §6.26-9 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수
     public static final String LLM_CLARIFIED_QUESTION_ENABLED = "llm.clarified-question-enabled"; // 답변 뒤 질문 다듬기(PostAnswerService) on/off
     public static final String LLM_FOLLOW_UP_QUESTIONS_ENABLED = "llm.follow-up-questions-enabled"; // 답변 아래 추가 질문 제안(PostAnswerService) on/off
+    public static final String LLM_FOLLOW_UP_QUESTIONS_COUNT  = "llm.follow-up-questions-count"; // 추가 질문 개수(2~5, 기본 3)
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
@@ -74,6 +76,18 @@ public final class SettingsKeys {
 
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
+            LLM_TEMPERATURE,
+            LLM_DIRECT_TEMPERATURE,
+            LLM_INDEXING_TEMPERATURE,
+            LLM_CREATIVE_TEMPERATURE,
+            LLM_CREATIVE_MODE_ENABLED,
+            LLM_CLARIFIED_QUESTION_ENABLED,
+            LLM_FOLLOW_UP_QUESTIONS_ENABLED,
+            LLM_FOLLOW_UP_QUESTIONS_COUNT,
+            LLM_SHRINK_STEP,
+            LLM_MAX_TOKENS,
+            UI_SOURCE_PREVIEW_ENABLED,
+            UI_RETRIEVAL_METRICS_ENABLED,
             SEARCH_SIMILARITY_THRESHOLD,
             SEARCH_RRF_KEYWORD_WEIGHT,
             SEARCH_RRF_K,
@@ -86,22 +100,12 @@ public final class SettingsKeys {
             SEARCH_HYBRID_ENABLED,
             SEARCH_CURATED_QA_ENABLED,
             SEARCH_CURATED_QA_WEIGHT,
+            SEARCH_CURATED_QA_MIN_SIMILARITY,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,
             CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
-            INDEXING_MAX_CONCURRENT_LLM,
-            LLM_TEMPERATURE,
-            LLM_DIRECT_TEMPERATURE,
-            LLM_INDEXING_TEMPERATURE,
-            LLM_CREATIVE_MODE_ENABLED,
-            LLM_CREATIVE_TEMPERATURE,
-            LLM_MAX_TOKENS,
-            LLM_SHRINK_STEP,
-            LLM_CLARIFIED_QUESTION_ENABLED,
-            LLM_FOLLOW_UP_QUESTIONS_ENABLED,
-            UI_SOURCE_PREVIEW_ENABLED,
-            UI_RETRIEVAL_METRICS_ENABLED
+            INDEXING_MAX_CONCURRENT_LLM
     );
 }

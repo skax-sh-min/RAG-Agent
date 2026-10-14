@@ -42,7 +42,8 @@ import java.util.regex.Pattern;
 
 /**
  * 답변이 끝난 턴을 한 번의 LLM 호출로 보강한다 — <b>재사용할 수 있게 다듬은 질문</b>
- * ({@code conversation_turns.clarified_question}, V6)과 <b>이어서 물어볼 만한 질문</b>(추가 질문, 저장하지 않는다).
+ * ({@code conversation_turns.clarified_question}, V6)과 <b>이어서 물어볼 만한 질문</b>(추가 질문, V8
+ * {@code thread_follow_up} — 대화마다 마지막 답변의 것만).
  *
  * <p><b>왜 필요한가.</b> 질문 재사용(§ 질문 추천/재사용)은 과거 질문의 원문만 본다. "이거 어떻게 설정해?"
  * 같은 질문은 지시어뿐이라 추천에서 빠지고({@code QuestionReuseService.isDirectiveOnlyQuestion}),
@@ -70,11 +71,14 @@ import java.util.regex.Pattern;
  *   <li>검색 0건 정형 답변·인사(RAG 인데 출처 없음)는 둘 다 부르지 않는다 — 다듬을 답도, 이어 물을 주제도 없다.</li>
  * </ul>
  *
- * <p><b>추가 질문은 저장하지 않는다.</b> 화면이 답변 직후 {@link #awaitExtras}(엔드포인트
- * {@code GET /ui/threads/{threadId}/turns/{turnId}/extras})로 기다렸다 받아 가장 최근 답변 아래에만 보여 주는
- * 일회성 제안이라, 결과는 {@link #EXTRAS_TTL} 동안 메모리에만 둔다(그 사이 대화를 다시 열면 다시 보인다).
- * 기다림은 턴 저장 시점에 먼저 등록된다 — 화면의 요청이 호출보다 먼저 와도 결과를 놓치지 않는다. 결과는 그
- * 턴을 만든 사용자·대화에만 내준다.
+ * <p><b>추가 질문은 대화마다 마지막 답변의 것 한 벌만 저장한다</b>(V8 {@code thread_follow_up}). 화면은 가장
+ * 최근 답변 아래에만 보여 주므로 이전 답변의 제안은 읽는 곳이 없다 — 새 턴이 덮어쓰고, 제안이 없는 턴(대상이
+ * 아니거나 꺼져 있거나 호출이 실패했다)은 그 행을 지운다. 개수는 {@code llm.follow-up-questions-count}(2~5, 기본
+ * 3). 예전에는 10분 동안 메모리에만 두어, 재시작하거나 대화를 오래 떠났다 돌아오면 사라졌다.
+ * 화면은 답변 직후 {@link #awaitExtras}(엔드포인트 {@code GET /ui/threads/{threadId}/turns/{turnId}/extras})로
+ * 기다렸다 받는다 — 그 기다림만 메모리에 있다({@link #PENDING_TTL}). 기다림은 턴 저장 시점에 먼저 등록된다:
+ * 화면의 요청이 호출보다 먼저 와도 결과를 놓치지 않는다. 기다림이 없으면(지났거나 재시작했다) 저장된 것을 읽는다.
+ * 결과는 그 턴을 만든 사용자·대화에만 내준다.
  *
  * <p><b>저장값의 뜻.</b> 다듬은 질문 · 원문 그대로(원문으로 충분했거나 결과를 버렸다 — "시도함") · NULL
  * (호출이 실패했거나 본문이 빈·읽을 수 없는 응답이 왔다 — 나중에 다시 시도할 수 있다. 빈 응답을 "시도함"으로
@@ -107,8 +111,7 @@ public class PostAnswerService {
     /** 다듬은 질문의 길이 상한 — 재사용 추천이 보여주는 상한과 같다(넘으면 어차피 추천에 안 뜬다). */
     static final int MAX_CLARIFIED_CHARS = QuestionReuseService.MAX_SUGGESTION_QUESTION_LENGTH;
 
-    /** 추가 질문 수와 하나의 길이 상한 — 입력창에 넣어 그대로 보낼 수 있는 한 문장이어야 한다. */
-    static final int FOLLOW_UP_COUNT = 3;
+    /** 추가 질문 하나의 길이 상한 — 입력창에 넣어 그대로 보낼 수 있는 한 문장이어야 한다(개수는 설정, {@link #afterTurn}). */
     static final int MAX_FOLLOW_UP_CHARS = QuestionReuseService.MAX_SUGGESTION_QUESTION_LENGTH;
 
     /**
@@ -130,8 +133,11 @@ public class PostAnswerService {
      */
     static final int MAX_OUTPUT_TOKENS = 2_048;
 
-    /** 추가 질문을 메모리에 두는 시간 — 저장하지 않는 일회성 제안이라, 대화를 잠시 떠났다 돌아오는 정도만 덮는다. */
-    static final Duration EXTRAS_TTL = Duration.ofMinutes(10);
+    /**
+     * 진행 중·방금 끝난 기다림을 메모리에 두는 시간 — 결과 자체는 DB 에 있으므로 화면의 첫 요청이 닿을 때까지만
+     * 덮으면 된다(그 요청은 {@link #MAX_EXTRAS_WAIT} 안에 끝난다). 지나면 {@link #awaitExtras} 가 저장된 것을 읽는다.
+     */
+    static final Duration PENDING_TTL = Duration.ofMinutes(2);
 
     /** 화면이 기다릴 수 있는 상한 — 생각을 끄지 못하는 서버에서 추가 질문까지 받는 데 걸리는 시간을 덮는다. */
     public static final Duration MAX_EXTRAS_WAIT = Duration.ofSeconds(25);
@@ -177,7 +183,7 @@ public class PostAnswerService {
     private final SettingsService settingsService;
     private final BeanOutputConverter<ExtrasOutput> extrasConverter = new BeanOutputConverter<>(ExtrasOutput.class);
     private final Cache<Long, Pending> pending = Caffeine.newBuilder()
-            .expireAfterWrite(EXTRAS_TTL)
+            .expireAfterWrite(PENDING_TTL)
             .maximumSize(1_000)
             .build();
 
@@ -201,7 +207,12 @@ public class PostAnswerService {
         boolean clarifyOn = settingsService.clarifiedQuestionEnabled();
         boolean withFollowUps = settingsService.followUpQuestionsEnabled() && canSuggestFollowUps(result, directMode);
         boolean clarifyOnly = !withFollowUps && clarifyOn && isReuseCandidate(result, directMode);
+        if (!withFollowUps) {
+            // 이 턴이 대화의 마지막 답변이 됐는데 제안을 만들지 않는다 — 지난 턴의 제안 행을 지운다.
+            memoryService.saveFollowUps(userId, threadId, turnId, List.of());
+        }
         if (!withFollowUps && !clarifyOnly) return;
+        int count = settingsService.followUpQuestionsCount();
 
         CompletableFuture<Extras> done = new CompletableFuture<>();
         pending.put(turnId, new Pending(userId, threadId, done));
@@ -209,24 +220,28 @@ public class PostAnswerService {
             Extras extras = Extras.NONE;
             try {
                 extras = withFollowUps
-                        ? clarifyWithFollowUps(turnId, userId, threadId, question, result, locale, clarifyOn)
+                        ? clarifyWithFollowUps(turnId, userId, threadId, question, result, locale, clarifyOn, count)
                         : clarify(turnId, userId, threadId, question, result.answer(), locale);
             } catch (RuntimeException e) {
                 log.warn("[CLARIFY] 답변 뒤 보강 실패 turnId={}: {}", turnId, e.toString());
             } finally {
+                // 화면에 내주기 전에 저장한다 — 실패한 호출(빈 목록)도 지난 턴의 행을 지우도록 언제나 쓴다.
+                if (withFollowUps) memoryService.saveFollowUps(userId, threadId, turnId, extras.followUps());
                 done.complete(extras);
             }
         }));
     }
 
     /**
-     * 이 턴의 답변 뒤 결과를 기다린다 — 등록된 기다림이 없거나(대상이 아니었거나 {@link #EXTRAS_TTL} 이 지났다)
-     * 다른 사용자·대화의 턴이거나 {@code wait} 안에 끝나지 않으면 비어 있다. {@code wait} 은
-     * {@link #MAX_EXTRAS_WAIT} 로 잘리고, 0 이면 기다리지 않고 지금 있는 것만 본다(대화를 다시 열 때).
+     * 이 턴의 답변 뒤 결과를 기다린다 — 다른 사용자·대화의 턴이거나 {@code wait} 안에 끝나지 않으면 비어 있다.
+     * {@code wait} 은 {@link #MAX_EXTRAS_WAIT} 로 잘리고, 0 이면 기다리지 않고 지금 있는 것만 본다(대화를 다시 열 때).
+     * 등록된 기다림이 없으면({@link #PENDING_TTL} 이 지났거나 재시작했다) 저장된 추가 질문을 읽는다 — 다듬은 질문은
+     * 싣지 않는다(대화를 다시 열면 서버 렌더가 이미 그렸다).
      */
     public Optional<Extras> awaitExtras(long turnId, String userId, String threadId, Duration wait) {
         Pending p = pending.getIfPresent(turnId);
-        if (p == null || !Objects.equals(p.userId(), userId) || !Objects.equals(p.threadId(), threadId)) {
+        if (p == null) return storedExtras(turnId, userId, threadId);
+        if (!Objects.equals(p.userId(), userId) || !Objects.equals(p.threadId(), threadId)) {
             return Optional.empty();
         }
         long waitMs = Math.max(0, Math.min(wait == null ? 0 : wait.toMillis(), MAX_EXTRAS_WAIT.toMillis()));
@@ -241,6 +256,13 @@ public class PostAnswerService {
             Thread.currentThread().interrupt();
             return Optional.empty();
         }
+    }
+
+    /** 저장된 추가 질문 — 설정이 꺼졌으면 저장돼 있어도 내주지 않는다(끈 뒤에 다시 연 대화에 지난 제안이 뜨지 않게). */
+    private Optional<Extras> storedExtras(long turnId, String userId, String threadId) {
+        if (!settingsService.followUpQuestionsEnabled()) return Optional.empty();
+        List<String> followUps = memoryService.getFollowUps(userId, threadId, turnId);
+        return followUps.isEmpty() ? Optional.empty() : Optional.of(new Extras(null, followUps));
     }
 
     /**
@@ -321,12 +343,12 @@ public class PostAnswerService {
     }
 
     /**
-     * 추가 질문이 켜져 있을 때의 길 — 한 번의 호출로 다듬은 질문과 추가 질문 셋을 함께 받는다. 다듬은 질문은
-     * {@code clarifyOn} 일 때만 저장하고 화면에 싣는다. 응답을 읽지 못하면 아무것도 저장하지 않는다(NULL 로 남아
-     * 다시 시도할 수 있다).
+     * 추가 질문이 켜져 있을 때의 길 — 한 번의 호출로 다듬은 질문과 추가 질문 {@code count} 개를 함께 받는다. 다듬은
+     * 질문은 {@code clarifyOn} 일 때만 저장하고 화면에 싣는다. 응답을 읽지 못하면 다듬은 질문을 저장하지 않는다
+     * (NULL 로 남아 다시 시도할 수 있다).
      */
     Extras clarifyWithFollowUps(long turnId, String userId, String threadId, String question, AgentState result,
-                                Locale locale, boolean clarifyOn) {
+                                Locale locale, boolean clarifyOn, int count) {
         if (question == null || question.isBlank()) return Extras.NONE;
         List<String> earlier = earlierQuestions(userId, threadId, turnId);
         String history = historyBlock(earlier);
@@ -339,6 +361,7 @@ public class PostAnswerService {
                     .replace("{history}", history.isBlank() ? none : history)
                     .replace("{sources}", sources.isBlank() ? none : sources)
                     .replace("{summary}", summary.isBlank() ? none : summary)
+                    .replace("{count}", Integer.toString(count))
                     .replace("{query}", PromptInjectionGuard.wrap(question));
             raw = llmRouter.executeWithTracking(ThinkingSite.POST_ANSWER.taskType(), ThinkingSite.POST_ANSWER.fixedRoutingMode(),
                     BackgroundUsage.POSTANSWER_PREFIX,
@@ -365,7 +388,7 @@ public class PostAnswerService {
         String clarified = clarifyOn
                 ? saveClarified(turnId, question, parse(out.clarifiedQuestion()), history + "\n" + summary, raw)
                 : null;
-        List<String> followUps = cleanFollowUps(out.followUps(), question, earlier);
+        List<String> followUps = cleanFollowUps(out.followUps(), question, earlier, count);
         log.info("[FOLLOW-UP] turnId={} 추가 질문 {}개", turnId, followUps.size());
         return new Extras(clarified, followUps);
     }
@@ -450,17 +473,17 @@ public class PostAnswerService {
 
     /**
      * 추가 질문을 화면에 낼 모양으로 — 한 줄만, 목록 기호·감싼 따옴표를 벗기고, 너무 긴 것·지금 질문이나 이전
-     * 질문과 같은 것·서로 겹치는 것을 버린 뒤 {@value #FOLLOW_UP_COUNT}개까지. 입력창에 그대로 들어가 보내질
-     * 문장이라 잘라 쓰지 않는다.
+     * 질문과 같은 것·서로 겹치는 것을 버린 뒤 {@code max} 개까지. 입력창에 그대로 들어가 보내질 문장이라 잘라
+     * 쓰지 않는다.
      */
-    static List<String> cleanFollowUps(List<String> raw, String question, List<String> earlier) {
+    static List<String> cleanFollowUps(List<String> raw, String question, List<String> earlier, int max) {
         if (raw == null || raw.isEmpty()) return List.of();
         Set<String> seen = new HashSet<>();
         seen.add(normalize(question));
         if (earlier != null) earlier.forEach(q -> seen.add(normalize(q)));
         List<String> out = new ArrayList<>();
         for (String one : raw) {
-            if (out.size() >= FOLLOW_UP_COUNT) break;
+            if (out.size() >= max) break;
             if (one == null) continue;
             String line = one.lines().map(String::strip).filter(s -> !s.isEmpty()).findFirst().orElse("");
             line = unquote(LIST_MARKER.matcher(line).replaceFirst("").strip());

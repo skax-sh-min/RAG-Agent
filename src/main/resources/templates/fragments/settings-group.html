@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!-- ── 설정 그룹 카드 하나 — settings.html 이 편집 가능한 그룹과 조회 전용 그룹을 따로 그리므로(사이에 생각 수준 카드)
+     같은 마크업을 두 번 쓰지 않게 여기 둔다. -->
+<div th:fragment="group(group)" class="card mb-4">
+    <div class="card-header fw-semibold">
+        <span th:text="#{__${group.title}__}">Group</span>
+        <!--/* 그룹 전체에 해당하는 말(예: 재기동 필요)은 제목 옆에 한 번만 — 항목마다 붙이지 않는다 */-->
+        <span th:if="${group.note != null}" class="badge bg-warning text-dark ms-2"
+              th:text="#{__${group.note}__}">note</span>
+    </div>
+    <div class="card-body py-2" style="font-size:.92rem;">
+        <div class="row">
+            <div class="col-12 col-md-6" th:each="item : ${group.items}">
+                <div th:replace="~{fragments/settings-item :: item}"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

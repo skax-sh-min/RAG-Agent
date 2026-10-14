@@ -12,14 +12,17 @@
 
 <style>
     /* 설명형 툴팁 — 기본 200px 폭에서는 계산식 안내가 세로로 길게 찢어진다.
+       480px(본문 0.875rem 기준 한 줄에 한글 약 32자)은 항목 설명이 두세 줄에 끝나는 폭이다 — admin.html 의 320px 은
+       한두 문장짜리 안내용이라 여기서는 네댓 줄로 늘어졌다. 좁은 화면에서는 양옆 16px 여백을 남기고 줄어든다.
        CSS 변수는 Bootstrap 5.3+ 경로, .tooltip-inner 규칙은 그 이전 버전용 폴백.
        (admin.html 에 같은 정의가 있지만 그쪽은 페이지 로컬이라 공유되지 않는다.) */
-    .tooltip-wide { --bs-tooltip-max-width: 320px; }
+    .tooltip-wide { --bs-tooltip-max-width: min(480px, calc(100vw - 32px)); }
     .tooltip-wide .tooltip-inner {
-        max-width: 320px;
+        max-width: min(480px, calc(100vw - 32px));
         text-align: left;
         line-height: 1.45;
     }
+    .setting-desc-tip .tooltip-inner { white-space: pre-line; }
 </style>
 
 
@@ -86,7 +89,17 @@
 
     <!-- ── LLM providers ─────────────────────────────────────────────────── -->
     <div class="card mb-4">
-        <div class="card-header fw-semibold" th:text="#{settings.group.llm}">LLM Routing</div>
+        <!--/* 컨텍스트 다시 탐지 버튼은 제목 줄 오른쪽 끝에 둔다(관리자만). 표 조각(#llm-providers)은 토글·재탐지 응답으로
+             통째로 바뀌므로 버튼을 그 바깥에 두어야 자리가 흔들리지 않는다 — 결과는 여전히 조각 안에 그려진다. */-->
+        <div class="card-header d-flex align-items-center">
+            <span class="fw-semibold" th:text="#{settings.group.llm}">LLM Routing</span>
+            <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-outline-secondary ms-auto py-0"
+                    hx-post="/admin/settings/context-window/reprobe"
+                    hx-target="#llm-providers" hx-swap="outerHTML"
+                    th:title="#{settings.btn.reprobe.hint}">
+                <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.btn.reprobe}">Re-detect context</span>
+            </button>
+        </div>
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
         </div>
@@ -115,6 +128,11 @@
         </div>
     </div>
 
+    <!-- ── 편집 가능한 그룹 — LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 (SettingsService.buildView() 의 순서) ── -->
+    <th:block th:each="group : ${settings.editableGroups()}">
+        <div th:replace="~{fragments/settings-group :: group(${group})}"></div>
+    </th:block>
+
     <!--/* ── 생각(추론) 수준 — 호출 지점별 (PLAN §6.29 ⑦) ──────────────────────────────────────────────
          (파서 수준 주석 — 렌더 결과에 남지 않는다: 게스트의 페이지에 엔드포인트 경로가 새지 않게 한다)
          관리자에게만 그린다(읽기까지 — 프로바이더 이름·창 크기·관측값이 드러난다). 내용은 /admin/settings/thinking 이 채운다:
@@ -131,22 +149,10 @@
         </div>
     </div>
 
-    <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
-    <div class="card mb-4" th:each="group : ${settings.groups}">
-        <div class="card-header fw-semibold">
-            <span th:text="#{__${group.title}__}">Group</span>
-            <!--/* 그룹 전체에 해당하는 말(예: 재기동 필요)은 제목 옆에 한 번만 — 항목마다 붙이지 않는다 */-->
-            <span th:if="${group.note != null}" class="badge bg-warning text-dark ms-2"
-                  th:text="#{__${group.note}__}">note</span>
-        </div>
-        <div class="card-body py-2" style="font-size:.92rem;">
-            <div class="row">
-                <div class="col-12 col-md-6" th:each="item : ${group.items}">
-                    <div th:replace="~{fragments/settings-item :: item}"></div>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ── 조회 전용 그룹 — 맨 뒤 ─────────────────────────────────────────── -->
+    <th:block th:each="group : ${settings.readOnlyGroups()}">
+        <div th:replace="~{fragments/settings-group :: group(${group})}"></div>
+    </th:block>
 
 <!-- 화면 표시 — 고르는 즉시 적용하고 이 브라우저에 저장한다. 쓰는 함수(getChatFontSize/setChatFontSize)는 base.html 의
      스크립트에 있는데 그 블록이 이 콘텐츠보다 뒤에 오므로 DOMContentLoaded 에서 시작한다. -->

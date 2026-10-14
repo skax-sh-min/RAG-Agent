@@ -509,20 +509,96 @@ public class RetrievalService {
      * <p><b>순서.</b> 벡터 히트가 앞이고 키워드 전용 히트가 뒤다 — 이 축은 질문 기반 매칭을
      * 전제로 설계됐고, BM25 를 더한 목적은 <b>벡터가 놓친 정확한 단어</b>를 후보에 넣는 것이다.
      * 그런 항목은 정의상 벡터 목록에 없으므로 중요한 것은 등장 여부이지 정확한 등수가 아니다.
+     *
+     * <p><b>문서 축보다 높은 문턱을 건다</b>({@link #gateCurated}). 큐레이션 풀은 작아서(실제 배포 1건) 무엇이든 문턱만
+     * 넘으면 이 축의 1위가 되고, RRF 는 순위만 보므로 그 1위는 상위 문서와 비슷한 점수를 받는다 — 문서 축의 임계값
+     * (0.3~0.35)과 OR 로 묶인 키워드 검색으로는 관련 없는 항목 하나가 거의 모든 답변의 출처에 끼었다(골든셋 26문항 중
+     * 25, SEARCH_EVALUATION §3.7).
      */
     private CuratedHits curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
         List<Document> vectorHits =
                 ragService.search(userId, question, CuratedQaService.CURATED_VERSION, fetchK);
-        if (!hybridEnabled) return new CuratedHits(vectorHits, List.of());
-
-        Set<String> seen = new HashSet<>();
-        for (Document d : vectorHits) seen.add(d.getId());
-        List<Document> keywordOnly = new ArrayList<>();
-        for (Document d : ragService.keywordSearch(
-                CuratedQaService.CURATED_VERSION, question, fetchK)) {
-            if (seen.add(d.getId())) keywordOnly.add(markCurated(d));
+        List<Document> keywordHits = hybridEnabled
+                ? ragService.keywordSearch(CuratedQaService.CURATED_VERSION, question, fetchK)
+                : List.of();
+        CuratedHits gated = gateCurated(vectorHits, keywordHits, question, props.searchCuratedQaMinSimilaritySafe());
+        if (log.isDebugEnabled() && (gated.vector().size() < vectorHits.size() || !keywordHits.isEmpty())) {
+            log.debug("[RETRIEVAL] 큐레이션 축 — 벡터 {}개 중 {}개 통과(최소 유사도), 키워드 {}개 중 키워드로만 {}개 받음",
+                    vectorHits.size(), gated.vector().size(), keywordHits.size(), gated.keyword().size());
         }
-        return new CuratedHits(vectorHits, List.copyOf(keywordOnly));
+        return gated;
+    }
+
+    /** 키워드로만 찾힌 큐레이션 항목이 받아들여지려면 본문에 있어야 하는 질문의 내용어 수(질문의 내용어가 더 적으면 그 수). */
+    static final int MIN_CURATED_KEYWORD_MATCHES = 2;
+
+    /**
+     * 큐레이션 축의 두 절반에 문턱을 건다 — 순수 함수(테스트용으로 열어 둔다).
+     *
+     * <ul>
+     *   <li><b>벡터 절반</b>: 유사도가 {@code minSimilarity} 미만이면 버린다. 문서 축의 임계값은 벡터 저장소 안에서 이미
+     *       걸렸다 — 이 값은 그 위에 한 번 더 거는 큐레이션 전용 바닥이다.</li>
+     *   <li><b>키워드 절반</b>: 벡터 절반에 남지 않은 항목만 보고, 질문의 <b>내용어</b>({@link QuestionKeywords#extract} —
+     *       의문·기능어를 뺀 어간)가 그 항목의 검색 텍스트에 {@value #MIN_CURATED_KEYWORD_MATCHES}개 이상(질문의 내용어가 더
+     *       적으면 전부) 있어야 받는다. 키워드 검색은 질문의 낱말을 OR 로 묶으므로, 예전에는 {@code 어떻게} 같은 흔한
+     *       낱말 하나만 맞아도 들어왔다. 내용어가 없는 질문이면 키워드로만 찾힌 항목은 받지 않는다.</li>
+     * </ul>
+     * 벡터에서 떨어진 항목도 키워드 조건을 채우면 키워드 절반으로 들어온다 — 그것이 BM25 를 더한 목적(벡터가 놓친 정확한
+     * 단어)이다.
+     */
+    static CuratedHits gateCurated(List<Document> vectorHits, List<Document> keywordHits, String question,
+                                   double minSimilarity) {
+        List<Document> vector = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (Document d : vectorHits) {
+            double similarity = d.getScore() == null ? 0.0 : d.getScore();
+            if (similarity < minSimilarity) continue;
+            vector.add(d);
+            seen.add(d.getId());
+        }
+        List<String> contentWords = QuestionKeywords.extract(question);
+        int needed = Math.min(MIN_CURATED_KEYWORD_MATCHES, contentWords.size());
+        List<Document> keywordOnly = new ArrayList<>();
+        if (needed > 0) {
+            for (Document d : keywordHits) {
+                if (seen.contains(d.getId())) continue;
+                if (matchedContentWords(d.getText(), contentWords) < needed) continue;
+                if (seen.add(d.getId())) keywordOnly.add(markCurated(d));
+            }
+        }
+        return new CuratedHits(List.copyOf(vector), List.copyOf(keywordOnly));
+    }
+
+    /**
+     * 검색 텍스트에 들어 있는 내용어 수(대소문자 무시). 한글 어간은 조사·어미가 붙은 모양({@code 역할} → {@code 역할을})을 맞혀야 해
+     * 부분 문자열로 찾고, <b>영문·숫자로만 된 낱말은 낱말 단위로</b> 찾는다 — 부분 문자열로 찾던 동안 {@code PU, FU, DU} 같은
+     * 두 글자 약어가 본문의 {@code CPU}·{@code pmEDU04…} 안에서 맞아 무관한 항목이 "내용어 둘"을 채웠다(SEARCH_EVALUATION §3.7).
+     */
+    static int matchedContentWords(String text, List<String> contentWords) {
+        if (text == null || text.isBlank()) return 0;
+        String haystack = text.toLowerCase(Locale.ROOT);
+        int n = 0;
+        for (String w : contentWords) {
+            if (ASCII_WORD.matcher(w).matches() ? containsAsciiWord(haystack, w) : haystack.contains(w)) n++;
+        }
+        return n;
+    }
+
+    private static final java.util.regex.Pattern ASCII_WORD = java.util.regex.Pattern.compile("[a-z0-9_.-]+");
+
+    /** {@code word} 가 앞뒤로 영문·숫자가 붙지 않은 채 나오는가 — {@code cpu} 안의 {@code pu} 는 아니다. */
+    private static boolean containsAsciiWord(String haystack, String word) {
+        for (int i = haystack.indexOf(word); i >= 0; i = haystack.indexOf(word, i + 1)) {
+            int end = i + word.length();
+            boolean startOk = i == 0 || !isAsciiAlnum(haystack.charAt(i - 1));
+            boolean endOk = end == haystack.length() || !isAsciiAlnum(haystack.charAt(end));
+            if (startOk && endOk) return true;
+        }
+        return false;
+    }
+
+    private static boolean isAsciiAlnum(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
     }
 
     /**

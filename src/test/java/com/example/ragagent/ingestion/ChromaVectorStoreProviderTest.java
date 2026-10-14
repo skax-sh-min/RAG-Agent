@@ -103,6 +103,84 @@ class ChromaVectorStoreProviderTest {
         assertThat(requests.get(1).getSimilarityThreshold()).isEqualTo(0.8);
     }
 
+    // ── SimilarityFallback — 임계값이 너무 많이 걸렀을 때 한 번 낮춘다 ─────────────────
+
+    private static List<Document> scored(double... scores) {
+        return java.util.Arrays.stream(scores)
+                .mapToObj(v -> Document.builder().id("d" + v).text("t").metadata(Map.of()).score(v).build())
+                .toList();
+    }
+
+    @Test
+    @DisplayName("search — 통과가 top-k 의 70% 미만이면 임계값을 0.05 낮춰 한 번 더 묻는다")
+    void search_relaxesThresholdOnShortfall() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+        when(store.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(scored(0.9, 0.8), scored(0.9, 0.8, 0.28, 0.27, 0.26, 0.26, 0.25));
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        when(props.searchTopKSafe()).thenReturn(10);
+
+        List<Document> hits = new ChromaVectorStoreProvider(registry, mock(ChromaApi.class), mock(EmbeddingModel.class),
+                new ObjectMapper(), props).search("owner", "질문", "latest", 10);
+
+        ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(store, org.mockito.Mockito.times(2)).similaritySearch(captor.capture());
+        assertThat(captor.getAllValues().get(1).getSimilarityThreshold())
+                .isCloseTo(0.25, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(hits).hasSize(7);
+    }
+
+    @Test
+    @DisplayName("search — 충분히 통과하거나 큐레이션 축이면 다시 묻지 않는다")
+    void search_noRelaxWhenEnoughOrCurated() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(scored(0.9));
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        when(props.searchTopKSafe()).thenReturn(1);
+        ChromaVectorStoreProvider provider = new ChromaVectorStoreProvider(
+                registry, mock(ChromaApi.class), mock(EmbeddingModel.class), new ObjectMapper(), props);
+
+        provider.search("owner", "질문", "latest", 1);                 // 1개 통과 ≥ ceil(0.7 × 1)
+        when(props.searchTopKSafe()).thenReturn(10);
+        provider.search("owner", "질문", "curated", 10);               // 큐레이션 축 — 모자라도 그대로
+
+        verify(store, org.mockito.Mockito.times(2)).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    @DisplayName("searchBatch — 모자라면 과조회한 같은 행을 0.05 낮춘 임계값으로 다시 거른다(추가 조회 없음)")
+    void searchBatch_relaxesOverTheSameRows() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any())).thenReturn(
+                new ChromaApi.QueryResponse(
+                        List.of(List.of("a", "b", "c", "d")), null,
+                        List.of(List.of("A", "B", "C", "D")),
+                        List.of(List.of(Map.of(), Map.of(), Map.of(), Map.of())),
+                        List.of(List.of(0.1, 0.72, 0.73, 0.8))));          // 유사도 0.9 · 0.28 · 0.27 · 0.2
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        when(registry.collectionName(any(), any())).thenReturn("u_shared_latest");
+        when(chromaApi.getCollection(anyString(), anyString(), anyString()))
+                .thenReturn(new ChromaApi.Collection("cid", "u_shared_latest", Map.of()));
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        when(props.searchTopKSafe()).thenReturn(4);
+        ChromaVectorStoreProvider provider =
+                new ChromaVectorStoreProvider(registry, chromaApi, embeddingModel, new ObjectMapper(), props);
+
+        List<List<Document>> result = provider.searchBatch("owner", List.of("q"), "latest", 4);
+
+        assertThat(result.get(0)).extracting(Document::getId).containsExactly("a", "b", "c");
+        verify(chromaApi).queryCollection(anyString(), anyString(), anyString(), any());
+    }
+
     // ── batched multi-query search ───────────────────────────────────────
 
     private ChromaVectorStoreProvider batchProvider(EmbeddingModel embeddingModel, ChromaApi chromaApi, double threshold) {

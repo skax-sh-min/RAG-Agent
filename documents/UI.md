@@ -75,7 +75,7 @@ src/main/resources/
 | POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
 | POST | `/ui/chat/stream/skip-images` | `204` | 현재 스트리밍 중인 턴의 쿼리 시점 이미지 분석(Lazy Vision) 대기를 건너뜀(`threadId` 파라미터) — 턴 전체를 끊는 `/ui/chat/stream`의 abort/중지와는 별개, 아래 §8 참고 |
-| GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`, `threadId` — 범위 파라미터는 받지 않는다, 항상 shared 기준). 항목마다 `origin`(`thread`/`mine`/`others`/`elsewhere`)이 붙는다 — `threadId`와 같은 대화의 턴이 `thread`이고, 화면은 그 항목만 재사용 대신 **그 질문 위치로 이동**한다 |
+| GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`, `threadId` — 범위 파라미터는 받지 않는다, 항상 shared 기준). 항목마다 `origin`(`thread`/`mine`/`others`/`elsewhere`)이 붙는다 — `threadId`와 같은 대화의 턴이 `thread`이고, 화면은 그 항목만 재사용 대신 **그 질문 위치로 이동**한다. `askedAt` 은 그 턴이 저장된 UTC 순간(ISO-8601, `Z`) — `conversation_turns.created_at` 은 시간대 표시가 없는 UTC 문자열이라 서버가 바꿔 싣는다 |
 | POST | `/api/v1/questions/reuse` | JSON | 추천 항목 재사용 시도. 반환 직전 출처 청크 유효성 재검증 후 성공 시 `reused=true`(+ `responseMode`/`directMode` — 원본 턴의 값, 새 턴에도 그대로 저장), 실패 시 `fallback=true`로 일반 질의 전환 신호 반환 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | POST | `/ui/chat/summary/precompute` | `202` | 입력창에 첫 글자를 칠 때 발화 — 이전 대화 요약 선계산(콜드스타트 안전망, OPERATOR_MANUAL §6.1) |
@@ -127,7 +127,7 @@ src/main/resources/
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(제목 `embed`, `EMBEDDING` 배지, 모델명은 본문 — 표·차트도 같은 이름) + orphan(설정에 없는 채팅 프로바이더 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 | GET | `/api/v1/llm/ping` | JSON `{"available","ok","deep","checkedAt","providers":[{"name","model","reachable","latencyMs","modelListed","modelState","circuitBlockedSeconds","inference","error","ok"}]}` — 전부 통과면 200, 하나라도 실패면 503 | 로컬 LLM 생사 확인. `?deep=true` 면 `max_tokens=1` 완성을 실제로 보낸다(서버는 살았는데 엔진이 죽은 경우를 잡는 유일한 검사). 라우터·브레이커를 우회하는 날것의 HTTP 라 결과가 상태를 바꾸지 않는다. `baseUrl` 은 관리자 응답에만 실린다 |
-| GET | `/ui/threads/{threadId}/turns/{turnId}/extras` | JSON `{"clarifiedQuestion","followUps":[…]}` 또는 204 | 답변 뒤 보강(다듬은 질문·추가 질문)을 `?waitMs`(기본 20000, 서버 상한 25초) 동안 기다렸다 돌려준다(`PostAnswerService.awaitExtras`). 대상이 아니던 턴·설정 꺼짐·아직 없음·메모리에서 지남(10분)·남의 턴은 전부 204 — 화면이 하는 일이 같고, 남의 턴이라고 알려 주지 않는다. 대화를 다시 열 때는 `waitMs=0` |
+| GET | `/ui/threads/{threadId}/turns/{turnId}/extras` | JSON `{"clarifiedQuestion","followUps":[…]}` 또는 204 | 답변 뒤 보강(다듬은 질문·추가 질문)을 `?waitMs`(기본 20000, 서버 상한 25초) 동안 기다렸다 돌려준다(`PostAnswerService.awaitExtras`). 대상이 아니던 턴·설정 꺼짐·아직 없음·마지막 답변이 아닌 턴·남의 턴은 전부 204 — 화면이 하는 일이 같고, 남의 턴이라고 알려 주지 않는다. 대화를 다시 열 때는 `waitMs=0` — 기다림이 없으면 저장된 추가 질문(`thread_follow_up`)이 나온다 |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N,"blockedSeconds":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
@@ -144,6 +144,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 - 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 매칭은 서버가 한다 — `QuestionKeywords`가 의문·기능어·조사·어미를 뺀 내용어(최대 6개)를 뽑고 그 전부가 든 질문을 찾는다(어순·대소문자 무관); 내용어가 없으면 입력 전체 부분 일치로 폴백. 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
 - 항목 앞에 출처 배지가 붙는다 — **현재 대화**(`thread`, 파랑·↑) / **내 대화**(`mine`, 초록) / **다른 사용자**(`others`, 회색) / **다른 대화**(`elsewhere`, 회색). 마지막 것은 `guest-identity=shared`처럼 모든 방문자가 한 id를 쓰는 배포용이다 — 그 id로는 내 것과 남의 것이 같아서, 그대로 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다(`QuestionReuseService.originOf()`). 목록 순서는 현재 대화 → 내 대화 → 그 외, 그 안에서 최신순(SQL `ORDER BY`)이고, 같은 질문이 여럿이면 그 순서의 첫 항목만 남는다.
+- **항목 오른쪽 끝에 날짜**(`.suggest-date`, `YY-MM-DD`, 보는 사람의 시간대 — `suggestDate()` 가 `askedAt` 을 로컬 날짜로 바꾼다; `title` 에 `YYYY-MM-DD HH:mm`). UTC 문자열을 그대로 날짜로 자르면 KST 에서 오전 9시 전에 물은 질문이 하루 앞 날짜로 뜬다. `askedAt` 이 없으면 날짜를 그리지 않는다.
+- **목록이 좁으면 배지가 이모지로 바뀐다**(📍 현재 대화 · 🙋 내 대화 · 👥 다른 사용자 · 💬 다른 대화 — 배경색 없이). 기준은 뷰포트가 아니라 **목록 자신의 폭**이다: `#question-suggest-box` 가 `container: suggest / inline-size` 이고 `@container suggest (max-width: 479.98px)` 에서 바꾼다. 사이드바가 768px 이상에서 펼쳐지므로 뷰포트로 재면 768px 창의 목록(441px)이 767px 창의 목록(735px)보다 좁은데도 넓은 모양을 받는다. 글자(`.suggest-origin-text`)는 지우지 않고 화면에서만 감춰 화면 낭독기가 계속 읽는다. 375px 실측: 글자 배지에 날짜만 더하면 질문 폭이 242→187px 로 줄어 항목마다 한 줄씩 늘었고, 이모지 + 날짜는 224px 로 줄 수가 예전과 같았다.
 - **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 제외·활성 출처·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
 - 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(범위 파라미터는 없다 — 항상 shared 기준).
 - 재사용 성공(`reused=true`)이면 페이지 새로고침 없이 사용자 버블 + 어시스턴트 버블을 즉시 렌더링하고 provider 배지에 `db-reuse`를 표시한다. 질문 버블의 두 글자 표기는 **응답의 `responseMode`/`directMode`**(= 원본 답변이 만들어진 모드·검색 축, 서버가 새 턴에 그대로 저장한 값)로 그린다 — 폼에 지금 선택된 모드가 아니다(그렇게 그리면 새로고침 뒤 서버 렌더와 어긋난다).
@@ -270,6 +272,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 **맨 위의 "화면 표시" 카드는 예외다** — 채팅 글자 크기(최소·작게·보통·크게)를 고르는 카드로, 서버에 아무것도 보내지 않고 이 브라우저에만 저장하므로 누구나 바꿀 수 있다(§9.4). 그래서 "관리자만 값을 변경할 수 있습니다" 안내는 카드 아래 **서버 설정** 제목 밑에 둔다.
 
+**카드 순서**: 화면 표시 → LLM 라우팅 → 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹) → 생각(추론) 수준(관리자) → 조회 전용 그룹(검색 · 저장 용량 · 쿼리 임베딩 캐시). 그룹 순서는 `SettingsService.buildView()` 가 정하고, 템플릿은 `SettingsView.editableGroups()`·`readOnlyGroups()` 를 따로 그려 그 사이에 생각 수준 카드를 끼운다(편집 가능 = 그 그룹에 편집할 수 있는 항목이 하나라도 있다). 그룹 카드 마크업은 `fragments/settings-group.html` 하나다.
+
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/settings` | `settings.html` | 화면 표시(채팅 글자 크기, 브라우저별 — §9.4) + LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
@@ -280,23 +284,25 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/context-window/reprobe` | `fragments/settings-providers :: providers` | §6.26 A5 — 등록된 LOCAL 프로바이더의 컨텍스트 창을 지금 다시 탐지해 프로바이더 표 전체를 되돌린다(프로바이더별 결과 배지 포함). 감사 `settings.context-window.reprobe` |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
-  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치**
-  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수(`1~4`)·동시 LLM 호출 수(`1~8`).
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·질의 확장 최소 길이·재시도 후보 확대·검색 문서 수(topK)·질의 확장 · 독립화·하이브리드 검색·**큐레이션 검색·큐레이션 가중치·큐레이션 최소 유사도**
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**소제목 분할(`chunk-split-granular`)**·동시 파일 수(`1~4`)·동시 LLM 호출 수(`1~8`).
     두 동시성 값의 범위는 **`/settings` 입력 한계일 뿐**이다 — `indexingSafe()`는 `<= 0`만 걸러내고
     상한 clamp가 없어서, 환경변수로 더 큰 값을 준 배포는 그대로 동작하되 설정 화면에서 그 값을 다시
     넣을 수는 없다(온도들과 다른 점이다. 아래 참고).
   - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 4종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 0.1]`)·C(응용) 창의(`llm.creative-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다.
     이 넷은 **`/settings` 스펙 범위와 `llmSafe()`의 clamp가 같은 값**이라, 환경변수로 범위를 벗어난 값을 줘도 같은 상한에서 잘린다 — 화면이 거부하는 값이 뒤에서 적용되는 일이 없다. 한쪽만 고치면 그 성질이 깨진다.
-  - **C(응용) 응답 모드 사용**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
-  - **블로킹 호출 출력 상한**(`llm.max-tokens`, INT 1,000~32,000, step 500) — 단순한 출력 길이 손잡이가 아니다. 대화 이력 예산(×0.5) · MD 교정 섹션 크기 · 인덱싱 출력 예약 · 컨텍스트 입력 예산이 모두 여기서 파생되므로, 내리면 그 다섯이 함께 내려간다. 범위의 바닥이 0 이 아닌 이유가 그것이다.
-  - **컨텍스트 초과 재시도당 제외할 문서 수**(`llm.shrink-step`, INT 1~10, 기본 **1**) — LLM 서버가 프롬프트를 컨텍스트 초과로 거절했을 때 재시도마다 덜어낼 문서 수(§6.26-9). 값이 클수록 왕복이 줄지만 버려지는 근거가 늘어난다; 재시도 상한이 5회라 **이 값 × 5** 가 도달 가능한 최대 축소폭이다.
+  - **응용(C) 모드**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
+  - **출력 상한 (max-tokens)** — 블로킹 호출의 출력 상한(`llm.max-tokens`, INT 1,000~32,000, step 500) — 단순한 출력 길이 손잡이가 아니다. 대화 이력 예산(×0.5) · MD 교정 섹션 크기 · 인덱싱 출력 예약 · 컨텍스트 입력 예산이 모두 여기서 파생되므로, 내리면 그 다섯이 함께 내려간다. 범위의 바닥이 0 이 아닌 이유가 그것이다.
+  - **초과 시 제외 문서 수** — 컨텍스트 초과 재시도당 제외할 문서 수(`llm.shrink-step`, INT 1~10, 기본 **1**) — LLM 서버가 프롬프트를 컨텍스트 초과로 거절했을 때 재시도마다 덜어낼 문서 수(§6.26-9). 값이 클수록 왕복이 줄지만 버려지는 근거가 늘어난다; 재시도 상한이 5회라 **이 값 × 5** 가 도달 가능한 최대 축소폭이다.
   - **프로바이더 표의 열 순서는 상태 → 활성화 → 생각 제어**(마지막은 관리자만)다. **상태**는 미설정 · 접속불가 · 정상 세 단계(+ 확인하는 동안의 "확인 중")다 — 미설정은 설정이 갖춰지지 않아(주소·키 없음) 서버가 만들어지지 않은 것이고, 나머지는 화면을 열 때 모델 목록 API 로 **실제로 접속해 본 결과**다. 페이지는 서버를 기다리지 않고 "확인 중"으로 먼저 그려진 뒤 `GET /settings/llm-status` 가 칸을 채운다(죽은 서버의 연결 타임아웃 3초가 페이지를 붙잡지 않게). 배지의 말풍선에 응답 시간 또는 접속하지 못한 사유가 있고, 서킷 브레이커가 건너뛰는 중이면 "차단 중"이 덧붙는다(접속 여부와 별개의 사실). 토글·재탐지 뒤의 표는 마지막 확인을 그대로 보여 준다. **생각 제어**는 호출 지점별 생각 수준 설정이 이 프로바이더로 가는 요청에 실리는지를 **사용자 설정 적용 / 서버 설정 사용 / Unknown** 셋으로 말한다(필드 이름·방식·거부 기억은 말풍선).
   - **조회 전용 그룹의 "재기동 필요"는 그룹 제목 옆에 한 번**(검색 · 저장 용량 · 쿼리 임베딩 캐시) — 항목마다 붙이지 않는다. **생각(추론) 수준 카드는 접힌 채로 시작한다**(머리말을 눌러 펴고 닫으며, 펴 둔 상태는 [다시 계산]·창 재탐지로 카드가 갱신된 뒤에도 이 화면을 연 동안 유지된다).
-  - **컨텍스트 다시 탐지** 버튼(프로바이더 표 위, `isAdmin` 일 때만 렌더) — 등록된 LOCAL 프로바이더에게 컨텍스트 창을 지금 다시 물어본다(§6.26 A5, `POST /admin/settings/context-window/reprobe` → 프로바이더 표 전체를 되돌려 `컨텍스트` 열이 제자리에서 갱신된다). 결과는 표 위에 프로바이더별 배지로 남고(**갱신됨** / **변화 없음** / **응답 없음 — 이전 값 유지** / **선언됨 — 탐지 안 함**), **"물어봤고 같았다"와 "안 물어봤다"를 반드시 구분해 보여야 한다** — 후자로 오해하면 버튼이 고장 난 것처럼 보인다. 출력 예약이 새 창과 어긋나면 재기동 안내가 함께 뜬다(그 값은 빈 생성 시점에 굳는다).
+  - **컨텍스트 다시 탐지** 버튼(LLM 라우팅 카드 **제목 줄 오른쪽 끝**, `isAdmin` 일 때만 렌더 — 프로바이더 표 조각 `#llm-providers` 밖에 둔다: 표는 토글·재탐지마다 통째로 바뀌므로 그 안에 두면 버튼도 매번 다시 그려진다) — 등록된 LOCAL 프로바이더에게 컨텍스트 창을 지금 다시 물어본다(§6.26 A5, `POST /admin/settings/context-window/reprobe` → 프로바이더 표 전체를 되돌려 `컨텍스트` 열이 제자리에서 갱신된다). 결과는 조각 안, 표 위에 프로바이더별 배지로 남고(**갱신됨** / **변화 없음** / **응답 없음 — 이전 값 유지** / **선언됨 — 탐지 안 함**), **"물어봤고 같았다"와 "안 물어봤다"를 반드시 구분해 보여야 한다** — 후자로 오해하면 버튼이 고장 난 것처럼 보인다. 출력 예약이 새 창과 어긋나면 재기동 안내가 함께 뜬다(그 값은 빈 생성 시점에 굳는다).
   - **저장 용량**(조회 전용) — 문서 저장 사용량(`documents`+`converted`+`images`, `documents/backup/` 제외)과 상한(`app.upload.max-total-size`). 상한은 재기동 필요이며 `/settings`에서 고칠 수 없다(배포 정책이고, 핫 키의 수치 타입이 GB 단위를 담지 못한다). 사용량을 함께 내는 이유는, 상한만 적혀 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이기 때문이다. 이 값은 30초 memoize된다 — `/settings`는 모든 인증 모드에서 게스트 개방이라 렌더가 곧 무제한 디렉터리 walk 트리거가 되어선 안 된다(업로드 검사 경로는 이 캐시를 쓰지 않고 매번 다시 잰다)
-  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
+  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
+- **항목 이름은 짧게, 설명은 이름의 풍선으로** — 라벨 키 `settings.item.X` 는 짧은 이름만 담고, 설명은 짝 키 `settings.desc.X`(`SettingsService.descriptionKey()`)에 있다. `fragments/settings-item.html` 이 이름과 ⓘ 를 한 `span.setting-label-tip`(점선 밑줄 · `cursor: help` · `tabindex=0` 이라 키보드 포커스로도 뜬다)으로 묶어 툴팁을 단다. **편집 가능한 숫자 항목은 설명 아래 줄에 허용 범위**(`settings.range.number`, 입력칸 툴팁과 같은 문구)를 덧붙인다 — 입력칸이 없는 게스트에게도 범위가 보이게. 줄바꿈은 `custom-class` `setting-desc-tip` 의 `white-space: pre-line` 이 살린다(bool 은 값이 둘뿐이라 붙이지 않는다). 편집 가능한 항목을 새로 만들면 두 번들에 설명도 넣을 것 — 빠지면 화면에 메시지 키가 그대로 보인다(`SettingsDescriptionTest`).
+  - 풍선 폭(`settings.html` 의 `.tooltip-wide`)은 **`min(480px, 100vw − 32px)`** — 0.875rem 본문에서 한 줄에 한글 약 32자라 설명 대부분이 두세 줄에 끝난다. `/admin` 의 같은 이름 클래스는 한두 문장짜리 안내용 320px 이고 페이지 로컬이라 공유되지 않는다. 좁은 화면에서는 양옆 16px 여백을 남기고 줄어든다.
 - **편집 칸에 마우스를 올리면 허용 범위가 툴팁으로 뜬다** — 숫자 칸은 `설정 가능 범위 1 ~ 1000 (입력 단위 1)`, bool 칸은 `설정 가능 값 true 또는 false`(`settings.range.number`/`.bool`). 툴팁은 행이 아니라 `<input>`/`<select>` 자신에 붙어 있어(타입별로 요소가 이미 갈라져 있으므로 조건 분기가 없다) 조작할 칸 바로 옆에 뜬다. 경계값은 `Double`이라 그대로 찍으면 `1.0 ~ 1000.0`이 되므로 `SettingItem.minLabel()/maxLabel()/stepLabel()`이 다듬는다(레코드 컴포넌트가 아닌 일반 메서드 — `SourceRef.staleBadge()` 선례). `data-bs-trigger="hover"`를 명시하는데, Bootstrap 기본값 `'hover focus'`로 두면 값을 고치려고 클릭한 순간 툴팁이 떠서 아래 행을 가린 채 blur까지 남는다.
   - 툴팁 재초기화 훅은 `htmx:afterSwap`이 아니라 **`htmx.onLoad`**여야 한다: `hx-swap=outerHTML`은 기존 행을 DOM에서 떼어내므로 그 행에서 발화하는 `afterSwap`이 `document.body`까지 버블링하지 못할 수 있고, `htmx:load`는 **새로 삽입된** 노드에서 발화하니 항상 도달한다. 편집 가능한 행에 툴팁이 생기기 전에는 스왑되는 행에 툴팁이 하나도 없어 드러나지 않던 차이다.
 - 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정)과 기본 라우팅 모드는 조회 전용으로만 노출된다. **`max-tokens`는 §6.26 A6 이후 LLM 핫 그룹의 편집 가능한 행이다** — 프로바이더 빈의 `defaultOptions`에 구워지는 값은 여전히 기동 시점 것이지만, 그건 옵션을 안 싣는 프레임워크 내부 호출자의 폴백일 뿐이고 앱의 모든 블로킹 호출은 자기 옵션을 실어 보내 `MaxTokensCappingChatModel`의 호출마다 재계산되는 상한을 받는다.
@@ -499,11 +505,11 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 ### 이어서 물어보기 (답변 아래 추가 질문 칩)
 
-답변이 끝나면 서버가 LLM 을 한 번 더 불러 **이어서 물어볼 만한 질문 셋**을 만든다(`PostAnswerService`, 질문 다듬기와 한 번의 호출). 저장하지 않는 일회성 제안이다.
+답변이 끝나면 서버가 LLM 을 한 번 더 불러 **이어서 물어볼 만한 질문**(`llm.follow-up-questions-count` 개, 2~5·기본 3)을 만든다(`PostAnswerService`, 질문 다듬기와 한 번의 호출). 대화마다 마지막 답변의 것만 DB(`thread_follow_up`)에 저장한다.
 
 - **가장 최근 답변 아래에만** 붙는다 — `onDone` 이 턴 id 를 받으면 `GET /ui/threads/{threadId}/turns/{turnId}/extras` 를 한 번 기다리고(20초), 결과의 칩을 그 답변 버블 바로 뒤(`.follow-up-questions`)에 넣는다. 새 질문을 보내는 순간(`submit`)·재사용 답변이 붙는 순간(`appendReusedTurn()` → `window.clearChatFollowUps()`) 칩을 치우고 기다리던 요청도 끊는다(`AbortController`) — 늦게 온 결과가 엉뚱한 답변 아래에 붙지 않는다.
 - **누르면 입력창에 넣을 뿐 보내지 않는다** — 비었으면 그 질문으로, 쓰던 글이 있으면 다음 줄에 덧붙인다(같은 질문이 이미 한 줄로 있으면 다시 넣지 않는다). 포커스·커서 끝 이동 후 `input` 이벤트를 쏴서 높이 맞춤·질문 추천이 사람이 친 것과 똑같이 돈다. 사용자가 고쳐서 직접 보낸다.
-- **대화를 다시 열 때**는 마지막 턴에 대해 `waitMs=0` 으로 한 번 묻는다 — 서버 메모리에 남아 있으면(10분) 칩이 다시 붙는다. 그 뒤로는 없다(DB 에 저장하지 않는다).
+- **대화를 다시 열 때**는 마지막 턴에 대해 `waitMs=0` 으로 한 번 묻는다 — 저장된 제안이 그 턴의 것이면 칩이 다시 붙는다(서버 재시작 뒤에도). 설정을 끈 뒤에는 저장돼 있어도 내주지 않는다.
 - 응답이 204 면(대상이 아니었거나 설정이 꺼졌다) 아무것도 붙이지 않는다. 검색 0건 정형 답변·인사처럼 근거 없는 답변 뒤에는 처음부터 만들지 않는다.
 - 크기는 채팅 글자 크기의 비율(`.follow-up-chip` 0.875em, 라벨 메타 단계) — 인라인 크기를 쓰지 않는다(`ChatFontSizeConventionTest`).
 - 풍선 표시 규칙은 `qnavUpdateFloat()` 하나에 있다: 목록 상단에서 `QNAV_ANCHOR_PX`(48px) 아래를 기준선으로 잡아 그 위로 시작점이 올라간 **마지막** 턴이 "지금 읽는 턴"이고, 그 질문 버블이 아직 화면에 남아 있으면 풍선은 숨는다(같은 문구를 두 번 보여줄 이유가 없다). 기준선을 상단 딱 그 지점이 아니라 조금 아래로 잡는 이유는 목록에서 이동했을 때 질문이 상단 12px 아래에 놓이기 때문 — 상단 기준이면 방금 이동해 온 질문이 '다음 턴'으로 분류돼 풍선이 바로 앞 질문을 가리킨다.

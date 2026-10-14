@@ -259,7 +259,7 @@ public class QuestionReuseService {
             }
             String key = normalizeQuestionKey(shown);
             if (!seenQuestions.add(key)) continue;
-            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin));
+            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin, utcInstant(c.createdAt())));
             if (out.size() >= limit) break;
         }
         return out;
@@ -517,7 +517,27 @@ public class QuestionReuseService {
         public String code() { return code; }
     }
 
-    public record Suggestion(long turnId, String question, String answerPreview, Origin origin) {}
+    /**
+     * 추천 항목 하나. {@code askedAt} 은 그 질문이 저장된 시각을 <b>UTC 순간</b>(ISO-8601, {@code Z})으로 — 화면이 보는 사람의
+     * 시간대로 날짜를 낸다. {@code conversation_turns.created_at} 은 SQLite {@code datetime('now')} 라 시간대 표시가 없는 UTC
+     * 문자열인데, 그대로 넘기면 브라우저가 로컬 시각으로 읽어 KST 에서는 오전 9시 이전에 물은 질문이 하루 늦은 날짜로 뜬다.
+     * 읽을 수 없는 값이면 {@code null}(날짜를 그리지 않는다).
+     */
+    public record Suggestion(long turnId, String question, String answerPreview, Origin origin, String askedAt) {}
+
+    private static final java.time.format.DateTimeFormatter SQLITE_UTC =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** SQLite {@code datetime('now')} 문자열(UTC, 시간대 표시 없음) → ISO-8601 UTC 순간. 형식이 다르면 {@code null}. */
+    static String utcInstant(String sqliteUtc) {
+        if (sqliteUtc == null || sqliteUtc.isBlank()) return null;
+        try {
+            return java.time.LocalDateTime.parse(sqliteUtc.strip(), SQLITE_UTC)
+                    .toInstant(java.time.ZoneOffset.UTC).toString();
+        } catch (java.time.format.DateTimeParseException e) {
+            return null;
+        }
+    }
 
     /**
      * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는

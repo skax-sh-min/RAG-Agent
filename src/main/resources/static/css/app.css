@@ -201,6 +201,39 @@
 .thread-copy-icon     { font-size: 0.75rem; }
 .chat-tag-chip        { font-size: 0.72rem; }
 .suggest-origin-badge { font-size: 0.65rem; }
+.suggest-date         { font-size: 0.72rem; }
+
+/* ── 질문 추천 목록 — 날짜와 좁은 목록의 이모지 배지 ─────────────────────────
+   기준은 화면(뷰포트)이 아니라 목록 자신의 폭이다. 사이드바가 768px 이상에서 펼쳐지므로 창 폭으로 재면 768px 창의
+   목록(약 440px)이 767px 창의 목록(약 735px)보다 좁은데도 넓은 모양을 받는다. 480px 미만이면 배지의 글자를
+   이모지로 바꾼다 — 글자("다른 사용자")가 차지하던 폭이 날짜가 차지하는 폭과 비슷해서, 날짜를 보여도 질문이 쓰는
+   폭은 예전과 거의 같다. 글자는 지우지 않고 화면에서만 감춘다(화면 낭독기는 계속 읽는다). */
+#question-suggest-box { container: suggest / inline-size; }
+.suggest-date {
+    color: var(--bs-secondary-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.suggest-origin-emoji { display: none; }
+@container suggest (max-width: 479.98px) {
+    #question-suggest-box .suggest-origin-badge {
+        background-color: transparent !important;
+        padding: 0;
+        font-size: 1rem;
+        line-height: 1;
+    }
+    .suggest-origin-emoji { display: inline; }
+    .suggest-origin-text {
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        margin: -1px !important;
+        overflow: hidden !important;
+        clip: rect(0, 0, 0, 0) !important;
+        white-space: nowrap !important;
+        border: 0 !important;
+    }
+}
 
 /* ── Message bubbles ─────────────────────────────────────────────────── */
 .bubble-user {
@@ -512,6 +545,16 @@
    and absorbs whatever the window adds. Just wide enough for 값 + 기본값 + 저장 side by
    side ("Default"/"Save" in English being the longer pair) — every editable setting is a
    short number (0.35, 60, 1500) or a true/false select, so anything more is dead space. */
+/* 설정 항목의 라벨 — 설명 풍선이 붙은 라벨은 점선 밑줄로 "올려 보면 설명이 있다"를 알린다(settings-item.html). */
+.setting-label-tip {
+    cursor: help;
+}
+.setting-label-tip > .fw-semibold {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--bs-secondary-color);
+    text-underline-offset: 3px;
+}
+
 .setting-value-col {
     flex: 0 0 auto;
     width: 12rem;

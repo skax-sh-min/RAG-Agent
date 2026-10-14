@@ -87,7 +87,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.SEARCH_MULTIQUERY_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.multiquery-enabled"),
             new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled"),
             new Spec(SettingsKeys.SEARCH_CURATED_QA_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.curated-qa-enabled"),
-            new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.curated-qa-weight")
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.curated-qa-weight"),
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY, Kind.DOUBLE, 0.0, 1.0, 0.01, "settings.item.curated-qa-min-similarity")
     );
 
     // Insertion order = render order in the "인덱싱 튜닝" group. Apply on the next indexing / ↺ re-index
@@ -101,6 +102,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
     );
 
+    /** 추가 질문 개수의 허용 범위와 기본값 — 화면 스펙과 followUpQuestionsCount()가 같은 값을 쓴다. */
+    public static final int MIN_FOLLOW_UP_COUNT = 2;
+    public static final int MAX_FOLLOW_UP_COUNT = 5;
+    public static final int DEFAULT_FOLLOW_UP_COUNT = 3;
+
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
             new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.05, "settings.item.temperature"),
@@ -108,9 +114,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 0.1,  0.05, "settings.item.indexing-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
-            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
             new Spec(SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED, Kind.BOOL,   0,   0,    0,    "settings.item.clarified-question-enabled"),
             new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED, Kind.BOOL,  0,   0,    0,    "settings.item.follow-up-questions-enabled"),
+            new Spec(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT,  Kind.INT,
+                    MIN_FOLLOW_UP_COUNT, MAX_FOLLOW_UP_COUNT, 1, "settings.item.follow-up-questions-count"),
+            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
             new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
                     AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
@@ -343,12 +351,13 @@ public class SettingsService implements AppProperties.OverrideSource {
     public SettingsView buildView() {
         List<ProviderRow> providers = providerRows(true);
 
-        // Editable groups first, read-only (조회 전용) groups last.
+        // 화면 순서 그대로다: 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹)이 먼저, 조회 전용(재기동 필요)
+        // 그룹이 나중이다. 템플릿은 두 무리 사이에 생각 수준 카드를 끼운다(SettingsView.editableGroups()/readOnlyGroups()).
         List<SettingGroup> groups = List.of(
+                new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
+                new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
-                new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
-            new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
                 new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
                 new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
@@ -632,7 +641,28 @@ public class SettingsService implements AppProperties.OverrideSource {
                 bool || choice ? null : spec.min(),
                 bool || choice ? null : spec.max(),
                 bool || choice ? null : spec.step(),
-                null);   // 편집 가능한 행은 라벨·범위로 충분해 툴팁을 쓰지 않는다
+                choice ? null : descriptionKey(spec.labelKey()));
+    }
+
+    /**
+     * 항목 설명의 메시지 키 — 라벨 키 {@code settings.item.X} 에 짝지은 {@code settings.desc.X}. 라벨은 짧은 이름만 두고 "무엇을
+     * 하는 값인가"는 라벨에 마우스를 올렸을 때 풍선으로 보인다(settings-item.html). 편집 가능한 일반 항목은 전부 설명을 가진다 —
+     * 빠지면 화면에 키가 그대로 보이므로 {@code SettingsServiceTest} 가 번들 두 벌에 다 있는지 확인한다. 생각 수준(CHOICE)은 자기
+     * 카드에서 따로 그려 여기에 오지 않는다.
+     */
+    static String descriptionKey(String labelKey) {
+        return labelKey.startsWith("settings.item.")
+                ? "settings.desc." + labelKey.substring("settings.item.".length())
+                : null;
+    }
+
+    /** 이 화면의 편집 가능한 일반 항목 전부(검색 · 인덱싱 · LLM · 화면 표시) — 설명 키 확인용. */
+    static List<String> hotItemLabelKeys() {
+        List<String> keys = new ArrayList<>();
+        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
+            for (Spec spec : specs) keys.add(spec.labelKey());
+        }
+        return keys;
     }
 
     private List<SettingItem> searchHotItems() {
@@ -645,7 +675,8 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  can't be hot-swapped (topK / multiquery / hybrid moved to the hot group). */
     private List<SettingItem> fixedSearchItems() {
         return List.of(
-                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), null)
+                readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), null,
+                        "settings.desc.rerank-enabled")
         );
     }
 
@@ -754,6 +785,24 @@ public class SettingsService implements AppProperties.OverrideSource {
         return o == null || o;
     }
 
+    /**
+     * 답변 아래에 제안할 추가 질문 수 — 위 스위치와 같은 운영 값이라 같은 이유로 이 캐시만 읽는다. 다음 턴부터
+     * 적용된다. 값이 없거나 읽을 수 없으면 {@value #DEFAULT_FOLLOW_UP_COUNT}, 범위 밖이면 범위 안으로 자른다
+     * (오버라이드는 저장 때 범위 검사를 받지만, 이 읽기가 그 검사에 기대지 않게).
+     */
+    public int followUpQuestionsCount() {
+        String raw = cache.get(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT);
+        int n = DEFAULT_FOLLOW_UP_COUNT;
+        if (raw != null && !raw.isBlank()) {
+            try {
+                n = Integer.parseInt(raw.strip());
+            } catch (NumberFormatException ignored) {
+                // 기본값
+            }
+        }
+        return Math.max(MIN_FOLLOW_UP_COUNT, Math.min(MAX_FOLLOW_UP_COUNT, n));
+    }
+
     private static Boolean parseBool(String value) {
         if (value == null || value.isBlank()) return null;
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
@@ -822,6 +871,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.SEARCH_HYBRID_ENABLED           -> Boolean.toString(props.searchHybridEnabledSafe());
             case SettingsKeys.SEARCH_CURATED_QA_ENABLED       -> Boolean.toString(props.searchCuratedQaEnabledSafe());
             case SettingsKeys.SEARCH_CURATED_QA_WEIGHT        -> trimNum(props.searchCuratedQaWeightSafe());
+            case SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY -> trimNum(props.searchCuratedQaMinSimilaritySafe());
             case SettingsKeys.CHUNK_SIZE                      -> Integer.toString(props.chunkSizeSafe());
             case SettingsKeys.CHUNK_OVERLAP                   -> Integer.toString(props.chunkOverlapSafe());
             case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());
@@ -837,6 +887,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.LLM_CLARIFIED_QUESTION_ENABLED  -> Boolean.toString(clarifiedQuestionEnabled());
             case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_ENABLED -> Boolean.toString(followUpQuestionsEnabled());
+            case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT   -> Integer.toString(followUpQuestionsCount());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> ThinkingSite.bySettingsKey(key)

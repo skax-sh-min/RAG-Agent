@@ -19,16 +19,25 @@
          `col-md` (no number) takes every column the value doesn't need, so a long Korean
          label gets the width instead of wrapping while dead space sits right of the value. -->
     <div class="col-12 col-md">
-        <span class="fw-semibold" th:text="#{__${item.label}__}">label</span>
+        <!-- 라벨은 짧은 이름만 — "무엇을 하는 값인가"는 라벨(과 옆의 ⓘ)에 마우스를 올리면 풍선으로 보인다. 둘을 한 요소로 묶어
+             어느 쪽에 올려도 같은 풍선이 뜨게 한다(키보드는 tabindex 로 포커스). 초기화는 settings.html 하단에서(HTMX 스왑 후
+             재초기화 포함). 숫자 항목은 설명 아래 줄에 허용 범위를 덧붙인다(입력칸의 범위 풍선과 같은 문구 —
+             값을 고치기 전에, 그리고 입력칸이 없는 게스트에게도 보이게). 줄바꿈은 .setting-desc-tip 의 pre-line 이 살린다. -->
+        <span th:if="${item.tooltip != null}" class="setting-label-tip" role="button" tabindex="0"
+              data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide setting-desc-tip" data-bs-placement="top"
+              th:title="${item.editable and item.type == 'number'}
+                      ? ${#messages.msg(item.tooltip) + #strings.unescapeJava('
+')
+                          + #messages.msg('settings.range.number', item.minLabel, item.maxLabel, item.stepLabel)}
+                      : ${#messages.msg(item.tooltip)}">
+            <span class="fw-semibold" th:text="#{__${item.label}__}">label</span><span
+                class="text-secondary ms-1" aria-hidden="true">&#9432;</span>
+        </span>
+        <span th:unless="${item.tooltip != null}" class="fw-semibold" th:text="#{__${item.label}__}">label</span>
         <span th:if="${item.overridden}" class="badge bg-info ms-1"
               th:text="#{settings.badge.overridden}">overridden</span>
         <span th:if="${item.note != null}" class="badge bg-warning text-dark ms-1"
               th:text="#{__${item.note}__}">note</span>
-        <!-- 값 열이 12rem 고정이라 계산 근거·적용 범위를 값에 다 적을 수 없다. 긴 설명은 여기로.
-             초기화는 settings.html 하단에서(HTMX 스왑 후 재초기화 포함). -->
-        <span th:if="${item.tooltip != null}" class="text-secondary ms-1" role="button"
-              tabindex="0" data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
-              th:title="#{__${item.tooltip}__}" aria-label="설명">&#9432;</span>
         <code th:if="${item.key != null}" class="d-block small text-secondary mt-1"
               th:text="'app.' + ${item.key}">app.key</code>
     </div>

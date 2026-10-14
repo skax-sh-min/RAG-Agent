@@ -190,6 +190,15 @@ public interface MemoryRepository {
     Map<Long, String> findClarifiedQuestionsByTurnIds(List<Long> turnIds);
 
     /**
+     * 답변 아래 추가 질문을 저장한다(V8 {@code thread_follow_up}) — 대화마다 <b>마지막 답변의 것 한 벌</b>만 둔다.
+     * 새 턴이 덮어쓰고, 빈 목록이면 그 대화의 행을 지운다(제안이 없는 답변 뒤에 지난 제안이 남지 않게).
+     */
+    void saveFollowUps(String userId, String threadId, long turnId, List<String> questions);
+
+    /** 그 턴의 추가 질문 — 행이 없거나 다른(이전) 턴의 것이면 빈 목록. */
+    List<String> findFollowUps(String userId, String threadId, long turnId);
+
+    /**
      * One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service.
      *
      * <p>{@code userId}/{@code threadId}/{@code threadTitle} (§6.25) are what let a diagnostics row

@@ -171,6 +171,22 @@ class SettingsServiceTest {
     }
 
     @Test
+    @DisplayName("추가 질문 개수 — 기본 3, 2~5 만 저장되고 다음 턴부터 읽힌다")
+    void followUpQuestionsCount_defaultsToThreeWithinTwoToFive() {
+        assertThat(service.followUpQuestionsCount()).isEqualTo(3);
+
+        assertThat(service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "5")).isEqualTo("5");
+        assertThat(service.followUpQuestionsCount()).isEqualTo(5);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "6"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT, "1"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        service.reset(SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT);
+        assertThat(service.followUpQuestionsCount()).isEqualTo(3);
+    }
+
+    @Test
     @DisplayName("reset — 오버라이드 삭제 시 프로퍼티 기본값으로 정확히 복귀")
     void reset_revertsToPropertyDefault() {
         service.update(SettingsKeys.SEARCH_RRF_K, "80");
@@ -273,7 +289,13 @@ class SettingsServiceTest {
         SettingsView view = service.buildView();
 
         assertThat(view.groups()).hasSize(7);
-        assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
+        // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
+        assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
+                "llm_hot", "ui_hot", "search_hot", "indexing", "search_fixed", "storage", "cache");
+        assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
+                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing");
+        assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
+                .containsExactly("search_fixed", "storage", "cache");
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));

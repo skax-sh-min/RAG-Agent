@@ -50,14 +50,7 @@
         </div>
     </div>
 
-    <div th:if="${isAdmin}" class="px-3 pt-3 pb-1">
-        <button type="button" class="btn btn-sm btn-outline-secondary"
-                hx-post="/admin/settings/context-window/reprobe"
-                hx-target="#llm-providers" hx-swap="outerHTML"
-                th:title="#{settings.btn.reprobe.hint}">
-            <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.btn.reprobe}">Re-detect context</span>
-        </button>
-    </div>
+    <!--/* [컨텍스트 다시 탐지] 버튼은 settings.html 의 카드 제목 줄에 있다 — 이 조각은 응답마다 통째로 바뀐다. */-->
 
     <div class="table-responsive">
     <table class="table table-sm mb-0 align-middle">
