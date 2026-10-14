@@ -47,7 +47,8 @@
                 <td class="text-center">
                     <span class="badge bg-warning text-dark" th:text="${g.reportCount()}">0</span>
                 </td>
-                <td class="text-muted" th:text="${g.lastReportedAt()}"></td>
+                <td class="text-muted" title="KST (저장은 UTC)"
+                    th:text="${T(com.example.ragagent.model.KstDateFormat).utcStampToKst(g.lastReportedAt())}"></td>
                 <td class="text-center">
                     <button type="button" class="btn btn-sm btn-outline-primary py-0 px-1"
                             style="font-size:0.7rem;"
@@ -136,8 +137,8 @@
                 <div class="d-flex align-items-center flex-wrap gap-2">
                     <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle"
                           th:text="#{'chunk.report.reason.' + ${#strings.toLowerCase(v.report().reasonCode())}}"></span>
-                    <span class="text-muted" style="font-size:0.72rem;"
-                          th:text="${v.report().createdAt()}"></span>
+                    <span class="text-muted" style="font-size:0.72rem;" title="KST (저장은 UTC)"
+                          th:text="${T(com.example.ragagent.model.KstDateFormat).utcStampToKst(v.report().createdAt())}"></span>
                     <span class="text-muted text-truncate" style="font-size:0.72rem; max-width:160px;"
                           th:title="${v.report().reporterUserId()}"
                           th:text="${v.report().reporterUserId()}"></span>
@@ -277,7 +278,8 @@
                 <span class="badge"
                       th:classappend="${h.status() == 'resolved'} ? 'bg-success' : 'bg-secondary'"
                       th:text="${h.status() == 'resolved'} ? '처리 완료' : '반려'"></span>
-                <span class="text-muted" th:text="${h.reviewedAt()}"></span>
+                <span class="text-muted" title="KST (저장은 UTC)"
+                      th:text="${T(com.example.ragagent.model.KstDateFormat).utcStampToKst(h.reviewedAt())}"></span>
                 <span th:text="${h.comment()}"></span>
                 <span th:if="${h.reviewNote() != null}" class="text-muted"
                       th:text="'→ ' + ${h.reviewNote()}"></span>

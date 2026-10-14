@@ -104,7 +104,7 @@
             </thead>
             <tbody th:each="t : ${panel.threads}">
             <tr>
-                <td class="text-muted text-nowrap" th:text="${t.updatedAt}">2026-08-27</td>
+                <td class="text-muted text-nowrap" th:text="${t.updatedAtKst}" title="KST (저장은 UTC)">2026-08-27</td>
                 <td class="text-truncate" style="max-width:0;"
                     th:text="${t.displayTitle}" th:title="${t.displayTitle}">제목</td>
                 <td class="text-truncate font-monospace text-muted" style="max-width:0;font-size:0.72rem;"

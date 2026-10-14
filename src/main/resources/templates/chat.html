@@ -1503,9 +1503,10 @@
     });
 
     /* ── Relative date formatting ──────────────────────────────────── */
+    /* dateStr = thread_meta.updated_at — 시간대 표시가 없는 UTC 문자열이라 'Z' 를 붙여 읽고, 오늘/어제는 보는 사람의 시간대로 가른다. */
     function formatRelativeDate(dateStr) {
         if (!dateStr) return '';
-        const d = new Date(dateStr.replace(' ', 'T'));
+        const d = new Date(dateStr.replace(' ', 'T') + 'Z');
         if (isNaN(d)) return dateStr;
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);

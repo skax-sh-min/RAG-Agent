@@ -6,13 +6,11 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * QA — §6.25 결정 2: {@code conversation_turns.asked_at} 은 UTC 로 저장되고 화면에는 KST 로 나간다.
+ * QA — §6.25 결정 2: 존 표기 없는 DB 스탬프는 UTC 로 저장되고 화면에는 KST 로 나간다.
  *
- * <p>이 앱은 두 가지 시각 표기를 저장한다 — {@code asked_at} 은 {@code Instant.now()} 를 UTC 로,
- * {@code thread_meta.updated_at} 은 {@code LocalDateTime.now()} 라 시스템 로컬로. 같은 대화에서
- * 두 값이 정확히 9시간 어긋나 보이는 것을 관리자 패널 실데이터로 확인했고
- * ({@code asked_at=04:48:12} vs {@code updated_at=13:44:10}), {@code /admin} 검색 진단 수치 패널은
- * 이 변환이 생기기 전까지 UTC 를 그대로 찍고 있었다.
+ * <p>{@code /admin} 검색 진단 수치 패널은 이 변환이 생기기 전까지 UTC 를 그대로 찍고 있었다. 그때는
+ * {@code thread_meta.updated_at} 이 서버 로컬 시각이라 같은 대화에서 두 값이 정확히 9시간 어긋나 보였다
+ * ({@code asked_at=04:48:12} vs {@code updated_at=13:44:10}) — 지금은 저장이 전부 UTC 다({@code DbTimestamp}, Flyway V9).
  *
  * <p>표시용 변환이라 <b>깨진 입력이 화면을 깨뜨리면 안 된다</b> — 파싱 실패는 원본을 그대로 돌려준다.
  */

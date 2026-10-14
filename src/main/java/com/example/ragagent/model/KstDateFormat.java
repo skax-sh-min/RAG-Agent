@@ -31,7 +31,7 @@ public final class KstDateFormat {
         }
     }
 
-    /** {@code conversation_turns.asked_at} 의 저장 형식이자, 이 클래스가 UTC 로 해석하는 형식. */
+    /** 존 표기 없는 DB 스탬프({@code DbTimestamp}, SQLite {@code datetime('now')})의 형식 — 이 클래스는 UTC 로 해석한다. */
     private static final DateTimeFormatter DB_STAMP =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -41,13 +41,12 @@ public final class KstDateFormat {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /**
-     * {@code conversation_turns.asked_at}({@code "yyyy-MM-dd HH:mm:ss"}, <b>UTC</b>)을 KST 로 —
-     * §6.25 결정 2.
+     * 존 표기 없는 DB 스탬프({@code "yyyy-MM-dd HH:mm:ss"}, <b>UTC</b> — {@code conversation_turns.asked_at},
+     * {@code thread_meta.updated_at} 등)를 KST 로 — §6.25 결정 2.
      *
-     * <p>이 앱은 두 가지 시각 표기를 저장한다: {@code asked_at} 은 {@code Instant.now()} 를 UTC 로
-     * 찍고, {@code thread_meta.updated_at} 은 {@code LocalDateTime.now()} 라 <b>시스템 로컬</b>이다.
-     * 같은 대화에서 두 값을 나란히 놓으면 실측 9시간이 어긋나 보이고(관리자 패널 실데이터로 확인),
-     * {@code /admin} 검색 진단 수치 패널은 이 변환이 생기기 전까지 UTC 를 그대로 찍고 있었다.
+     * <p>{@code /admin} 검색 진단 수치 패널은 이 변환이 생기기 전까지 UTC 를 그대로 찍고 있었다. 그때는
+     * {@code thread_meta.updated_at} 같은 몇몇 컬럼이 서버 로컬 시각이라 같은 대화의 두 시각이 실측 9시간 어긋났는데,
+     * 지금은 저장이 전부 UTC 다({@code DbTimestamp}, Flyway V9 가 옛 값을 옮겼다).
      *
      * <p>{@link #toKst} 와 갈라 두는 이유는 <b>입력 형식이 다르기 때문</b>이다 — 저쪽은 ISO instant
      * ({@code DocRegistry.indexedAt}), 이쪽은 존 표기가 없는 DB 스탬프라 "UTC 로 읽는다"는 규칙이

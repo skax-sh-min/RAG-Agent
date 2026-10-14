@@ -74,6 +74,11 @@ public class ThreadAdminService {
         public int dislikeCount() { return row.dislikeCount(); }
         public String tags()      { return row.tags(); }
 
+        /** 턴 시각과 같은 규칙 — 저장은 UTC({@code DbTimestamp}), 표시는 KST(§6.25 결정 2). */
+        public String updatedAtKst() {
+            return KstDateFormat.utcStampToKst(row.updatedAt());
+        }
+
         /**
          * Shortened owner id for the table cell — a guest id is
          * {@code guest-<12 hex>} (an HMAC, see {@code GuestIdentityResolver}), which is
