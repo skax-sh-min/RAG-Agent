@@ -271,9 +271,9 @@
                 <div class="fw-semibold" th:text="#{settings.thinking.detail.modes}">By routing mode</div>
                 <ul class="mb-0">
                     <li th:each="line : ${row.modeLines}"
-                        th:text="${#messages.msg('settings.thinking.mode.line', line.mode().name(), line.receiver().name(),
-                                line.receiver().window(), line.cell().reservedTokens(),
-                                line.cell().inputBudget() != null ? line.cell().inputBudget() : '—', line.cell().meaning().text())}">
+                        th:text="#{settings.thinking.mode.line(${line.mode().name()}, ${line.receiver().name()},
+                                ${line.receiver().window()}, ${line.cell().reservedTokens()},
+                                ${line.cell().inputBudget() != null ? line.cell().inputBudget() : '—'}, ${line.cell().meaning().text()})}">
                         QUALITY_FIRST → remote</li>
                 </ul>
             </div>
@@ -286,15 +286,15 @@
                     <span th:if="${!o.stats().any()}" class="text-secondary"
                           th:text="${#messages.msg('settings.thinking.obs.none', #messages.msg('settings.thinking.level.' + o.level().value()))}">none</span>
                     <span th:if="${o.stats().any()}"
-                          th:text="${#messages.msg('settings.thinking.obs.line',
-                                  #messages.msg('settings.thinking.level.' + o.level().value()),
-                                  o.stats().count(),
-                                  #messages.msg('settings.thinking.sent.' + o.sent().name().toLowerCase()),
-                                  o.stats().thinkingObserved(),
-                                  o.stats().outputP50() != null ? o.stats().outputP50() : '—',
-                                  o.stats().outputP95() != null ? o.stats().outputP95() : '—',
-                                  o.stats().thinkingP95() != null ? o.stats().thinkingP95() + (o.stats().thinkingEstimated() ? ' (est.)' : '') : '—',
-                                  o.stats().truncated())}">line</span>
+                          th:text="#{settings.thinking.obs.line(
+                                  ${#messages.msg('settings.thinking.level.' + o.level().value())},
+                                  ${o.stats().count()},
+                                  ${#messages.msg('settings.thinking.sent.' + o.sent().name().toLowerCase())},
+                                  ${o.stats().thinkingObserved()},
+                                  ${o.stats().outputP50() != null ? o.stats().outputP50() : '—'},
+                                  ${o.stats().outputP95() != null ? o.stats().outputP95() : '—'},
+                                  ${o.stats().thinkingP95() != null ? o.stats().thinkingP95() + (o.stats().thinkingEstimated() ? ' (est.)' : '') : '—'},
+                                  ${o.stats().truncated()})}">line</span>
                 </li>
                 <li class="text-secondary">
                     <span th:if="${row.speed != null}"
