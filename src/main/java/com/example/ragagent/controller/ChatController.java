@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.security.PromptInjectionGuard;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.service.LlmOutageMessages;
@@ -173,8 +174,19 @@ public class ChatController {
                                  @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio) {
         final ChatForm normalizedForm = normalizeResponseMode(form, responseModeRadio);
         SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
-        if (normalizedForm.question() == null || normalizedForm.question().isBlank()) {
-            emitter.completeWithError(new IllegalArgumentException("question is blank"));
+        // 스레드 행을 만들기 전에 거른다 — 거절된 질문이 사이드바에 빈 대화를 남기지 않게. 거절은 화면이 이미 그리는
+        // SSE error 이벤트로 보낸다(completeWithError 는 비동기 재디스패치에서 ProblemDetail 을 text/event-stream 으로
+        // 쓰려다 실패할 뿐 화면에 아무 말도 하지 않는다). StreamingAgentService.run() 도 같은 검사를 첫 줄에 둔다.
+        try {
+            PromptInjectionGuard.validate(normalizedForm.question());
+        } catch (IllegalArgumentException e) {
+            try {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", e.getMessage()), MediaType.APPLICATION_JSON));
+                emitter.complete();
+            } catch (java.io.IOException io) {
+                emitter.completeWithError(io);
+            }
             return emitter;
         }
         String userId = ctx.userId();

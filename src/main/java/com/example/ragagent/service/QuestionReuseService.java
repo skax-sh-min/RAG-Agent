@@ -33,6 +33,12 @@ public class QuestionReuseService {
      * 바로 그 질문들이 다시 추천에서 빠졌다. 다듬기(PostAnswerService)도 같은 상한으로 만든다.
      */
     static final int MAX_SUGGESTION_QUESTION_LENGTH = 100;
+    /**
+     * 추천 검색에 쓰는 입력의 앞부분 길이. 화면은 입력창 내용을 {@code GET ?q=} 로 보내므로, 통째로 실으면 긴 붙여넣기 하나가
+     * Tomcat 의 요청 줄 한도(8KB)를 넘겨 {@code Request header is too large} 가 된다 — 화면도 이 값으로 잘라 보낸다
+     * ({@code chat.html} 의 {@code SUGGEST_MAX_QUERY_CHARS}). 키워드는 최대 6개라 앞부분이면 충분하다.
+     */
+    public static final int SUGGEST_MAX_QUERY_CHARS = 200;
     private static final String DELETED_REFERENCE_LABEL = "참조 원문 삭제됨";
     private static final String DELETED_REFERENCE_PREVIEW = "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.";
     private static final String DELETED_CHUNK_PREVIEW = "이 출처 청크는 삭제되어 원문을 표시할 수 없습니다.";
@@ -230,6 +236,7 @@ public class QuestionReuseService {
      */
     public List<Suggestion> suggest(String userId, String threadId, String q, int limit) {
         String query = q == null ? "" : q.strip();
+        if (query.length() > SUGGEST_MAX_QUERY_CHARS) query = query.substring(0, SUGGEST_MAX_QUERY_CHARS).strip();
         if (query.length() < 2) return List.of();
 
         // 의문·기능어와 조사·어미를 걷어낸 내용어로 맞춘다. 아무것도 안 남으면(예: "이거 왜 안 돼요")

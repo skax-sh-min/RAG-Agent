@@ -357,6 +357,23 @@ class ChatControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("POST /ui/chat/stream — 2,000자를 넘는 질문은 SSE error 이벤트로 거절하고 스레드를 만들지 않는다")
+    void streamChat_overlongQuestion_rejectedWithoutCreatingThread() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+        org.springframework.test.web.servlet.MvcResult result = mvc.perform(post("/ui/chat/stream")
+                        .param("question", "a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_QUESTION_LEN + 1))
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).contains("event:error", "질문이 너무 깁니다");
+        org.mockito.Mockito.verify(threadMetaService, org.mockito.Mockito.never()).getOrCreate(any(), any(), any());
+        org.mockito.Mockito.verify(streamingAgentService, org.mockito.Mockito.never()).run(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("§6.10 — POST /ui/chat/summary/precompute → 202 Accepted (백그라운드 발화 후 즉시 응답)")
     void precomputeSummary_returnsAccepted() throws Exception {
         mvc.perform(post("/ui/chat/summary/precompute")
@@ -730,6 +747,9 @@ class ChatControllerHtmxTest {
         assertThat(marked.find()).as("marked 를 싣는 script 태그").isTrue();
         assertThat(tex.find()).as("LaTeX 기호 확장을 싣는 script 태그").isTrue();
         assertThat(tex.start()).as("확장은 marked 보다 뒤에 실려야 한다").isGreaterThan(marked.start());
+        // 질문 추천이 URL 에 싣는 입력 길이 상한 — 서버 상수가 인라이닝됐는지(주석 안에 갇힌 기본값이 아니라).
+        assertThat(html).contains("const SUGGEST_MAX_QUERY_CHARS = "
+                + com.example.ragagent.service.QuestionReuseService.SUGGEST_MAX_QUERY_CHARS + ";");
     }
 
     /**

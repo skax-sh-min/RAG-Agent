@@ -622,6 +622,8 @@
     /* 관리자면 위 버튼이 신고 대신 '청크 수정'이다 — 문구는 서버가 이미 바꿔 렌더했고, 여기서는
        동작만 가른다. 표시 분기일 뿐 권한 게이트가 아니다(/admin/** 은 서버가 막는다). */
     const IS_ADMIN = /*[[${isAdmin}]]*/ false;
+    // 질문 추천에 보내는 입력 앞부분 — 서버(QuestionReuseService)도 같은 값으로 자른다.
+    const SUGGEST_MAX_QUERY_CHARS = /*[[${T(com.example.ragagent.service.QuestionReuseService).SUGGEST_MAX_QUERY_CHARS}]]*/ 200;
     window.isSourcePreviewEnabled = function () {
         return !!SOURCE_PREVIEW_ENABLED;
     };
@@ -1349,7 +1351,8 @@
         const seq = ++suggestSeq;
         // threadId: 서버가 이 값으로 "현재 대화" 항목을 가른다 — 폼의 hidden 값이 곧 지금 열린 대화다.
         const threadId = chatForm.querySelector('input[name="threadId"]').value || '';
-        const params = new URLSearchParams({ q, threadId, limit: '20' });
+        // 앞부분만 보낸다 — 통째로 실으면 긴 붙여넣기가 요청 줄 한도(8KB)를 넘겨 Tomcat 이 400 으로 끊는다.
+        const params = new URLSearchParams({ q: q.slice(0, SUGGEST_MAX_QUERY_CHARS).trim(), threadId, limit: '20' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
                 headers: getCsrfHeaders()

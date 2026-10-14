@@ -130,6 +130,21 @@ class StreamingAgentServiceTest {
     }
 
     @Test
+    @DisplayName("2,000자를 넘는 질문 — 그래프·저장 없이 error 이벤트를 보내고 닫는다(AgentService.chat() 과 같은 제한)")
+    void run_overlongQuestion_rejectedBeforeAnything() throws Exception {
+        ChatForm longForm = new ChatForm("a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_QUESTION_LEN + 1),
+                "t1", "v1", "COST_FIRST", false, null, null);
+
+        service.run("u1", longForm, emitter);
+
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verify(agentGraph, never()).runStreaming(any(), any());
+        verify(classifierService, never()).classifyOnly(any(), any());
+        verify(memoryService, never()).addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any(), anyBoolean());
+    }
+
+    @Test
     @DisplayName("directMode=true — classifier 스킵, AgentState.directMode=true 로 그래프 실행")
     void run_directMode_skipsClassifierAndSetsDirectMode() {
         ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
