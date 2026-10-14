@@ -409,7 +409,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 #### 지켜야 할 결정·함정
 
 - **재사용 카운터는 두 개이고 방향이 반대다.** `reusedIn`(이 대화가 과거 답변을 재사용한 횟수) vs `reusedOut`(이 대화의 답변이 재사용된 횟수). 삭제 버튼 옆에 있어야 하는 건 후자다 — 지우면 그 턴들이 전부 `"참조 원문 삭제됨"` 폴백이 된다. `reusedOut`은 **조인이 아니라 상관 서브쿼리**여야 한다(두 번 조인하면 그룹 행이 곱해져 다른 카운터가 전부 부풀어 오른다).
-- **시각은 두 계열로 저장된다.** `conversation_turns.asked_at`은 UTC(`Instant.now()`), `thread_meta.updated_at`은 시스템 로컬(`LocalDateTime.now()`) — 실데이터로 정확히 9시간 어긋남을 확인했고, 진단 패널은 그때까지 UTC를 로컬인 양 찍고 있었다. 표시만 `KstDateFormat.utcStampToKst()`로 통일했다. `toKst()`와 합치지 않은 이유는 **입력 형식이 달라서**다(ISO instant vs 존 없는 DB 스탬프) — 합치면 "존 없는 값은 UTC"라는 규칙이 형식 추측에 묻힌다. **저장 존 통일은 하지 않았다**(아래 열린 항목).
+- **시각은 두 계열로 저장된다.** `conversation_turns.asked_at`은 UTC(`Instant.now()`), `thread_meta.updated_at`은 시스템 로컬(`LocalDateTime.now()`) — 실데이터로 정확히 9시간 어긋남을 확인했고, 진단 패널은 그때까지 UTC를 로컬인 양 찍고 있었다. 표시만 `KstDateFormat.utcStampToKst()`로 통일했다. `toKst()`와 합치지 않은 이유는 **입력 형식이 달라서**다(ISO instant vs 존 없는 DB 스탬프) — 합치면 "존 없는 값은 UTC"라는 규칙이 형식 추측에 묻힌다. 저장 존은 그때 통일하지 않았고 2026-10-14 V9 로 통일했다(아래 열린 항목).
 - **삭제는 thread id 만 받는다.** `thread_meta.thread_id`가 PK라 소유자는 서버가 찾는다 — `userId`를 받으면 "누구 대화를 지울지 지정하는 파라미터"를 노출하는 셈이다. 확인 대화상자의 숫자도 렌더된 행이 아니라 **클릭 시점 재조회**(`delete-preview`)에서 온다: 패널이 몇 분 전 것일 수 있고, 낡은 숫자로 되돌릴 수 없는 작업을 승인하게 두는 것이 그 절차가 막으려는 실패다. **벌크 삭제는 없다.**
 - **큐레이션 회수에서 제안(manual) 행은 `source_turn_id IS NOT NULL`로 배제한다.** 지금 수동 행이 `source_thread_id=''`라는 사실에 기대면, 그 값이 나중에 진짜 id로 바뀌는 순간 대화 삭제가 제안의 일부 청크를 조용히 내린다(제안은 전부/전무 단위). 실데이터 삭제 검증에서 like 행은 `inactive`+벡터 제거, manual 행은 `active` 유지로 이 가드가 실제로 하는 일을 확인했다.
 - **답변 원문은 목록과 다른 쿼리로만 나간다.** 목록의 `TurnRow`에는 `answer` 필드가 아예 없다 — 감추는 것을 템플릿이 아니라 구조로 강제해야 나중에 템플릿을 고치다 유출시킬 수 없다. 목록 쿼리에 컬럼을 더했다면 **목록을 여는 것 자체가 기록 없는 열람**이 됐을 것이다. 열람은 `admin.thread.read` 감사를 남기고, **내용이 실제로 나갈 때만** 남긴다(없는 턴은 404이고 열람이 아니다). 오프캔버스는 마크다운 렌더 없이 `<pre>`+`textContent`.
@@ -427,7 +427,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 #### 남은 열린 항목 (§6.25 범위 밖)
 
-- **`thread_meta.updated_at`의 저장 존 통일** — 지금은 시스템 로컬이라 서버가 KST가 아닌 곳에서 돌면 두 시각 열이 다시 갈린다. 어느 존으로 쓰였는지 사후에 알 수 없어 표시 계층에서 고칠 수 없다.
+- ~~**`thread_meta.updated_at`의 저장 존 통일**~~ — **2026-10-14 해소**: 서버 로컬 시각을 쓰던 네 저장소(`thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`)가 `DbTimestamp.now()`(UTC)로 쓰고, Flyway `V9__Local_timestamps_to_utc`(Java — JVM 시간대가 필요하다)가 기존 값을 그 JVM 의 기본 시간대 기준으로 옮겼다(`LocalTimestampsToUtcMigrationTest`). 존 없는 `LocalDateTime.now()` 는 `DbTimestampConventionTest` 가 막고, 그 값을 찍던 화면(관리자 대화 목록·큐레이션·지식 제안·청크 신고, 채팅 사이드바)은 UTC 로 읽어 바꾼다. 근거와 가정은 PITFALLS "DB 시각은 UTC 로만 쓴다".
 - `curated_qa.source_thread_id` 인덱스 — 대화 목록에 큐레이션 수 열을 넣고 싶어질 때 필요(지금은 삭제 확인에서만 1회 조회).
 - 전사 트랜스크립트 검색/뷰어 — 필요해지면 §7.3.
 - ~~**고아 `turn_source_ref`**~~ — **2026-10-12 해소**: Flyway `V7__purge_orphan_turn_refs.sql` 이 턴이 없는 출처·이미지 참조 행을 한 번 지운다(`OrphanTurnRefsMigrationTest`). 지금의 삭제 경로(`clearHistory`·`deleteTurn`)는 두 표를 턴과 함께 지우므로 새로 생기지 않는다 — 남아 있던 것은 그 삭제가 들어가기 전(2026-08-06)과 그 가드가 고장 나 있던 동안의 흔적이다. `conversation_turns.id` 가 `AUTOINCREMENT` 라 지워진 턴의 id 가 재사용되지 않아, 그 행들이 새 턴에 붙는 일은 없었다.
