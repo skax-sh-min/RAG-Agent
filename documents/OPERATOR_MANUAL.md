@@ -2698,7 +2698,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 카드 순서는 **청크 오류 신고(§6.12) → 지식 제안 검토(§7.6) → 큐레이션 Q&A → 대화 목록(§7.9) → 과거 질문 다듬기(§7.10) → 검색 진단 수치(§7.7)**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
-카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
+카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
 | 기능 | 방법 |
 |------|------|
