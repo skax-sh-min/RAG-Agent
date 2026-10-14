@@ -156,6 +156,7 @@ container system stop
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 (chroma 백엔드) |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
+| `APP_TIME_ZONE` | — | `Asia/Seoul` | 사람이 읽는 서버의 시계 — 로그 시각(날짜·오프셋 포함)·감사 로그 파일 회전·DB 백업 시각과 파일 이름. DB·API 의 시각은 이 값과 무관하게 UTC 이고, JVM·컨테이너의 시간대(`TZ`)는 읽지 않는다 |
 | `UPLOAD_MAX_TOTAL_SIZE` | — | `0`(무제한) | 배포 전체 저장 상한. `20GB`/`500MB`처럼 단위를 붙일 수 있고 접미사가 없으면 바이트. `DATA_DIR` 아래 `documents`+`converted`+`images`를 센다 — 업로드 원본만이 아니라 인덱싱이 만드는 변환 MD·추출 이미지까지. 초과 시 업로드는 413 `RAG-UP-002`로 거부된다. `documents/backup/`은 제외라(아래) 문서를 지우면 실제로 자리가 난다 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md#업로드-크기-제한) 참고 |
 | `BACKUP_RETENTION_DAYS` | — | `30` | 문서 삭제 시 원본이 보관되는 `documents/backup/`의 보관 일수. `0` = 기간 제한 없음 |
 | `BACKUP_MAX_SIZE` | — | `2GB` | 같은 폴더의 용량 상한 — 초과 시 오래된 것부터 삭제. `0` = 용량 제한 없음. 이 앱이 만든 백업만 지운다 |

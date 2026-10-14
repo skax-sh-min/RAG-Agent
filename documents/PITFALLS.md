@@ -716,11 +716,21 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 ### DB 시각은 UTC 로만 쓴다
 
 - **경위** (2026-10-14, V9): `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report` 의 저장소가 각자 `LocalDateTime.now()` 로 **서버 로컬** 시각을 쓰고, 나머지 운영 테이블은 UTC 였다. 모양(`yyyy-MM-dd HH:mm:ss`)이 같아 값만 보고는 가를 수 없어서, KST 서버에서 같은 대화의 `thread_meta.updated_at` 과 `conversation_turns.asked_at` 이 9시간 어긋났다. §6.25 는 표시만 KST 로 맞췄고 저장 존은 그대로 둬, 서버가 KST 가 아니면 화면이 다시 갈리는 상태였다.
-- **규칙**: DB 에 쓰는 시각은 `DbTimestamp.now()`(UTC, 같은 모양)로 만든다. `DbTimestampConventionTest` 가 앱 코드의 존 없는 `LocalDateTime`/`LocalDate`/`LocalTime.now()` 와 SQL `'localtime'` 을 빌드로 막는다. 예외는 DB 에 쓰지 않는 로컬 시각뿐이고 이유와 함께 목록에 둔다(지금은 백업 파일 이름 — 정기 실행 시각과 같은 서버 시계로 읽힌다).
+- **규칙**: DB 에 쓰는 시각은 `DbTimestamp.now()`(UTC, 같은 모양)로 만든다. `TimeZoneConventionTest` 가 앱 코드의 존 없는 `now()`(`LocalDateTime`·`LocalDate`·`ZonedDateTime`·…)와 SQL `'localtime'` 을 빌드로 막는다. 사람이 읽는 서버의 시각(로그·백업 파일 이름)은 이것이 아니라 `app.time-zone` 이다([아래](#사람이-읽는-서버-시계는-apptime-zone-이다)).
 - **V9 가 SQL 이 아니라 Java 인 이유**: 옛 값은 JVM 의 기본 시간대(`-Duser.timezone` → `TZ` → OS)로 찍혔다. SQLite 의 `datetime(x, 'utc')` 는 C 런타임의 로컬 시간대를 써서 `-Duser.timezone` 을 준 배포에서는 다른 답을 낸다. 같은 JVM 의 `ZoneId.systemDefault()` 로 되돌린다. 테스트를 위해 변환은 시간대를 받는 `toUtc(Connection, ZoneId)` 로 열려 있다(`LocalTimestampsToUtcMigrationTest`).
-- **V9 의 가정**: 그 값들이 **지금 이 JVM 과 같은 시간대**에서 쓰였다. UTC 로 돌던 배포(흔한 컨테이너)에서는 아무 값도 바뀌지 않는다. 시간대가 다른 서버로 DB 를 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석된다 — 값에 시간대가 없어 사후에 알아낼 방법이 없는 경우다. 모양이 다른 값은 그대로 두고 개수만 WARN 으로 남긴다.
+- **V9 의 가정**: 그 값들이 **지금 이 JVM 과 같은 시간대**에서 쓰였다. UTC 로 돌던 배포(흔한 컨테이너)에서는 아무 값도 바뀌지 않는다. 시간대가 다른 서버로 DB 를 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석된다 — 값에 시간대가 없어 사후에 알아낼 방법이 없는 경우다. 같은 이유로 **JVM 의 시간대(`TZ`/`-Duser.timezone`)를 바꾸려면 V9 가 적용된 뒤에** 바꿀 것 — KST 로 쓰인 DB 에서 먼저 UTC 로 바꾸면 V9 는 아무것도 바꾸지 않고 값이 9시간 틀린 채 남는다(앱은 이제 JVM 시간대를 읽지 않으므로 바꿀 이유도 없다). 모양이 다른 값은 그대로 두고 개수만 WARN 으로 남긴다.
 - **읽는 쪽**: 존 표기 없는 스탬프는 언제나 UTC 로 읽는다. 관리자·제안 화면은 `KstDateFormat.utcStampToKst()`(KST — 다른 관리자 시각과 같은 규칙), 채팅 사이드바는 `'Z'` 를 붙여 브라우저 시간대로(`formatRelativeDate()`). 새 화면에서 이 값을 그대로 찍으면 UTC 가 나간다.
 - **시간대만 통일했다 — 문자열 모양은 여전히 테이블마다 다르다**(DATABASE §2.4: `datetime('now')` 모양 / ISO `…Z` / `users` 의 ISO). 정렬과 비교는 한 컬럼 안에서만 일어나 모양 차이가 문제를 만들지 않고, 모양을 바꾸면 그 값을 읽는 코드(`Instant.parse`, `LocalDateTime.parse`)도 함께 바꿔야 한다.
+
+### 사람이 읽는 서버 시계는 `app.time-zone` 이다
+
+- **경위** (2026-10-14): DB 를 UTC 로 통일한 뒤에도 서버가 스스로 시각을 정하는 자리들이 JVM 기본 시간대를 따랐다 — 콘솔 로그(`%d{HH:mm:ss.SSS}`), 감사 로그 파일 회전, 정기 백업 cron(`03:30`)과 백업 파일 이름, 논스트리밍 답변 버블의 수신 시각, `/settings` 생각 수준 카드의 계산 시각. Docker 이미지에는 TZ 설정이 없어 JVM 이 UTC 로 돌므로, 같은 앱이 개발 PC(KST)와 컨테이너에서 9시간 다른 시각을 찍었고 컨테이너의 정기 백업은 KST 낮 12:30 에 돌았다.
+- **규칙**: 시각은 셋 중 하나로 정한다 — DB·API 의 값은 UTC(`DbTimestamp`), 사람이 읽는 서버의 시계는 `app.time-zone`(기본 `Asia/Seoul`, 환경변수 `APP_TIME_ZONE`), 화면은 관리자 화면 KST(`KstDateFormat.KST`)·채팅은 브라우저 시간대. JVM 기본 시간대는 읽지 않으므로 그 값을 바꿔도 결과가 같다. `TimeZoneConventionTest` 가 존 없는 `now()`·`ZoneId.systemDefault()`/`TimeZone.getDefault()`/`Clock.systemDefaultZone()`·SQL `'localtime'`·`zone` 없는 cron `@Scheduled`·시간대 없는 logback `%d` 를 막는다. 예외는 V9 하나다(옛 값을 쓴 바로 그 시간대로 되돌려야 한다).
+- **로그**: `%d{yyyy-MM-dd HH:mm:ss.SSSXXX, ${timeZone}}` — 날짜와 오프셋(`+09:00`)을 함께 찍어 UTC 인 DB·API 값과 대조할 때 헷갈리지 않게 했다. logback 은 `%d` 옵션 안의 `${timeZone}` 을 패턴을 해석하기 전에 치환한다(logback 1.5.34 로 확인 — JVM 을 UTC 로 돌려도 KST 로 찍힌다). 메시지 안에 넣은 `Instant` 값은 여전히 UTC(`…Z`)다. 감사 로그는 파일 회전 경계만 `app.time-zone` 의 자정이고, 각 줄의 `ts` 는 기계가 읽는 값이라 UTC 그대로다.
+- **cron**: `@Scheduled(zone = "${app.time-zone:Asia/Seoul}")` — 스프링은 `zone` 이 없으면 스케줄러 시계(JVM 기본 시간대)로 cron 을 푼다. 자리표시자까지 실제로 풀린 트리거를 `DatabaseBackupScheduleTest` 가 본다. 틀린 시간대는 기동을 멈춘다(`DatabaseBackupService` 생성자와 `@Scheduled` 둘 다) — 다른 시계로 조용히 돌지 않는다. `/admin` DB 백업 카드는 cron 옆에 시간대를 함께 적는다.
+- **화면은 서버 시계가 아니다**: 논스트리밍 답변 버블의 수신 시각은 UTC 스탬프(`data-utc-time`)로 내보내 다른 버블처럼 `applyMsgTimes()` 가 바꾸고, 생각 수준 카드는 다른 관리자 화면처럼 KST 다. 관리자 화면 시각을 전부 브라우저 변환으로 옮기는 것은 검토 후 보류했다 — 사용자가 모두 KST 라 보이는 결과가 같고, 옮길 자리 12곳 + 늦게 그려지는 패널마다 훅 + JS 테스트 하네스 없음이 비용이었다.
+- **문서 백업 파일 이름은 UTC 다**(`documents/backup/{name}_{yyyyMMdd_HHmmss}{ext}`, `RagService`) — `DocumentBackupCleaner` 가 그 이름을 UTC 로 읽어 보존 기간을 재므로 바꾸지 않았다. DB 백업 이름(`app.time-zone`)과는 시계가 다르다.
+- **날짜 단위 집계는 여전히 UTC 날짜다**(`llm_usage.usage_date`) — "오늘"이 KST 오전 9시에 바뀐다. 집계 칸 자체가 UTC 날짜라 화면 변환으로는 고칠 수 없고, KST 날짜로 바꾸려면 집계 키를 바꾸는 별도 작업이다.
 
 ### 지식 제안 (등록 당시 이름은 "청크 추가")
 

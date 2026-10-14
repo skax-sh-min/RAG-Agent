@@ -219,6 +219,7 @@ copy .env.example .env
 | `CHROMA_HOST` | — | `http://localhost` | **chroma 전용** — Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
 | `CHROMA_PORT` | — | `8001` | **chroma 전용** — Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
 | `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
+| `APP_TIME_ZONE` | — | `Asia/Seoul` | 사람이 읽는 서버의 시계 — 로그 시각(날짜·오프셋 포함, 예: `2026-10-14 13:52:03.905+09:00`)·감사 로그 파일 회전·정기 백업 시각(`DB_BACKUP_CRON`)·백업 파일 이름. DB·API 의 시각은 이 값과 무관하게 UTC 입니다. `TZ`/`-Duser.timezone`(JVM 시간대)과도 무관해서, TZ 설정 없는 컨테이너(UTC)에서도 이 시계로 찍고 돕니다. 틀린 값이면 기동이 멈춥니다. 재기동 필요 |
 | `UPLOAD_MAX_TOTAL_SIZE` | — | `0` (무제한) | 배포 전체 저장 상한 (§6.15). `20GB`처럼 단위를 붙일 수 있고 단위 없는 숫자는 바이트. `DATA_DIR` 아래 `documents`+`converted`+`images` 합계로 검사하며, 초과 업로드는 413 `RAG-UP-002`. 재기동 필요 — 상세는 아래 "업로드 크기 제한" |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 | `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
@@ -1980,8 +1981,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 인덱스 레지스트리 | `doc_registry` 테이블 — 앱의 유일한 SQLite 파일 `DATA_DIR/memory.db`([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: 같은 SQLite 파일 `DATA_DIR/memory.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 같은 SQLite 파일 `DATA_DIR/memory.db` | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
-| 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
-| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
+| 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함(날짜는 `APP_TIME_ZONE` 기준, 각 줄의 `ts` 는 UTC) |
+| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30(`APP_TIME_ZONE`)·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -2063,12 +2064,12 @@ Rename-Item data/vector.db memory.db
 
 #### 6.3.2 DB 백업과 복구
 
-앱이 `memory.db` 의 사본을 **매일 03:30** 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
+앱이 `memory.db` 의 사본을 **매일 03:30**(`app.time-zone`, 기본 KST) 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
 
 | 설정 | 환경변수 | 기본값 | 설명 |
 |---|---|---|---|
 | `app.backup.enabled` | `DB_BACKUP_ENABLED` | `true` | 정기 백업. `false` 여도 `/admin` 의 수동 백업은 됩니다 |
-| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일) |
+| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일). **`app.time-zone`(`APP_TIME_ZONE`, 기본 `Asia/Seoul`)의 시각**이고, 백업 파일 이름의 시각도 같은 시계입니다 — JVM·컨테이너의 시간대와 무관합니다. `/admin` 카드가 cron 옆에 시간대를 함께 보여 줍니다 |
 | `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
 | `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
 

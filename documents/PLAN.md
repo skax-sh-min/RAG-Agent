@@ -427,7 +427,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 #### 남은 열린 항목 (§6.25 범위 밖)
 
-- ~~**`thread_meta.updated_at`의 저장 존 통일**~~ — **2026-10-14 해소**: 서버 로컬 시각을 쓰던 네 저장소(`thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`)가 `DbTimestamp.now()`(UTC)로 쓰고, Flyway `V9__Local_timestamps_to_utc`(Java — JVM 시간대가 필요하다)가 기존 값을 그 JVM 의 기본 시간대 기준으로 옮겼다(`LocalTimestampsToUtcMigrationTest`). 존 없는 `LocalDateTime.now()` 는 `DbTimestampConventionTest` 가 막고, 그 값을 찍던 화면(관리자 대화 목록·큐레이션·지식 제안·청크 신고, 채팅 사이드바)은 UTC 로 읽어 바꾼다. 근거와 가정은 PITFALLS "DB 시각은 UTC 로만 쓴다".
+- ~~**`thread_meta.updated_at`의 저장 존 통일**~~ — **2026-10-14 해소**: 서버 로컬 시각을 쓰던 네 저장소(`thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`)가 `DbTimestamp.now()`(UTC)로 쓰고, Flyway `V9__Local_timestamps_to_utc`(Java — JVM 시간대가 필요하다)가 기존 값을 그 JVM 의 기본 시간대 기준으로 옮겼다(`LocalTimestampsToUtcMigrationTest`). 존 없는 `LocalDateTime.now()` 는 `TimeZoneConventionTest` 가 막고, 그 값을 찍던 화면(관리자 대화 목록·큐레이션·지식 제안·청크 신고, 채팅 사이드바)은 UTC 로 읽어 바꾼다. 같은 날 후속으로 사람이 읽는 서버의 시계(로그 시각·감사 로그 회전·정기 백업 cron·백업 파일 이름)를 `app.time-zone`(기본 KST)으로 고정하고 JVM 기본 시간대는 읽지 않게 했다 — TZ 설정 없는 컨테이너(UTC)에서 정기 백업이 KST 낮 12:30 에 돌고 로그가 9시간 다르게 찍히던 자리다. 근거와 가정은 PITFALLS "DB 시각은 UTC 로만 쓴다"·"사람이 읽는 서버 시계는 `app.time-zone` 이다".
 - `curated_qa.source_thread_id` 인덱스 — 대화 목록에 큐레이션 수 열을 넣고 싶어질 때 필요(지금은 삭제 확인에서만 1회 조회).
 - 전사 트랜스크립트 검색/뷰어 — 필요해지면 §7.3.
 - ~~**고아 `turn_source_ref`**~~ — **2026-10-12 해소**: Flyway `V7__purge_orphan_turn_refs.sql` 이 턴이 없는 출처·이미지 참조 행을 한 번 지운다(`OrphanTurnRefsMigrationTest`). 지금의 삭제 경로(`clearHistory`·`deleteTurn`)는 두 표를 턴과 함께 지우므로 새로 생기지 않는다 — 남아 있던 것은 그 삭제가 들어가기 전(2026-08-06)과 그 가드가 고장 나 있던 동안의 흔적이다. `conversation_turns.id` 가 `AUTOINCREMENT` 라 지워진 턴의 id 가 재사용되지 않아, 그 행들이 새 턴에 붙는 일은 없었다.

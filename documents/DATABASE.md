@@ -91,7 +91,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | ISO-8601, `Z` 없음 (`LocalDateTime.now(UTC)`) | UTC | `users.created_at`·`updated_at`·`locked_until` |
 | `YYYY-MM-DD` | UTC 날짜 | `llm_usage.usage_date` |
 
-> 시간대 표시가 없는 값도 UTC로 읽습니다. 화면에 낼 때는 바꿔야 합니다 — 관리자 화면은 KST(`KstDateFormat.utcStampToKst()`), 채팅 화면은 보는 사람의 시간대. 새 코드는 `DbTimestamp.now()`로 씁니다(존 없는 `LocalDateTime.now()`는 `DbTimestampConventionTest`가 막습니다).
+> 시간대 표시가 없는 값도 UTC로 읽습니다. 화면에 낼 때는 바꿔야 합니다 — 관리자 화면은 KST(`KstDateFormat.utcStampToKst()`), 채팅 화면은 보는 사람의 시간대. 새 코드는 `DbTimestamp.now()`로 씁니다(존 없는 `LocalDateTime.now()`는 `TimeZoneConventionTest`가 막습니다).
 >
 > V9 전에는 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각이 **서버 로컬 시각**이었습니다(KST 서버에서 다른 테이블과 9시간 차이). V9가 기존 값을 그 JVM의 기본 시간대 기준으로 UTC로 옮겼습니다 — 시간대가 다른 서버로 DB를 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석됩니다([PITFALLS](PITFALLS.md#db-시각은-utc-로만-쓴다)).
 
