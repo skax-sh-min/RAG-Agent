@@ -491,7 +491,7 @@ User question
 | `GET` | `/api/v1/tags` | Distinct tags in use (`?version`, `?excludeCommon`, `?includeCurated`) |
 | `GET` | `/api/v1/versions` | Indexed document versions (feeds the chat version selector) |
 | `GET` | `/api/v1/chunks/{chunkId}` | Full untruncated chunk text for the source "원문 보기" popup (404 once the chunk is gone) |
-| `GET` | `/api/v1/questions/suggest` | Previously asked questions matching the in-progress input (`?q`, `?limit`, `?threadId` — items carry an `origin`: `thread`/`mine`/`others`/`elsewhere`). Questions longer than 100 characters are excluded as candidates; a turn's clarified question, when it has one, is what is matched (alongside the original) and shown |
+| `GET` | `/api/v1/questions/suggest` | Previously asked questions matching the in-progress input (`?q`, `?limit`, `?threadId` — items carry an `origin`: `thread`/`mine`/`others`/`elsewhere`, and `askedAt` — the turn's UTC instant, ISO-8601; the chat shows it as a local `YY-MM-DD` at the row's right end). Questions longer than 100 characters are excluded as candidates; a turn's clarified question, when it has one, is what is matched (alongside the original) and shown |
 | `POST` | `/api/v1/questions/reuse` | Reuse a suggested question's stored answer; revalidates source chunks, else signals fallback |
 | `GET` | `/ui/threads/{threadId}/turns/{turnId}/extras` | Waits (`?waitMs`, up to 25 s) for a turn's post-answer extras - the clarified question when it differs, and follow-up questions; 204 when there are none or the turn is not yours |
 | `GET` | `/api/v1/llm/usage` | Per-provider token usage + Circuit Breaker status |

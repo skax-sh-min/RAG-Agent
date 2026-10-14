@@ -482,7 +482,7 @@ rag_java/
 | `GET` | `/api/v1/tags` | 사용 중인 태그 목록 (`?version`, `?excludeCommon`, `?includeCurated`) |
 | `GET` | `/api/v1/versions` | 인덱싱된 문서 버전 목록 (채팅의 버전 선택기가 읽는다) |
 | `GET` | `/api/v1/chunks/{chunkId}` | 출처 "원문 보기" 팝업이 쓰는 청크 전문(잘리지 않은 원문). 청크가 사라졌으면 404 |
-| `GET` | `/api/v1/questions/suggest` | 입력 중인 질문과 맞는 과거 질문 추천 (`?q`, `?limit`, `?threadId` — 항목마다 `origin`: `thread`/`mine`/`others`/`elsewhere`). 100자를 넘는 질문은 후보에서 제외된다. 다듬은 질문이 있는 턴은 원문과 함께 그 문장으로 맞추고 그 문장을 보여 준다 |
+| `GET` | `/api/v1/questions/suggest` | 입력 중인 질문과 맞는 과거 질문 추천 (`?q`, `?limit`, `?threadId` — 항목마다 `origin`: `thread`/`mine`/`others`/`elsewhere` 과 `askedAt` — 그 턴의 UTC 순간(ISO-8601), 채팅 화면은 항목 오른쪽 끝에 로컬 `YY-MM-DD` 로). 100자를 넘는 질문은 후보에서 제외된다. 다듬은 질문이 있는 턴은 원문과 함께 그 문장으로 맞추고 그 문장을 보여 준다 |
 | `POST` | `/api/v1/questions/reuse` | 선택한 과거 turn 재사용(출처 재검증 실패 시 일반 질의 폴백 신호 반환) |
 | `GET` | `/ui/threads/{threadId}/turns/{turnId}/extras` | 그 턴의 답변 뒤 보강(원문과 다를 때의 다듬은 질문 · 추가 질문)을 `?waitMs`(최대 25초)만큼 기다렸다 반환. 없거나 남의 턴이면 204 |
 | `GET` | `/api/v1/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
