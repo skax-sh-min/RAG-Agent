@@ -7,16 +7,24 @@
     <springProperty name="auditMaxFileSize"  source="app.audit.max-file-size"     defaultValue="10MB"/>
     <springProperty name="auditMaxHistory"   source="app.audit.max-history-days"  defaultValue="7"/>
     <springProperty name="auditTotalSizeCap" source="app.audit.total-size-cap"    defaultValue="100MB"/>
+    <springProperty name="timeZone"          source="app.time-zone"               defaultValue="Asia/Seoul"/>
 
+    <!--
+        로그 시각은 app.time-zone(기본 KST) — JVM 기본 시간대가 아니다. %d 에 시간대를 적지 않으면 JVM 기본 시간대를 따르는데,
+        TZ 설정 없는 컨테이너는 UTC 라 같은 앱이 배포 위치에 따라 9시간 다른 시각을 찍었다. 날짜와 오프셋(+09:00)을 함께 찍어
+        UTC 로 저장된 DB 값·API 값과 대조할 때 헷갈리지 않게 한다. 메시지 안에 넣은 Instant 값은 여전히 UTC(…Z)다.
+        TimeZoneConventionTest 가 이 파일의 %d 마다 시간대가 있는지 본다.
+    -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%X{traceId:--}] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSSXXX, ${timeZone}} [%X{traceId:--}] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
     <!--
         AUDIT 전용 롤링 파일 appender.
-        - 하루 단위 로테이션 + 10 MB 초과 시 추가 분할 (.0, .1, ...)
+        - 하루 단위 로테이션(app.time-zone 의 자정) + 10 MB 초과 시 추가 분할 (.0, .1, ...)
+        - 각 줄의 ts 는 UTC(Instant) 그대로 — 기계가 읽는 값이라 시간대를 바꾸지 않는다
         - maxHistory: 보관 일수 (기본 7일), 오래된 파일 자동 삭제
         - totalSizeCap: 전체 audit 디렉터리 상한 (기본 100 MB)
         - 포맷: JSON 한 줄 (NDJSON) — grep / jq 로 분석 가능
@@ -24,7 +32,7 @@
     <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${dataDir}/audit/audit.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${dataDir}/audit/audit.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <fileNamePattern>${dataDir}/audit/audit.%d{yyyy-MM-dd, ${timeZone}}.%i.log.gz</fileNamePattern>
             <maxFileSize>${auditMaxFileSize}</maxFileSize>
             <maxHistory>${auditMaxHistory}</maxHistory>
             <totalSizeCap>${auditTotalSizeCap}</totalSizeCap>

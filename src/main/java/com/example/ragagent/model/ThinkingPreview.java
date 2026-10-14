@@ -27,9 +27,10 @@ import java.util.Set;
 public record ThinkingPreview(Instant computedAt, Basis basis, List<Group> groups) {
 
     private static final java.time.format.DateTimeFormatter CLOCK =
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss").withZone(java.time.ZoneId.systemDefault());
+            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss").withZone(KstDateFormat.KST);
 
-    /** 계산 시각 — 숫자는 계산 시점의 스냅샷(라우팅 상태·창·설정값)이라 기준 줄에 시각을 적는다. */
+    /** 계산 시각 — 숫자는 계산 시점의 스냅샷(라우팅 상태·창·설정값)이라 기준 줄에 시각을 적는다. 다른 관리자 화면처럼
+     *  KST 다(JVM 기본 시간대로 찍던 동안 UTC 로 도는 컨테이너에서는 9시간 이른 시각이 나왔다). */
     public String computedAtText() {
         return CLOCK.format(computedAt);
     }

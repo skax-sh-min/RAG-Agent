@@ -14,7 +14,8 @@ import java.time.format.DateTimeFormatter;
  */
 public final class KstDateFormat {
 
-    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+    /** 관리자 화면이 시각을 보여 주는 시간대. 서버의 시계(로그·예약 작업)는 이것이 아니라 {@code app.time-zone} 이다. */
+    public static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private KstDateFormat() {}

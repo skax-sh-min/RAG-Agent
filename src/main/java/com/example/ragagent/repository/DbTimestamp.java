@@ -11,7 +11,7 @@ import java.time.format.DateTimeFormatter;
  * {@code LocalDateTime.now()} 로 <b>서버 로컬</b> 시각을 써서, 같은 모양의 문자열이 테이블에 따라 다른 시간대였다(KST
  * 서버에서 {@code conversation_turns} 와 9시간 차이). 값에 시간대 표시가 없어 읽는 쪽이 가를 수 없으므로 쓰는 쪽을 여기로
  * 모았다. 그때까지 쌓인 값은 Flyway V9 가 UTC 로 옮겼다. 존을 주지 않은 {@code LocalDateTime.now()} 는
- * {@code DbTimestampConventionTest} 가 막는다.
+ * {@code TimeZoneConventionTest} 가 막는다. 사람이 읽는 서버의 시각(로그·백업 파일 이름)은 이것이 아니라 {@code app.time-zone} 이다.
  */
 public final class DbTimestamp {
 

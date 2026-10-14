@@ -173,7 +173,9 @@
                 &nbsp;·&nbsp;
                 <span>📝 <span th:text="${#strings.length(answer)}"></span>
                       <span th:text="#{meta.answer.length}">chars</span></span>
-                <span th:if="${receivedAt != null}">&nbsp;·&nbsp;🕐 <span th:text="${receivedAt}"></span></span>
+                <!--/* receivedAt 은 UTC 스탬프 — chat.html 의 applyMsgTimes() 가 보는 사람의 시간대로 바꾼다(기록의 답변 시각과 같은 규칙) */-->
+                <span th:if="${receivedAt != null}">&nbsp;·&nbsp;<span class="msg-time"
+                      th:attr="data-utc-time=${receivedAt}">🕐</span></span>
             </div>
         </div>
     </div>

@@ -9,6 +9,7 @@ import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.model.VerificationSnapshot;
+import com.example.ragagent.repository.DbTimestamp;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AgentService;
@@ -30,10 +31,15 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -231,6 +237,29 @@ class ChatControllerHtmxTest {
         assertThat(html).contains("source-item");
         assertThat(html).contains("data-chunk-id=\"chunk-1\"");
         assertThat(html).contains("data-turn-id=");
+    }
+
+    /**
+     * 논스트리밍 폴백 경로의 답변 버블만 서버가 수신 시각을 {@code HH:mm} 으로 찍었다 — JVM 기본 시간대라 TZ 설정 없는
+     * 컨테이너(UTC)에서는 이 버블만 9시간 이른 시각이었다. 이제 다른 버블처럼 UTC 스탬프를 싣고 화면이 바꾼다.
+     */
+    @Test
+    @DisplayName("POST /ui/chat — 수신 시각은 UTC 스탬프(data-utc-time)로 나가고 화면(applyMsgTimes)이 바꾼다")
+    void postChat_receivedAtTravelsAsUtc() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        Matcher m = Pattern.compile("<span class=\"msg-time\"[^>]*data-utc-time=\"([^\"]+)\"").matcher(html);
+        assertThat(m.find()).as("수신 시각 칸이 없다:%n%s", html).isTrue();
+        LocalDateTime stamp = LocalDateTime.parse(m.group(1), DbTimestamp.FORMAT);
+        assertThat(Duration.between(stamp, LocalDateTime.now(ZoneOffset.UTC)).abs()).isLessThan(Duration.ofMinutes(1));
     }
 
     @Test

@@ -2125,7 +2125,8 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
     const fmtTime = iso => iso ? new Date(iso).toLocaleString() : '-';
 
     function render(s) {
-        el('dbb-schedule').textContent = s.enabled ? s.cron : '꺼짐 (app.backup.enabled=false)';
+        // cron 은 app.time-zone 기준이다 — 시간대를 함께 적어야 "03:30" 이 어느 시계의 03:30 인지 알 수 있다.
+        el('dbb-schedule').textContent = s.enabled ? s.cron + ' (' + s.zone + ')' : '꺼짐 (app.backup.enabled=false)';
         el('dbb-keep').textContent = s.keep;
         el('dbb-dir').textContent = s.dir;
         const last = s.last;
