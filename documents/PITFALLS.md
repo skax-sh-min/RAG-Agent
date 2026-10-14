@@ -719,18 +719,27 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 - **규칙**: DB 에 쓰는 시각은 `DbTimestamp.now()`(UTC, 같은 모양)로 만든다. `TimeZoneConventionTest` 가 앱 코드의 존 없는 `now()`(`LocalDateTime`·`LocalDate`·`ZonedDateTime`·…)와 SQL `'localtime'` 을 빌드로 막는다. 사람이 읽는 서버의 시각(로그·백업 파일 이름)은 이것이 아니라 `app.time-zone` 이다([아래](#사람이-읽는-서버-시계는-apptime-zone-이다)).
 - **V9 가 SQL 이 아니라 Java 인 이유**: 옛 값은 JVM 의 기본 시간대(`-Duser.timezone` → `TZ` → OS)로 찍혔다. SQLite 의 `datetime(x, 'utc')` 는 C 런타임의 로컬 시간대를 써서 `-Duser.timezone` 을 준 배포에서는 다른 답을 낸다. 같은 JVM 의 `ZoneId.systemDefault()` 로 되돌린다. 테스트를 위해 변환은 시간대를 받는 `toUtc(Connection, ZoneId)` 로 열려 있다(`LocalTimestampsToUtcMigrationTest`).
 - **V9 의 가정**: 그 값들이 **지금 이 JVM 과 같은 시간대**에서 쓰였다. UTC 로 돌던 배포(흔한 컨테이너)에서는 아무 값도 바뀌지 않는다. 시간대가 다른 서버로 DB 를 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석된다 — 값에 시간대가 없어 사후에 알아낼 방법이 없는 경우다. 같은 이유로 **JVM 의 시간대(`TZ`/`-Duser.timezone`)를 바꾸려면 V9 가 적용된 뒤에** 바꿀 것 — KST 로 쓰인 DB 에서 먼저 UTC 로 바꾸면 V9 는 아무것도 바꾸지 않고 값이 9시간 틀린 채 남는다(앱은 이제 JVM 시간대를 읽지 않으므로 바꿀 이유도 없다). 모양이 다른 값은 그대로 두고 개수만 WARN 으로 남긴다.
-- **읽는 쪽**: 존 표기 없는 스탬프는 언제나 UTC 로 읽는다. 관리자·제안 화면은 `KstDateFormat.utcStampToKst()`(KST — 다른 관리자 시각과 같은 규칙), 채팅 사이드바는 `'Z'` 를 붙여 브라우저 시간대로(`formatRelativeDate()`). 새 화면에서 이 값을 그대로 찍으면 UTC 가 나간다.
+- **읽는 쪽**: 존 표기 없는 스탬프는 언제나 UTC 로 읽는다. 화면은 UTC 순간으로 내보내고 브라우저가 바꾼다([화면의 시각은 브라우저가 바꾼다](#화면의-시각은-브라우저가-바꾼다)) — 채팅 사이드바는 `'Z'` 를 붙여 읽는다(`formatRelativeDate()`). 새 화면에서 이 값을 그대로 찍으면 UTC 가 나간다.
 - **시간대만 통일했다 — 문자열 모양은 여전히 테이블마다 다르다**(DATABASE §2.4: `datetime('now')` 모양 / ISO `…Z` / `users` 의 ISO). 정렬과 비교는 한 컬럼 안에서만 일어나 모양 차이가 문제를 만들지 않고, 모양을 바꾸면 그 값을 읽는 코드(`Instant.parse`, `LocalDateTime.parse`)도 함께 바꿔야 한다.
 
 ### 사람이 읽는 서버 시계는 `app.time-zone` 이다
 
 - **경위** (2026-10-14): DB 를 UTC 로 통일한 뒤에도 서버가 스스로 시각을 정하는 자리들이 JVM 기본 시간대를 따랐다 — 콘솔 로그(`%d{HH:mm:ss.SSS}`), 감사 로그 파일 회전, 정기 백업 cron(`03:30`)과 백업 파일 이름, 논스트리밍 답변 버블의 수신 시각, `/settings` 생각 수준 카드의 계산 시각. Docker 이미지에는 TZ 설정이 없어 JVM 이 UTC 로 돌므로, 같은 앱이 개발 PC(KST)와 컨테이너에서 9시간 다른 시각을 찍었고 컨테이너의 정기 백업은 KST 낮 12:30 에 돌았다.
-- **규칙**: 시각은 셋 중 하나로 정한다 — DB·API 의 값은 UTC(`DbTimestamp`), 사람이 읽는 서버의 시계는 `app.time-zone`(기본 `Asia/Seoul`, 환경변수 `APP_TIME_ZONE`), 화면은 관리자 화면 KST(`KstDateFormat.KST`)·채팅은 브라우저 시간대. JVM 기본 시간대는 읽지 않으므로 그 값을 바꿔도 결과가 같다. `TimeZoneConventionTest` 가 존 없는 `now()`·`ZoneId.systemDefault()`/`TimeZone.getDefault()`/`Clock.systemDefaultZone()`·SQL `'localtime'`·`zone` 없는 cron `@Scheduled`·시간대 없는 logback `%d` 를 막는다. 예외는 V9 하나다(옛 값을 쓴 바로 그 시간대로 되돌려야 한다).
+- **규칙**: 시각은 셋 중 하나로 정한다 — DB·API 의 값은 UTC(`DbTimestamp`), 사람이 읽는 서버의 시계는 `app.time-zone`(기본 `Asia/Seoul`, 환경변수 `APP_TIME_ZONE`), 화면은 브라우저가 보는 사람의 시간대로 바꾼다(서버는 UTC 를 보낸다). JVM 기본 시간대는 읽지 않으므로 그 값을 바꿔도 결과가 같다. `TimeZoneConventionTest` 가 존 없는 `now()`·`ZoneId.systemDefault()`/`TimeZone.getDefault()`/`Clock.systemDefaultZone()`·SQL `'localtime'`·`zone` 없는 cron `@Scheduled`·시간대 없는 logback `%d` 를 막는다. 예외는 V9 하나다(옛 값을 쓴 바로 그 시간대로 되돌려야 한다).
 - **로그**: `%d{yyyy-MM-dd HH:mm:ss.SSSXXX, ${timeZone}}` — 날짜와 오프셋(`+09:00`)을 함께 찍어 UTC 인 DB·API 값과 대조할 때 헷갈리지 않게 했다. logback 은 `%d` 옵션 안의 `${timeZone}` 을 패턴을 해석하기 전에 치환한다(logback 1.5.34 로 확인 — JVM 을 UTC 로 돌려도 KST 로 찍힌다). 메시지 안에 넣은 `Instant` 값은 여전히 UTC(`…Z`)다. 감사 로그는 파일 회전 경계만 `app.time-zone` 의 자정이고, 각 줄의 `ts` 는 기계가 읽는 값이라 UTC 그대로다.
 - **cron**: `@Scheduled(zone = "${app.time-zone:Asia/Seoul}")` — 스프링은 `zone` 이 없으면 스케줄러 시계(JVM 기본 시간대)로 cron 을 푼다. 자리표시자까지 실제로 풀린 트리거를 `DatabaseBackupScheduleTest` 가 본다. 틀린 시간대는 기동을 멈춘다(`DatabaseBackupService` 생성자와 `@Scheduled` 둘 다) — 다른 시계로 조용히 돌지 않는다. `/admin` DB 백업 카드는 cron 옆에 시간대를 함께 적는다.
-- **화면은 서버 시계가 아니다**: 논스트리밍 답변 버블의 수신 시각은 UTC 스탬프(`data-utc-time`)로 내보내 다른 버블처럼 `applyMsgTimes()` 가 바꾸고, 생각 수준 카드는 다른 관리자 화면처럼 KST 다. 관리자 화면 시각을 전부 브라우저 변환으로 옮기는 것은 검토 후 보류했다 — 사용자가 모두 KST 라 보이는 결과가 같고, 옮길 자리 12곳 + 늦게 그려지는 패널마다 훅 + JS 테스트 하네스 없음이 비용이었다.
+- **화면은 서버 시계가 아니다**: 논스트리밍 답변 버블의 수신 시각은 UTC 스탬프(`data-utc-time`)로 내보내 다른 버블처럼 `applyMsgTimes()` 가 바꾼다. 관리자 화면도 같은 날 브라우저 변환으로 옮겼다([아래](#화면의-시각은-브라우저가-바꾼다)).
 - **문서 백업 파일 이름은 UTC 다**(`documents/backup/{name}_{yyyyMMdd_HHmmss}{ext}`, `RagService`) — `DocumentBackupCleaner` 가 그 이름을 UTC 로 읽어 보존 기간을 재므로 바꾸지 않았다. DB 백업 이름(`app.time-zone`)과는 시계가 다르다.
 - **날짜 단위 집계는 여전히 UTC 날짜다**(`llm_usage.usage_date`) — "오늘"이 KST 오전 9시에 바뀐다. 집계 칸 자체가 UTC 날짜라 화면 변환으로는 고칠 수 없고, KST 날짜로 바꾸려면 집계 키를 바꾸는 별도 작업이다.
+
+### 화면의 시각은 브라우저가 바꾼다
+
+- **경위** (2026-10-14): 같은 저장값이 화면마다 다른 규칙을 탔다 — 관리자·지식 제안 화면은 서버가 KST 로 고정 변환(`KstDateFormat`), 채팅은 브라우저 변환, 몇 자리는 서버 JVM 의 기본 시간대. 섞여 있어서 실제로 어긋났다: 문서 목록은 서버가 그린 행(KST)과 업로드 직후 JS 가 붙인 행(UTC ISO 문자열을 앞 16자로 자른 것)이 한 표 안에서 9시간 달랐고, 사이드바는 UTC 문자열을 로컬로 읽었다.
+- **규칙**: 서버는 화면에 나가는 시각의 시간대를 정하지 않는다. 템플릿은 `~{fragments/time :: utc(값, 정밀도)}` — `<time class="utc-time" datetime="2026-10-14T01:55:38Z" data-precision="second">2026-10-14 01:55:38 UTC</time>` — 를 그리고, `layout/base.html` 의 `localizeTimes()` 가 보는 사람의 시간대로 바꾼다(원래 UTC 값은 `title` 로). JSON 은 `UtcTime.iso()`(ISO UTC)로 내보내고 JS 가 `formatLocalTime(값, 정밀도)` 로 그린다. 정밀도는 `second`·`minute`·`time` 셋. 채팅 버블은 '오늘이면 시:분만' 규칙이 따로 있어 `formatBubbleTime` 을 쓴다.
+- **늦게 그려지는 화면은 MutationObserver 한 곳이 잡는다**: `/admin` 패널 상당수는 `fetch` + `innerHTML` 로 다시 그려져 조각 안의 `<script>` 가 돌지 않고, HTMX swap 도 있다. 패널마다 훅을 달면 하나만 빠져도 그 패널이 UTC 를 보이므로 `document.body` 의 추가 노드를 보고 바꾼다. 바꾼 요소는 `data-localized` 로 표시해 다시 바꾸지 않는다.
+- **JS 가 돌지 않으면 'UTC' 를 붙인 UTC 시각이 보인다**(`UtcTime.fallback`) — 틀린 시각이 아니라 다른 시계로 읽히게. 읽을 수 없는 값은 `utc-time` 클래스 없이 그대로 보인다.
+- **번들 문구 안의 시각**(`/settings` 생각 수준 카드의 기준 줄)은 조각을 쓸 수 없어 `<time>` 요소 문자열을 자리표시자에 넣고 `th:utext` 로 그린다. 요소는 `Instant` 에서만 만들고(`UtcTime.timeElement`), 정밀도는 정해진 셋으로 고정한다. **Thymeleaf 는 `th:utext` 안의 정적 클래스 호출(`T(...)`)을 막는다** — 레코드의 메서드(`ThinkingPreview.computedAtElement()`)로 부른다.
+- **테스트는 서버 쪽에만 있다**: 이 저장소에는 JS 테스트 하네스가 없어, 모양과 순간을 정하는 쪽(`UtcTime` — `UtcTimeTest`)을 서버에 두고 JS 는 `Date` 를 그리는 몇 줄만 갖는다. 렌더 결과는 `AdminControllerWebMvcTest` 가 `<time datetime>` 으로 본다.
 
 ### 지식 제안 (등록 당시 이름은 "청크 추가")
 
