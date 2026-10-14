@@ -114,6 +114,18 @@ class QuestionReuseServiceTest {
         assertThat(suggestions).hasSize(2);
         assertThat(suggestions.get(0).question()).isEqualTo("Spring Boot 설정 방법");
         assertThat(suggestions.get(1).question()).isEqualTo("다른 질문");
+        // 화면이 보는 사람의 시간대로 날짜를 내도록 UTC 순간으로 싣는다(created_at 은 시간대 표시 없는 UTC 문자열)
+        assertThat(suggestions.get(0).askedAt()).isEqualTo("2026-08-05T10:00:00Z");
+    }
+
+    @Test
+    @DisplayName("utcInstant — SQLite datetime('now')(UTC, 표시 없음) → ISO-8601 UTC 순간, 읽을 수 없으면 null")
+    void utcInstant_convertsSqliteUtcText() {
+        assertThat(QuestionReuseService.utcInstant("2026-10-13 23:30:05")).isEqualTo("2026-10-13T23:30:05Z");
+        assertThat(QuestionReuseService.utcInstant(" 2026-10-13 00:00:00 ")).isEqualTo("2026-10-13T00:00:00Z");
+        assertThat(QuestionReuseService.utcInstant(null)).isNull();
+        assertThat(QuestionReuseService.utcInstant("")).isNull();
+        assertThat(QuestionReuseService.utcInstant("2026-10-13T23:30:05Z")).as("모르는 형식은 그리지 않는다").isNull();
     }
 
     @Test
