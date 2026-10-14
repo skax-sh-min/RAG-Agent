@@ -166,7 +166,7 @@ class ThreadAdminServiceTest {
 
         assertThat(c.question()).isEqualTo("질문");
         assertThat(c.answer()).isEqualTo("답변 전문");     // 원문은 손대지 않는다
-        assertThat(c.askedAtKst()).isEqualTo("2026-08-27 12:00:00");
+        assertThat(c.askedAt()).isEqualTo("2026-08-27T03:00:00Z");   // UTC 순간 — 시간대는 화면이 바꾼다
         assertThat(c.responseMode()).isEqualTo("N");       // 구 M/L 은 실제 동작과 같은 N 으로
         assertThat(c.userId()).isEqualTo("u1");            // 감사에 남길 소유자
     }
@@ -177,16 +177,6 @@ class ThreadAdminServiceTest {
         when(repository.findTurnContent(99L)).thenReturn(java.util.Optional.empty());
 
         assertThat(service.turnContent(99L)).isEmpty();
-    }
-
-    @Test
-    @DisplayName("드릴다운 턴의 시각도 KST — 진단 패널과 같은 규칙")
-    void drilldownTurnTimeIsKst() {
-        var row = new ThreadAdminRepository.TurnRow(
-                7L, "2026-08-27 15:30:45", "질문", "N", "local", null, false, false, true);
-
-        assertThat(new ThreadAdminService.TurnView(row).askedAtKst())
-                .isEqualTo("2026-08-28 00:30:45");   // 날짜 경계를 넘는다
     }
 
     // ── 삭제 ─────────────────────────────────────────────────────────────────

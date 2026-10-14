@@ -36,7 +36,9 @@
         <!-- 계산 기준 줄 — 이 숫자들이 서 있는 값. 추정이 얼마나 맞는지가 같은 화면에 있어야 한다. -->
         <div class="small thinking-basis-line mb-3">
             <div>
-                <span th:text="#{settings.thinking.basis.line(${thinking.computedAtText()}, ${thinking.basis.maxTokens},
+                <!--/* utext — 첫 자리에 <time>(computedAtElement → UtcTime.timeElement, Instant 에서만 만든다)이 들어가 브라우저가 시간대를 바꾼다.
+                       나머지 자리는 숫자다. */-->
+                <span th:utext="#{settings.thinking.basis.line(${thinking.computedAtElement()}, ${thinking.basis.maxTokens},
                           ${thinking.basis.topK}, ${thinking.basis.chunkSize}, ${thinking.basis.keywordBatchSize})}">
                     basis</span>
             </div>

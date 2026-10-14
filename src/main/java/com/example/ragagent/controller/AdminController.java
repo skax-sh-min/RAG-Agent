@@ -419,7 +419,7 @@ public class AdminController {
                             "owner", c.userId()));
                     Map<String, Object> body = new HashMap<>();
                     body.put("turnId", c.turnId());
-                    body.put("askedAt", c.askedAtKst());
+                    body.put("askedAt", c.askedAt());
                     body.put("question", c.question());
                     body.put("answer", c.answer());
                     body.put("responseMode", c.responseMode());

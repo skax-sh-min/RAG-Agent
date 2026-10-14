@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ul>
  *   <li>DB·API 에 쓰는 시각은 UTC — {@link DbTimestamp#now()}.</li>
  *   <li>사람이 읽는 서버의 시계(로그 시각, 예약 작업, 백업 파일 이름)는 {@code app.time-zone}(기본 KST).</li>
+ *   <li>화면에 나가는 시각은 UTC 로 보내고 브라우저가 보는 사람의 시간대로 바꾼다({@code UtcTime}, {@code fragments/time}).</li>
  *   <li>JVM 기본 시간대({@code TZ}/{@code -Duser.timezone})는 어디서도 읽지 않는다.</li>
  * </ul>
  *
@@ -75,7 +76,7 @@ class TimeZoneConventionTest {
                 assertThat(MAIN.resolve(allowed)).as("예외 목록의 파일이 옮겨졌거나 지워졌다 — 목록도 고칠 것").exists());
         List<String> violations = scan(JVM_DEFAULT_ZONE, JVM_DEFAULT_ZONE_ALLOWED.keySet());
         assertThat(violations)
-                .as("JVM 기본 시간대를 읽는 곳이 있다. 화면이면 UTC 를 넘겨 브라우저가 바꾸게 하거나 KstDateFormat.KST 를, "
+                .as("JVM 기본 시간대를 읽는 곳이 있다. 화면이면 UTC 를 넘겨 브라우저가 바꾸게 하고(fragments/time · UtcTime), "
                         + "서버의 시계면 app.time-zone 을 쓸 것")
                 .isEmpty();
     }

@@ -1,7 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.model.KstDateFormat;
+import com.example.ragagent.model.UtcTime;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadAdminRepository;
@@ -73,11 +73,6 @@ public class ThreadAdminService {
         public int likeCount()    { return row.likeCount(); }
         public int dislikeCount() { return row.dislikeCount(); }
         public String tags()      { return row.tags(); }
-
-        /** 턴 시각과 같은 규칙 — 저장은 UTC({@code DbTimestamp}), 표시는 KST(§6.25 결정 2). */
-        public String updatedAtKst() {
-            return KstDateFormat.utcStampToKst(row.updatedAt());
-        }
 
         /**
          * Shortened owner id for the table cell — a guest id is
@@ -153,11 +148,6 @@ public class ThreadAdminService {
         public boolean directMode()     { return row.directMode(); }
         public boolean hasDiagnostics() { return row.hasDiagnostics(); }
 
-        /** 진단 패널과 같은 규칙 — 저장은 UTC, 표시는 KST(§6.25 결정 2). */
-        public String askedAtKst() {
-            return KstDateFormat.utcStampToKst(row.askedAt());
-        }
-
         /** Preview line — the panel is a list, not a transcript reader. */
         public String question() {
             String q = row.question();
@@ -186,9 +176,9 @@ public class ThreadAdminService {
     /**
      * One turn's question and answer, in full.
      *
-     * @param askedAtKst 저장은 UTC, 표시는 KST — 목록·드릴다운과 같은 규칙(결정 2)
+     * @param askedAt ISO-8601 UTC 순간 — 보는 사람의 시간대로 바꾸는 것은 화면이다(목록·드릴다운과 같은 규칙)
      */
-    public record TurnContentView(long turnId, String userId, String threadId, String askedAtKst,
+    public record TurnContentView(long turnId, String userId, String threadId, String askedAt,
                                   String question, String answer, String responseMode) {}
 
     /**
@@ -200,7 +190,7 @@ public class ThreadAdminService {
     public Optional<TurnContentView> turnContent(long turnId) {
         return repository.findTurnContent(turnId).map(c -> new TurnContentView(
                 c.turnId(), c.userId(), c.threadId(),
-                KstDateFormat.utcStampToKst(c.askedAt()),
+                UtcTime.iso(c.askedAt()),
                 c.question(), c.answer(),
                 ResponseMode.parse(c.responseMode()).name()));
     }

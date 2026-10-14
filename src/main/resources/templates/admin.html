@@ -137,7 +137,7 @@
                         <td class="text-center" style="min-width:45px;"
                             th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
-                        <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
+                        <td class="text-muted"><time th:replace="~{fragments/time :: utc(${doc.indexedAt()}, 'minute')}"></time></td>
                         <td class="text-center">
                             <button type="button"
                                     class="btn btn-sm btn-outline-primary py-0 px-2"
@@ -1385,7 +1385,7 @@ function openTurnContent(turnId) {
             const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             document.getElementById('turn-content-meta').textContent =
-                'turn #' + c.turnId + ' · ' + c.askedAt + ' · ' + c.responseMode;
+                'turn #' + c.turnId + ' · ' + (formatLocalTime(c.askedAt, 'second') || c.askedAt || '') + ' · ' + c.responseMode;
             document.getElementById('turn-content-question').textContent = c.question || '';
 
             // 원문은 언제나 textContent 로만 넣는다 — 렌더는 미리보기 패널의 몫이고,
@@ -2122,7 +2122,7 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
     if (!card) return;
     const el = id => document.getElementById(id);
     const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-    const fmtTime = iso => iso ? new Date(iso).toLocaleString() : '-';
+    const fmtTime = iso => formatLocalTime(iso, 'second') || '-';   // base.html — 다른 시각과 같은 모양
 
     function render(s) {
         // cron 은 app.time-zone 기준이다 — 시간대를 함께 적어야 "03:30" 이 어느 시계의 03:30 인지 알 수 있다.

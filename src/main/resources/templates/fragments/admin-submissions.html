@@ -65,8 +65,7 @@
                               th:text="${s.displayStatus()}"></span>
                     </span>
                 </td>
-                <td class="text-muted" title="KST (저장은 UTC)"
-                    th:text="${T(com.example.ragagent.model.KstDateFormat).utcStampToKst(s.createdAt())}"></td>
+                <td class="text-muted"><time th:replace="~{fragments/time :: utc(${s.createdAt()}, 'second')}"></time></td>
                 <td class="text-center">
                     <button type="button" class="btn btn-sm btn-outline-primary py-0 px-1"
                             style="font-size:0.7rem;"

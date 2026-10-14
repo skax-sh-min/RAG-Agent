@@ -4,6 +4,7 @@ import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.UtcTime;
 import com.example.ragagent.repository.QuestionReuseRepository;
 import com.example.ragagent.security.GuestIdentityResolver;
 import com.fasterxml.jackson.annotation.JsonValue;
@@ -259,7 +260,7 @@ public class QuestionReuseService {
             }
             String key = normalizeQuestionKey(shown);
             if (!seenQuestions.add(key)) continue;
-            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin, utcInstant(c.createdAt())));
+            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin, UtcTime.iso(c.createdAt())));
             if (out.size() >= limit) break;
         }
         return out;
@@ -524,20 +525,6 @@ public class QuestionReuseService {
      * 읽을 수 없는 값이면 {@code null}(날짜를 그리지 않는다).
      */
     public record Suggestion(long turnId, String question, String answerPreview, Origin origin, String askedAt) {}
-
-    private static final java.time.format.DateTimeFormatter SQLITE_UTC =
-            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    /** SQLite {@code datetime('now')} 문자열(UTC, 시간대 표시 없음) → ISO-8601 UTC 순간. 형식이 다르면 {@code null}. */
-    static String utcInstant(String sqliteUtc) {
-        if (sqliteUtc == null || sqliteUtc.isBlank()) return null;
-        try {
-            return java.time.LocalDateTime.parse(sqliteUtc.strip(), SQLITE_UTC)
-                    .toInstant(java.time.ZoneOffset.UTC).toString();
-        } catch (java.time.format.DateTimeParseException e) {
-            return null;
-        }
-    }
 
     /**
      * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는

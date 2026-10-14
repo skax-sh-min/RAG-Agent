@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--/* 저장된 시각 하나 — UTC 순간으로 내보내고, 보는 사람의 시간대로 바꾸는 것은 layout/base.html 의 localizeTimes() 다.
+       precision: second(기본) · minute · time. JS 가 돌지 않으면 'UTC' 를 붙인 원래 시각이 보인다(UtcTime.fallback).
+       읽을 수 없는 값은 utc-time 클래스 없이 그대로 보인다. */-->
+<time th:fragment="utc(value, precision)"
+      th:with="iso=${T(com.example.ragagent.model.UtcTime).iso(value)}"
+      th:classappend="${iso != null} ? 'utc-time'"
+      th:attr="datetime=${iso},data-precision=${precision}"
+      th:text="${T(com.example.ragagent.model.UtcTime).fallback(value, precision)}"></time>
+
+</body>
+</html>
