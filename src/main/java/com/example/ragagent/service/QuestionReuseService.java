@@ -4,6 +4,7 @@ import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.UtcTime;
 import com.example.ragagent.repository.QuestionReuseRepository;
 import com.example.ragagent.security.GuestIdentityResolver;
 import com.fasterxml.jackson.annotation.JsonValue;
@@ -32,6 +33,12 @@ public class QuestionReuseService {
      * 바로 그 질문들이 다시 추천에서 빠졌다. 다듬기(PostAnswerService)도 같은 상한으로 만든다.
      */
     static final int MAX_SUGGESTION_QUESTION_LENGTH = 100;
+    /**
+     * 추천 검색에 쓰는 입력의 앞부분 길이. 화면은 입력창 내용을 {@code GET ?q=} 로 보내므로, 통째로 실으면 긴 붙여넣기 하나가
+     * Tomcat 의 요청 줄 한도(8KB)를 넘겨 {@code Request header is too large} 가 된다 — 화면도 이 값으로 잘라 보낸다
+     * ({@code chat.html} 의 {@code SUGGEST_MAX_QUERY_CHARS}). 키워드는 최대 6개라 앞부분이면 충분하다.
+     */
+    public static final int SUGGEST_MAX_QUERY_CHARS = 200;
     private static final String DELETED_REFERENCE_LABEL = "참조 원문 삭제됨";
     private static final String DELETED_REFERENCE_PREVIEW = "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.";
     private static final String DELETED_CHUNK_PREVIEW = "이 출처 청크는 삭제되어 원문을 표시할 수 없습니다.";
@@ -229,6 +236,7 @@ public class QuestionReuseService {
      */
     public List<Suggestion> suggest(String userId, String threadId, String q, int limit) {
         String query = q == null ? "" : q.strip();
+        if (query.length() > SUGGEST_MAX_QUERY_CHARS) query = query.substring(0, SUGGEST_MAX_QUERY_CHARS).strip();
         if (query.length() < 2) return List.of();
 
         // 의문·기능어와 조사·어미를 걷어낸 내용어로 맞춘다. 아무것도 안 남으면(예: "이거 왜 안 돼요")
@@ -259,7 +267,7 @@ public class QuestionReuseService {
             }
             String key = normalizeQuestionKey(shown);
             if (!seenQuestions.add(key)) continue;
-            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin, utcInstant(c.createdAt())));
+            out.add(new Suggestion(c.turnId(), shown, summarize(c.answer()), origin, UtcTime.iso(c.createdAt())));
             if (out.size() >= limit) break;
         }
         return out;
@@ -524,20 +532,6 @@ public class QuestionReuseService {
      * 읽을 수 없는 값이면 {@code null}(날짜를 그리지 않는다).
      */
     public record Suggestion(long turnId, String question, String answerPreview, Origin origin, String askedAt) {}
-
-    private static final java.time.format.DateTimeFormatter SQLITE_UTC =
-            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    /** SQLite {@code datetime('now')} 문자열(UTC, 시간대 표시 없음) → ISO-8601 UTC 순간. 형식이 다르면 {@code null}. */
-    static String utcInstant(String sqliteUtc) {
-        if (sqliteUtc == null || sqliteUtc.isBlank()) return null;
-        try {
-            return java.time.LocalDateTime.parse(sqliteUtc.strip(), SQLITE_UTC)
-                    .toInstant(java.time.ZoneOffset.UTC).toString();
-        } catch (java.time.format.DateTimeParseException e) {
-            return null;
-        }
-    }
 
     /**
      * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는

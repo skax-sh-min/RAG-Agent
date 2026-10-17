@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.security.PromptInjectionGuard;
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
@@ -165,6 +166,15 @@ public class StreamingAgentService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
     public void run(String userId, ChatForm form, SseEmitter emitter) {
+        // 공개 채팅 진입점의 첫 호출(AgentService.chat() 과 같은 규칙). 이 경로에만 빠져 있던 동안 화면의 질문은
+        // 길이 제한(2,000자) 없이 들어갔다 — 17,500자 질문이 답변·검증 프롬프트를 창에 맞추느라 문서를 덜어냈다.
+        try {
+            PromptInjectionGuard.validate(form.question());
+        } catch (IllegalArgumentException e) {
+            trySendError(emitter, e.getMessage());
+            emitter.complete();
+            return;
+        }
         long startNs = System.nanoTime();
         String askedAt = DB_FMT.format(Instant.now());
         SseGraphListener listener = null;

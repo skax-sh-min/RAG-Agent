@@ -12,6 +12,7 @@ import com.example.ragagent.llm.ThinkingObservations;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.repository.DbTimestamp;
 import com.example.ragagent.service.AnswerService;
 import com.example.ragagent.service.ClassifierService;
 import com.example.ragagent.service.CuratedQuestionSuggester;
@@ -51,8 +52,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -124,7 +123,6 @@ class ThinkingLevelEvaluationTest {
     private static final String USER = "thinking-eval";
     private static final String VERSION = "latest";
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final DateTimeFormatter TURN_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** 쓰는 하네스라 개발 DB 를 가리키지 못하게 한다 — 스크래치 데이터 디렉터리가 필수다. */
     @DynamicPropertySource
@@ -411,7 +409,7 @@ class ThinkingLevelEvaluationTest {
             FollowUp fu = cases.get(i);
             for (ThinkingLevel level : order(i, ThinkingLevel.OFF, ThinkingLevel.LOW)) {
                 String thread = "te-cond-" + i + "-" + level.value();
-                memory.addTurn(USER, thread, fu.previous(), "답변", LocalDateTime.now().format(TURN_TIME),
+                memory.addTurn(USER, thread, fu.previous(), "답변", DbTimestamp.now(),
                         10, 10, 100, "local", 1, "N", "");
                 use(ThinkingSite.CONDENSE, level);
                 Timed<Optional<QuestionCondenser.Condensed>> t = timed(ThinkingSite.CONDENSE,
@@ -744,7 +742,7 @@ class ThinkingLevelEvaluationTest {
             if (answer == null || answer.isBlank()) continue;
             for (ThinkingLevel level : order(i, ThinkingLevel.OFF, ThinkingLevel.LOW)) {
                 String thread = "te-post-" + gq.id() + "-" + level.value();
-                long turnId = memory.addTurn(USER, thread, gq.question(), answer, LocalDateTime.now().format(TURN_TIME),
+                long turnId = memory.addTurn(USER, thread, gq.question(), answer, DbTimestamp.now(),
                         10, 10, 100, "local", 1, "N", "");
                 AgentState result = answerState(gq, thread).toBuilder().answer(answer).build();
                 use(ThinkingSite.POST_ANSWER, level);

@@ -876,14 +876,14 @@ class AdminControllerWebMvcTest {
     void turnContent_returnsTextAndAuditsTheRead() throws Exception {
         when(threadAdminService.turnContent(7L)).thenReturn(Optional.of(
                 new com.example.ragagent.service.ThreadAdminService.TurnContentView(
-                        7L, "guest-a1b2c3d4e5f6", "t1", "2026-08-27 12:00:00",
+                        7L, "guest-a1b2c3d4e5f6", "t1", "2026-08-27T03:00:00Z",
                         "청크 분할 전략이 뭐야", "답변 전문입니다", "N")));
 
         mvc.perform(get("/admin/threads/turns/7/content").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("답변 전문입니다")))
-                // 표시 시각은 KST 로 변환된 값이어야 한다 (§6.25 결정 2)
-                .andExpect(content().string(containsString("2026-08-27 12:00:00")));
+                // 시각은 UTC 순간 그대로 나간다 — 보는 사람의 시간대로 바꾸는 것은 화면(formatLocalTime)이다
+                .andExpect(content().string(containsString("\"askedAt\":\"2026-08-27T03:00:00Z\"")));
 
         verify(auditLogger).log(eq("admin.thread.read"), eq("t1"), argThat(d ->
                 Long.valueOf(7L).equals(d.get("turnId"))
@@ -918,8 +918,10 @@ class AdminControllerWebMvcTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("질문 미리보기")))
                 .andExpect(content().string(containsString("원문")))
-                // 시각은 KST 로 (03:00 UTC → 12:00 KST)
-                .andExpect(content().string(containsString("2026-08-27 12:00:00")));
+                // 시각은 UTC 순간(<time datetime>)으로 나가고 브라우저가 바꾼다 — JS 가 없으면 'UTC' 를 단 값이 보인다
+                .andExpect(content().string(containsString("datetime=\"2026-08-27T03:00:00Z\"")))
+                .andExpect(content().string(containsString("class=\"utc-time\"")))
+                .andExpect(content().string(containsString(">2026-08-27 03:00:00 UTC</time>")));
     }
 
     // ── §6.25 대화 삭제 ─────────────────────────────────────────────────────────

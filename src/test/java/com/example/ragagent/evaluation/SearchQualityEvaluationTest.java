@@ -7,6 +7,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.repository.DbTimestamp;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionCondenser;
 import com.example.ragagent.service.RagService;
@@ -30,8 +31,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -93,7 +92,6 @@ class SearchQualityEvaluationTest {
     private static final String FOLLOWUP_RESOURCE = "search-eval/nexcore-followup.json";
     private static final String USER = "search-eval";
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final DateTimeFormatter TURN_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** 스크래치 데이터 디렉터리와 질의 확장 스위치 — 둘 다 {@code .env} 보다 앞서야 해서 여기서 싣는다. */
     @DynamicPropertySource
@@ -250,7 +248,7 @@ class SearchQualityEvaluationTest {
                         String thread = "se-" + runToken + "-" + fu.id() + "-" + variant;
                         for (String prevId : fu.previousIds()) {
                             memory.addTurn(USER, thread, gold.get(prevId).question(), "답변",
-                                    LocalDateTime.now().format(TURN_TIME), 10, 10, 100, "local", 1, "N", "");
+                                    DbTimestamp.now(), 10, 10, 100, "local", 1, "N", "");
                         }
                         // concat = LLM 없이 앞 질문들과 후속 질문을 이어 붙인 검색어(독립화의 값싼 대안이 되는가).
                         String previousText = fu.previousIds().stream().map(id -> gold.get(id).question())

@@ -289,8 +289,8 @@
                             <span th:case="*"           class="badge bg-secondary"
                                   th:text="${s.displayStatus()}"></span>
                         </span>
-                        <div class="text-muted mt-1" style="font-size:0.72rem;"
-                             th:text="${s.createdAt()}"></div>
+                        <div class="text-muted mt-1" style="font-size:0.72rem;"><time
+                             th:replace="~{fragments/time :: utc(${s.createdAt()}, 'second')}"></time></div>
                         <!-- 수정·철회는 검토 대기와 등록 완료에서만. 반려·철회된 제안은 읽기 전용이고,
                              다시 내려면 새로 등록한다. -->
                         <div th:if="${s.isPending() or s.status() == 'approved'}"

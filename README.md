@@ -154,6 +154,7 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
+| `APP_TIME_ZONE` | — | `Asia/Seoul` | The server's clock for people: log timestamps (with date and offset), the audit log's daily split, the DB backup schedule and backup file names. Stored and API times are UTC regardless, and the JVM/container time zone (`TZ`) is never read |
 | `UPLOAD_MAX_TOTAL_SIZE` | — | `0` (unlimited) | Deployment-wide storage cap; accepts `20GB`/`500MB`, a bare number is bytes. Measures `documents` + `converted` + `images` under `DATA_DIR` — indexing's converted Markdown and extracted images, not just the uploaded originals. Over it, an upload is refused with 413 `RAG-UP-002`. Excludes `documents/backup/` (see below), so deleting a document really does free space — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md#업로드-크기-제한) |
 | `BACKUP_RETENTION_DAYS` | — | `30` | Retention for `documents/backup/`, where deleting a document archives its original. `0` = no age limit |
 | `BACKUP_MAX_SIZE` | — | `2GB` | Size cap for the same directory — oldest archives go first. `0` = no size limit. Only this app's own archives are ever deleted |

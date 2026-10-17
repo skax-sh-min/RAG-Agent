@@ -335,6 +335,33 @@ class SettingsControllerRenderTest {
     }
 
     @Test
+    @DisplayName("관측 줄(인자 8개)과 라우팅 모드 줄(인자 6개)이 렌더된다 — #messages.msg 는 인자 3개까지라 #{key(...)} 로 써야 한다")
+    void thinkingRowRendersObservationsAndModeLines() throws Exception {
+        ThinkingPreviewHarness h = ThinkingPreviewHarness.builder().build();
+        h.observations.record(ThinkingSite.EVAL, ThinkingPreviewHarness.PROVIDER, ThinkingLevel.LOW,
+                new com.example.ragagent.llm.ThinkingObservations.Sample(com.example.ragagent.llm.ThinkingWire.Sent.ON,
+                        1_200, false, 800, true, true, false, 9_000));
+        when(h.router.findProviderName(org.mockito.ArgumentMatchers.any(com.example.ragagent.llm.TaskType.class),
+                org.mockito.ArgumentMatchers.eq(com.example.ragagent.llm.RoutingMode.QUALITY_FIRST))).thenReturn("remote");
+        when(h.router.findNominalProviderName(org.mockito.ArgumentMatchers.any(com.example.ragagent.llm.TaskType.class),
+                org.mockito.ArgumentMatchers.eq(com.example.ragagent.llm.RoutingMode.QUALITY_FIRST)))
+                .thenReturn(java.util.Optional.of("remote"));
+        h.windows.record("remote", 131_072, com.example.ragagent.llm.ProviderContextWindows.Source.CONFIGURED);
+        com.example.ragagent.model.ThinkingPreview.Row row = h.row(ThinkingSite.EVAL);
+        assertThat(row.modeLines()).isNotEmpty();
+        when(thinkingPreview.row(ThinkingSite.EVAL)).thenReturn(row);
+
+        String html = mvc.perform(post("/admin/settings/update")
+                        .param("key", "llm.thinking.eval").param("value", "low")
+                        .locale(Locale.KOREAN).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("생각 관측 1/1", "QUALITY_FIRST", "remote");
+        assertThat(html).doesNotContain("??");
+    }
+
+    @Test
     @DisplayName("GET /settings — 관리자에게만 카드 자리표시자를 그린다(내용은 /admin/settings/thinking 이 채운다)")
     void thinkingPlaceholderIsAdminOnly() throws Exception {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",

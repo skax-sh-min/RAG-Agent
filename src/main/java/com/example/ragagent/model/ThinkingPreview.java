@@ -26,12 +26,13 @@ import java.util.Set;
  */
 public record ThinkingPreview(Instant computedAt, Basis basis, List<Group> groups) {
 
-    private static final java.time.format.DateTimeFormatter CLOCK =
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss").withZone(java.time.ZoneId.systemDefault());
-
-    /** 계산 시각 — 숫자는 계산 시점의 스냅샷(라우팅 상태·창·설정값)이라 기준 줄에 시각을 적는다. */
-    public String computedAtText() {
-        return CLOCK.format(computedAt);
+    /**
+     * 계산 시각 — 숫자는 계산 시점의 스냅샷(라우팅 상태·창·설정값)이라 기준 줄에 시각을 적는다. 번들 문구의 자리표시자에
+     * 들어가는 {@code <time>} 요소이고 시간대는 브라우저가 바꾼다({@link UtcTime#timeElement}). 템플릿이 정적 클래스를
+     * 부르지 않는 이유: Thymeleaf 는 {@code th:utext} 안의 {@code T(...)} 를 막는다.
+     */
+    public String computedAtElement() {
+        return UtcTime.timeElement(computedAt, "time");
     }
 
     /**

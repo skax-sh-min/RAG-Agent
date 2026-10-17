@@ -64,8 +64,7 @@
                     <div class="text-truncate" style="max-width:420px;"
                          th:title="${c.answer()}" th:text="${c.answer()}"></div>
                 </td>
-                <td class="text-muted"
-                    th:text="${c.createdAt() != null ? c.createdAt().substring(0,19).replace('T',' ') : ''}"></td>
+                <td class="text-muted"><time th:replace="~{fragments/time :: utc(${c.createdAt()}, 'second')}"></time></td>
                 <td class="text-center">
                     <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
                             style="font-size:0.7rem;"

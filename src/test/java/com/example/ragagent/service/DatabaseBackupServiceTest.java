@@ -15,10 +15,16 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.time.DateTimeException;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * {@link DatabaseBackupService} — 진짜 SQLite 파일(앱과 같은 모양: Hikari 풀 1개 · WAL)에 대해 백업을 뜨고, 사본이 열리고
@@ -48,7 +54,8 @@ class DatabaseBackupServiceTest {
     }
 
     private DatabaseBackupService service(boolean enabled, int keep) {
-        return new DatabaseBackupService(ds, tmp.toString(), enabled, "0 30 3 * * *", keep, backupDir.toString());
+        return new DatabaseBackupService(ds, tmp.toString(), enabled, "0 30 3 * * *", keep, backupDir.toString(),
+                "Asia/Seoul");
     }
 
     private static List<String> names(Path dir) throws Exception {
@@ -110,7 +117,7 @@ class DatabaseBackupServiceTest {
     void run_failureIsRecordedNotThrown() {
         DriverManagerDataSource notHikari = new DriverManagerDataSource("jdbc:sqlite:" + tmp.resolve("x.db"));
         DatabaseBackupService svc = new DatabaseBackupService(notHikari, tmp.toString(), true, "0 30 3 * * *", 7,
-                backupDir.toString());
+                backupDir.toString(), "Asia/Seoul");
 
         DatabaseBackupService.RunResult r = svc.run("manual");
 
@@ -127,7 +134,36 @@ class DatabaseBackupServiceTest {
         assertThat(Files.exists(backupDir)).isFalse();
         assertThat(off.run("manual").ok()).isTrue();
 
-        DatabaseBackupService defaults = new DatabaseBackupService(ds, tmp.toString(), true, "0 30 3 * * *", 7, "");
+        DatabaseBackupService defaults = new DatabaseBackupService(ds, tmp.toString(), true, "0 30 3 * * *", 7, "",
+                "Asia/Seoul");
         assertThat(defaults.status().dir()).isEqualTo(tmp.resolve("db-backups").toAbsolutePath().toString());
+    }
+
+    /**
+     * 파일 이름의 시각은 app.time-zone 의 시계다 — JVM 기본 시간대가 아니다. 어느 JVM 의 기본값과도 겹치지 않을 시간대
+     * (UTC+14)를 줘서, 기본 시간대로 찍으면 반드시 틀리게 만든다.
+     */
+    @Test
+    @DisplayName("run — 이름의 시각은 app.time-zone 기준이고, 카드가 그 시간대를 함께 보인다")
+    void run_namesTheCopyOnTheConfiguredClock() throws Exception {
+        ZoneId zone = ZoneId.of("Pacific/Kiritimati");
+        DatabaseBackupService svc = new DatabaseBackupService(ds, tmp.toString(), true, "0 30 3 * * *", 7,
+                backupDir.toString(), zone.getId());
+
+        DatabaseBackupService.RunResult r = svc.run("manual");
+
+        assertThat(r.ok()).as(r.error()).isTrue();
+        LocalDateTime named = LocalDateTime.parse(
+                r.file().substring("memory-".length(), r.file().length() - ".db".length()),
+                DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        assertThat(Duration.between(named, LocalDateTime.now(zone)).abs()).isLessThan(Duration.ofMinutes(1));
+        assertThat(svc.status().zone()).isEqualTo("Pacific/Kiritimati");
+    }
+
+    @Test
+    @DisplayName("생성 — 시간대가 틀리면 기동 단계에서 멈춘다(조용히 다른 시계로 돌지 않는다)")
+    void invalidZoneFailsFast() {
+        assertThatThrownBy(() -> new DatabaseBackupService(ds, tmp.toString(), true, "0 30 3 * * *", 7, "", "Asia/Seol"))
+                .isInstanceOf(DateTimeException.class);
     }
 }

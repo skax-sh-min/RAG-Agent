@@ -8,8 +8,6 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -31,8 +29,6 @@ import java.util.Set;
  */
 @Repository
 public class CuratedQaRepository {
-
-    private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** {@code origin} value for a row whose proposal came from a 👍한 채팅 답변 (§10.11). */
     public static final String ORIGIN_LIKE = "like";
@@ -339,7 +335,7 @@ public class CuratedQaRepository {
     }
 
     private static String now() {
-        return LocalDateTime.now().format(DT_FMT);
+        return DbTimestamp.now();
     }
 
     /**

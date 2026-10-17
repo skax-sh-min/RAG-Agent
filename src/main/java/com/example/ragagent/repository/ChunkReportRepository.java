@@ -11,8 +11,6 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,8 +28,6 @@ import java.util.Optional;
 public class ChunkReportRepository {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkReportRepository.class);
-
-    private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     public static final String STATUS_OPEN     = "open";
     public static final String STATUS_RESOLVED = "resolved";
@@ -303,6 +299,6 @@ public class ChunkReportRepository {
     }
 
     private static String now() {
-        return LocalDateTime.now().format(DT_FMT);
+        return DbTimestamp.now();
     }
 }

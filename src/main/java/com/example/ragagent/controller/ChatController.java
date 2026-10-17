@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.security.PromptInjectionGuard;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.service.LlmOutageMessages;
@@ -8,6 +9,7 @@ import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
+import com.example.ragagent.repository.DbTimestamp;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
@@ -37,7 +39,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
@@ -173,8 +174,19 @@ public class ChatController {
                                  @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio) {
         final ChatForm normalizedForm = normalizeResponseMode(form, responseModeRadio);
         SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
-        if (normalizedForm.question() == null || normalizedForm.question().isBlank()) {
-            emitter.completeWithError(new IllegalArgumentException("question is blank"));
+        // 스레드 행을 만들기 전에 거른다 — 거절된 질문이 사이드바에 빈 대화를 남기지 않게. 거절은 화면이 이미 그리는
+        // SSE error 이벤트로 보낸다(completeWithError 는 비동기 재디스패치에서 ProblemDetail 을 text/event-stream 으로
+        // 쓰려다 실패할 뿐 화면에 아무 말도 하지 않는다). StreamingAgentService.run() 도 같은 검사를 첫 줄에 둔다.
+        try {
+            PromptInjectionGuard.validate(normalizedForm.question());
+        } catch (IllegalArgumentException e) {
+            try {
+                emitter.send(SseEmitter.event().name("error")
+                        .data(Map.of("message", e.getMessage()), MediaType.APPLICATION_JSON));
+                emitter.complete();
+            } catch (java.io.IOException io) {
+                emitter.completeWithError(io);
+            }
             return emitter;
         }
         String userId = ctx.userId();
@@ -243,9 +255,9 @@ public class ChatController {
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
-            String receivedAt = DateTimeFormatter.ofPattern("HH:mm")
-                    .withZone(ZoneId.systemDefault()).format(Instant.now());
-            model.addAttribute("receivedAt", receivedAt);
+            // UTC 스탬프 — 보는 사람의 시간대로 바꾸는 것은 화면이다(applyMsgTimes, 기록에서 다시 연 답변 시각과 같은 함수).
+            // 서버가 HH:mm 으로 찍던 동안은 JVM 기본 시간대였다: UTC 로 도는 컨테이너에서는 이 버블만 9시간 이른 시각을 달았다.
+            model.addAttribute("receivedAt", DbTimestamp.now());
             model.addAttribute("threadId", form.threadId());
             model.addAttribute("turnId", resp.turnId());
             model.addAttribute("answer", resp.answer());

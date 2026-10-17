@@ -137,7 +137,7 @@
                         <td class="text-center" style="min-width:45px;"
                             th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
-                        <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
+                        <td class="text-muted"><time th:replace="~{fragments/time :: utc(${doc.indexedAt()}, 'minute')}"></time></td>
                         <td class="text-center">
                             <button type="button"
                                     class="btn btn-sm btn-outline-primary py-0 px-2"
@@ -233,8 +233,12 @@
     <!-- 지식 제안보다 위: 둘 다 대기열이지만 이쪽은 **이미 검색에 쓰이고 있는** 청크가 틀렸다는
          신고라 방치 비용이 더 크다(제안은 아직 코퍼스 밖에 있다). 바로 위 청크 패널에서 고치는
          대상과 같은 것을 다루므로 자리도 붙어 있는 편이 낫다. -->
+    <!-- 지연 로딩 카드 다섯(이 카드 · 지식 제안 · 큐레이션 · 대화 목록 · 검색 진단)은 hx-trigger="toggle once" 다.
+         필터([this.open])를 쓰지 않는다: HTMX 는 필터를 Function() 으로 만드는데 CSP 에 'unsafe-eval' 이 없어
+         EvalError 가 나고(카드마다 콘솔 오류 하나), HTMX 는 필터를 버린 채 "toggle once" 로 돌았다. 카드는 닫힌 채
+         시작하고 코드가 여는 것도 닫힘→열림이라 첫 toggle 은 언제나 펼침이다. HtmxCspConventionTest 가 막는다. -->
     <details class="card mt-4" id="chunk-report-card"
-              hx-get="/admin/chunk-reports" hx-trigger="toggle[this.open] once"
+              hx-get="/admin/chunk-reports" hx-trigger="toggle once"
               hx-target="#chunk-report-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-flag me-2"></i>
@@ -256,7 +260,7 @@
     <!-- 큐레이션 Q&A 카드보다 위: 이쪽은 관리자의 조치를 기다리는 대기열(검토 대기 배지가 붙는다)이고,
          아래 큐레이션 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물다. -->
     <details class="card mt-4" id="submission-card"
-              hx-get="/admin/submissions" hx-trigger="toggle[this.open] once"
+              hx-get="/admin/submissions" hx-trigger="toggle once"
               hx-target="#submission-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-journal-plus me-2"></i>
@@ -278,7 +282,7 @@
     <!-- 페이지 최하단: 위 제안 카드가 조치를 기다리는 대기열인 반면 이쪽은 이미 반영된 것을
          확인·수정·회수하는 용도라 상시 확인 대상이 아니다. -->
     <details class="card mt-4" id="curated-qa-card"
-              hx-get="/admin/curated" hx-trigger="toggle[this.open] once"
+              hx-get="/admin/curated" hx-trigger="toggle once"
               hx-target="#curated-qa-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-chat-heart me-2"></i>
@@ -299,7 +303,7 @@
     <!-- 아래 검색 진단 수치 카드 바로 위: 두 패널이 서로 드릴다운하는 짝이다(대화 행 → 그 대화의
          진단, 진단 행 → 그 대화). 위의 제안/큐레이션 카드는 조치 대기열이라 순서를 유지한다. -->
     <details class="card mt-4" id="thread-admin-card"
-              hx-get="/admin/threads" hx-trigger="toggle[this.open] once"
+              hx-get="/admin/threads" hx-trigger="toggle once"
               hx-target="#thread-admin-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-chat-left-text me-2"></i>
@@ -392,7 +396,7 @@
     <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
          확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
     <details class="card mt-4" id="retrieval-metrics-card"
-              hx-get="/admin/retrieval-metrics" hx-trigger="toggle[this.open] once"
+              hx-get="/admin/retrieval-metrics" hx-trigger="toggle once"
               hx-target="#retrieval-metrics-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-speedometer2 me-2"></i>
@@ -1385,7 +1389,7 @@ function openTurnContent(turnId) {
             const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             document.getElementById('turn-content-meta').textContent =
-                'turn #' + c.turnId + ' · ' + c.askedAt + ' · ' + c.responseMode;
+                'turn #' + c.turnId + ' · ' + (formatLocalTime(c.askedAt, 'second') || c.askedAt || '') + ' · ' + c.responseMode;
             document.getElementById('turn-content-question').textContent = c.question || '';
 
             // 원문은 언제나 textContent 로만 넣는다 — 렌더는 미리보기 패널의 몫이고,
@@ -2122,10 +2126,11 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
     if (!card) return;
     const el = id => document.getElementById(id);
     const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-    const fmtTime = iso => iso ? new Date(iso).toLocaleString() : '-';
+    const fmtTime = iso => formatLocalTime(iso, 'second') || '-';   // base.html — 다른 시각과 같은 모양
 
     function render(s) {
-        el('dbb-schedule').textContent = s.enabled ? s.cron : '꺼짐 (app.backup.enabled=false)';
+        // cron 은 app.time-zone 기준이다 — 시간대를 함께 적어야 "03:30" 이 어느 시계의 03:30 인지 알 수 있다.
+        el('dbb-schedule').textContent = s.enabled ? s.cron + ' (' + s.zone + ')' : '꺼짐 (app.backup.enabled=false)';
         el('dbb-keep').textContent = s.keep;
         el('dbb-dir').textContent = s.dir;
         const last = s.last;

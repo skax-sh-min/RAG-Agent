@@ -9,6 +9,7 @@ import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.model.VerificationSnapshot;
+import com.example.ragagent.repository.DbTimestamp;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AgentService;
@@ -30,10 +31,15 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -233,6 +239,29 @@ class ChatControllerHtmxTest {
         assertThat(html).contains("data-turn-id=");
     }
 
+    /**
+     * 논스트리밍 폴백 경로의 답변 버블만 서버가 수신 시각을 {@code HH:mm} 으로 찍었다 — JVM 기본 시간대라 TZ 설정 없는
+     * 컨테이너(UTC)에서는 이 버블만 9시간 이른 시각이었다. 이제 다른 버블처럼 UTC 스탬프를 싣고 화면이 바꾼다.
+     */
+    @Test
+    @DisplayName("POST /ui/chat — 수신 시각은 UTC 스탬프(data-utc-time)로 나가고 화면(applyMsgTimes)이 바꾼다")
+    void postChat_receivedAtTravelsAsUtc() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        Matcher m = Pattern.compile("<span class=\"msg-time\"[^>]*data-utc-time=\"([^\"]+)\"").matcher(html);
+        assertThat(m.find()).as("수신 시각 칸이 없다:%n%s", html).isTrue();
+        LocalDateTime stamp = LocalDateTime.parse(m.group(1), DbTimestamp.FORMAT);
+        assertThat(Duration.between(stamp, LocalDateTime.now(ZoneOffset.UTC)).abs()).isLessThan(Duration.ofMinutes(1));
+    }
+
     @Test
     @DisplayName("POST /ui/chat — 빈 질문 → message-error fragment")
     void postChat_blankQuestion_returnsErrorFragment() throws Exception {
@@ -325,6 +354,23 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(request().asyncStarted());
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream — 2,000자를 넘는 질문은 SSE error 이벤트로 거절하고 스레드를 만들지 않는다")
+    void streamChat_overlongQuestion_rejectedWithoutCreatingThread() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+        org.springframework.test.web.servlet.MvcResult result = mvc.perform(post("/ui/chat/stream")
+                        .param("question", "a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_QUESTION_LEN + 1))
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).contains("event:error", "질문이 너무 깁니다");
+        org.mockito.Mockito.verify(threadMetaService, org.mockito.Mockito.never()).getOrCreate(any(), any(), any());
+        org.mockito.Mockito.verify(streamingAgentService, org.mockito.Mockito.never()).run(any(), any(), any());
     }
 
     @Test
@@ -701,6 +747,9 @@ class ChatControllerHtmxTest {
         assertThat(marked.find()).as("marked 를 싣는 script 태그").isTrue();
         assertThat(tex.find()).as("LaTeX 기호 확장을 싣는 script 태그").isTrue();
         assertThat(tex.start()).as("확장은 marked 보다 뒤에 실려야 한다").isGreaterThan(marked.start());
+        // 질문 추천이 URL 에 싣는 입력 길이 상한 — 서버 상수가 인라이닝됐는지(주석 안에 갇힌 기본값이 아니라).
+        assertThat(html).contains("const SUGGEST_MAX_QUERY_CHARS = "
+                + com.example.ragagent.service.QuestionReuseService.SUGGEST_MAX_QUERY_CHARS + ";");
     }
 
     /**

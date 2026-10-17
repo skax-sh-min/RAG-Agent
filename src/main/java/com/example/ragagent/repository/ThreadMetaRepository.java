@@ -4,15 +4,11 @@ import com.example.ragagent.model.ThreadMeta;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
 @Repository
 public class ThreadMetaRepository {
-
-    private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final JdbcTemplate jdbc;
 
@@ -94,7 +90,8 @@ public class ThreadMetaRepository {
         return count != null ? count : 0;
     }
 
+    /** UTC — {@link DbTimestamp}. */
     public static String now() {
-        return LocalDateTime.now().format(DT_FMT);
+        return DbTimestamp.now();
     }
 }
