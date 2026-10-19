@@ -197,7 +197,7 @@ copy .env.example .env
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
 | `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]`(로컬 LLM 2) 작업 유형 (`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 로컬 LLM 1과 같은 `BOTH`를 사용 |
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(`MICRO_TEXT`는 `local`이 흡수. 단 **대화 요약만은 흡수하지 않고 생략**되어 채팅이 원본 history 폴백으로 동작한다 — 부가 기능인 요약이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
-| `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
+| `LOCAL_FAST_LLM_KEY` | — | `no-key` | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. **예외 하나**: `LOCAL_LLM_URL`·`LOCAL_LLM_URL_2` 처럼 같은 type·priority 로 묶인 복제본 중 **한 대만** 안 뜨면(연결 안 됨·응답 없음·5xx — 4xx 나 모델 목록이 아닌 응답은 설정 오류라 해당하지 않는다) 기동을 이어 가고 그 서버는 30초 차단된 채 시작한다(모델명은 검증하지 못해 설정값 그대로 — 서버가 다른 id 로 부르면 전체 id 로 적을 것). 둘 다 안 뜨거나, 닿은 서버에 모델이 없으면 여전히 기동 실패. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다(설정한 모델명이 그대로 실린다) |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
@@ -3118,6 +3118,8 @@ grep -E "threw |blocked for |NO-FALLBACK|REPEATED-FAILURE|LLM_PING" logs/rag-age
 > **출력 상한은 함께 따라옵니다** (§6.26 A6): 앱의 모든 블로킹 호출은 자기 옵션을 실어 보내고, 그 위에 씌워지는 프로바이더 상한이 호출마다 현재 창 · 현재 `LLM_MAX_TOKENS` 로 다시 계산됩니다. 재기동이 필요한 곳은 **옵션을 실어 보내지 않는** 프레임워크 내부 호출(쿼리 확장 등)이 쓰는 기동 시점 기본값 하나뿐이고, 그 값이 **좁아진 새 창을 넘게 될 때만** 결과 위에 재기동 경고가 뜹니다(예: `local: defaultOptions 6,000 ≥ 창 4,096`). 창이 넓어진 경우는 그 기본값이 작을 뿐 안전하므로 알리지 않습니다.
 
 > **주기적 자동 재탐지는 일부러 넣지 않았습니다.** 예산이 스스로 움직이면 같은 질문이 시각에 따라 다른 양의 근거를 받아 재현이 안 됩니다(`[TOKEN_CAL]` 계수를 자동 보정하지 않는 것과 같은 이유). 창을 자주 바꾸는 배포라면 아예 `context-size` 로 못 박는 편이 낫습니다 — 선언된 값은 애초에 낡지 않습니다.
+>
+> **단, 컨텍스트 초과가 나면 그 프로바이더의 창을 한 번 자동으로 다시 잽니다.** 초과 자체가 "기록된 창이 실제보다 크다"는 서버의 증언이라 근거가 있기 때문입니다. 채팅 화면(스트리밍)과 블로킹 호출 모두에 걸리고(채팅 화면은 2026-10-19 부터), 버튼과 같은 규칙을 따릅니다 — `context-size` 선언 프로바이더는 묻지 않고, 탐지에 실패하면 알던 값을 지우지 않으며, LOCAL 만 대상입니다. 초과는 연달아 오므로 프로바이더마다 1분에 한 번만 묻고, 실패한 요청을 더 늦추지 않도록 백그라운드에서 돕니다. **창이 커진 경우는 초과가 나지 않아 잡히지 않으므로** 그때는 위 버튼을 누르십시오.
 
 
 창을 알 때 자동으로 도는 것:
@@ -3428,7 +3430,7 @@ sh scripts/install-hooks.sh
 
 | 항목 | 제한 | 응답 |
 |------|------|------|
-| 질문 길이 | 최대 2,000자 | 400 Bad Request |
+| 질문 길이 | 최대 2,000자 | REST(`/api/v1/chat`)는 400 Bad Request, 채팅 화면(SSE)은 오류 말풍선 — 대화를 만들기 전에 거절한다(2026-10-14 전에는 채팅 화면 경로에 이 제한이 빠져 있었다) |
 | 파일 업로드 크기 | 최대 200 MB (기본) | 413 Payload Too Large |
 | 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
 | API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |

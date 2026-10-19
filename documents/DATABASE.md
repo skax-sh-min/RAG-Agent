@@ -25,7 +25,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 | 테이블 | 한 행 = | 분류 | 스키마 / 쓰는 곳 |
 |---|---|---|---|
-| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4 / `SqliteMemoryRepository` |
+| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4·V6 / `SqliteMemoryRepository` |
 | `thread_meta` | 대화 하나 | 대화 | Flyway V1·V3 / `ThreadMetaRepository` |
 | `turn_source_ref` | 한 턴의 출처 청크 하나 | 대화 | Flyway V4 / `QuestionReuseRepository` |
 | `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | Flyway V4 / `SqliteMemoryRepository` |
