@@ -2158,7 +2158,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 항목 | 키 | 범위 |
 |------|----|------|
 | 유사도 임계값 | `app.search-similarity-threshold` | 0.0 ~ 1.0 |
-| 키워드 검색 가중치 | `app.search-rrf-keyword-weight` | 0.0 ~ 10.0 |
+| 키워드 검색 가중치 | `app.search-rrf-keyword-weight` | 0.1 ~ 10.0 (끄려면 하이브리드 검색 끄기) |
 | RRF 상수 k | `app.search-rrf-k` | 1 ~ 1000 |
 | 리랭크 후보 배수 | `app.search-candidate-multiplier` | 1 ~ 20 |
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
@@ -2169,7 +2169,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 질의 확장 · 독립화 (§10.12) | `app.search-multiquery-enabled` | true/false |
 | 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
 | 큐레이션 검색 (§10.10) | `app.search-curated-qa-enabled` | true/false |
-| 큐레이션 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |
+| 큐레이션 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.1 ~ 10.0 (끄려면 큐레이션 검색 끄기) |
 | 큐레이션 최소 유사도 | `app.search-curated-qa-min-similarity` | 0.0 ~ 1.0 |
 
 **핫 수정 가능 — 인덱싱/청킹 (재기동 불필요, 다음 인덱싱/↺ 재인덱싱부터 반영)** — 검색 튜닝과 달리 즉시가 아니라 **다음 인덱싱**부터 적용되며, 이미 색인된 청크를 소급 재분할하지는 않습니다(값을 바꾼 뒤 재업로드하거나 `/admin` ↺ 재인덱싱을 눌러야 반영):

@@ -276,6 +276,21 @@ class SettingsServiceTest {
     }
 
     @Test
+    @DisplayName("update — RRF 축 가중치 둘은 0 을 받지 않는다(접근자가 0 이하를 1.0 으로 읽어 '끄기'가 '올리기'가 된다), 0.1 은 받는다")
+    void update_axisWeightsRejectZero() {
+        for (String key : java.util.List.of(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT, SettingsKeys.SEARCH_CURATED_QA_WEIGHT)) {
+            assertThatThrownBy(() -> service.update(key, "0"))
+                    .as(key).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.update(key, "0.0"))
+                    .as(key).isInstanceOf(IllegalArgumentException.class);
+            assertThat(repo.store).as(key).doesNotContainKey(key);
+
+            service.update(key, "0.1");
+            assertThat(repo.store).as(key).containsEntry(key, "0.1");
+        }
+    }
+
+    @Test
     @DisplayName("update — 검증 실패 시 감사 로그를 남기지 않는다")
     void update_invalid_notAudited() {
         assertThatThrownBy(() -> service.update(SettingsKeys.SEARCH_RRF_K, "abc"))
