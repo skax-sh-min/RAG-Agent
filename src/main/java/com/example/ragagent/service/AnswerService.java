@@ -769,8 +769,15 @@ public class AnswerService {
             String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
             sent[0] = userPrompt;
             // 생각 델타는 "나간 토큰"이 아니다 — 화면에 아무것도 찍히지 않았으므로 축소 재시도를 막지 않는다.
-            callOrStream(provider, state, systemPrompt, userPrompt,
-                    t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
+            try {
+                callOrStream(provider, state, systemPrompt, userPrompt,
+                        t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
+            } catch (RuntimeException e) {
+                // 초과는 창을 다시 잴 근거다. 블로킹 경로는 라우터가 시도마다 걸지만, 여기서 난 초과는 축소 재시도가 삼키고
+                // 더 작게 성공하면 StreamFailover → LlmRouter.failOver 까지 가지 않는다 — 그래서 시도마다 직접 알린다.
+                if (isContextOverflow(e)) llmRouter.contextOverflowObserved(provider);
+                throw e;
+            }
             return null;
         });
         return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());

@@ -2,7 +2,9 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -276,5 +278,95 @@ class StreamingFailoverWireTest {
         assertThat(listener.tokens).as("첫 토큰은 이미 화면에 나갔다").containsExactly("안");
         assertThat(aliveRequests.get()).as("local-2 로 다시 열지 않는다 — 화면에 앞부분이 두 번 찍힌다").isZero();
         assertThat(breaker.isBlocked("local")).as("토큰을 내던 서버를 죽었다고 단정하지 않는다").isFalse();
+    }
+
+    // ── 컨텍스트 초과(요청이 서버 창보다 크다) ─────────────────────────────────────────────────
+
+    /** llama.cpp 가 스트리밍 요청의 초과에 돌려주는 모양 — SSE 가 아니라 일반 HTTP 400 본문이다(2026-10-02 실측). */
+    private static final String OVERFLOW_BODY = "{\"error\":{\"code\":400,\"message\":\"request (9000 tokens) exceeds the "
+            + "available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\"}}";
+
+    /** 처음 {@code overflows} 번은 초과로 거절하고, 그 뒤로는 "다섯" "입니다" 를 스트리밍한다. 요청 수는 {@code requests} 에. */
+    private String overflowingServer(int overflows, AtomicInteger requests) throws IOException {
+        return start(exchange -> {
+            if (requests.incrementAndGet() <= overflows) {
+                byte[] body = OVERFLOW_BODY.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(400, body.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(body);
+                }
+                return;
+            }
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream os = exchange.getResponseBody()) {
+                for (String event : List.of(ROLE_CHUNK, content("다섯"), content("입니다"), STOP_CHUNK)) {
+                    os.write(("data: " + event + "\n\n").getBytes(StandardCharsets.UTF_8));
+                }
+                os.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
+            }
+        });
+    }
+
+    /** 프로바이더 하나, 창 재탐지를 {@code reprobed} 에 기록하는 라우터. */
+    private LlmRouter observedRouter(String url, List<String> reprobed) {
+        return new LlmRouter(List.of(provider("local", url)), mock(LlmUsageRepository.class), breaker,
+                RoutingMode.LOCAL_ONLY, 180, Map.of(), 3, 2, new ProviderToggle(), new BackgroundLlmConcurrencyTracker(),
+                p -> reprobed.add(p.name()));
+    }
+
+    /** 문서 셋 — 축소 재시도가 두 번(3→2→1) 돌 수 있다. S 라 검증을 건너뛴다. */
+    private static AgentState ragStateWithThreeDocs() {
+        return ragState().toBuilder().retrievedDocs(List.of(
+                new Document("첫 문서입니다."), new Document("둘째 문서입니다."), new Document("셋째 문서입니다."))).build();
+    }
+
+    @Test
+    @DisplayName("RAG 스트리밍 — 축소해도 안 들어가면 날것의 400 이 아니라 LlmContextOverflowException 이고, 창을 다시 잰다(차단은 안 한다)")
+    void ragOverflowThatNeverFitsIsReportedAsContextOverflow() throws IOException {
+        AtomicInteger requests = new AtomicInteger();
+        List<String> reprobed = new CopyOnWriteArrayList<>();
+        LlmRouter router = observedRouter(overflowingServer(Integer.MAX_VALUE, requests), reprobed);
+
+        // 예전에는 WebClientResponseException 이 그대로 올라와 StreamingAgentService 의 일반 catch 로 떨어졌다 —
+        // 사용자는 "400 Bad Request from POST …" 를 봤고, 로그는 ERROR, 응답은 completeWithError 였다.
+        assertThatThrownBy(() -> answerService(router).executeStreaming(ragStateWithThreeDocs(), new Collected()))
+                .isInstanceOf(LlmContextOverflowException.class);
+
+        assertThat(requests.get()).as("원래 1회 + 축소 재시도 2회(3→2→1)").isEqualTo(3);
+        assertThat(reprobed).as("화면에서 난 초과도 창을 다시 잰다 — 예전에는 블로킹 경로에서만").isNotEmpty().containsOnly("local");
+        assertThat(breaker.isBlocked("local")).as("요청 크기 문제지 서버 장애가 아니다").isFalse();
+    }
+
+    @Test
+    @DisplayName("RAG 스트리밍 — 한 번 초과 후 축소로 성공해도 창을 다시 잰다(이 초과는 failOver 까지 오지 않는다)")
+    void ragOverflowRecoveredByShrinkStillReprobes() throws IOException {
+        AtomicInteger requests = new AtomicInteger();
+        List<String> reprobed = new CopyOnWriteArrayList<>();
+        LlmRouter router = observedRouter(overflowingServer(1, requests), reprobed);
+        Collected listener = new Collected();
+
+        AgentState result = answerService(router).executeStreaming(ragStateWithThreeDocs(), listener);
+
+        assertThat(listener.tokens).containsExactly("다섯", "입니다");
+        assertThat(result.usedProvider()).isEqualTo("local");
+        assertThat(requests.get()).isEqualTo(2);
+        assertThat(reprobed).as("기록된 창이 틀렸다는 관측은 답이 나왔어도 사실이다").containsExactly("local");
+    }
+
+    @Test
+    @DisplayName("Direct 스트리밍 — 초과는 LlmContextOverflowException 으로 올라가고 창을 다시 잰다")
+    void directOverflowIsReportedAsContextOverflow() throws IOException {
+        AtomicInteger requests = new AtomicInteger();
+        List<String> reprobed = new CopyOnWriteArrayList<>();
+        LlmRouter router = observedRouter(overflowingServer(Integer.MAX_VALUE, requests), reprobed);
+
+        assertThatThrownBy(() -> directService(router).executeStreaming(directState(), new Collected()))
+                .isInstanceOf(LlmContextOverflowException.class);
+
+        assertThat(requests.get()).as("Direct 에는 줄일 문서가 없다 — 한 번").isEqualTo(1);
+        assertThat(reprobed).containsExactly("local");
+        assertThat(breaker.isBlocked("local")).isFalse();
     }
 }

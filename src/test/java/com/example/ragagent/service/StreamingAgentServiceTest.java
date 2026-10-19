@@ -145,6 +145,20 @@ class StreamingAgentServiceTest {
     }
 
     @Test
+    @DisplayName("컨텍스트 초과 — 날것의 오류 문구가 아니라 error.llm.context-overflow 안내를 보내고 정상 종료한다")
+    void run_contextOverflow_sendsTheOverflowMessageAndCompletes() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenThrow(new com.example.ragagent.exception.LlmContextOverflowException(
+                "local", new IllegalStateException("400 Bad Request from POST http://local/v1/chat/completions")));
+
+        service.run("u1", form(false, null), emitter);
+
+        verify(messageSource).getMessage(eq("error.llm.context-overflow"), isNull(), anyString(), any(Locale.class));
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+    }
+
+    @Test
     @DisplayName("directMode=true — classifier 스킵, AgentState.directMode=true 로 그래프 실행")
     void run_directMode_skipsClassifierAndSetsDirectMode() {
         ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
