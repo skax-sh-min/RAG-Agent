@@ -249,16 +249,31 @@ public class LlmRouter {
      *   <li>HTTP 5xx, 그리고 429·402·503 은 {@code Retry-After} 를 존중해 차단({@link #blockForOverload})</li>
      * </ul>
      * 그 밖의 것은 건드리지 않고 {@code false} 다 — 사용자 중단·인터럽트, 읽기 타임아웃(서버는 멀쩡한데 클라이언트가
-     * 끊었다), 컨텍스트 초과(요청 크기 문제 — 호출부의 축소 재시도 몫), 4xx(요청 문제), 알 수 없는 오류.
+     * 끊었다), 컨텍스트 초과(요청 크기 문제 — 호출부의 축소 재시도 몫. 차단은 안 하지만 창 재탐지는 건다 —
+     * {@link #contextOverflowObserved}), 4xx(요청 문제), 알 수 없는 오류.
      *
      * @param failure 스트림에서 올라온 예외 그대로(원인 사슬을 탄다)
      * @return 차단했고 다른 프로바이더로 다시 시도해도 되면 {@code true}. {@code false} 면 호출부가 예외를 그대로 올린다
      */
+    /**
+     * 이 프로바이더에서 <b>컨텍스트 초과를 관측했다</b> — 기록된 창이 틀렸다는 증거이므로 창을 다시 잰다({@link ContextWindowRefresher},
+     * 디바운스·비동기는 재탐지기가 한다). 초과를 보는 자리가 셋이라 한 곳으로 모은다: 블로킹 순회({@code executeWithTracking}),
+     * 스트리밍의 장애 판정({@link #failOver}), 그리고 스트리밍 답변의 축소 재시도({@code AnswerService.streamAnswer}) — 마지막 것은
+     * 초과를 삼키고 더 작게 다시 보내 성공하면 {@code failOver} 까지 오지 않으므로 따로 알려야 한다. 스트리밍은 채팅 화면의 유일한
+     * 전송 경로인데, 이것이 블로킹 순회 안에만 있던 동안 화면에서 난 초과는 창을 한 번도 다시 재지 않았다.
+     */
+    public void contextOverflowObserved(LlmProvider provider) {
+        contextWindowRefresher.refreshAfterOverflow(provider);
+    }
+
     public boolean failOver(LlmProvider provider, TaskType taskType, RoutingMode mode, Throwable failure) {
         if (Thread.currentThread().isInterrupted()) return false;              // 사용자 중단·유휴 타임아웃
         boolean connectTimedOut = isConnectTimeout(failure);
         if (isTimeoutLike(failure) && !connectTimedOut) return false;          // 읽기 타임아웃 포함 — 서버 탓이 아니다
-        if (isContextOverflow(failure)) return false;                          // 요청 크기 — 축소 재시도가 맡는다
+        if (isContextOverflow(failure)) {                                       // 요청 크기 — 축소 재시도가 맡는다
+            contextOverflowObserved(provider);                                 // 차단은 안 해도 창은 다시 잰다 — 블로킹 경로와 같다
+            return false;
+        }
         List<ProviderRole> roleOrder = roleOrder(mode);
         Set<String> tried = Set.of(provider.name());
         int status = httpStatusOf(failure);
@@ -766,7 +781,7 @@ public class LlmRouter {
                 // 않는다. 여기가 그 사실을 아는 유일한 지점이라 재탐지를 건다(디바운스·비동기라
                 // 이 요청을 더 늦추지 않는다). 폴백이 받아 준 경우에도 걸어야 한다 — 그때는 아무도
                 // 창이 낡았다는 것을 눈치채지 못한 채 초과가 계속 반복된다.
-                contextWindowRefresher.refreshAfterOverflow(provider);
+                contextOverflowObserved(provider);
             } else if (isRequestTerminatedByServer(e)) {
                 // 서버가 내려가면서 이 요청을 끊었다. 차단하면 서버가 올라온 뒤까지 그 차단이 남아
                 // "재시작했는데도 계속 안 된다"가 된다 — isTimeoutLike 와 같은 이유로 통과시킨다.

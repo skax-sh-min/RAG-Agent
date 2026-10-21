@@ -75,9 +75,13 @@ public class SettingsService implements AppProperties.OverrideSource {
             java.util.Arrays.stream(ThinkingLevel.values()).map(ThinkingLevel::value).toList();
 
     // Insertion order = render order in the "검색 튜닝 (핫 수정)" group. Apply on the next search.
+    // The two RRF axis weights start at 0.1, not 0.0: their xxxSafe() accessors read a non-positive
+    // value as "missing" and fall back to 1.0, so a 0 meant to switch an axis off would instead have
+    // raised it (the keyword axis ships at 0.5). Switching an axis off is search-hybrid-enabled /
+    // search-curated-qa-enabled.
     private static final List<Spec> SEARCH_HOT_SPECS = List.of(
             new Spec(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD,     Kind.DOUBLE, 0.0, 1.0,  0.01, "settings.item.similarity-threshold"),
-            new Spec(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT,       Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.rrf-keyword-weight"),
+            new Spec(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT,       Kind.DOUBLE, 0.1, 10.0, 0.1,  "settings.item.rrf-keyword-weight"),
             new Spec(SettingsKeys.SEARCH_RRF_K,                    Kind.INT,    1,   1000, 1,    "settings.item.rrf-k"),
             new Spec(SettingsKeys.SEARCH_CANDIDATE_MULTIPLIER,     Kind.INT,    1,   20,   1,    "settings.item.candidate-multiplier"),
             new Spec(SettingsKeys.SEARCH_TAG_CANDIDATE_MULTIPLIER, Kind.INT,    1,   20,   1,    "settings.item.tag-candidate-multiplier"),
@@ -87,7 +91,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.SEARCH_MULTIQUERY_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.multiquery-enabled"),
             new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled"),
             new Spec(SettingsKeys.SEARCH_CURATED_QA_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.curated-qa-enabled"),
-            new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.curated-qa-weight"),
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.1, 10.0, 0.1,  "settings.item.curated-qa-weight"),
             new Spec(SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY, Kind.DOUBLE, 0.0, 1.0, 0.01, "settings.item.curated-qa-min-similarity")
     );
 

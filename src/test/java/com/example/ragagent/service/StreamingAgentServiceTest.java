@@ -130,6 +130,35 @@ class StreamingAgentServiceTest {
     }
 
     @Test
+    @DisplayName("2,000자를 넘는 질문 — 그래프·저장 없이 error 이벤트를 보내고 닫는다(AgentService.chat() 과 같은 제한)")
+    void run_overlongQuestion_rejectedBeforeAnything() throws Exception {
+        ChatForm longForm = new ChatForm("a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_QUESTION_LEN + 1),
+                "t1", "v1", "COST_FIRST", false, null, null);
+
+        service.run("u1", longForm, emitter);
+
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verify(agentGraph, never()).runStreaming(any(), any());
+        verify(classifierService, never()).classifyOnly(any(), any());
+        verify(memoryService, never()).addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("컨텍스트 초과 — 날것의 오류 문구가 아니라 error.llm.context-overflow 안내를 보내고 정상 종료한다")
+    void run_contextOverflow_sendsTheOverflowMessageAndCompletes() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenThrow(new com.example.ragagent.exception.LlmContextOverflowException(
+                "local", new IllegalStateException("400 Bad Request from POST http://local/v1/chat/completions")));
+
+        service.run("u1", form(false, null), emitter);
+
+        verify(messageSource).getMessage(eq("error.llm.context-overflow"), isNull(), anyString(), any(Locale.class));
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+    }
+
+    @Test
     @DisplayName("directMode=true — classifier 스킵, AgentState.directMode=true 로 그래프 실행")
     void run_directMode_skipsClassifierAndSetsDirectMode() {
         ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);

@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,10 +57,15 @@ class StreamFailoverTest {
 
     /** 허용 대기 1초 — 퍼밋 포화 테스트가 오래 걸리지 않게. */
     private LlmRouter router(String... names) {
+        return router(ContextWindowRefresher.NOOP, names);
+    }
+
+    /** 창 재탐지를 관찰할 수 있는 라우터 — 컨텍스트 초과가 재탐지를 거는지 본다. */
+    private LlmRouter router(ContextWindowRefresher refresher, String... names) {
         List<LlmProvider> providers = new ArrayList<>();
         for (String name : names) providers.add(provider(name));
         return new LlmRouter(providers, mock(LlmUsageRepository.class), breaker, RoutingMode.LOCAL_ONLY, 180,
-                Map.of(), 3, 1, new ProviderToggle());
+                Map.of(), 3, 1, new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), refresher);
     }
 
     /** {@code dead} 로 열린 스트림만 {@code failure} 로 실패하고, 나머지는 자기 이름을 돌려준다. */
@@ -248,20 +254,38 @@ class StreamFailoverTest {
     }
 
     @Test
-    @DisplayName("컨텍스트 초과는 요청 크기 문제다 — 호출부의 축소 재시도 몫이라 차단도 전환도 하지 않는다(5xx 로 와도)")
-    void contextOverflowIsLeftToTheShrinkRetry() {
-        LlmRouter r = router("local", "local-2");
+    @DisplayName("컨텍스트 초과는 요청 크기 문제다 — 차단도 전환도 하지 않고(5xx 로 와도), 블로킹 경로와 같은 LlmContextOverflowException 으로 올리며 창을 다시 잰다")
+    void contextOverflowIsNotAnOutageButIsReportedAndReprobed() {
+        List<String> reprobed = new ArrayList<>();
+        LlmRouter r = router(p -> reprobed.add(p.name()), "local", "local-2");
         String body = "{\"error\":{\"message\":\"request (40016 tokens) exceeds the available context size (32768 tokens)\"}}";
 
         for (int status : new int[]{400, 500}) {
             calls.clear();
+            reprobed.clear();
             RuntimeException failure = http(status, body, new HttpHeaders());
 
-            assertThatThrownBy(() -> run(r, false, stream("local", failure))).isSameAs(failure);
+            // 날것(WebClient 400/500)이 아니라 채팅 진입점이 잡는 타입으로 — 안 바꾸면 "400 Bad Request from POST …" 가
+            // 일반 오류로 떨어져 화면에 그대로 나가고 ERROR 로 찍혔다.
+            assertThatThrownBy(() -> run(r, false, stream("local", failure)))
+                    .as("status %d", status)
+                    .isInstanceOf(LlmContextOverflowException.class)
+                    .hasCause(failure);
 
             assertThat(calls).as("status %d", status).containsExactly("local");
             assertThat(breaker.isBlocked("local")).as("status %d", status).isFalse();
+            assertThat(reprobed).as("status %d — 블로킹 경로처럼 창 재탐지를 건다", status).containsExactly("local");
         }
+    }
+
+    @Test
+    @DisplayName("이미 LlmContextOverflowException 이면 다시 감싸지 않는다")
+    void anAlreadyReportedOverflowIsNotWrappedAgain() {
+        LlmRouter r = router("local");
+        RuntimeException reported = new LlmContextOverflowException("local",
+                new IllegalStateException("Context size has been exceeded."));
+
+        assertThatThrownBy(() -> run(r, false, stream("local", reported))).isSameAs(reported);
     }
 
     @Test

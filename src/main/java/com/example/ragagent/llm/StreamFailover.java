@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -52,11 +53,23 @@ public final class StreamFailover {
             } catch (LlmBackpressureException e) {
                 throw e;   // 용량 압박이지 서버 장애가 아니다 — 차단도 전환도 하지 않는다
             } catch (RuntimeException e) {
-                if (outputStarted.getAsBoolean() || !router.failOver(provider, taskType, mode, e)) throw e;
+                if (outputStarted.getAsBoolean() || !router.failOver(provider, taskType, mode, e)) throw asReported(provider, e);
                 LlmProvider next = router.routeProvider(taskType, mode);   // 차단된 쪽은 건너뛴다
                 if (tried.contains(next.name())) throw e;                  // 같은 곳이 또 나왔다 — 넘어갈 곳이 없다
                 provider = next;
             }
         }
+    }
+
+    /**
+     * 컨텍스트 초과는 블로킹 경로와 <b>같은 타입</b>으로 올린다 — 라우터가 순회 끝에 {@link LlmContextOverflowException} 으로 바꾸는
+     * 것({@code executeWithTracking})의 스트리밍 짝이다. 채팅 진입점들이 그 타입을 잡아 "질문을 좁히거나 search-top-k 를 낮추라"는
+     * 문구를 보내는데, 스트리밍은 그 순회를 우회하므로 여기서 바꾸지 않으면 WebClient 의 날것({@code "400 Bad Request from POST …"})이
+     * 일반 오류로 떨어져 그 메시지가 그대로 화면에 나가고 ERROR 로 찍혔다. 축소 재시도는 이 안쪽({@code stream})에서 이미 끝났으므로
+     * 여기까지 온 초과는 최종이다.
+     */
+    private static RuntimeException asReported(LlmProvider provider, RuntimeException e) {
+        if (e instanceof LlmContextOverflowException || !LlmRouter.isContextOverflow(e)) return e;
+        return new LlmContextOverflowException(provider.name(), e);
     }
 }

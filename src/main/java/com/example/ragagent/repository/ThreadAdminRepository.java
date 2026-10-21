@@ -38,11 +38,10 @@ public class ThreadAdminRepository {
      *       count drops every one of those turns to the {@code 참조 원문 삭제됨} fallback.</li>
      * </ul>
      *
-     * @param lastAskedAt {@code MAX(asked_at)} — the real last-message time, <b>UTC</b>, unlike
-     *                    {@code updatedAt} which {@link ThreadMetaRepository#now()} writes in
-     *                    system-local time. The two must never be mixed in one column or sorted
-     *                    against each other; see PLAN §6.25 결정 2. Null when the thread has no
-     *                    turns at all.
+     * @param lastAskedAt {@code MAX(asked_at)} — the real last-message time, UTC. {@code updatedAt}
+     *                    is UTC too ({@link DbTimestamp}; system-local before Flyway V9) but also
+     *                    moves on title changes, so it is not a last-question time. Null when the
+     *                    thread has no turns at all.
      * @param diagCount   turns carrying retrieval diagnostics. Reuse/Direct/meta turns run no
      *                    search, so a large {@code turnCount - diagCount} gap is itself the
      *                    signal that this conversation mostly did not retrieve anything.

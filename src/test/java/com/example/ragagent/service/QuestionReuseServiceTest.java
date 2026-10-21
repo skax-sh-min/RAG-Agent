@@ -119,16 +119,6 @@ class QuestionReuseServiceTest {
     }
 
     @Test
-    @DisplayName("utcInstant — SQLite datetime('now')(UTC, 표시 없음) → ISO-8601 UTC 순간, 읽을 수 없으면 null")
-    void utcInstant_convertsSqliteUtcText() {
-        assertThat(QuestionReuseService.utcInstant("2026-10-13 23:30:05")).isEqualTo("2026-10-13T23:30:05Z");
-        assertThat(QuestionReuseService.utcInstant(" 2026-10-13 00:00:00 ")).isEqualTo("2026-10-13T00:00:00Z");
-        assertThat(QuestionReuseService.utcInstant(null)).isNull();
-        assertThat(QuestionReuseService.utcInstant("")).isNull();
-        assertThat(QuestionReuseService.utcInstant("2026-10-13T23:30:05Z")).as("모르는 형식은 그리지 않는다").isNull();
-    }
-
-    @Test
     @DisplayName("추천 목록에는 100자를 초과하는 질문이 포함되지 않는다")
     void suggest_excludesQuestionsOver100Chars() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
@@ -194,6 +184,23 @@ class QuestionReuseServiceTest {
         assertThat(service.suggest("u1", null, "타임아웃", 10))
                 .extracting(QuestionReuseService.Suggestion::question)
                 .containsExactly("MCI 연동 타임아웃 오류는 왜 발생하나요?");
+    }
+
+    /** 화면은 입력창 내용을 GET ?q= 로 보낸다 — 긴 붙여넣기는 앞부분만 검색에 쓴다(요청 줄 8KB 한도와 같은 이유). */
+    @Test
+    @DisplayName("추천 검색은 입력의 앞부분(SUGGEST_MAX_QUERY_CHARS)만 쓴다")
+    void suggest_usesOnlyTheHeadOfALongInput() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        when(repo.findSuggestionCandidates(anyList(), anyString(), any(), anyInt())).thenReturn(List.of());
+
+        String longInput = "?".repeat(17_500);   // 내용어가 없어 입력 전체가 키워드 하나로 간다
+        service.suggest("u1", null, longInput, 10);
+
+        org.mockito.ArgumentCaptor<List<String>> keywords = org.mockito.ArgumentCaptor.captor();
+        org.mockito.Mockito.verify(repo).findSuggestionCandidates(keywords.capture(), anyString(), any(), anyInt());
+        assertThat(keywords.getValue()).allSatisfy(k ->
+                assertThat(k.length()).isLessThanOrEqualTo(QuestionReuseService.SUGGEST_MAX_QUERY_CHARS));
     }
 
     /** 재사용된 새 턴의 질문은 다듬은 질문이다 — 원문 "그거 …"는 다른 대화에서 지시 대상이 없다. */

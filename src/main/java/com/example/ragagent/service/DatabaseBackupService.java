@@ -20,6 +20,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,6 +45,10 @@ import java.util.stream.Stream;
  * {@code images/} — 파일이다). 복구 절차와 함께 OPERATOR_MANUAL 에 적혀 있다.
  *
  * <p>설정은 기동 시 한 번 읽는다({@code app.backup.*} — 재기동 필요, {@code CircuitBreaker} 의 {@code @Value} 선례).
+ *
+ * <p><b>정기 실행 시각과 파일 이름의 시각은 {@code app.time-zone}(기본 KST) 기준이다</b> — JVM 기본 시간대가 아니다. 둘 다
+ * JVM 기본 시간대를 따르던 동안 UTC 로 도는 컨테이너(TZ 설정 없는 이미지)에서는 "03:30" 이 KST 낮 12:30 이었고, 이름도 9시간
+ * 이른 시각을 달았다. 같은 설정을 로그 시각도 쓰므로 로그의 {@code [DB-BACKUP]} 줄과 파일 이름이 같은 시계로 읽힌다.
  */
 @Service
 public class DatabaseBackupService {
@@ -56,7 +61,7 @@ public class DatabaseBackupService {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final Pattern BACKUP_NAME = Pattern.compile("memory-\\d{8}-\\d{6}\\.db");
 
-    /** 백업 파일 하나 — 이름이 곧 만든 시각이다. */
+    /** 백업 파일 하나 — 이름이 곧 만든 시각이다({@code app.time-zone} 기준). */
     public record BackupFile(String name, long bytes, Instant modifiedAt) {}
 
     /** 마지막 실행의 결과. {@code error} 가 있으면 실패다(그때 {@code file} 은 null). */
@@ -64,13 +69,14 @@ public class DatabaseBackupService {
         public boolean ok() { return error == null; }
     }
 
-    /** {@code /admin} 카드가 그리는 것 — 설정 · 마지막 실행 · 남아 있는 백업. */
-    public record Status(boolean enabled, String cron, int keep, String dir, boolean running,
+    /** {@code /admin} 카드가 그리는 것 — 설정 · 마지막 실행 · 남아 있는 백업. {@code zone} 은 cron 과 파일 이름의 시간대. */
+    public record Status(boolean enabled, String cron, String zone, int keep, String dir, boolean running,
                          RunResult last, List<BackupFile> backups) {}
 
     private final DataSource dataSource;
     private final boolean enabled;
     private final String cron;
+    private final ZoneId zone;
     private final int keep;
     private final Path dir;
     private volatile boolean running;
@@ -81,10 +87,12 @@ public class DatabaseBackupService {
                                  @Value("${app.backup.enabled:true}") boolean enabled,
                                  @Value("${app.backup.cron:0 30 3 * * *}") String cron,
                                  @Value("${app.backup.keep:7}") int keep,
-                                 @Value("${app.backup.dir:}") String backupDir) {
+                                 @Value("${app.backup.dir:}") String backupDir,
+                                 @Value("${app.time-zone:Asia/Seoul}") String timeZone) {
         this.dataSource = dataSource;
         this.enabled = enabled;
         this.cron = cron;
+        this.zone = ZoneId.of(timeZone);   // 틀린 값이면 기동이 멈춘다 — @Scheduled 의 zone 도 같은 값으로 그렇게 한다
         this.keep = Math.max(1, keep);
         this.dir = (backupDir == null || backupDir.isBlank())
                 ? Path.of(dataDir).resolve("db-backups")
@@ -92,7 +100,7 @@ public class DatabaseBackupService {
     }
 
     /** 정기 실행 — {@code app.backup.enabled=false} 면 아무것도 하지 않는다(수동 실행은 그래도 된다). */
-    @Scheduled(cron = "${app.backup.cron:0 30 3 * * *}")
+    @Scheduled(cron = "${app.backup.cron:0 30 3 * * *}", zone = "${app.time-zone:Asia/Seoul}")
     void scheduled() {
         if (!enabled) return;
         run("scheduled");
@@ -110,10 +118,10 @@ public class DatabaseBackupService {
             String url = sourceUrl();
             Files.createDirectories(dir);
             deleteLeftoverPartials();
-            String name = PREFIX + LocalDateTime.now().format(STAMP) + SUFFIX;
+            String name = PREFIX + LocalDateTime.now(zone).format(STAMP) + SUFFIX;
             while (Files.exists(dir.resolve(name))) {   // 같은 초에 두 번(버튼 연타) — 다음 초 이름을 쓴다
                 Thread.sleep(200);
-                name = PREFIX + LocalDateTime.now().format(STAMP) + SUFFIX;
+                name = PREFIX + LocalDateTime.now(zone).format(STAMP) + SUFFIX;
             }
             Path target = dir.resolve(name);
             partial = dir.resolve(name + PARTIAL);
@@ -144,7 +152,7 @@ public class DatabaseBackupService {
     }
 
     public Status status() {
-        return new Status(enabled, cron, keep, dir.toAbsolutePath().toString(), running, last, listBackups());
+        return new Status(enabled, cron, zone.getId(), keep, dir.toAbsolutePath().toString(), running, last, listBackups());
     }
 
     /** 이름이 {@code memory-yyyyMMdd-HHmmss.db} 인 완성본만, 최신부터. */

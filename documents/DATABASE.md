@@ -25,7 +25,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 | 테이블 | 한 행 = | 분류 | 스키마 / 쓰는 곳 |
 |---|---|---|---|
-| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4 / `SqliteMemoryRepository` |
+| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4·V6 / `SqliteMemoryRepository` |
 | `thread_meta` | 대화 하나 | 대화 | Flyway V1·V3 / `ThreadMetaRepository` |
 | `turn_source_ref` | 한 턴의 출처 청크 하나 | 대화 | Flyway V4 / `QuestionReuseRepository` |
 | `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | Flyway V4 / `SqliteMemoryRepository` |
@@ -54,12 +54,12 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
 - Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 옛 런타임 DDL로 만들어진 파일을 버전 3으로 baseline한 뒤 V4 부터 적용합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
-- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V8)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
+- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V9)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
 
 ### 2.2 외래 키가 없다
 
@@ -81,16 +81,19 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.4 시각 형식 — 테이블마다 다르다
 
+시간대는 **전부 UTC**입니다. 문자열 모양만 테이블마다 다릅니다.
+
 | 형식 | 시간대 | 컬럼 |
 |---|---|---|
-| `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`) | UTC | `conversation_turns.created_at`, `turn_source_ref.created_at`·`invalidated_at`·`hidden_at`, `turn_image_ref.created_at`, `image_descriptions.created_at` |
-| `YYYY-MM-DD HH:MM:SS` (Java 포맷) | UTC | `conversation_turns.asked_at` |
-| `YYYY-MM-DD HH:MM:SS` (Java `LocalDateTime.now()`) | **서버 로컬 시각** | `thread_meta.created_at`·`updated_at`, `curated_qa`·`curated_submission`·`chunk_report`의 모든 시각 |
+| `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`) | UTC | `conversation_turns.created_at`, `turn_source_ref.created_at`·`invalidated_at`·`hidden_at`, `turn_image_ref.created_at`, `image_descriptions.created_at`, `thread_follow_up.created_at` |
+| `YYYY-MM-DD HH:MM:SS` (Java — `DbTimestamp.now()` 등) | UTC | `conversation_turns.asked_at`, `thread_meta.created_at`·`updated_at`, `curated_qa`·`curated_submission`·`chunk_report`의 모든 시각 |
 | ISO-8601 `…Z` (`Instant`) | UTC | `doc_registry.indexed_at`, `vec_document_chunks.created_at`, `settings_override.updated_at`, `app_secret.created_at`, 메타데이터 `collected_at`·`edited_at` |
 | ISO-8601, `Z` 없음 (`LocalDateTime.now(UTC)`) | UTC | `users.created_at`·`updated_at`·`locked_until` |
 | `YYYY-MM-DD` | UTC 날짜 | `llm_usage.usage_date` |
 
-> ⚠️ 겉모양이 같아도 시간대가 다릅니다. `thread_meta.updated_at`(로컬)과 `conversation_turns.created_at`(UTC)은 KST 서버에서 9시간 차이가 납니다 — 두 테이블의 시각을 SQL로 직접 비교하지 마세요.
+> 시간대 표시가 없는 값도 UTC로 읽습니다. 화면에는 UTC 순간으로 내보내고 브라우저가 보는 사람의 시간대로 바꿉니다(`fragments/time` · `UtcTime` · `layout/base.html` 의 `localizeTimes()`). 새 코드는 `DbTimestamp.now()`로 씁니다(존 없는 `LocalDateTime.now()`는 `TimeZoneConventionTest`가 막습니다).
+>
+> V9 전에는 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각이 **서버 로컬 시각**이었습니다(KST 서버에서 다른 테이블과 9시간 차이). V9가 기존 값을 그 JVM의 기본 시간대 기준으로 UTC로 옮겼습니다 — 시간대가 다른 서버로 DB를 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석됩니다([PITFALLS](PITFALLS.md#db-시각은-utc-로만-쓴다)).
 
 ### 2.5 JSON·CSV를 담는 컬럼
 
@@ -159,7 +162,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `thread_id` | TEXT | PK | 대화 id (UUID) |
 | `title` | TEXT | NOT NULL, `'새 대화'` | 제목 — LLM이 생성하거나(사용량 `title:`) 사용자가 고칩니다 |
 | `version` | TEXT | NOT NULL, `'latest'` | 이 대화가 검색하는 문서 버전 |
-| `created_at`, `updated_at` | TEXT | NOT NULL | **서버 로컬 시각**. 대화 목록은 `updated_at DESC` |
+| `created_at`, `updated_at` | TEXT | NOT NULL | UTC(V9 전에는 서버 로컬 시각, §2.4). 대화 목록은 `updated_at DESC` |
 | `routing_mode` | TEXT | NOT NULL, `'COST_FIRST'` | `RoutingMode` — `COST_FIRST` / `QUALITY_FIRST` / `PROGRESSIVE` / `LOCAL_ONLY` |
 | `tags` | TEXT | NOT NULL, `''` | 가장 최근 메시지에서 고른 태그 스냅샷 (CSV) — 사이드바 표시용 (V3) |
 | `user_id` | TEXT | NOT NULL, `'anonymous'` | 대화 주인 |
@@ -269,7 +272,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `question`, `answer` | TEXT | NOT NULL | 턴과 독립된 **사본** — 고쳐도 원본 턴은 그대로입니다 |
 | `status` | TEXT | NOT NULL, `'active'` | `active`(검색에 기여) / `inactive`(내려감) |
 | `source_doc_version` | TEXT | | 원본 턴의 문서 버전 (직접 작성은 NULL) |
-| `created_at`, `updated_at` | TEXT | NOT NULL | 서버 로컬 시각 |
+| `created_at`, `updated_at` | TEXT | NOT NULL | UTC(V9 전에는 서버 로컬 시각, §2.4) |
 | `embed_status` | TEXT | NOT NULL, `'ok'` | `ok` / `failed` (임베딩 실패 — 제안 화면의 "임베딩 실패") |
 | `origin` | TEXT | NOT NULL, `'like'` | `like`(좋아요 출신) / `manual`(직접 작성) — 벡터 메타데이터 `curated_origin`으로도 실립니다 |
 | `source_submission_id` | INTEGER | | → `curated_submission.id`. **반드시 채웁니다** — 비면 제안이 현실과 조용히 끊깁니다(청크 0개인 "등록 완료"로 보임) |
@@ -291,7 +294,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `status` | TEXT | NOT NULL, `'pending'` | `pending` / `approved` / `rejected` / `withdrawn`. 화면의 "회수됨"(`revoked`)은 저장값이 아니라 연결된 `curated_qa` 행들로 계산합니다 |
 | `reviewer_user_id`, `review_note`, `reviewed_at` | TEXT | | 검토자·검토 메모·검토 시각 |
 | `curated_qa_id` | INTEGER | | 승인으로 만들어진 첫 `curated_qa` 행 |
-| `created_at`, `updated_at` | TEXT | NOT NULL | 서버 로컬 시각 |
+| `created_at`, `updated_at` | TEXT | NOT NULL | UTC(V9 전에는 서버 로컬 시각, §2.4) |
 | `author_read_at` | TEXT | | 저자가 검토 결과를 확인한 시각 — NULL이면 미확인 알림 배지에 잡힙니다(승인·반려할 때 NULL로 되돌림) |
 | `tags` | TEXT | | 저자가 고른 태그 CSV |
 | `source_turn_id` | INTEGER | | 좋아요 출신 제안의 원본 턴 (직접 작성은 NULL) |
@@ -316,7 +319,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `chunk_hash`, `chunk_snapshot` | TEXT | | 신고 **시점**의 청크 해시·텍스트 — 관리자 화면이 지금 내용과 비교합니다(`ChunkDiff`) |
 | `status` | TEXT | NOT NULL, `'open'` | `open` / `resolved` / `rejected` |
 | `reviewer_user_id`, `review_note`, `reviewed_at` | TEXT | | 처리 정보 |
-| `created_at` | TEXT | NOT NULL | 서버 로컬 시각 |
+| `created_at` | TEXT | NOT NULL | UTC(V9 전에는 서버 로컬 시각, §2.4) |
 
 인덱스: `idx_chunk_report_open(status, chunk_id)`, `idx_chunk_report_chunk(chunk_id, id DESC)`, `idx_chunk_report_dup` UNIQUE(`chunk_id`, `reporter_user_id`, `thread_id`) WHERE `status = 'open'`
 
@@ -395,7 +398,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 6.5 `flyway_schema_history`
 
-Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V8 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
+Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V9 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
 
 ---
 

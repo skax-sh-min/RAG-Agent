@@ -197,7 +197,7 @@ copy .env.example .env
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
 | `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]`(로컬 LLM 2) 작업 유형 (`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 로컬 LLM 1과 같은 `BOTH`를 사용 |
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(`MICRO_TEXT`는 `local`이 흡수. 단 **대화 요약만은 흡수하지 않고 생략**되어 채팅이 원본 history 폴백으로 동작한다 — 부가 기능인 요약이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
-| `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
+| `LOCAL_FAST_LLM_KEY` | — | `no-key` | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치(정확 일치, 또는 유일한 부분 일치 → 서버 id 사용)를 확인하고, 어느 모델에도 없거나 여러 모델에 걸리거나 서버가 안 뜨면 애플리케이션이 시작되지 않는다. **예외 하나**: `LOCAL_LLM_URL`·`LOCAL_LLM_URL_2` 처럼 같은 type·priority 로 묶인 복제본 중 **한 대만** 안 뜨면(연결 안 됨·응답 없음·5xx — 4xx 나 모델 목록이 아닌 응답은 설정 오류라 해당하지 않는다) 기동을 이어 가고 그 서버는 30초 차단된 채 시작한다(모델명은 검증하지 못해 설정값 그대로 — 서버가 다른 id 로 부르면 전체 id 로 적을 것). 둘 다 안 뜨거나, 닿은 서버에 모델이 없으면 여전히 기동 실패. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다(설정한 모델명이 그대로 실린다) |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
@@ -219,6 +219,7 @@ copy .env.example .env
 | `CHROMA_HOST` | — | `http://localhost` | **chroma 전용** — Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
 | `CHROMA_PORT` | — | `8001` | **chroma 전용** — Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
 | `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
+| `APP_TIME_ZONE` | — | `Asia/Seoul` | 사람이 읽는 서버의 시계 — 로그 시각(날짜·오프셋 포함, 예: `2026-10-14 13:52:03.905+09:00`)·감사 로그 파일 회전·정기 백업 시각(`DB_BACKUP_CRON`)·백업 파일 이름. DB·API 의 시각은 이 값과 무관하게 UTC 입니다. `TZ`/`-Duser.timezone`(JVM 시간대)과도 무관해서, TZ 설정 없는 컨테이너(UTC)에서도 이 시계로 찍고 돕니다. 틀린 값이면 기동이 멈춥니다. 재기동 필요 |
 | `UPLOAD_MAX_TOTAL_SIZE` | — | `0` (무제한) | 배포 전체 저장 상한 (§6.15). `20GB`처럼 단위를 붙일 수 있고 단위 없는 숫자는 바이트. `DATA_DIR` 아래 `documents`+`converted`+`images` 합계로 검사하며, 초과 업로드는 413 `RAG-UP-002`. 재기동 필요 — 상세는 아래 "업로드 크기 제한" |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 | `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
@@ -1980,8 +1981,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 인덱스 레지스트리 | `doc_registry` 테이블 — 앱의 유일한 SQLite 파일 `DATA_DIR/memory.db`([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: 같은 SQLite 파일 `DATA_DIR/memory.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 같은 SQLite 파일 `DATA_DIR/memory.db` | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
-| 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
-| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
+| 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함(날짜는 `APP_TIME_ZONE` 기준, 각 줄의 `ts` 는 UTC) |
+| DB 백업 | `DATA_DIR/db-backups/memory-yyyyMMdd-HHmmss.db` (`DB_BACKUP_DIR` 로 변경) | `memory.db` 의 검사를 통과한 사본, 매일 03:30(`APP_TIME_ZONE`)·최근 7개 — [§6.3.2](#632-db-백업과-복구) |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -2056,17 +2057,19 @@ Rename-Item data/vector.db memory.db
 > ⚠️ **Chroma 배포는 저장소가 둘입니다** — 벡터는 Chroma 서버, 레지스트리는 이 SQLite 파일. 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준이므로, 백업 시 Chroma 볼륨과 `data/`를 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
 >
 > **스키마는 기동 시 자동 정비됩니다** — 운영 테이블은 전부 Flyway 마이그레이션이 만들고 고칩니다. 기동할 때 Flyway 가 아직 적용되지 않은 마이그레이션만 순서대로 적용하고, V4(`V4__Consolidate_runtime_schema`)는 옛 버전이 만든 DB 에 빠진 테이블·컬럼·인덱스만 더합니다(예전에는 각 저장소가 기동할 때마다 `CREATE TABLE IF NOT EXISTS`·`ALTER TABLE` 을 직접 실행했습니다). 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 기본값 또는 `NULL`). 기동 로그의 `[FLYWAY] V4 — 테이블 생성 […], 컬럼 추가 […]` 한 줄이 무엇을 더했는지 알려 줍니다. 검색 색인(`chunk_fts`·`chunk_fts_key`·`vec_*`)은 Flyway 가 아니라 위 표의 컴포넌트가 만듭니다. 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
+>
+> **DB 의 시각은 전부 UTC 입니다** — 대화 목록·큐레이션·지식 제안·청크 신고의 시각은 예전에 **서버 로컬 시각**으로 저장됐습니다. 이 버전으로 처음 기동할 때 V9(`V9__Local_timestamps_to_utc`)가 그 값들을 **지금 JVM 의 시간대 기준으로** UTC 로 옮기고 `[V9] server-local timestamps -> UTC (zone=…): N converted, M left as-is` 한 줄을 남깁니다. 서버 시간대가 UTC 였다면(흔한 컨테이너) 바뀌는 값이 없습니다. **DB 를 시간대가 다른 서버로 옮길 계획이라면 옮기기 전 서버에서 이 버전을 한 번 기동해 V9 를 적용한 뒤 옮기세요** — 옮긴 뒤 처음 기동하면 옛 값이 새 서버의 시간대로 해석됩니다(값에 시간대 표시가 없어 사후에 바로잡을 수 없습니다). 화면은 시각을 보는 사람(브라우저)의 시간대로 표시하고, 마우스를 올리면 원래 UTC 값이 보입니다.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
 #### 6.3.2 DB 백업과 복구
 
-앱이 `memory.db` 의 사본을 **매일 03:30** 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
+앱이 `memory.db` 의 사본을 **매일 03:30**(`app.time-zone`, 기본 KST) 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
 
 | 설정 | 환경변수 | 기본값 | 설명 |
 |---|---|---|---|
 | `app.backup.enabled` | `DB_BACKUP_ENABLED` | `true` | 정기 백업. `false` 여도 `/admin` 의 수동 백업은 됩니다 |
-| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일) |
+| `app.backup.cron` | `DB_BACKUP_CRON` | `0 30 3 * * *` | Spring cron(초 분 시 일 월 요일). **`app.time-zone`(`APP_TIME_ZONE`, 기본 `Asia/Seoul`)의 시각**이고, 백업 파일 이름의 시각도 같은 시계입니다 — JVM·컨테이너의 시간대와 무관합니다. `/admin` 카드가 cron 옆에 시간대를 함께 보여 줍니다 |
 | `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
 | `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
 
@@ -2155,7 +2158,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 항목 | 키 | 범위 |
 |------|----|------|
 | 유사도 임계값 | `app.search-similarity-threshold` | 0.0 ~ 1.0 |
-| 키워드 검색 가중치 | `app.search-rrf-keyword-weight` | 0.0 ~ 10.0 |
+| 키워드 검색 가중치 | `app.search-rrf-keyword-weight` | 0.1 ~ 10.0 (끄려면 하이브리드 검색 끄기) |
 | RRF 상수 k | `app.search-rrf-k` | 1 ~ 1000 |
 | 리랭크 후보 배수 | `app.search-candidate-multiplier` | 1 ~ 20 |
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
@@ -2166,7 +2169,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 질의 확장 · 독립화 (§10.12) | `app.search-multiquery-enabled` | true/false |
 | 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
 | 큐레이션 검색 (§10.10) | `app.search-curated-qa-enabled` | true/false |
-| 큐레이션 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |
+| 큐레이션 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.1 ~ 10.0 (끄려면 큐레이션 검색 끄기) |
 | 큐레이션 최소 유사도 | `app.search-curated-qa-min-similarity` | 0.0 ~ 1.0 |
 
 **핫 수정 가능 — 인덱싱/청킹 (재기동 불필요, 다음 인덱싱/↺ 재인덱싱부터 반영)** — 검색 튜닝과 달리 즉시가 아니라 **다음 인덱싱**부터 적용되며, 이미 색인된 청크를 소급 재분할하지는 않습니다(값을 바꾼 뒤 재업로드하거나 `/admin` ↺ 재인덱싱을 눌러야 반영):
@@ -2695,7 +2698,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 카드 순서는 **청크 오류 신고(§6.12) → 지식 제안 검토(§7.6) → 큐레이션 Q&A → 대화 목록(§7.9) → 과거 질문 다듬기(§7.10) → 검색 진단 수치(§7.7)**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
-카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
+카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
 | 기능 | 방법 |
 |------|------|
@@ -2842,7 +2845,7 @@ A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 
 
 | 열 | 의미 |
 |---|---|
-| 최종 활동 | `thread_meta.updated_at`. 제목 자동 생성·수동 변경도 이 값을 갱신하므로 엄밀한 "마지막 질문 시각"은 아닙니다(정확한 값은 상세의 턴 시각) |
+| 최종 활동 | `thread_meta.updated_at`(UTC 저장, 보는 사람의 시간대로 표시). 제목 자동 생성·수동 변경도 이 값을 갱신하므로 엄밀한 "마지막 질문 시각"은 아닙니다(정확한 값은 상세의 턴 시각) |
 | 진단 | 검색이 실제로 돌아 진단 수치가 남은 턴 수. 턴 수와 크게 벌어지면 ⚠ — 재사용·Direct 위주의 대화라는 뜻입니다 |
 | 재사용함 | 이 대화의 턴이 **과거 답변을 재사용한** 횟수 |
 | 재사용됨 | **이 대화의 답변이** 다른 턴에서 재사용된 횟수. 0보다 크면 ◆ — 삭제 시 그 턴들이 전부 "참조 원문 삭제됨"이 됩니다. **삭제를 판단할 때 봐야 할 값은 이쪽입니다** |
@@ -3115,6 +3118,8 @@ grep -E "threw |blocked for |NO-FALLBACK|REPEATED-FAILURE|LLM_PING" logs/rag-age
 > **출력 상한은 함께 따라옵니다** (§6.26 A6): 앱의 모든 블로킹 호출은 자기 옵션을 실어 보내고, 그 위에 씌워지는 프로바이더 상한이 호출마다 현재 창 · 현재 `LLM_MAX_TOKENS` 로 다시 계산됩니다. 재기동이 필요한 곳은 **옵션을 실어 보내지 않는** 프레임워크 내부 호출(쿼리 확장 등)이 쓰는 기동 시점 기본값 하나뿐이고, 그 값이 **좁아진 새 창을 넘게 될 때만** 결과 위에 재기동 경고가 뜹니다(예: `local: defaultOptions 6,000 ≥ 창 4,096`). 창이 넓어진 경우는 그 기본값이 작을 뿐 안전하므로 알리지 않습니다.
 
 > **주기적 자동 재탐지는 일부러 넣지 않았습니다.** 예산이 스스로 움직이면 같은 질문이 시각에 따라 다른 양의 근거를 받아 재현이 안 됩니다(`[TOKEN_CAL]` 계수를 자동 보정하지 않는 것과 같은 이유). 창을 자주 바꾸는 배포라면 아예 `context-size` 로 못 박는 편이 낫습니다 — 선언된 값은 애초에 낡지 않습니다.
+>
+> **단, 컨텍스트 초과가 나면 그 프로바이더의 창을 한 번 자동으로 다시 잽니다.** 초과 자체가 "기록된 창이 실제보다 크다"는 서버의 증언이라 근거가 있기 때문입니다. 채팅 화면(스트리밍)과 블로킹 호출 모두에 걸리고(채팅 화면은 2026-10-19 부터), 버튼과 같은 규칙을 따릅니다 — `context-size` 선언 프로바이더는 묻지 않고, 탐지에 실패하면 알던 값을 지우지 않으며, LOCAL 만 대상입니다. 초과는 연달아 오므로 프로바이더마다 1분에 한 번만 묻고, 실패한 요청을 더 늦추지 않도록 백그라운드에서 돕니다. **창이 커진 경우는 초과가 나지 않아 잡히지 않으므로** 그때는 위 버튼을 누르십시오.
 
 
 창을 알 때 자동으로 도는 것:
@@ -3425,7 +3430,7 @@ sh scripts/install-hooks.sh
 
 | 항목 | 제한 | 응답 |
 |------|------|------|
-| 질문 길이 | 최대 2,000자 | 400 Bad Request |
+| 질문 길이 | 최대 2,000자 | REST(`/api/v1/chat`)는 400 Bad Request, 채팅 화면(SSE)은 오류 말풍선 — 대화를 만들기 전에 거절한다(2026-10-14 전에는 채팅 화면 경로에 이 제한이 빠져 있었다) |
 | 파일 업로드 크기 | 최대 200 MB (기본) | 413 Payload Too Large |
 | 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
 | API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |
