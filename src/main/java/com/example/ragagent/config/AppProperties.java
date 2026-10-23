@@ -136,7 +136,7 @@ public record AppProperties(
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService, CuratedQuestionSuggester) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss the streaming branch (the temperature it hands AnswerStreamer) and only the chat UI stays cold
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
-            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 12000, clamp >0 — HOT-editable since §6.26 A6 (/settings, range 1,000~32,000): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
+            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 12000, clamp [8,000, 64,000] — HOT-editable since §6.26 A6 (/settings, same range): the blocking-call cap, the conversation-history budget (×0.5), the MD-correction section size and the indexing output reservation all derive from it, so it is the loudest single knob for context pressure. Streaming chat answers stay uncapped by design (bounded by SSE timeouts). Each provider bean also bakes it in at creation as the fallback for framework-internal callers that cannot take a per-call override — those pick up a change only on restart
             Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
             Boolean verifyLocalModelsOnStartup, // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
             Map<String, String> thinking     // PLAN §6.29 — 호출 지점별 생각 수준 (app.llm.thinking.<site-id> = off|low|medium|high). 키는 ThinkingSite.id(). 읽기는 thinkingLevel(site) 로만 — 줄이 없거나 값이 틀리면 그 사이트의 출하 기본값이다. 환경변수는 두지 않는다(사이트 수만큼 늘어나고, /settings 핫 편집이 같은 일을 한다)
@@ -1021,14 +1021,19 @@ public record AppProperties(
     }
 
     /**
-     * {@code app.llm.max-tokens} 의 허용 범위. 바닥이 0 이 아닌 이유는 이 값이 단순한 출력 상한이
-     * 아니기 때문이다 — 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약이 전부 여기서
-     * 파생되므로, 0 에 가까운 값은 "짧게 답한다"가 아니라 이력도 근거도 없는 상태가 된다.
-     * 천장은 좁은 창을 가진 로컬 배포에서 예약만으로 컨텍스트를 다 먹는 설정을 막는다
-     * (창을 아는 프로바이더에는 {@code cappedMaxTokens} 가 그 위에 한 번 더 걸린다).
+     * {@code app.llm.max-tokens} 의 허용 범위 — 8,000~64,000 (2026-10-23 운영 결정, 이전 1,000~32,000).
+     * 이 값은 단순한 출력 상한이 아니다 — 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약이
+     * 전부 여기서 파생되므로, 바닥이 그 셋의 바닥이다(이력 4,000자 · 섹션 3,750자).
+     *
+     * <p><b>바닥 8,000 의 대가</b>: 창 8k~10k 배포는 지원 밖이 된다. 그 창에서는 이 값이 창보다 작아
+     * {@code cappedMaxTokens}(창 이상일 때만 창의 절반으로 누른다)가 걸리지 않으므로, 옵션을 싣지 않는
+     * 질의 확장이 8,000 을 예약해 넘치고 스트리밍 답변의 입력 예산도 절반 아래로 준다. 프로바이더별
+     * {@code max-tokens} 는 그 프로바이더의 상한만 바꾸고 이력 예산·답변 예약은 이 전역값을 읽으므로
+     * 우회로가 되지 못한다. 천장 64,000 은 넓은 창의 원격 모델용이며, 창을 아는 프로바이더에는
+     * {@code cappedMaxTokens} 가 그 위에 한 번 더 걸린다.
      */
-    public static final int MIN_MAX_TOKENS = 1_000;
-    public static final int MAX_MAX_TOKENS = 32_000;
+    public static final int MIN_MAX_TOKENS = 8_000;
+    public static final int MAX_MAX_TOKENS = 64_000;
 
     /** 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수의 기본값 — 1개씩(가장 보수적). */
     public static final int DEFAULT_SHRINK_STEP = 1;

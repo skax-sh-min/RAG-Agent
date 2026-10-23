@@ -192,10 +192,11 @@ class ThinkingPreviewServiceTest {
         assertThat(h.row(ThinkingSite.ANSWER_DIRECT_N).cell(ThinkingLevel.OFF).basis())
                 .as("Direct 도 같은 모드 예산을 쓴다").anyMatch(line -> line.contains("응답 예산 8,400(상한의 70%)"));
 
-        // 설정 상한이 모드의 요구보다 낮으면 그 사실이 보인다(§6.24 클램프)
+        // 설정 상한이 모드의 요구보다 낮은 경우(§6.24 클램프)는 전역 max-tokens 의 하한(8,000)이 막는다 — 하한 아래 값은
+        // 8,000 으로 올라가 N 의 비율항(5,600)이 이긴다. '설정 상한' 항 자체는 ResponseModeBudgetTermTest 가 순수 함수로 지킨다.
         ThinkingPreviewHarness small = ThinkingPreviewHarness.builder().maxTokens(3_000).build();
         assertThat(small.row(ThinkingSite.ANSWER_RAG_N).cell(ThinkingLevel.OFF).basis())
-                .anyMatch(line -> line.contains("응답 예산 3,000(설정 상한)"));
+                .anyMatch(line -> line.contains("응답 예산 5,600(상한의 70%)"));
     }
 
     @Test
@@ -212,7 +213,7 @@ class ThinkingPreviewServiceTest {
     @DisplayName("블로킹 사이트의 응답 자리 없음은 ⛔ — 프로바이더 상한이 응답 필요분보다 작으면 생각을 켜는 순간 빈 응답이다")
     void noRoomIsDangerousForBlockingCalls() {
         // 프로바이더 자신의 max-tokens 40 — 상한을 싣지 않는 질의 확장(응답 필요분 60)은 그 값이 그대로 예약된다.
-        // (전역 max-tokens 는 하한 1,000 이 있어 자기 상한을 싣는 사이트로는 이 상황을 만들 수 없다.)
+        // (전역 max-tokens 는 하한 8,000 이 있어 자기 상한을 싣는 사이트로는 이 상황을 만들 수 없다.)
         Row expansion = ThinkingPreviewHarness.builder().providerMaxTokens(40).build().row(ThinkingSite.QUERY_EXPANSION);
 
         Cell low = expansion.cell(ThinkingLevel.LOW);
@@ -395,9 +396,10 @@ class ThinkingPreviewServiceTest {
         assertThat(summary.reservedTokens()).as("요약은 남길 분량(2,000자) + 1,024").isEqualTo(3_024);
         assertThat(summary.use()).isEqualTo(ThinkingPreview.Use.REQUEST);
 
-        // 전역 max-tokens 를 내리면 따라온다(핫 편집) — 예전에는 기동 때 구워진 값이라 따라오지 않았다.
+        // 전역 max-tokens 의 하한(8,000)이 자기 상한(2,048)보다 커서, 전역값을 바닥까지 내려도 짧은 호출의 예약은 그대로다
+        // (하한 아래 값은 8,000 으로 올라간다).
         Row lowered = ThinkingPreviewHarness.builder().window(16_384).maxTokens(1_000).build().row(ThinkingSite.CLASSIFY);
-        assertThat(lowered.cell(ThinkingLevel.OFF).reservedTokens()).isEqualTo(1_000);
+        assertThat(lowered.cell(ThinkingLevel.OFF).reservedTokens()).isEqualTo(2_048);
     }
 
     @Test
@@ -503,10 +505,10 @@ class ThinkingPreviewServiceTest {
     @Test
     @DisplayName("관측이 없을 때의 '잘림 가능' — 생각 자리가 있되 요구한 여유보다 작을 때만")
     void withoutObservationsPossibleTruncationComparesToTheHeadroom() {
-        // 전역 max-tokens 1,000 → 요약은 1,000 을 예약하고(상한도 1,000 이라 여유를 못 받는다) 응답 필요분 800 을 빼면
-        // 생각 자리 200 < 낮게의 여유 1,024
-        Cell low = ThinkingPreviewHarness.builder().maxTokens(1_000).build()
-                .row(ThinkingSite.SUMMARY).cell(ThinkingLevel.LOW);
+        // 프로바이더 자신의 max-tokens 260 → 상한을 싣지 않는 질의 확장은 260 을 예약하고(상한도 260 이라 여유를 못 받는다)
+        // 응답 필요분 60 을 빼면 생각 자리 200 < 낮게의 여유 1,024. 전역 max-tokens 는 하한 8,000 이 있어 이 상황을 만들 수 없다.
+        Cell low = ThinkingPreviewHarness.builder().providerMaxTokens(260).build()
+                .row(ThinkingSite.QUERY_EXPANSION).cell(ThinkingLevel.LOW);
 
         assertThat(low.thinkingRoom()).isEqualTo(200);
         assertThat(low.has(Badge.Kind.TRUNCATION_POSSIBLE)).isTrue();

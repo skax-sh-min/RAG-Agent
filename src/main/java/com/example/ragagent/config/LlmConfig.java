@@ -132,6 +132,8 @@ public class LlmConfig {
                                     ProviderContextWindows.Source.PROBED);
                         }
                     }
+                    warnIfBelowSupportedWindow(cfg.name(), effectiveCtx, declaredCtx != null
+                            ? ProviderContextWindows.Source.CONFIGURED : ProviderContextWindows.Source.PROBED);
 
                     // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
                     // 기동 시점의 값은 defaultOptions 에 굽고 경고를 내는 데만 쓰고, 실제 상한은 아래
@@ -323,6 +325,39 @@ public class LlmConfig {
                   -> app.llm.providers[N].max-tokens 를 창보다 충분히 작게 두거나, 서버의 컨텍스트를 키우세요.""",
                 providerName, requested, contextTokens, capped);
         return capped;
+    }
+
+    /**
+     * 이 앱이 지원하는 가장 작은 컨텍스트 창 — {@code app.llm.max-tokens} 하한의 두 배(16,000, "16K").
+     *
+     * <p>두 배인 이유는 {@link ProviderContextWindows#cappedMaxTokens} 와 같은 경계다 — 출력 예약이 창의 절반을 넘으면
+     * 입력 자리가 출력보다 작아진다. 하한이 그 경계 안에 드는 가장 작은 창이 이 값이다. 그보다 작은 창에서는 그 클램프가
+     * {@code max-tokens ≥ 창}일 때만 걸리므로 하한 전체가 그대로 예약된다 — 8k~10k 창이면 옵션을 싣지 않는 질의 확장이
+     * 넘치고 답변의 입력 예산도 절반 아래로 준다(PITFALLS 의 2026-10-23 범위 변경 항목). 16,384 가 아니라 하한에 묶은 값인
+     * 이유는 하한이 바뀌면 이 경계도 함께 움직여야 해서다 — 16K 로 띄운 서버(16,384)는 통과한다.
+     */
+    static final int MIN_SUPPORTED_CONTEXT_TOKENS = 2 * AppProperties.MIN_MAX_TOKENS;
+
+    /**
+     * 창을 알고 그 창이 {@link #MIN_SUPPORTED_CONTEXT_TOKENS} 보다 작으면 WARN 을 남긴다 — <b>기동은 막지 않는다</b>.
+     * 막지 않는 이유: 작게 띄운 쪽이 복제본 하나이거나 실험용 모델일 수 있고, 탐지값이 틀렸으면 운영자가
+     * {@code context-size} 선언으로 고칠 수 있다(선언이 탐지를 이긴다). 창을 모르면 아무것도 하지 않는다.
+     *
+     * <p>기동 때만 본다 — {@code /settings} 의 재탐지·컨텍스트 초과 뒤의 자동 재탐지로 바뀐 창은 여기를 지나지 않는다.
+     *
+     * @return 경고했는가. package-private static: 순수 판정이라 빈을 띄우지 않고 검사할 수 있어야 한다
+     */
+    static boolean warnIfBelowSupportedWindow(String providerName, Integer contextTokens,
+                                              ProviderContextWindows.Source source) {
+        if (contextTokens == null || contextTokens <= 0 || contextTokens >= MIN_SUPPORTED_CONTEXT_TOKENS) return false;
+        log.warn("""
+                [LLM CONFIG] provider=[{}] context-size({}, {}) < {} — 지원하는 최소 컨텍스트(16K)보다 작습니다. \
+                max-tokens 하한({})이 창의 절반을 넘어 블로킹 호출의 입력 자리가 출력 예약보다 작아지고, \
+                8k~10k 창에서는 옵션을 싣지 않는 질의 확장이 넘칩니다.
+                  -> 서버의 컨텍스트를 16K 이상으로 띄우세요(llama.cpp -c 16384 · LM Studio 컨텍스트 길이).""",
+                providerName, contextTokens, source == ProviderContextWindows.Source.CONFIGURED ? "선언" : "탐지",
+                MIN_SUPPORTED_CONTEXT_TOKENS, AppProperties.MIN_MAX_TOKENS);
+        return true;
     }
 
     /**

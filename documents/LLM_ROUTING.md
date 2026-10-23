@@ -148,7 +148,7 @@ app.llm.circuit-breaker-minutes=4
 # not conversational ones — hence its tight [0.0, 0.1] clamp, unlike the other temperatures.
 # creative-mode-enabled is the on/off switch for the C mode itself (default true): the temperature
 # says HOW C answers, this says WHETHER C is offered — it is the only mode that writes content the
-# documents do not contain. max-tokens is hot-editable too (§6.26 A6, 1000~32000) and applies to blocking
+# documents do not contain. max-tokens is hot-editable too (§6.26 A6, 8000~64000) and applies to blocking
 # calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
 app.llm.temperature=${LLM_TEMPERATURE:0.2}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.5}
@@ -165,7 +165,7 @@ app.llm.shrink-step=${LLM_SHRINK_STEP:1}
 # 그래도 못 구하면 '모름'으로 둔다 — 두 서버가 노출하는 "모델 상한" 필드는 실제 로드된 크기와
 # 무관하므로 일부러 쓰지 않는다.
 # app.llm.providers[1].max-tokens=4000
-# app.llm.providers[1].context-size=8192
+# app.llm.providers[1].context-size=16384
 app.llm.max-tokens=${LLM_MAX_TOKENS:12000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
