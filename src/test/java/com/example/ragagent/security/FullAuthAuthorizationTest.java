@@ -92,6 +92,7 @@ class FullAuthAuthorizationTest {
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean SettingsService settingsService;
     @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;   // §6.29 — 생각 수준 카드
+    @MockitoBean com.example.ragagent.service.ProviderCatalog providerCatalog;          // 프로바이더 편집
 
     @BeforeEach
     void setUp() {

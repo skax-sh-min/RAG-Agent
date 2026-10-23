@@ -38,6 +38,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `llm_usage` | (프로바이더, 날짜)별 사용량 | 운영 | Flyway V1 / `LlmUsageRepository` |
 | `settings_override` | `/settings` 오버라이드 키 하나 | 운영 | Flyway V4 / `SettingsOverrideRepository` |
 | `app_secret` | 서버 비밀값 하나 | 운영 | Flyway V4 / `AppSecretRepository` |
+| `llm_provider_override` | `/settings` 에서 고친 LLM 프로바이더 하나 | 운영 | Flyway V10 / `ProviderOverrideRepository` |
 | `users` | 계정 하나 | 계정 | Flyway V2 / `SqliteUserDetailsService` |
 | `persistent_logins` | remember-me 토큰 (현재 미사용) | 계정 | Flyway V2 / `SqliteUserDetailsService` |
 | `flyway_schema_history` | 마이그레이션 한 건 | 시스템 | Flyway |
@@ -86,7 +87,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | 형식 | 시간대 | 컬럼 |
 |---|---|---|
 | `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`) | UTC | `conversation_turns.created_at`, `turn_source_ref.created_at`·`invalidated_at`·`hidden_at`, `turn_image_ref.created_at`, `image_descriptions.created_at`, `thread_follow_up.created_at` |
-| `YYYY-MM-DD HH:MM:SS` (Java — `DbTimestamp.now()` 등) | UTC | `conversation_turns.asked_at`, `thread_meta.created_at`·`updated_at`, `curated_qa`·`curated_submission`·`chunk_report`의 모든 시각 |
+| `YYYY-MM-DD HH:MM:SS` (Java — `DbTimestamp.now()` 등) | UTC | `conversation_turns.asked_at`, `thread_meta.created_at`·`updated_at`, `curated_qa`·`curated_submission`·`chunk_report`의 모든 시각, `llm_provider_override.updated_at` |
 | ISO-8601 `…Z` (`Instant`) | UTC | `doc_registry.indexed_at`, `vec_document_chunks.created_at`, `settings_override.updated_at`, `app_secret.created_at`, 메타데이터 `collected_at`·`edited_at` |
 | ISO-8601, `Z` 없음 (`LocalDateTime.now(UTC)`) | UTC | `users.created_at`·`updated_at`·`locked_until` |
 | `YYYY-MM-DD` | UTC 날짜 | `llm_usage.usage_date` |
@@ -376,6 +377,19 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 > 방문자별 게스트 식별(`guest-identity` = `ip`/`cookie`/`hybrid`)이 쓰는 HMAC 키입니다. 앱은 처음 쓸 때 이 값을 메모리에 올려 두므로, 행을 지우면 **다음 기동 때** 새 키가 만들어져 모든 방문자의 id가 바뀌고 그 방문자들의 대화 이력이 고아가 됩니다. `/settings`에 노출되지 않도록 `settings_override`와 분리돼 있습니다.
 
+### 6.3.1 `llm_provider_override` — `/settings` 에서 고친 LLM 프로바이더 (V10)
+
+| 컬럼 | 타입 | 제약·기본값 | 의미 |
+|---|---|---|---|
+| `name` | TEXT | PK | 프로바이더 이름 — `app.llm.providers[N].name` 과 맞춘다. 같은 이름의 프로바이더는 한 논리 모델이라 함께 받는다 |
+| `base_url` · `model` · `type` · `role` · `priority` | TEXT·INTEGER | | 고친 값. **NULL = properties 값 그대로**(같은 값은 NULL 로 저장된다) |
+| `context_size` | INTEGER | | 수동 컨텍스트(토큰) — 다른 칸과 달리 **저장 즉시** 반영된다(출처 `MANUAL`). **자동 탐지가 안 될 때의 대체값**이라 탐지가 성공하면 메모리의 값은 탐지값으로 바뀌고(이 칸은 남는다 — 다음 탐지 실패 때 다시 쓰인다), 기동 때도 탐지를 먼저 해 본 뒤 실패했을 때만 쓰인다 |
+| `added` | INTEGER | NOT NULL, 0 | 1 = 화면에서 추가한 프로바이더(properties 에 없다, LOCAL 만) — 이때는 위 칸이 다 채워져 있다 |
+| `deleted` | INTEGER | NOT NULL, 0 | 1 = 재기동 뒤 등록하지 않는다 |
+| `updated_at` | TEXT | NOT NULL | `DbTimestamp.now()` (UTC) |
+
+> **API 키 칸은 없습니다** — 키는 환경변수(.env)로만 받습니다. 앱은 기동할 때 이 테이블을 properties 목록 위에 얹어 **그 실행 동안 굳힙니다**(`ProviderCatalog`) — 컨텍스트 말고는 재기동해야 반영됩니다. 행을 지우면 그 프로바이더는 `application.properties` 정의로 돌아갑니다. 화면에서 고친 값이 기동 때 모델 검증에 실패하면 그 실행은 properties 정의로 뜨고 행은 그대로 남습니다.
+
 ### 6.4 `users` · `persistent_logins` — 계정
 
 **`users`**
@@ -398,7 +412,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 6.5 `flyway_schema_history`
 
-Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V9 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
+Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V10 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
 
 ---
 

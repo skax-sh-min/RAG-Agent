@@ -93,7 +93,13 @@
              통째로 바뀌므로 버튼을 그 바깥에 두어야 자리가 흔들리지 않는다 — 결과는 여전히 조각 안에 그려진다. */-->
         <div class="card-header d-flex align-items-center">
             <span class="fw-semibold" th:text="#{settings.group.llm}">LLM Routing</span>
+            <!--/* 프로바이더 추가(관리자) — 폼은 표 조각 안의 #provider-editor 에 열린다. LOCAL 만 추가할 수 있다(키를 화면에서 받지 않는다). */-->
             <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-outline-secondary ms-auto py-0"
+                    hx-get="/admin/settings/provider/editor" hx-target="#provider-editor" hx-swap="innerHTML"
+                    th:title="#{settings.btn.provider-add.hint}">
+                <i class="bi bi-plus-lg me-1"></i><span th:text="#{settings.btn.provider-add}">Add provider</span>
+            </button>
+            <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-outline-secondary ms-2 py-0"
                     hx-post="/admin/settings/context-window/reprobe"
                     hx-target="#llm-providers" hx-swap="outerHTML"
                     th:title="#{settings.btn.reprobe.hint}">

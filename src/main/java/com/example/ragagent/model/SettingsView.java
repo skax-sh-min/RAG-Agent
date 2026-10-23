@@ -44,6 +44,8 @@ public record SettingsView(
      *                   {@code max-tokens} 보정도 돌지 않는다. 기동 로그의 {@code ctx=?} 와 같은 값이다
      * @param thinking   "생각 제어" 열의 재료 — 등록되지 않은 프로바이더는 {@code null}(= {@link ThinkingControl#UNKNOWN})
      * @param connection "상태" 열 — 설정(미설정)과 서버에 실제로 물어본 결과(접속불가 · 정상). {@code null} 이면 설정이 갖춰졌느냐로 정한다
+     * @param edit       화면의 프로바이더 편집({@code ProviderCatalog})이 이 행에 대해 아는 것 — 출처·재기동 대기·기동 검증 실패.
+     *                   {@code null} = 편집 기능이 없는 구성(테스트)이라 properties 그대로로 그린다
      */
     public record ProviderRow(
             String name,
@@ -57,13 +59,23 @@ public record SettingsView(
             boolean enabled,
             String contextWindow,
             ProviderThinking thinking,
-            ProviderConnection connection
+            ProviderConnection connection,
+            ProviderEdit edit
     ) {
         /** 접속 확인 없이 만드는 호출부(테스트 포함)는 설정이 갖춰졌으면 "확인 중", 아니면 "미설정" 이다. */
         public ProviderRow {
             if (connection == null) {
                 connection = configured ? ProviderConnection.pending() : ProviderConnection.notConfigured();
             }
+            if (edit == null) edit = ProviderEdit.untouched();
+        }
+
+        /** 편집 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
+        public ProviderRow(String name, String role, int priority, String model, String baseUrl,
+                           boolean configured, boolean blocked, String blockedUntil, boolean enabled,
+                           String contextWindow, ProviderThinking thinking, ProviderConnection connection) {
+            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow,
+                    thinking, connection, null);
         }
 
         /** 접속 확인 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
@@ -71,19 +83,56 @@ public record SettingsView(
                            boolean configured, boolean blocked, String blockedUntil, boolean enabled,
                            String contextWindow, ProviderThinking thinking) {
             this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow,
-                    thinking, null);
+                    thinking, null, null);
         }
 
         /** 생각 제어 열 없이 만드는 형태 — 이 열이 생기기 전부터 있던 호출부(테스트 포함)를 위한 편의 생성자. */
         public ProviderRow(String name, String role, int priority, String model, String baseUrl,
                            boolean configured, boolean blocked, String blockedUntil, boolean enabled,
                            String contextWindow) {
-            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow, null, null);
+            this(name, role, priority, model, baseUrl, configured, blocked, blockedUntil, enabled, contextWindow,
+                    null, null, null);
+        }
+
+        /** 재기동하면 추가될, 아직 돌고 있지 않은 행인가 — 토글·상태·생각 제어 칸이 그 행에는 의미가 없다. */
+        public boolean pendingAdd() {
+            return edit.pending() == ProviderEdit.Pending.ADD;
         }
 
         /** "생각 제어" 열의 3단계 — 호출 지점별 생각 수준 설정이 이 프로바이더로 가는 요청에 실리는가. */
         public ThinkingControl thinkingControl() {
             return thinking == null ? ThinkingControl.UNKNOWN : thinking.control();
+        }
+    }
+
+    /**
+     * 화면의 프로바이더 편집({@code ProviderCatalog})이 표의 한 행에 대해 아는 것.
+     *
+     * @param origin         이 정의가 어디서 왔는가 — properties 그대로 · 화면에서 고침 · 화면에서 추가
+     * @param pending        다음 기동에 일어날 일 — 없음 · 바뀜 · 추가 · 삭제
+     * @param pendingFields  바뀌는 칸({@code pending == CHANGE}) — {@code base-url}·{@code model}·{@code type}·{@code role}·{@code priority}
+     * @param startupFailure 지난 기동에서 화면 값으로 검증에 실패해 properties 값으로 떨어졌다면 그 사유, 아니면 {@code null}
+     * @param manualContext  화면에서 넣은 컨텍스트(토큰, 저장 즉시 반영 중) — 없으면 {@code null}
+     */
+    public record ProviderEdit(Origin origin, Pending pending, List<String> pendingFields, String startupFailure,
+                               Integer manualContext) {
+
+        public enum Origin { PROPERTIES, EDITED, ADDED }
+
+        public enum Pending { NONE, CHANGE, ADD, DELETE }
+
+        public ProviderEdit {
+            pendingFields = pendingFields == null ? List.of() : List.copyOf(pendingFields);
+        }
+
+        /** properties 그대로, 대기도 실패도 없다. */
+        public static ProviderEdit untouched() {
+            return new ProviderEdit(Origin.PROPERTIES, Pending.NONE, List.of(), null, null);
+        }
+
+        /** [되돌리기] 를 보일까 — 화면에 남긴 것이 있을 때만. */
+        public boolean revertible() {
+            return origin != Origin.PROPERTIES;
         }
     }
 

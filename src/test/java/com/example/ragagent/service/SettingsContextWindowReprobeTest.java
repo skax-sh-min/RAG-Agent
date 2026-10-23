@@ -123,6 +123,30 @@ class SettingsContextWindowReprobeTest {
     }
 
     @Test
+    @DisplayName("화면에서 넣은 컨텍스트(수동 입력)는 탐지가 되면 탐지값으로 덮이고, 탐지가 실패하면 그대로 남는다")
+    void aManualWindowYieldsToASuccessfulProbe() throws IOException {
+        String base = startServer(40_960);
+        ProviderContextWindows windows = new ProviderContextWindows();
+        windows.record("local", 24_576, ProviderContextWindows.Source.MANUAL);   // 탐지가 안 될 때 /settings 에서 넣었다
+
+        SettingsService.ReprobeResult result =
+                service(windows, provider("local", base, null, null)).reprobeContextWindows();
+
+        assertThat(windows.find("local")).hasValueSatisfying(w -> {
+            assertThat(w.tokens()).isEqualTo(40_960);
+            assertThat(w.source()).isEqualTo(ProviderContextWindows.Source.PROBED);
+        });
+        assertThat(result.rows()).singleElement()
+                .satisfies(r -> assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.UPDATED));
+
+        ProviderContextWindows kept = new ProviderContextWindows();
+        kept.record("local", 24_576, ProviderContextWindows.Source.MANUAL);
+        service(kept, provider("local", "http://127.0.0.1:1/v1", null, null)).reprobeContextWindows();
+        assertThat(kept.find("local")).hasValueSatisfying(w ->
+                assertThat(w.source()).isEqualTo(ProviderContextWindows.Source.MANUAL));
+    }
+
+    @Test
     @DisplayName("LOCAL 이 아닌 프로바이더는 아예 대상이 아니다 — 그 엔드포인트가 없다")
     void cloudProvidersAreNotProbed() {
         ProviderContextWindows windows = new ProviderContextWindows();
@@ -178,6 +202,47 @@ class SettingsContextWindowReprobeTest {
         assertThat(result.restartNeeded()).isFalse();
         assertThat(result.rows()).singleElement()
                 .satisfies(r -> assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.UNCHANGED));
+    }
+
+    @Test
+    @DisplayName("재탐지한 창이 16K 미만이면 그 줄에 표시가 붙는다 — 버튼을 누른 운영자는 로그를 보지 않을 수 있다")
+    void flagsAProbedWindowBelowTheSupportedMinimum() throws IOException {
+        String base = startServer(8_192);
+        ProviderContextWindows windows = new ProviderContextWindows();
+        windows.record("local", 32_768, ProviderContextWindows.Source.PROBED);   // 서버를 작은 창으로 다시 띄웠다
+
+        SettingsService.ReprobeResult result =
+                service(windows, provider("local", base, null, null)).reprobeContextWindows();
+
+        assertThat(result.rows()).singleElement().satisfies(r -> {
+            assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.UPDATED);
+            assertThat(r.belowSupported()).isTrue();
+        });
+    }
+
+    @Test
+    @DisplayName("16K 이상이면 표시가 없고, 묻지 않은 줄(선언·실패)도 지금 기록된 값으로 판정한다")
+    void theFlagFollowsTheRecordedWindow() throws IOException {
+        String base = startServer(16_384);
+        ProviderContextWindows windows = new ProviderContextWindows();
+        assertThat(service(windows, provider("local", base, null, null)).reprobeContextWindows().rows())
+                .singleElement().satisfies(r -> assertThat(r.belowSupported()).isFalse());
+
+        ProviderContextWindows declared = new ProviderContextWindows();
+        declared.record("local", 8_192, ProviderContextWindows.Source.CONFIGURED);
+        assertThat(service(declared, provider("local", base, 8_192, null)).reprobeContextWindows().rows())
+                .singleElement().satisfies(r -> {
+                    assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.SKIPPED_DECLARED);
+                    assertThat(r.belowSupported()).isTrue();
+                });
+
+        ProviderContextWindows failed = new ProviderContextWindows();
+        failed.record("local", 8_192, ProviderContextWindows.Source.PROBED);
+        assertThat(service(failed, provider("local", "http://127.0.0.1:1/v1", null, null)).reprobeContextWindows().rows())
+                .singleElement().satisfies(r -> {
+                    assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.FAILED);
+                    assertThat(r.belowSupported()).isTrue();
+                });
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

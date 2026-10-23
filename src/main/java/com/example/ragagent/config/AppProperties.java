@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
@@ -484,6 +485,31 @@ public record AppProperties(
     /** Clears the bound source (used on shutdown and to isolate tests). */
     public static void unbindOverrides() {
         overrideSource = null;
+    }
+
+    // ── Provider overlay (ProviderCatalog) ────────────────────────────────────
+    //
+    // /settings 의 LLM 라우팅 표에서 고친 프로바이더(주소·모델·type·role·우선순위·추가·삭제)는 위의 OverrideSource 와 따로
+    // 얹힌다. 그쪽은 값 하나를 매 호출 다시 읽어 핫으로 바뀌지만, 프로바이더 목록은 기동 때 라우터가 한 번 만들어 쥐므로
+    // 실행 중에 바뀌면 라우터와 나머지 소비자(설정 화면·ThinkingBudget·미리보기·사용량 화면)가 서로 다른 목록을 보게 된다.
+    // 그래서 ProviderCatalog 가 기동 때 한 번 계산한 목록을 여기 묶고, llmSafe().providers() 가 그 굳은 목록을 돌려준다 —
+    // 모두가 "지금 돌고 있는 목록"을 본다. 묶이지 않았으면(단위 테스트) properties 목록 그대로다.
+
+    private static volatile UnaryOperator<List<ProviderConfig>> providerOverlay;
+
+    /** {@code ProviderCatalog} 가 기동 때 한 번 묶는다 — {@code LlmConfig} 가 라우터를 만들기 전이다(그 빈이 catalog 에 의존한다). */
+    public static void bindProviderOverlay(UnaryOperator<List<ProviderConfig>> overlay) {
+        providerOverlay = overlay;
+    }
+
+    /** 종료 시와 테스트 격리용. */
+    public static void unbindProviderOverlay() {
+        providerOverlay = null;
+    }
+
+    private static List<ProviderConfig> overlaid(List<ProviderConfig> fromProperties) {
+        UnaryOperator<List<ProviderConfig>> o = providerOverlay;
+        return o == null ? fromProperties : o.apply(fromProperties);
     }
 
     private static String rawOverride(String key) {
@@ -975,10 +1001,10 @@ public record AppProperties(
             int ss = clampInt(shrinkStepOverride != null ? shrinkStepOverride : DEFAULT_SHRINK_STEP, 1, 10);
             int mt = clampInt(maxTokensOverride != null ? maxTokensOverride : DEFAULT_MAX_TOKENS,
                     MIN_MAX_TOKENS, MAX_MAX_TOKENS);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
+            return new LlmConfig(overlaid(List.of()), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
                     mt, ss, true, Map.of());
         }
-        List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
+        List<ProviderConfig> providers = overlaid(llm.providers() != null ? llm.providers() : List.of());
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
                 int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;

@@ -7,9 +7,11 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.ProviderCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
@@ -34,6 +36,18 @@ public class LlmConfig {
 
     private static final Logger log = LoggerFactory.getLogger(LlmConfig.class);
 
+    /**
+     * {@code /settings} 에서 고친 프로바이더 정의 — 이 설정 클래스의 {@code @Bean} 메서드보다 먼저 주입되므로, 그 클래스가 기동 때
+     * 묶는 목록({@code AppProperties.bindProviderOverlay})이 아래 {@code props.llmSafe()} 에 이미 얹혀 있다. 테스트가
+     * {@code new LlmConfig()} 로 부르면 {@code null} = 편집 없음.
+     */
+    private ProviderCatalog providerCatalog;
+
+    @Autowired(required = false)
+    public void setProviderCatalog(ProviderCatalog providerCatalog) {
+        this.providerCatalog = providerCatalog;
+    }
+
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
                                 CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
@@ -42,6 +56,8 @@ public class LlmConfig {
                                 TokenEstimateCalibration tokenCalibration,
                                 ProviderThinkingDialects thinkingDialects,
                                 ThinkingObservations thinkingObservations) {
+        // 화면에서 고친 LOCAL 프로바이더를 먼저 혼자 검증한다 — 실패하면 properties 정의로 되돌린 목록이 아래에 읽힌다.
+        precheckEditedLocalProviders(props);
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -117,23 +133,30 @@ public class LlmConfig {
                     // 컨텍스트 창: 운영자 선언이 최우선, 없으면 서버에 물어본다(LOCAL 만 — 클라우드
                     // 프로바이더는 이 엔드포인트가 없고, 컨텍스트가 넉넉해 문제가 되지도 않는다).
                     // 못 구하면 기록하지 않는다 = "모른다". 0 이나 추측값을 넣지 않는 것이 중요하다.
-                    Integer declaredCtx = cfg.declaredContextSize();
+                    // /settings 에서 넣은 수동 컨텍스트는 선언이 아니라 "탐지가 안 될 때의 대체값"이다(ProviderCatalog) — 병합된
+                    // cfg 의 contextSize 에 섞여 오므로 선언으로 읽지 말고, 탐지를 먼저 해 본 뒤 실패했을 때만 쓴다.
+                    boolean manual = providerCatalog != null && providerCatalog.hasManualContext(cfg.name());
+                    Integer declaredCtx = manual ? null : cfg.declaredContextSize();
                     Integer effectiveCtx = declaredCtx;
+                    ProviderContextWindows.Source ctxSource = ProviderContextWindows.Source.CONFIGURED;
                     if (effectiveCtx != null) {
-                        contextWindows.record(cfg.name(), effectiveCtx,
-                                ProviderContextWindows.Source.CONFIGURED);
+                        contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
                     } else if (cfg.isLocal() && !startedUnreachable.contains(cfg.name())) {
                         // 방금 닿지 않은 서버에 다시 물으면 연결 타임아웃을 한 번 더 물 뿐이다 — 창은 "모름"으로 두고,
                         // 서버가 돌아온 뒤 컨텍스트 초과(자동 재탐지)나 /settings 의 재탐지 버튼이 채운다.
                         effectiveCtx = ContextWindowProbe.probe(apiBase, effectiveModel,
                                 connectTimeoutSeconds, readTimeoutSeconds).orElse(null);
+                        ctxSource = ProviderContextWindows.Source.PROBED;
                         if (effectiveCtx != null) {
-                            contextWindows.record(cfg.name(), effectiveCtx,
-                                    ProviderContextWindows.Source.PROBED);
+                            contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
                         }
                     }
-                    warnIfBelowSupportedWindow(cfg.name(), effectiveCtx, declaredCtx != null
-                            ? ProviderContextWindows.Source.CONFIGURED : ProviderContextWindows.Source.PROBED);
+                    if (effectiveCtx == null && manual) {
+                        effectiveCtx = cfg.contextSize();
+                        ctxSource = ProviderContextWindows.Source.MANUAL;
+                        contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
+                    }
+                    ProviderContextWindows.warnIfBelowSupportedMinimum(cfg.name(), effectiveCtx, ctxSource, "기동");
 
                     // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
                     // 기동 시점의 값은 defaultOptions 에 굽고 경고를 내는 데만 쓰고, 실제 상한은 아래
@@ -328,36 +351,32 @@ public class LlmConfig {
     }
 
     /**
-     * 이 앱이 지원하는 가장 작은 컨텍스트 창 — {@code app.llm.max-tokens} 하한의 두 배(16,000, "16K").
+     * {@code /settings} 에서 재기동 칸(주소·모델·type·role·우선순위)을 고친 LOCAL 프로바이더 — 화면에서 추가한 것 포함 — 를 G3 보다 먼저
+     * <b>혼자</b> 검증한다. 실패하면 이유가 무엇이든({@code /v1/models} 에 닿지 않음 · 모델 없음 · 모호함) 그 프로바이더를 properties
+     * 정의로 되돌리고({@link ProviderCatalog#fallBackAtStartup}) 기동을 이어 간다 — 화면에서 넣은 값의 오타가 기동을 막으면 그 값을
+     * 되돌릴 화면에 닿을 수 없기 때문이다. 되돌린 정의는 아래의 평소 G3 를 그대로 지난다(properties 자체가 틀렸다면 예전처럼 멈춘다).
      *
-     * <p>두 배인 이유는 {@link ProviderContextWindows#cappedMaxTokens} 와 같은 경계다 — 출력 예약이 창의 절반을 넘으면
-     * 입력 자리가 출력보다 작아진다. 하한이 그 경계 안에 드는 가장 작은 창이 이 값이다. 그보다 작은 창에서는 그 클램프가
-     * {@code max-tokens ≥ 창}일 때만 걸리므로 하한 전체가 그대로 예약된다 — 8k~10k 창이면 옵션을 싣지 않는 질의 확장이
-     * 넘치고 답변의 입력 예산도 절반 아래로 준다(PITFALLS 의 2026-10-23 범위 변경 항목). 16,384 가 아니라 하한에 묶은 값인
-     * 이유는 하한이 바뀌면 이 경계도 함께 움직여야 해서다 — 16K 로 띄운 서버(16,384)는 통과한다.
+     * <p>복제본 예외({@link #verifyLocalModels})를 여기 적용하지 않는 이유: 화면에서 고친 서버가 마침 꺼져 있었다면 그 값이 맞는지
+     * 확인할 길이 없고, 확인하지 못한 값으로 띄우는 것보다 알던 정의로 띄우는 쪽이 낫다. 고친 값은 화면에 남아 다음 기동에 다시 시도된다.
      */
-    static final int MIN_SUPPORTED_CONTEXT_TOKENS = 2 * AppProperties.MIN_MAX_TOKENS;
-
-    /**
-     * 창을 알고 그 창이 {@link #MIN_SUPPORTED_CONTEXT_TOKENS} 보다 작으면 WARN 을 남긴다 — <b>기동은 막지 않는다</b>.
-     * 막지 않는 이유: 작게 띄운 쪽이 복제본 하나이거나 실험용 모델일 수 있고, 탐지값이 틀렸으면 운영자가
-     * {@code context-size} 선언으로 고칠 수 있다(선언이 탐지를 이긴다). 창을 모르면 아무것도 하지 않는다.
-     *
-     * <p>기동 때만 본다 — {@code /settings} 의 재탐지·컨텍스트 초과 뒤의 자동 재탐지로 바뀐 창은 여기를 지나지 않는다.
-     *
-     * @return 경고했는가. package-private static: 순수 판정이라 빈을 띄우지 않고 검사할 수 있어야 한다
-     */
-    static boolean warnIfBelowSupportedWindow(String providerName, Integer contextTokens,
-                                              ProviderContextWindows.Source source) {
-        if (contextTokens == null || contextTokens <= 0 || contextTokens >= MIN_SUPPORTED_CONTEXT_TOKENS) return false;
-        log.warn("""
-                [LLM CONFIG] provider=[{}] context-size({}, {}) < {} — 지원하는 최소 컨텍스트(16K)보다 작습니다. \
-                max-tokens 하한({})이 창의 절반을 넘어 블로킹 호출의 입력 자리가 출력 예약보다 작아지고, \
-                8k~10k 창에서는 옵션을 싣지 않는 질의 확장이 넘칩니다.
-                  -> 서버의 컨텍스트를 16K 이상으로 띄우세요(llama.cpp -c 16384 · LM Studio 컨텍스트 길이).""",
-                providerName, contextTokens, source == ProviderContextWindows.Source.CONFIGURED ? "선언" : "탐지",
-                MIN_SUPPORTED_CONTEXT_TOKENS, AppProperties.MIN_MAX_TOKENS);
-        return true;
+    private void precheckEditedLocalProviders(AppProperties props) {
+        if (providerCatalog == null) return;
+        AppProperties.LlmConfig llmCfg = props.llmSafe();
+        if (llmCfg.verifyLocalModelsOnStartup() != null && !llmCfg.verifyLocalModelsOnStartup()) return;
+        for (AppProperties.ProviderConfig cfg : providerCatalog.editedLocalProviders()) {
+            try {
+                verifyLocalModel(cfg.name(), cfg.apiBase(), cfg.model(),
+                        llmCfg.connectTimeoutSeconds(), llmCfg.readTimeoutSeconds());
+            } catch (RuntimeException e) {
+                String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                log.error("""
+                        [LLM STARTUP CHECK] provider=[{}] /settings 에서 고친 값(주소 {} · 모델 {})으로 검증에 실패했다 — {}
+                          -> 이번 기동은 application.properties 정의로 띄운다(화면에서 추가한 프로바이더면 등록하지 않는다).
+                          -> 고친 값은 /settings 에 그대로 남아 있다: 고치거나 [되돌리기] 하고 다시 기동하세요.""",
+                        cfg.name(), cfg.baseUrl(), cfg.model(), reason);
+                providerCatalog.fallBackAtStartup(cfg.name(), reason);
+            }
+        }
     }
 
     /**

@@ -15,7 +15,9 @@
 
 ### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.16.2·6.19.1·6.20·6.30·6.31 제외)
 
-> **2026-10-23 범위 변경**(운영 결정): `app.llm.max-tokens` 의 허용 범위 1,000~32,000 → **8,000~64,000**(`AppProperties.MIN_MAX_TOKENS`/`MAX_MAX_TOKENS` — `/settings` 의 범위도 같은 상수). 대가: 창 8k~10k 배포는 지원 밖이다 — 이유와 프로바이더별 `max-tokens` 가 우회로가 아닌 까닭은 PITFALLS 의 §6.26 A6 항목. 그래서 **지원하는 최소 창을 16K 로** 두고(= 하한 × 2, 출력 예약이 창의 절반을 넘지 않는 가장 작은 창), 알려진 창이 그보다 작으면 기동 때 WARN 을 남긴다(`LlmConfig.warnIfBelowSupportedWindow`, 기동은 막지 않는다).
+> **2026-10-23 추가 완료**: **`/settings` LLM 라우팅 표의 프로바이더 편집** — 우선순위를 맨 왼쪽 열로, 관리자에게 [편집]·[되돌리기]·[로컬 프로바이더 추가]. 접속 주소·모델·type·role·우선순위·추가(LOCAL 만)·삭제는 저장 후 **재기동 시** 반영되고(표에 "재기동 후 적용" 배지), 라우터 재구성 없이 되는 **컨텍스트는 저장 즉시**(수동 입력 — 자동 탐지가 안 될 때만 넣을 수 있고, 나중에 탐지가 되면 탐지값이 덮으며 실패하면 남는다). API 키는 화면에서 받지 않는다(.env 만) — 그래서 키 있는 프로바이더의 호스트·포트 변경은 거절. 화면 값의 오타가 기동을 막지 않게, 고친 LOCAL 은 기동 때 혼자 검증하고 실패하면 properties 정의로 뜬다(`ProviderCatalog`, Flyway V10 `llm_provider_override` — 결정은 PITFALLS). 같은 날 **16K 미만 경고를 재탐지에도** — `/settings` 재탐지 버튼(결과 줄 배지)과 컨텍스트 초과 뒤 자동 재탐지가 기동과 같은 판정을 부른다.
+>
+> **2026-10-23 범위 변경**(운영 결정): `app.llm.max-tokens` 의 허용 범위 1,000~32,000 → **8,000~64,000**(`AppProperties.MIN_MAX_TOKENS`/`MAX_MAX_TOKENS` — `/settings` 의 범위도 같은 상수). 대가: 창 8k~10k 배포는 지원 밖이다 — 이유와 프로바이더별 `max-tokens` 가 우회로가 아닌 까닭은 PITFALLS 의 §6.26 A6 항목. 그래서 **지원하는 최소 창을 16K 로** 두고(= 하한 × 2, 출력 예약이 창의 절반을 넘지 않는 가장 작은 창), 알려진 창이 그보다 작으면 WARN 을 남긴다 — 기동 · `/settings` 재탐지(결과 줄에 배지도) · 컨텍스트 초과 뒤 자동 재탐지가 같은 판정을 부른다(`ProviderContextWindows.warnIfBelowSupportedMinimum`, 막지는 않는다).
 >
 > **2026-10-14 ~ 10-19 추가 완료**: **시각의 단일 규칙**(§6.25 열린 항목 해소) — DB 에 쓰는 시각은 전부 UTC(`DbTimestamp`, 옛 서버 로컬 값은 Flyway V9 가 옮겼다) · 사람이 읽는 서버 시계(로그·감사 로그 회전·백업 cron·파일 이름)는 `app.time-zone`(기본 `Asia/Seoul`)이고 JVM 기본 시간대는 읽지 않는다 · 화면의 시각은 UTC 로 내보내 브라우저가 보는 사람의 시간대로 바꾼다(`UtcTime`·`localizeTimes()`) · 질문 추천에 날짜와 출처 이모지 배지. **수정**: 채팅 화면 경로(`/ui/chat/stream`)가 질문 길이 제한(2,000자)을 건너뛰던 것(17,500자 질문이 그대로 들어가 답변·검증 프롬프트가 문서를 덜어냈다) · 질문 추천이 입력 전문을 URL 에 실어 긴 붙여넣기에서 요청 줄 한도(8KB)를 넘던 것(앞 200자만 보낸다) · 채팅 스트리밍의 컨텍스트 초과가 안내 문구 대신 서버 오류 원문으로 나가고 창 재탐지를 걸지 않던 것(§6.26) · `/settings` 생각 수준 카드가 관측이 쌓이면 렌더에 실패하던 것(`#messages.msg` 는 인자 3개까지). **문서 정리**: 완료 절 §6.15·§6.19·§6.25·§6.27·§6.29·§10.11~10.13 재압축(옮겨야 할 결정은 먼저 PITFALLS 로 — 전문은 커밋 `c9a9ec4`) · §10.10 열린 항목 (a)(c) 해소 반영.
 >
@@ -65,7 +67,7 @@
 | ~~3~~ | ~~**§6.29 호출 지점별 생각(추론) 수준 제어**~~ | ✅ 2026-10-07 완료 (1~6단계 — 사이트 22곳 × 수준 4개, `/settings` 관리자 카드, 실측이 권한 값은 검증·응용 답변만 낮게였으나 출하값은 속도를 택해 22곳 전부 끔). 열린 항목: 측정 못 한 4곳. ~~요청 단위 생각 토큰 예산~~은 2026-10-12 측정(예산을 줄인 만큼 검증의 탐지도 사라진다) 뒤 구현하지 않기로 결정. (d) 짧은 호출의 출력 상한은 2026-10-12 해소 |
 | 4 | 운영 준비 잔여 — ~~SQLite 백업 자동화~~, Caddy 인증서 만료 모니터링 | **SQLite 백업은 2026-10-13 완료** — 앱 안의 정기 백업(`DatabaseBackupService`, 매일 03:30 · 최근 7개 · `/admin` "DB 백업" 카드에서 수동 실행). Litestream/cron 대신 앱 안에 둔 이유: 폐쇄망 단일 운영자 배포에 바이너리·스케줄러를 하나 더 들이지 않고, 별도 연결의 `VACUUM INTO` 라 WAL 에서 쓰기를 막지 않으며(54 MB 1초), 사본마다 `quick_check` 로 검증된다. 담지 않는 것: 문서 파일 · Chroma 벡터(OPERATOR_MANUAL §6.3.2). Caddy 인증서 모니터링은 미착수 |
 | 5 | **§6.30 프롬프트 축소 사다리** — 바닥값이 있는 단계형(RAG 답변) | 설계 2026-10-21 · 검토 2026-10-22, 미착수. 과거 질문 자르기 → 직전 1턴만 → 문서 50% → 직전 답변을 `## 요약` 으로 → 이력 전부(후속 질문이면 다시 쓴 질문 한 줄) → 문서 1개, 멈춘 뒤 남는 자리는 되돌려 채운다. 사전 예산과 축소 재시도가 같은 사다리를 쓴다. 검증 실패 재시도는 모델이 실제로 본 문서로 판단하고(교체·조기 종료) 이력을 더 줄이지 않는다. 측정(8k·16k 선언, 후속 질문 세트를 세 유형으로)으로 완료 판정. 연관: 질문 한도 5,000자의 전제 넷(상수 분리·질문 임베딩 상한·이력 속 과거 질문·Direct 축소 재시도) |
-| 6 | **§6.31 이력 제외 체크박스** — 이전 대화 대신 문서를 더(RAG 답변) | 설계 2026-10-23, 미착수. `응답옵션` 왼쪽 체크박스(기본 꺼짐 = 지금과 같음). 켜면 답변 프롬프트에서 이력을 빼고(후속 질문이면 다시 쓴 질문 한 줄) 최종 컷에 `이력 상한 ÷ chunk-size`(기본 +4)를 더한다 — 답변 쪽 최악 크기가 지금과 같아 창을 몰라도 안전하고, 검증 쪽은 창을 알면 발췌 예산으로 누른다. Direct·`meta` 는 무시, 턴에 저장(Flyway V10)·재사용이 복사. §6.30 과 독립(칸 5 를 공유) |
+| 6 | **§6.31 이력 제외 체크박스** — 이전 대화 대신 문서를 더(RAG 답변) | 설계 2026-10-23, 미착수. `응답옵션` 왼쪽 체크박스(기본 꺼짐 = 지금과 같음). 켜면 답변 프롬프트에서 이력을 빼고(후속 질문이면 다시 쓴 질문 한 줄) 최종 컷에 `이력 상한 ÷ chunk-size`(기본 +4)를 더한다 — 답변 쪽 최악 크기가 지금과 같아 창을 몰라도 안전하고, 검증 쪽은 창을 알면 발췌 예산으로 누른다. Direct·`meta` 는 무시, 턴에 저장(Flyway V11)·재사용이 복사. §6.30 과 독립(칸 5 를 공유) |
 | 7 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. **§6.26 이후 전제가 바뀌었다** — 검증 발췌 상한이 이제 창에서 파생되므로(`evalExcerptTokenBudget`), 부스트를 올리기 전에 확인할 것은 `MAX_EVAL_EXCERPT_CHARS` 상수가 아니라 **대상 프로바이더의 실제 창**이다 |
 | 8 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 9 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
@@ -607,7 +609,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 - **UI**: 라벨 "이력 제외", 툴팁 "이전 대화를 프롬프트에서 빼고 그 자리에 검색 문서를 더 싣습니다. 직전 답변의 내용을 묻는 질문에는 쓰지 마세요." 응답 모드와 같은 수명이다 — 보낸 뒤에도 유지, RAG↔Direct 토글과 새 대화에서 해제. 메시지 번들 한/영.
 - **요청**: 숨은 필드 하나(`name="excludeHistory"`) — HTMX 폼과 SSE 의 `FormData(form)` 가 그대로 싣는다(태그 칩의 `#chat-tags-input` 선례). REST(`POST /api/v1/chat`)는 `ChatRequest` 필드.
-- **저장**: 턴마다 저장한다 — Flyway `V10` 으로 `conversation_turns` 에 컬럼 하나(기본 0). 근거 셋: "왜 앞 대화를 무시했지?"의 기록 · 버블 표시 · 재사용(`/api/v1/questions/reuse`)이 원본 턴의 모드·`direct_mode`·`selected_tags` 를 복사하는 규칙(`ReuseLookup`)에 이 값도 더한다. 요청 쪽 값은 `TurnPersistence.Turn` 으로 들어간다.
+- **저장**: 턴마다 저장한다 — Flyway `V11` 로(V10 은 프로바이더 편집이 썼다) `conversation_turns` 에 컬럼 하나(기본 0). 근거 셋: "왜 앞 대화를 무시했지?"의 기록 · 버블 표시 · 재사용(`/api/v1/questions/reuse`)이 원본 턴의 모드·`direct_mode`·`selected_tags` 를 복사하는 규칙(`ReuseLookup`)에 이 값도 더한다. 요청 쪽 값은 `TurnPersistence.Turn` 으로 들어간다.
 - **버블 표시**: 두 글자 표기(`[RN]`)에 섞지 않는다(렌더러 넷·규칙의 출처 둘 — Key Constraints). 따로 작은 표시를 렌더러 넷 모두에 단다.
 
 #### 대가와 위험
@@ -619,7 +621,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 #### 작업 범위
 
-`chat.html`(체크박스 · Direct 비활성화 · 숨은 필드 · 버블 표시) · `chat-stream.js`/`base.html`/`fragments/message-assistant.html`(버블 표시) · 메시지 번들 한/영 · `ChatForm`/`ChatRequest`(필드 + Direct 가드) · `AgentState`(컴포넌트 하나 — `AgentState.of()` 위치 생성자도) · `AgentService`/`StreamingAgentService`(켜면 답변용 이력을 넘기지 않음) · `RetrievalService`(부스트 + 검증 쪽 상한) · `AnswerService`(다시 쓴 질문 줄 · 안내 문구) · Flyway `V10` + `TurnPersistence`·`MemoryRepository`·`QuestionReuseRepository`(복사) · 문서: CLAUDE.md(`AnswerService`·`RetrievalService` 항목), DATABASE.md(컬럼), UI.md, OPERATOR_MANUAL(채팅 사용법).
+`chat.html`(체크박스 · Direct 비활성화 · 숨은 필드 · 버블 표시) · `chat-stream.js`/`base.html`/`fragments/message-assistant.html`(버블 표시) · 메시지 번들 한/영 · `ChatForm`/`ChatRequest`(필드 + Direct 가드) · `AgentState`(컴포넌트 하나 — `AgentState.of()` 위치 생성자도) · `AgentService`/`StreamingAgentService`(켜면 답변용 이력을 넘기지 않음) · `RetrievalService`(부스트 + 검증 쪽 상한) · `AnswerService`(다시 쓴 질문 줄 · 안내 문구) · Flyway `V11` + `TurnPersistence`·`MemoryRepository`·`QuestionReuseRepository`(복사) · 문서: CLAUDE.md(`AnswerService`·`RetrievalService` 항목), DATABASE.md(컬럼), UI.md, OPERATOR_MANUAL(채팅 사용법).
 
 **완료 기준**: 꺼진 상태에서 프롬프트가 지금과 바이트 단위로 같다(회귀 테스트). 부스트 식·검증 쪽 상한·Direct/`meta` 무시·재사용 복사·버블 렌더의 테스트가 있다. 측정은 §6.30 의 하네스(8k·16k 선언)에 64k 를 더해 긴 독립 질문의 keyHit 이 같거나 나아지는지 본다.
 
