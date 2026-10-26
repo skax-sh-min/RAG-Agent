@@ -165,12 +165,12 @@ public final class HistoryPolicy {
     public static String renderAnswer(String answer, String responseMode, boolean askingDirect,
                                       boolean previousTurnWasDirect) {
         if (answer == null) return "";
-        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
         if (!askingDirect && !previousTurnWasDirect) {
             // 지금까지의 규칙 그대로. RAG 턴은 검색을 다시 하므로 이전 답변 전문은 [검색된 문서] 를
             // 모델의 검증되지 않은 산문으로 한 번 더 복제하는 셈이 된다.
-            return ownSummary.isBlank() ? cap(answer, RECENT_ANSWER_CAP) : ownSummary;
+            return digest(answer);
         }
+        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
         // 분기는 값이 아니라 성질로 한다 — ResponseModeBranchConventionTest 가 모드 값 비교를
         // 빌드 실패로 막는다(그 가드는 텍스트 검사라 이 주석에 그 패턴을 적는 것조차 걸린다).
         // summaryOnly() 가 마침 정확히 S 만 참이라 새 성질을 만들지 않는다.
@@ -181,9 +181,162 @@ public final class HistoryPolicy {
         return body.isBlank() ? answer : body;
     }
 
+    /**
+     * 답변의 <b>요약</b> — {@code ## 요약} 섹션, 없으면 앞 {@value #RECENT_ANSWER_CAP}자. RAG 턴을 물을 때 이전 RAG 턴이 이력에
+     * 실리는 모양이고({@link #renderAnswer} 의 첫 갈래), §6.30 칸 4 가 직전 Direct 턴의 답변을 이 모양으로 줄인다
+     * ({@code MemoryService.lastDirectAnswerDigest}).
+     */
+    public static String digest(String answer) {
+        if (answer == null) return "";
+        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
+        return ownSummary.isBlank() ? cap(answer, RECENT_ANSWER_CAP) : ownSummary;
+    }
+
     private static String cap(String answer, int cap) {
         if (cap <= 0 || answer.length() <= cap) return answer;
         return answer.substring(0, cap).strip() + "…";
+    }
+
+    // ── §6.30 프롬프트 축소 사다리 — 이력 조각 ────────────────────────────────────────
+
+    /**
+     * 칸 1 — <b>직전 질문을 뺀</b> 과거 질문의 글자 상한. 상수로 시작하고, 측정이 배포마다 다르게 나오면 그때 설정(핫)으로
+     * 뺀다(PLAN §6.30 바닥값 규칙).
+     */
+    public static final int PAST_QUESTION_CAP = 500;
+
+    /** 칸 1 이 자른 자리에 붙는 표시. */
+    static final String QUESTION_CAP_MARK = "…(생략)";
+
+    private static final String SUMMARY_HEADER = "[Conversation Summary]\n";
+    private static final String RECENT_HEADER = "[Recent]\n";
+    private static final String RECENT_SEPARATOR = "\n\n" + RECENT_HEADER;
+
+    /**
+     * 이력의 한 턴.
+     *
+     * @param answer {@code "\nA: "} 가 없는 조각이면 {@code null} — 그대로 다시 쓰기 위해 구별한다
+     */
+    public record Turn(String question, String answer) {
+        String render() {
+            return answer == null ? "Q: " + question : "Q: " + question + "\nA: " + answer;
+        }
+    }
+
+    /**
+     * 사다리가 다룰 조각으로 나눈 이력.
+     *
+     * @param original     나눈 원문 — 아무것도 줄이지 않았으면 이 값을 그대로 쓴다(바이트 단위로 지금과 같다)
+     * @param lead         턴 앞의 덩어리 — 요약 블록({@code [Conversation Summary]}), 또는 턴 경계로 읽히지 않은 이력
+     *                     전체. 없으면 {@code null}. 칸 2 가 <b>통째로</b> 뺀다(여러 턴을 섞은 한 덩어리라 부분이 없다)
+     * @param recentHeader 턴 앞에 {@code [Recent]} 머리말이 있었는가(요약 경로)
+     * @param turns        오래된 것부터. 마지막이 직전 턴이다
+     */
+    public record ParsedHistory(String original, String lead, boolean recentHeader, List<Turn> turns) {
+
+        public ParsedHistory {
+            turns = turns == null ? List.of() : List.copyOf(turns);
+        }
+
+        public boolean isEmpty() {
+            return lead == null && turns.isEmpty();
+        }
+    }
+
+    /**
+     * 이력 문자열을 사다리가 다룰 조각으로 나눈다 — 두 이력 경로가 만드는 두 모양(요약 경로
+     * {@code [Conversation Summary] … [Recent] Q:/A: …}, 폴백 경로 {@code Q:/A:} 의 나열)을 읽는다.
+     *
+     * <p>턴 경계는 {@link #trimToBudget} 과 같은 {@code "\n\nQ: "} 다 — 답변 본문 안의 {@code Q: } 줄(FAQ 형식)이 경계로
+     * 잘못 잡히는 오차도 그대로 안는다(PLAN §6.30 대가와 위험). 대신 <b>나눈 것을 다시 이으면 원문과 같아야 한다</b>는 것만은
+     * 지킨다: 같지 않으면 이력 전체를 덩어리 하나({@code lead})로 돌려준다 — 모르는 모양을 잘못 잘라 반쪽 턴을 싣느니
+     * 통째로 다루는 편이 낫다.
+     */
+    public static ParsedHistory parse(String history) {
+        if (history == null || history.isBlank()) return new ParsedHistory(history == null ? "" : history, null, false, List.of());
+        String lead = null;
+        String rest = history;
+        boolean header = false;
+        if (history.startsWith(SUMMARY_HEADER)) {
+            int at = history.indexOf(RECENT_SEPARATOR);
+            if (at < 0) return new ParsedHistory(history, history, false, List.of());
+            lead = history.substring(0, at);
+            rest = history.substring(at + RECENT_SEPARATOR.length());
+            header = true;
+        } else if (history.startsWith(RECENT_HEADER)) {
+            rest = history.substring(RECENT_HEADER.length());
+            header = true;
+        }
+        List<Turn> turns = new ArrayList<>();
+        for (String chunk : rest.split("\n\n(?=Q: )")) {
+            if (!chunk.startsWith("Q: ")) return opaque(history);   // 첫 조각만 여기 올 수 있다 — 모르는 머리
+            int a = chunk.indexOf("\nA: ");
+            turns.add(a < 0 ? new Turn(chunk.substring(3), null)
+                            : new Turn(chunk.substring(3, a), chunk.substring(a + 4)));
+        }
+        ParsedHistory parsed = new ParsedHistory(history, lead, header, turns);
+        return render(parsed.lead(), parsed.recentHeader(), parsed.turns()).equals(history) ? parsed : opaque(history);
+    }
+
+    private static ParsedHistory opaque(String history) {
+        return new ParsedHistory(history, history, false, List.of());
+    }
+
+    /** {@link #parse} 의 역 — 남은 조각을 원래 모양으로 다시 잇는다. */
+    public static String render(String lead, boolean recentHeader, List<Turn> turns) {
+        StringBuilder sb = new StringBuilder();
+        if (lead != null) sb.append(lead);
+        if (!turns.isEmpty()) {
+            if (recentHeader) sb.append(sb.isEmpty() ? RECENT_HEADER : RECENT_SEPARATOR);
+            else if (!sb.isEmpty()) sb.append("\n\n");
+            for (int i = 0; i < turns.size(); i++) {
+                if (i > 0) sb.append("\n\n");
+                sb.append(turns.get(i).render());
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 칸 1 — 질문 하나를 {@code cap} 자로. 넘지 않으면 그대로. */
+    public static String capQuestion(String question, int cap) {
+        if (question == null || question.length() <= cap) return question;
+        return question.substring(0, cap).strip() + QUESTION_CAP_MARK;
+    }
+
+    /**
+     * 칸 1 — 덩어리({@code lead}) 안의 과거 질문 줄을 자른다. 요약 블록이 LLM 없이 조립됐으면(이전 턴 전부에
+     * {@code ## 요약} 이 있거나 MICRO_TEXT 오프로드 모델이 없을 때 — 흔한 배포다) 그 안에 {@code Q: } 로 시작하는 원문 질문이
+     * 들어 있다. LLM 이 쓴 요약문에는 질문 줄이 없어 아무것도 바뀌지 않는다.
+     *
+     * <p>질문은 줄 첫머리의 {@code Q: } 부터 다음 {@code "\nA: "}(없으면 다음 턴 경계 또는 끝)까지다 — 여러 줄 질문도 통째로 잰다.
+     */
+    public static String capQuestionsIn(String block, int cap) {
+        if (block == null) return null;
+        StringBuilder out = new StringBuilder();
+        int pos = 0;
+        int q = lineStartOf(block, pos);
+        while (q >= 0) {
+            int start = q + 3;
+            int end = firstOf(block, start, "\nA: ", "\n\nQ: ");
+            out.append(block, pos, start).append(capQuestion(block.substring(start, end), cap));
+            pos = end;
+            q = lineStartOf(block, pos);
+        }
+        return out.append(block, pos, block.length()).toString();
+    }
+
+    /** {@code from} 이후 줄 첫머리에 오는 {@code "Q: "} 의 위치. 없으면 -1. */
+    private static int lineStartOf(String block, int from) {
+        int i = block.indexOf("Q: ", from);
+        while (i > 0 && block.charAt(i - 1) != '\n') i = block.indexOf("Q: ", i + 1);
+        return i;
+    }
+
+    private static int firstOf(String s, int from, String a, String b) {
+        int i = s.indexOf(a, from);
+        int j = s.indexOf(b, from);
+        if (i < 0) return j < 0 ? s.length() : j;
+        return j < 0 ? i : Math.min(i, j);
     }
 
     /**

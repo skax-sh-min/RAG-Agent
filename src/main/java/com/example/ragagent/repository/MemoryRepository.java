@@ -96,6 +96,18 @@ public interface MemoryRepository {
     List<Turn> getRecentTurns(String userId, String threadId);
 
     /**
+     * 이력에 실릴 <b>가장 최근 턴</b> — 싫어요 턴은 건너뛴다({@link #getHistory} 와 같은 제외). §6.30 칸 4 가 직전 턴의 답변을
+     * 요약으로 바꿀 때, 이력 문자열에는 없는 원문(Direct 답변은 {@code ## 요약} 을 뗀 본문으로 실린다)을 여기서 읽는다.
+     */
+    default Optional<Turn> getLastTurn(String userId, String threadId) {
+        List<Turn> recent = getRecentTurns(userId, threadId);
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            if (!"DISLIKE".equals(recent.get(i).feedback())) return Optional.of(recent.get(i));
+        }
+        return Optional.empty();
+    }
+
+    /**
      * 이 턴 <b>앞의</b> 질문들 — 같은 대화에서 {@code turnId} 보다 먼저 저장된 것 가운데 최근 {@code limit} 개,
      * 오래된 것부터. 답변 뒤 질문 다듬기의 재료다: 방금 끝난 턴이면 "직전 질문들"이고, 과거 턴을 다듬는 백필에서는
      * 그 턴 시점의 이전 질문이다 — {@link #getRecentTurns} 로는 대화의 <em>마지막</em> 턴들이 나와, 대화 중간의

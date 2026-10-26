@@ -377,6 +377,28 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("§6.30 B — 조기 종료는 검색 결과가 아니라 답변 프롬프트에 실린 문서로 비교한다")
+    void rejectionComparesTheDocumentsTheModelSaw() {
+        Document a = new Document("a", "x", java.util.Map.of());
+        Document b = new Document("b", "y", java.util.Map.of());
+        Document c = new Document("c", "z", java.util.Map.of());
+        com.example.ragagent.model.SentPrompt sawAB = new com.example.ragagent.model.SentPrompt(
+                List.of("a", "b"), null, List.of());
+        AgentState first = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(a, b)).lastSent(sawAB)
+                .rememberRejection(AgentState.RetryGate.INSUFFICIENT).build();
+
+        // 재검색이 c 를 더 가져왔지만 사다리가 잘라 모델은 같은 a, b 를 봤다 — 같은 재료다
+        AgentState sameSeen = first.toBuilder().retrievedDocs(List.of(a, b, c)).lastSent(sawAB).build();
+        assertThat(sameSeen.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)).isTrue();
+
+        // c 가 실렸으면 재료가 바뀌었다
+        AgentState newSeen = first.toBuilder().retrievedDocs(List.of(a, b, c))
+                .lastSent(new com.example.ragagent.model.SentPrompt(List.of("a", "b", "c"), null, List.of())).build();
+        assertThat(newSeen.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)).isFalse();
+    }
+
+    @Test
     @DisplayName("runStreaming — RETRIEVAL 직후 listener.onImagesReady()가 state.imageRefs()로 호출됨")
     void runStreaming_firesOnImagesReadyAfterRetrieval() {
         List<String> refs = List.of("images/doc1/p1_img1.png");

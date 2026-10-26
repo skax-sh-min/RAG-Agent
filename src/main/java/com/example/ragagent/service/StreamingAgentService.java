@@ -228,6 +228,9 @@ public class StreamingAgentService {
                         CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                                 () -> resolveHistory(userId, form.threadId(), false,
                                         form.responseModeOrDefault(), rm, form.question()), exec);
+                        // §6.30 칸 4 — 블로킹 경로(AgentService.chat)와 같다.
+                        CompletableFuture<String> digestF = CompletableFuture.supplyAsync(
+                                () -> memoryService.lastDirectAnswerDigest(userId, form.threadId()), exec);
                         // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
                         // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
                         // 독립화를 기다린다.
@@ -241,7 +244,7 @@ public class StreamingAgentService {
                         AgentState.Builder builder =
                                 AgentState.of(form.question(), form.version(), form.threadId(),
                                                 userId, historyF.join(), rm, false, locale)
-                                        .toBuilder().questionType(typeF.join());
+                                        .toBuilder().questionType(typeF.join()).lastAnswerDigest(digestF.join());
                         if (condensed != null) {
                             builder.searchQuestion(condensed.searchQuestion())
                                    .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());

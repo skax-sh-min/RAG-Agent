@@ -106,6 +106,9 @@ public class AgentService {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                             () -> resolveHistory(userId, request.threadId(), false,
                                     request.responseMode(), request.routingMode(), request.question()), exec);
+                    // §6.30 칸 4 — 직전 Direct 답변의 요약. 이력 문자열에는 없어 따로 읽는다(RAG 턴만 — 사다리는 RAG 답변 전용).
+                    CompletableFuture<String> digestF = CompletableFuture.supplyAsync(
+                            () -> memoryService.lastDirectAnswerDigest(userId, request.threadId()), exec);
                     // §10.12 — 짧은 후속 질문이면 먼저 독립화하고, 분류는 그 결과를 본다. 게이트가
                     // 순수해서(길이만 본다) 긴 질문에서는 이 future 가 이미 완료된 채로 만들어지므로
                     // 분류가 즉시 출발한다 — 오늘의 병렬성이 그대로다.
@@ -123,7 +126,7 @@ public class AgentService {
                             historyF.join(),
                             request.routingMode(),
                             false, ctx.locale())
-                        .toBuilder().questionType(typeF.join());
+                        .toBuilder().questionType(typeF.join()).lastAnswerDigest(digestF.join());
                     if (condensed != null) {
                         // 그래프 바깥에서 일어난 호출이라 여기서 실어 준다 — 안 실으면 사용자가 보는
                         // LLM 호출 수·토큰이 실제보다 적게 나온다(classifyOnly 의 알려진 누락과 같은 함정).

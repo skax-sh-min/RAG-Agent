@@ -254,6 +254,21 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public Optional<Turn> getLastTurn(String userId, String threadId) {
+        List<Turn> rows = jdbc.query(
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode " +
+            "FROM conversation_turns t " +
+            REUSE_SOURCE_JOIN +
+            "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "ORDER BY t.id DESC LIMIT 1",
+                TURN_ROW_MAPPER,
+                userId, threadId);
+        return rows.stream().findFirst();
+    }
+
+    @Override
     public List<String> findQuestionsBefore(String userId, String threadId, long turnId, int limit) {
         List<String> newestFirst = jdbc.queryForList(
                 "SELECT question FROM conversation_turns " +

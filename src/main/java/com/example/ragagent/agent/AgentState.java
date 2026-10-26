@@ -2,6 +2,7 @@ package com.example.ragagent.agent;
 
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.model.SentPrompt;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.ai.document.Document;
 
@@ -66,6 +67,13 @@ public record AgentState(
         String lastRejection         // §6.27 조기 종료 — 직전에 재시도를 부른 반려의 서명(게이트 + 그 시도가 본
                                      // 청크 id 집합, rejectionKey()). 같은 서명으로 또 반려되면 다음 시도도
                                      // 같은 재료를 보므로 재시도를 멈춘다. null = 아직 반려 없음
+        ,
+        SentPrompt lastSent,         // §6.30 — 가장 최근 답변 시도가 실제로 보낸 문서·이력 절단(+ 그 답변을 평가한 검증이
+                                     // 근거로 썼다고 보고한 문서). 재시도의 교체·조기 종료·이력 유지·뺄 순서가 검색
+                                     // 결과가 아니라 이것을 읽는다. null = 아직 답변 전(또는 RAG 답변이 아닌 턴)
+        String lastAnswerDigest      // §6.30 칸 4 — 직전 턴이 Direct 였을 때 그 답변의 `## 요약`(없으면 앞 1,200자).
+                                     // 이력에는 Direct 답변이 요약을 뗀 본문으로 실려 있어 파싱으로는 얻을 수 없으므로
+                                     // 이력을 불러올 때 따로 실어 온다. null = 해당 없음
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -112,7 +120,8 @@ public record AgentState(
                 0, 0, 0,
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
-                0, List.of(), null, null);
+                0, List.of(), null, null,
+                null, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -150,13 +159,26 @@ public record AgentState(
      * 하나도 바꾸지 못했을 때, 근거 이탈 재시도는(재검색이 없으므로) 두 번째 반려에서 멈춘다.
      */
     public boolean repeatsLastRejection(RetryGate gate) {
-        return lastRejection != null && lastRejection.equals(rejectionKey(gate, retrievedDocs));
+        return lastRejection != null && lastRejection.equals(rejectionKeyOf(gate, seenDocKeys(lastSent, retrievedDocs)));
+    }
+
+    /**
+     * §6.30 B — 모델이 <b>실제로 본</b> 문서의 키. 답변 프롬프트에 실린 집합이 있으면 그것이고, 없으면(답변 전·옛 경로)
+     * 검색 결과 전체다. 조기 종료가 검색 결과로 비교하면, 검색 결과만 바뀌고 사다리가 같은 문서를 실은 재시도가 멈추지 않아
+     * 재시도 예산을 다 쓴다.
+     */
+    private static List<String> seenDocKeys(SentPrompt sent, List<Document> retrieved) {
+        return sent != null ? sent.docKeys() : retrieved.stream().map(SentPrompt::keyOf).toList();
     }
 
     /** 반려 서명 — 게이트와 청크 id 집합(순서 무시). 순위가 바뀐 것은 재료가 바뀐 것이 아니다. */
     public static String rejectionKey(RetryGate gate, List<Document> docs) {
-        return gate.name() + ":" + docs.stream()
-                .map(d -> Objects.toString(d.getId(), ""))
+        return rejectionKeyOf(gate, docs.stream().map(SentPrompt::keyOf).toList());
+    }
+
+    private static String rejectionKeyOf(RetryGate gate, List<String> keys) {
+        return gate.name() + ":" + keys.stream()
+                .map(k -> Objects.toString(k, ""))
                 .sorted()
                 .collect(Collectors.joining(","));
     }
@@ -202,6 +224,8 @@ public record AgentState(
         private List<String> excludedDocIds      = List.of();
         private String searchQuestion;
         private String lastRejection;
+        private SentPrompt lastSent;
+        private String lastAnswerDigest;
 
         Builder() {}
 
@@ -239,6 +263,8 @@ public record AgentState(
             this.excludedDocIds     = s.excludedDocIds;
             this.searchQuestion     = s.searchQuestion;
             this.lastRejection      = s.lastRejection;
+            this.lastSent           = s.lastSent;
+            this.lastAnswerDigest   = s.lastAnswerDigest;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -271,8 +297,16 @@ public record AgentState(
         public Builder excludedDocIds(List<String> v)      { this.excludedDocIds = v;     return this; }
         public Builder searchQuestion(String v)            { this.searchQuestion = v;     return this; }
         public Builder lastRejection(String v)             { this.lastRejection = v;      return this; }
-        /** 지금 들고 있는 검색 결과로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). */
-        public Builder rememberRejection(RetryGate gate)   { this.lastRejection = rejectionKey(gate, retrievedDocs); return this; }
+        public Builder lastSent(SentPrompt v)              { this.lastSent = v;           return this; }
+        public Builder lastAnswerDigest(String v)          { this.lastAnswerDigest = v;   return this; }
+        /**
+         * 이 시도가 본 문서로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). 본 문서는 답변 프롬프트에
+         * 실린 집합이다(§6.30 B, {@link AgentState#repeatsLastRejection} 와 같은 키).
+         */
+        public Builder rememberRejection(RetryGate gate) {
+            this.lastRejection = rejectionKeyOf(gate, seenDocKeys(lastSent, retrievedDocs));
+            return this;
+        }
         /** RETRIEVAL 을 다시 도는 분기에서만 호출한다 — {@code incrementRetry()} 와 짝이 아니라 별개다. */
         public Builder incrementRetrievalRetry()           { this.retrievalRetries++;     return this; }
 
@@ -291,7 +325,8 @@ public record AgentState(
                     totalInputTokens, totalOutputTokens, llmCallCount,
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
-                    retrievalRetries, excludedDocIds, searchQuestion, lastRejection);
+                    retrievalRetries, excludedDocIds, searchQuestion, lastRejection,
+                    lastSent, lastAnswerDigest);
         }
     }
 }
