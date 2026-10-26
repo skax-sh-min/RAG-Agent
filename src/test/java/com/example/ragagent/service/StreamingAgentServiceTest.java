@@ -171,6 +171,21 @@ class StreamingAgentServiceTest {
     }
 
     @Test
+    @DisplayName("directMode=true + 라우팅 모드 없음·틀림 — 이력 예산과 상태가 COST_FIRST 를 받는다(null 이면 이력 예산이 NPE)")
+    void run_directModeWithoutRoutingMode_defaultsToCostFirst() {
+        for (String raw : new String[]{null, "", "BOGUS"}) {
+            ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+            when(agentGraph.runStreaming(stateCaptor.capture(), any())).thenReturn(resultState("답변"));
+
+            service.run("u1", new ChatForm("질문", "t1", "v1", raw, true, null, null), emitter);
+
+            verify(memoryService).maxConversationChars(eq(true), any(), eq(RoutingMode.COST_FIRST), eq(true), eq("질문"));
+            assertThat(stateCaptor.getValue().routingMode()).isEqualTo(RoutingMode.COST_FIRST);
+            org.mockito.Mockito.clearInvocations(memoryService);
+        }
+    }
+
+    @Test
     @DisplayName("일반 RAG 모드 — classifier 호출 결과가 초기 AgentState.questionType 에 반영")
     void run_normalMode_setsQuestionTypeFromClassifier() {
         ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);

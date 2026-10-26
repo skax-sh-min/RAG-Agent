@@ -599,12 +599,18 @@ public class StreamingAgentService {
                 : memoryService.getHistory(userId, threadId, budget, askingDirect);
     }
 
+    /**
+     * 비었거나 모르는 값이면 {@code COST_FIRST} — 블로킹 경로의 {@code ChatRequest} 와 같은 기본값이다.
+     * {@code null} 을 돌려주던 동안은 {@code AgentState.of()} 가 뒤늦게 기본값을 채워 RAG 턴은 멀쩡했지만,
+     * 그 전에 도는 Direct 턴의 이력 예산({@code MemoryService.maxConversationChars})이 그 {@code null} 로
+     * 사이트의 라우팅을 물어 NPE 로 턴이 실패했다(라우팅 모드 없이 보낸 요청 · 저장된 모드 값이 틀린 대화).
+     */
     private static RoutingMode parseRoutingMode(String value) {
-        if (value == null || value.isBlank()) return null;
+        if (value == null || value.isBlank()) return RoutingMode.COST_FIRST;
         try {
             return RoutingMode.valueOf(value);
         } catch (IllegalArgumentException e) {
-            return null;
+            return RoutingMode.COST_FIRST;
         }
     }
 }
