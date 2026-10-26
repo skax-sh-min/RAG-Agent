@@ -134,7 +134,7 @@ public class AgentGraph {
                             // 재료다. 소진과 같이 다룬다(아래로 내려가 CRITIC — 그 게이트는 다른 실패라 따로 판단한다).
                             log.info("[AgentGraph] retry stopped early reason=ANSWER_INSUFFICIENT thread={} — rejected again "
                                     + "on the same {} chunk(s) after retry #{}; another search round would bring the same material (detail={})",
-                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                                    state.threadId(), state.seenDocCount(), state.retryCount(), state.evalReason());
                         } else {
                             state = state.toBuilder().incrementRetry().incrementRetrievalRetry()
                                     .rememberRejection(AgentState.RetryGate.INSUFFICIENT).build();
@@ -168,7 +168,7 @@ public class AgentGraph {
                             // 같은 재료로 한 번 더 써 봐야 같은 쪽으로 기운다.
                             log.info("[AgentGraph] retry stopped early reason=CRITIC_UNGROUNDED thread={} — ungrounded again "
                                     + "on the same {} chunk(s) after retry #{} (detail={})",
-                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                                    state.threadId(), state.seenDocCount(), state.retryCount(), state.evalReason());
                             yield Node.FINALIZE;
                         }
                         state = state.toBuilder().incrementRetry()

@@ -90,11 +90,18 @@ public final class PromptLadder {
      * §6.30 D — 재시도에서 문서를 빼는 순서. 재시도로 들어온 문서(교체분·+1)는 대개 RRF 하위에 서는데, 순위로만 빼면 재시도가
      * 가져온 새 근거가 가장 먼저 잘려 모델은 지난번과 같은 문서를 본다. 그래서 무리를 셋으로 나눈다:
      * <ol>
-     *   <li>직전 시도에 실렸지만 근거로 쓰였다고 보고되지 않은 문서 — 보고가 없으면(모름) 직전에 실렸던 문서 전부</li>
+     *   <li>직전 시도에 실렸지만 근거로 쓰였다고 보고되지 않은 문서</li>
      *   <li>새로 들어온 문서(직전 시도에 실리지 않았던 것)</li>
-     *   <li>근거로 쓰였다고 보고된 문서</li>
+     *   <li>근거로 쓰였다고 보고된 문서 — 보고가 없으면(모름) 직전에 실렸던 문서 전부</li>
      * </ol>
      * 무리 안에서는 하위부터, 1순위는 언제나 남긴다. 이번 시도에서만 빼는 것이라 교체와 달리 앞쪽 절반도 대상이다.
+     *
+     * <p><b>보고가 없으면 직전에 실린 문서를 지킨다</b> — 빈 보고는 "안 썼다"가 아니라 "모른다"다({@code RetrievalEviction} 의
+     * 가드 ①과 같은 규약). 설계(PLAN §6.30 D)는 반대로 그 문서들을 첫 무리로 뒀는데, 측정에서 바닥 아래로 내려간 재시도가
+     * 1순위 + 지난번에 잘린 하위 문서로 갈아탔다가 다음 시도에서 원래 상위 집합으로 돌아오는 왕복을 했다 — 보낸 집합이 매번 달라
+     * 조기 종료(§6.30 B)도 걸리지 않아, 12K 긴 질문에서 재시도가 11 → 19회로 늘고 정답 포함이 6 → 4건으로 줄었다
+     * (documents/PROMPT_LADDER_EVALUATION.md). 근거 없음 반려는 대개 보고가 비어 오므로 이 경우가 흔하다. 지키면 새 문서가
+     * 없을 때 재시도는 같은 문서를 다시 보내고, 같은 재료로 또 반려되면 조기 종료가 멈춘다.
      *
      * @param keys          이번 시도의 문서 키(순위 순)
      * @param previousSent  직전 시도에 실린 문서 키
@@ -109,7 +116,7 @@ public final class PromptLadder {
         for (int i = keys.size() - 1; i >= 1; i--) {
             String key = keys.get(i);
             if (!previousSent.contains(key)) fresh.add(i);
-            else if (usedKnown && reportedUsed.contains(key)) used.add(i);
+            else if (!usedKnown || reportedUsed.contains(key)) used.add(i);   // 모름 → 지킨다
             else unusedSeen.add(i);
         }
         List<Integer> order = new ArrayList<>(unusedSeen);

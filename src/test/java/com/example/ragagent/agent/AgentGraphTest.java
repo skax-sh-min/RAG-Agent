@@ -391,6 +391,8 @@ class AgentGraphTest {
         // 재검색이 c 를 더 가져왔지만 사다리가 잘라 모델은 같은 a, b 를 봤다 — 같은 재료다
         AgentState sameSeen = first.toBuilder().retrievedDocs(List.of(a, b, c)).lastSent(sawAB).build();
         assertThat(sameSeen.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)).isTrue();
+        // 조기 종료 로그의 청크 수도 비교한 집합의 크기다(검색 결과 3개가 아니라)
+        assertThat(sameSeen.seenDocCount()).isEqualTo(2);
 
         // c 가 실렸으면 재료가 바뀌었다
         AgentState newSeen = first.toBuilder().retrievedDocs(List.of(a, b, c))

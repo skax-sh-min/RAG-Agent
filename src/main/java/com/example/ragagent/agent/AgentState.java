@@ -162,6 +162,11 @@ public record AgentState(
         return lastRejection != null && lastRejection.equals(rejectionKeyOf(gate, seenDocKeys(lastSent, retrievedDocs)));
     }
 
+    /** {@link #repeatsLastRejection} 가 비교하는 집합의 크기 — 조기 종료 로그용(검색 결과 수가 아니다). */
+    public int seenDocCount() {
+        return seenDocKeys(lastSent, retrievedDocs).size();
+    }
+
     /**
      * §6.30 B — 모델이 <b>실제로 본</b> 문서의 키. 답변 프롬프트에 실린 집합이 있으면 그것이고, 없으면(답변 전·옛 경로)
      * 검색 결과 전체다. 조기 종료가 검색 결과로 비교하면, 검색 결과만 바뀌고 사다리가 같은 문서를 실은 재시도가 멈추지 않아

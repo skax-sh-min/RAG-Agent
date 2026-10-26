@@ -291,7 +291,27 @@ class PromptLadderTest {
             assertThat(PromptLadder.retryRemovalOrder(keys, Set.of("a", "b", "c", "d"), Set.of("b")))
                     .containsExactly(3, 2, 4, 1);
             assertThat(PromptLadder.retryRemovalOrder(keys, Set.of("a", "b", "c", "d"), Set.of()))
-                    .as("보고가 없으면(모름) 직전에 실렸던 문서 전부가 첫 무리").containsExactly(3, 2, 1, 4);
+                    .as("보고가 없으면(모름) 직전에 실렸던 문서 전부를 지킨다 — 새 문서부터 뺀다").containsExactly(4, 3, 2, 1);
+        }
+
+        @Test
+        @DisplayName("D — 보고가 없으면 바닥 아래의 재시도가 하위 문서로 갈아타지 않는다(같은 문서를 다시 보낸다)")
+        void unknownUseKeepsThePreviouslySentSet() {
+            // 측정에서 본 모양: 15개 중 7개만 들어가고, 근거 없음 반려라 검증이 쓴 문서를 보고하지 않았다
+            List<String> keys = java.util.stream.IntStream.rangeClosed(1, 15).mapToObj(i -> "d" + i).toList();
+            Set<String> sent = Set.copyOf(keys.subList(0, 7));
+
+            PromptLadder.Result unknown = PromptLadder.plan(new PromptLadder.Input(Collections.nCopies(15, 1_000L),
+                    PromptLadder.retryRemovalOrder(keys, sent, Set.of()), 8, HistoryPolicy.parse(""), null, null, 0,
+                    SentPrompt.HistoryCut.NONE), 7_000).at(0, 1);
+            assertThat(unknown.keptDocs()).as("같은 7개 — 같은 재료로 또 반려되면 조기 종료가 멈춘다")
+                    .containsExactly(0, 1, 2, 3, 4, 5, 6);
+
+            PromptLadder.Result known = PromptLadder.plan(new PromptLadder.Input(Collections.nCopies(15, 1_000L),
+                    PromptLadder.retryRemovalOrder(keys, sent, Set.of("d1", "d2")), 8, HistoryPolicy.parse(""), null,
+                    null, 0, SentPrompt.HistoryCut.NONE), 7_000).at(0, 1);
+            assertThat(known.keptDocs()).as("보고가 있으면 봤지만 안 쓴 것을 빼고 안 본 것을 보낸다")
+                    .containsExactly(0, 1, 7, 8, 9, 10, 11);
         }
 
         @Test

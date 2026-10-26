@@ -1639,7 +1639,8 @@ public class AnswerService {
      *
      * <p><b>재시도 모드</b>(검증 실패로 다시 답하는 시도, {@code fresh} 아님): 직전 시도가 이력에 한 절단을 먼저 다시 하고 넘치는
      * 몫은 문서로 흡수하며(§6.30 C — 근거가 모자라서 한 재시도가 맥락까지 깎지 않게), 문서를 빼는 순서는 순위가 아니라 "직전에
-     * 봤지만 안 쓴 것 → 새로 들어온 것 → 쓴 것"이다(D — 재시도가 가져온 새 근거가 가장 먼저 잘리지 않게).
+     * 봤지만 안 쓴 것 → 새로 들어온 것 → 쓴 것"이다(D — 재시도가 가져온 새 근거가 가장 먼저 잘리지 않게. 검증이 쓴 문서를 보고하지
+     * 않았으면 직전에 실린 것은 전부 "쓴 것"으로 지킨다 — {@link PromptLadder#retryRemovalOrder}).
      */
     private Ladder ladderFor(AgentState state, String providerName, boolean streaming, boolean fresh) {
         List<Document> docs = state.retrievedDocs();

@@ -192,10 +192,14 @@ class AnswerServiceLadderTest {
 
     /** 검증 실패 재시도의 상태 — 큰 그 앞 턴 + 작은 직전 턴, 문서 11개(escalation +1). */
     private AgentState retryState(List<String> previousSentKeys) {
+        return retryState(previousSentKeys, List.of());
+    }
+
+    private AgentState retryState(List<String> previousSentKeys, List<String> reportedUsedKeys) {
         String history = turn("그앞질문", 1_490) + "\n\n" + turn("직전질문", 90);
         return state(docs(11, 1_000), history).toBuilder()
                 .retryCount(1).evalReason("근거 부족")
-                .lastSent(new SentPrompt(previousSentKeys, SentPrompt.HistoryCut.NONE, List.of()))
+                .lastSent(new SentPrompt(previousSentKeys, SentPrompt.HistoryCut.NONE, reportedUsedKeys))
                 .build();
     }
 
@@ -222,9 +226,22 @@ class AnswerServiceLadderTest {
         stub(0, PASS);
         List<String> previous = docs(10, 1_000).stream().map(Document::getId).toList();   // d11 은 이번에 새로 들어왔다
 
-        service.execute(retryState(previous));
+        service.execute(retryState(previous, List.of("d1", "d2")));
 
         assertThat(lastPrompt()).as("직전에 봤지만 쓰였다는 보고가 없는 하위 문서(d10)가 먼저 빠진다")
                 .contains("문서11-").doesNotContain("문서10-");
+    }
+
+    @Test
+    @DisplayName("§6.30 D — 검증이 쓴 문서를 보고하지 않았으면(모름) 직전에 실린 문서를 지킨다")
+    void retryWithUnknownUseKeepsThePreviouslySentDocuments() {
+        windows.record("lm", WINDOW, ProviderContextWindows.Source.CONFIGURED);
+        stub(0, PASS);
+        List<String> previous = docs(10, 1_000).stream().map(Document::getId).toList();
+
+        service.execute(retryState(previous));
+
+        assertThat(lastPrompt()).as("빈 보고는 '안 썼다'가 아니라 '모른다' — 새로 들어온 d11 이 먼저 빠진다")
+                .contains("문서10-").doesNotContain("문서11-");
     }
 }
