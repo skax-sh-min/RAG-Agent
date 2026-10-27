@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -183,6 +184,29 @@ class StreamingAgentServiceTest {
             assertThat(stateCaptor.getValue().routingMode()).isEqualTo(RoutingMode.COST_FIRST);
             org.mockito.Mockito.clearInvocations(memoryService);
         }
+    }
+
+    @Test
+    @DisplayName("§6.31 — 이력 제외를 켠 폼은 상태에 실리고, 결과가 켠 채로 끝나면 그 턴을 표시한다")
+    void run_excludeHistory_reachesTheStateAndIsPersisted() {
+        ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+        when(agentGraph.runStreaming(stateCaptor.capture(), any()))
+                .thenReturn(resultState("답변").toBuilder().excludeHistory(true).build());
+
+        service.run("u1", new ChatForm("질문", "t1", "v1", "COST_FIRST", false, null, null, true), emitter);
+
+        assertThat(stateCaptor.getValue().excludeHistory()).isTrue();
+        verify(memoryService).markHistoryExcluded(42L);
+    }
+
+    @Test
+    @DisplayName("§6.31 — 그래프가 끈 턴(meta 판정)은 요청이 켰어도 표시하지 않는다 — 저장값은 결과에서 읽는다")
+    void run_excludeHistory_followsTheResultNotTheRequest() {
+        when(agentGraph.runStreaming(any(), any())).thenReturn(resultState("답변"));   // excludeHistory=false
+
+        service.run("u1", new ChatForm("질문", "t1", "v1", "COST_FIRST", false, null, null, true), emitter);
+
+        verify(memoryService, never()).markHistoryExcluded(anyLong());
     }
 
     @Test

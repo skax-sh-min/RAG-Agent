@@ -98,6 +98,22 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("§6.31 — RAG 로 물었는데 meta 로 판정되면 이력 제외를 끈 채 DIRECT_ANSWER 로 간다(이력이 곧 답, 저장값도 끈 것)")
+    void metaTurnDropsTheHistoryExclusion() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("meta").build());
+        org.mockito.ArgumentCaptor<AgentState> seen = org.mockito.ArgumentCaptor.forClass(AgentState.class);
+        when(directAnswerService.execute(seen.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST).toBuilder()
+                .excludeHistory(true).historyBoost(4).build());
+
+        assertThat(seen.getValue().excludeHistory()).isFalse();
+        assertThat(result.excludeHistory()).isFalse();
+        assertThat(result.historyBoost()).isZero();
+    }
+
+    @Test
     @DisplayName("classifier 가 non-meta 분류 → RETRIEVAL → ANSWER 진행")
     void classifier_nonMeta_goesToRetrieval() {
         when(classifierService.execute(any()))

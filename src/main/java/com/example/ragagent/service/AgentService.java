@@ -140,9 +140,11 @@ public class AgentService {
             }
         }
         // carry the selected search-scope tags + response mode into the graph state.
+        // §6.31 이력 제외도 — 이력은 그대로 불러 둔다: 분류기가 meta 로 판정하면 이 턴은 이력으로 답한다(AgentGraph 가 끈다).
         initial = initial.toBuilder()
                 .selectedTags(request.selectedTags())
                 .responseMode(request.responseMode())
+                .excludeHistory(request.excludeHistory())
                 .build();
 
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

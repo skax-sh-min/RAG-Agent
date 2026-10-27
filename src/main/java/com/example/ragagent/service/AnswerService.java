@@ -84,7 +84,7 @@ public class AnswerService {
      * 32k model the effective ceiling is closer to 20,000 chars and must come from {@code topK} /
      * {@code chunk-size} rather than from this constant. See OPERATOR_MANUAL §8.
      */
-    private static final int MAX_EVAL_EXCERPT_CHARS = 32_000;
+    static final int MAX_EVAL_EXCERPT_CHARS = 32_000;   // §6.31 이력 제외 부스트의 상한도 이 값을 읽는다(RetrievalService)
 
     /**
      * Output cap for the evaluation call only.
@@ -1466,7 +1466,9 @@ public class AnswerService {
         return size.render("%s | thread=%s mode=%s%s%s".formatted(tail, state.threadId(),
                 state.responseMode().name() + (state.directMode() ? "(Direct)" : ""),
                 state.retryCount() > 0 ? " retry=" + state.retryCount() : "",
-                fitted.note() != null ? " [축소됨]" : ""));
+                (state.excludeHistory() ? fitted.docs().size() < state.retrievedDocs().size() : fitted.note() != null)
+                        ? " [축소됨]" : "")
+                + (state.excludeHistory() ? " [이력 제외]" : ""));
     }
 
     /**
@@ -1548,6 +1550,16 @@ public class AnswerService {
     }
 
     /**
+     * §6.31 — 사용자가 이력 제외를 켠 턴의 {@code [이전 대화]} 자리. 칸 5 와 같은 한 줄이되 이유가 다르다(길이 한도가 아니라
+     * 사용자의 선택). 독립 질문이면 {@code null} — 블록 자체가 빠진다.
+     */
+    static String excludedHistoryLine(AgentState state) {
+        if (!state.wasCondensed()) return null;
+        return "(이번 답변에서는 이전 대화를 제외했다. 이 질문을 이전 대화에 비추어 다시 쓰면: "
+                + state.searchQuestion().replaceAll("\\s+", " ").strip() + ")";
+    }
+
+    /**
      * 예산에 맞춘 결과 — 무엇이 얼마나 남았는지.
      *
      * @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}.
@@ -1616,6 +1628,7 @@ public class AnswerService {
         List<SizedDoc> kept = r.keptDocs().stream().map(ladder.sized()::get).toList();
         int total = state.retrievedDocs().size();
         String note = noteFor(total, kept.size(), r, state.wasCondensed());
+        boolean excluded = state.excludeHistory();
         if (note != null) {
             PromptBudget budget = ladder.budget();
             log.warn("[BUDGET] {} → 축소 사다리 칸 {}까지: 문서 {}→{}개(바닥 {}), 이력 {}→{}자{} (재시도 축소 단계 {}). "
@@ -1623,9 +1636,16 @@ public class AnswerService {
                     budget == null ? "창 모름"
                             : "컨텍스트 창 %d토큰(출력 예약 %d) → 입력 예산 %d토큰".formatted(budget.contextWindow(),
                                     budget.outputReservation(), budget.inputBudget()),
-                    r.highestRung(), total, kept.size(), ladder.floor(), lengthOf(state.conversationHistory()),
+                    r.highestRung(), total, kept.size(), ladder.floor(), lengthOf(ladderHistory(state)),
                     lengthOf(r.history()), r.cut().allDropped() && r.history().length() > 0 ? "(다시 쓴 질문 한 줄)" : "",
                     shrinkLevel);
+        }
+        if (excluded) {
+            // §6.31 — 이력은 사다리에 넣지 않았다(ladderFor). 자리에는 후속 질문의 다시 쓴 질문 한 줄만, 안내는 사용자가 고른
+            // 것을 사실로 말한다 — 축소 안내와 문구를 가른다.
+            String line = excludedHistoryLine(state);
+            return new Fitted(kept, line == null ? "" : line,
+                    exclusionNoteText(state.historyBoost(), total, kept.size()), r.cut());
         }
         return new Fitted(kept, r.history(), note, r.cut());
     }
@@ -1650,11 +1670,15 @@ public class AnswerService {
         List<SizedDoc> sized = docs.stream().map(budget == null ? SizedDoc::unmeasured : SizedDoc::measured).toList();
         // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
         // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
+        // §6.31 이력 제외 — "사다리를 칸 5 에서 시작"과 같다: 사다리에는 빈 이력을 넘기고(되돌려 채우기가 이력을 다시 싣지
+        // 않게), 그 자리에 갈 다시 쓴 질문 한 줄은 고정비로 센다. 직전 Direct 답변의 요약(칸 4)도 싣지 않는다.
+        boolean excluded = state.excludeHistory();
         long fixedCost = budget == null ? 0 : answerFixedCost(
                 TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode())),
                 TokenEstimator.estimate(state.question()),
                 TokenEstimator.estimate(String.join("\n", state.retrievalWarnings())),
-                TokenEstimator.estimate(retryFeedback(state)));
+                TokenEstimator.estimate(retryFeedback(state)))
+                + (excluded ? TokenEstimator.estimate(excludedHistoryLine(state)) : 0);
         SentPrompt previous = state.lastSent();
         boolean retry = !fresh && state.retryCount() > 0 && previous != null;
         List<Integer> order = retry
@@ -1663,8 +1687,8 @@ public class AnswerService {
                 : PromptLadder.rankRemovalOrder(docs.size());
         int floor = PromptLadder.floor(props.searchTopKSafe(), docs.size());
         PromptLadder.Input in = new PromptLadder.Input(sized.stream().map(SizedDoc::tokens).toList(), order, floor,
-                HistoryPolicy.parse(state.conversationHistory()), state.lastAnswerDigest(),
-                condensedHistoryLine(state), fixedCost, retry ? previous.historyCut() : null);
+                HistoryPolicy.parse(ladderHistory(state)), excluded ? null : state.lastAnswerDigest(),
+                excluded ? null : condensedHistoryLine(state), fixedCost, retry ? previous.historyCut() : null);
         return new Ladder(sized, PromptLadder.plan(in, budget == null ? -1 : budget.inputBudget()), budget, floor);
     }
 
@@ -1684,6 +1708,24 @@ public class AnswerService {
 
     /** 이력에 대해 사용자에게 할 말 — 사다리가 이력을 얼마나 줄였는가. */
     enum HistoryNote { NONE, PARTLY, REMOVED, REPLACED }
+
+    /** 사다리가 받는 이력 — §6.31 이력 제외면 비어 있다(이력 자체는 불러 둔다: meta 로 판정되면 그 턴은 이력으로 답한다). */
+    private static String ladderHistory(AgentState state) {
+        return state.excludeHistory() ? "" : state.conversationHistory();
+    }
+
+    /**
+     * §6.31 — 이력 제외를 켠 턴의 안내. 경고가 아니라 사용자가 고른 것의 결과를 말한다: 이전 대화를 빼고 문서를 몇 개 더
+     * 실었는가({@code boost} — 검색이 실제로 더한 수, 검증 쪽 상한으로 0 일 수 있다). 그래도 창에 막혀 문서를 덜어냈으면 그 사실을
+     * 축소 안내와 같은 문장으로 덧붙인다 — 출처 목록은 줄지 않으므로 그 문장이 없으면 모델이 다 본 것으로 읽힌다.
+     */
+    static String exclusionNoteText(int boost, int totalDocs, int keptDocs) {
+        boolean trimmed = keptDocs < totalDocs;
+        String head = boost <= 0 ? "이전 대화를 제외했습니다."
+                : (trimmed ? "이전 대화를 제외하고 문서를 %d개 더 검색했습니다." : "이전 대화를 제외하고 문서를 %d개 더 사용했습니다.")
+                        .formatted(boost);
+        return trimmed ? head + " " + budgetNoteText(totalDocs, keptDocs, HistoryNote.NONE) : head;
+    }
 
     private static int lengthOf(String s) {
         return s == null ? 0 : s.length();

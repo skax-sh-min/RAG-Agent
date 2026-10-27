@@ -276,6 +276,26 @@
     white-space: nowrap;
 }
 
+/* 입력줄의 '이력 제외'와 '응답옵션' 사이 세로 구분선(chat.html, Bootstrap .vr). .vr 은 기본이 행 높이만큼 늘어나
+   (align-self: stretch) 버튼 그룹보다 길어 보이므로 글자 높이로 줄여 가운데에 둔다. 색은 .vr 의 currentColor 25% 라
+   다크 모드에서도 따라온다. */
+.chat-option-divider {
+    align-self: center;
+    height: 1.25em;
+}
+
+/* §6.31 '이력 제외'로 보낸 질문의 표시 — 두 글자 표기([RN])와 섞지 않고 그 옆에 따로 단다(렌더러 넷: chat.html 기록 루프 ·
+   재사용 · HTMX 낙관적 버블 · chat-stream.js, 모양은 base.html 의 bubbleHistoryMark() 하나). 크기는 모드 표기와 같은 비율. */
+.bubble-user-flag {
+    opacity: 0.75;
+    font-size: 0.85em;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+    border-radius: 0.6em;
+    padding: 0 0.4em;
+    margin-right: 0.3em;
+}
+
 /* 원문 아래 "(다듬은 질문)" — 답변 뒤에 이 대화를 모르는 사람도 읽을 수 있게 다듬은 문장(PostAnswerService).
    원문과 다를 때만 붙는다. 사용자가 쓴 문장이 주인공이라 한 단계 흐리게 둔다. */
 .bubble-user-clarified {

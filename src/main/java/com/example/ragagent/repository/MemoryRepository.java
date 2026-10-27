@@ -202,6 +202,12 @@ public interface MemoryRepository {
     Map<Long, String> findClarifiedQuestionsByTurnIds(List<Long> turnIds);
 
     /**
+     * §6.31 — 이 턴의 답변이 이전 대화를 보지 않았다고 적는다(V11 {@code exclude_history}). {@code saveVerification} 과 같은 사후
+     * UPDATE 다: 값은 저장 시점에 알지만 켠 턴에만 필요해, 오버로드가 넷인 {@code addTurn} 의 시그니처를 다시 넓히지 않는다.
+     */
+    void markHistoryExcluded(long turnId);
+
+    /**
      * 답변 아래 추가 질문을 저장한다(V8 {@code thread_follow_up}) — 대화마다 <b>마지막 답변의 것 한 벌</b>만 둔다.
      * 새 턴이 덮어쓰고, 빈 목록이면 그 대화의 행을 지운다(제안이 없는 답변 뒤에 지난 제안이 남지 않게).
      */
@@ -235,7 +241,15 @@ public interface MemoryRepository {
                 int inputTokens, int outputTokens,
                 int elapsedMs, String provider, int llmCalls,
                 String feedback, String responseMode, String selectedTags,
-                boolean directMode) {
+                boolean directMode, boolean excludeHistory) {
+
+        /** §6.31 이전의 모양 — 이력 제외 없음(V11 이전 턴과 같다). */
+        public Turn(long id, String question, String answer, String askedAt, String answeredAt,
+                    int inputTokens, int outputTokens, int elapsedMs, String provider, int llmCalls,
+                    String feedback, String responseMode, String selectedTags, boolean directMode) {
+            this(id, question, answer, askedAt, answeredAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls,
+                    feedback, responseMode, selectedTags, directMode, false);
+        }
 
         /**
          * 이 턴에서 좋아요가 <b>지식 제안을 열어 주는가</b> — 대화 기록 렌더러가 읽는 값이다

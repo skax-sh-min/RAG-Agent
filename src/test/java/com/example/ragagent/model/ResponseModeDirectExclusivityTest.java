@@ -53,6 +53,22 @@ class ResponseModeDirectExclusivityTest {
     }
 
     @Test
+    @DisplayName("§6.31 — 이력 제외도 Direct 와 배타다: 폼·REST 모두 Direct 면 꺼진다")
+    void excludeHistory_isOffInDirect() {
+        ChatForm rag = new ChatForm("질문", "t1", "latest", "COST_FIRST", false, "", "N", true);
+        ChatForm direct = new ChatForm("질문", "t1", "latest", "COST_FIRST", true, "", "N", true);
+        assertThat(rag.excludesHistory()).isTrue();
+        assertThat(direct.excludesHistory()).isFalse();
+        assertThat(new ChatForm("질문", "t1", "latest", "COST_FIRST", false, "", "N").excludesHistory())
+                .as("필드가 없는 폼(옛 클라이언트)은 끈 것").isFalse();
+
+        assertThat(new ChatRequest("질문", "latest", "t1", RoutingMode.COST_FIRST, false, List.of(), ResponseMode.N, true)
+                .excludeHistory()).isTrue();
+        assertThat(new ChatRequest("질문", "latest", "t1", RoutingMode.COST_FIRST, true, List.of(), ResponseMode.N, true)
+                .excludeHistory()).isFalse();
+    }
+
+    @Test
     @DisplayName("HTMX/SSE 폼 — Direct가 아니면 C는 그대로 통과한다")
     void form_creativeWithoutDirect_isKept() {
         assertThat(form("C", false).responseModeOrDefault()).isEqualTo(ResponseMode.C);

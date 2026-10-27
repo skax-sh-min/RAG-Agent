@@ -400,10 +400,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **드롭다운 전체 숨김**: 위 표는 LOCAL_ONLY 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
 
-### 입력 바 상단 행 (버전 · 태그 칩 · 응답 모드)
+### 입력 바 상단 행 (버전 · 태그 칩 · 이력 제외 · 응답 모드)
 
-한 행에 좌측부터 **버전 셀렉터 → 태그 칩 → (여백) → 응답 모드 토글**을 배치한다(`flex-grow-1` 스페이서로
-응답 모드를 행 오른쪽 끝에 붙임).
+한 행에 좌측부터 **버전 셀렉터 → 태그 칩 → (여백) → 이력 제외 체크박스 → 세로 구분선 → 응답 모드 토글**을 배치한다
+(`flex-grow-1` 스페이서로 뒤의 셋을 행 오른쪽 끝에 붙임). 구분선(Bootstrap `.vr` + `.chat-option-divider` — 글자 높이로 줄여
+가운데 정렬)은 두 손잡이가 다른 축(이 메시지가 무엇을 보는가 / 답변의 성격)이라 체크박스가 `응답옵션`의 일부로 읽히지 않게 가른다. 좁은 화면에서는 `flex-wrap` 으로 다음 줄로 내려간다(375px 에서 가로 넘침 없음).
 
 > **태그 입력창은 없다**: 검색 스코프 태그는 이 행의 **칩을 클릭해서만** 토글한다(별도 텍스트 입력창 없음).
 > 칩 토글 결과는 hidden 필드 `#chat-tags-input`(`name="tags"`)에 쉼표로 모여 전송되므로 서버 계약은 그대로다.
@@ -439,6 +440,20 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 | S | `S` | 요약 하나로 (`## 요약` 섹션만) | **1,000자 이내** + 4~7줄 |
 | N | `N` | 문서에 충실하게, 5섹션 (기본값) | 숫자 없음 — "구체적이고 자세하게" |
 | C | `C` | 문서를 **재료로** 코드·설정 생성, 4섹션 | 숫자 없음 — "구체적이고 자세하게" |
+
+**이력 제외 체크박스 (PLAN §6.31)**: `#exclude-history-toggle`(라벨 `chat.exclude-history.label`, 툴팁은 감싼
+`#exclude-history-wrapper` 의 Bootstrap Tooltip — `chat.exclude-history.tooltip`). 값은 hidden 필드
+`#form-exclude-history`(`name="excludeHistory"`, `true`/`false`)로 가서 HTMX 폼·SSE 의 `FormData(form)` 가 그대로 싣는다(태그 칩의
+`#chat-tags-input` 선례). 켜면 그 메시지의 RAG 답변 프롬프트에서 `[이전 대화]` 를 빼고 그 자리만큼 문서를 더 검색한다
+(`RetrievalService.historyBoostFor`). 수명은 응답 모드와 같되 **저장하지 않는다** — 보낸 뒤에도 남고, RAG↔Direct 토글(어느 방향이든
+해제)과 페이지 로드(새 대화·다시 연 대화)에서 풀린다. Direct 에서는 비활성(`updateExcludeHistoryAvailability`) — 실을 문서가 없고
+이력이 유일한 재료다. 서버도 같은 판정을 따로 건다(`ChatForm.excludesHistory()` · `ChatRequest` 의 가드).
+
+**질문 버블의 `이력 제외` 표시**: 켠 턴의 질문 버블에 두 글자 표기(`[RN]`) 다음 작은 테두리 표시(`.bubble-user-flag`)가 붙는다 —
+표기에는 섞지 않는다(렌더러 넷·규칙의 출처 둘, `data-question`·`data-response-mode` 도 그대로). 모양은 `base.html` 의
+`bubbleHistoryMark()` 하나이고 클라이언트 렌더러 셋(스트리밍 · 재사용 · HTMX 낙관적 버블)이 부른다. 서버 렌더(기록 루프)는 같은 마크업을
+`turn.excludeHistory` 로 그린다(`HistoryExclusionRendererConventionTest` 가 넷을 고정). 답변 아래 안내 줄(`budgetNote` 자리)에는
+"이전 대화를 제외하고 문서를 N개 더 사용했습니다."가 사실로 나온다 — 창에 막혀 문서를 덜었으면 축소 안내 문장이 뒤에 붙는다.
 
 **옛 `L`(원문 최대)은 제거됐다** — 같은 검색 결과를 받아 재료가 동일했고 실측 분량이 M과 4.6%밖에
 차이 나지 않았다(PLAN §6.24). 화이트리스트(`CREATIVE_MODE_ENABLED`가 켜져 있으면 `['S','N','C']`, 꺼져 있으면 `['S','N']`)에
@@ -717,6 +732,8 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 | 대화 이력 텍스트 | SQLite `conversation_turns` | 영속 |
 | 대화 제목·버전·라우팅 모드·태그 | SQLite `thread_meta` | 영속 |
 | turn별 응답 모드·검색 스코프 태그 | SQLite `conversation_turns` (`response_mode`, `selected_tags`) | 영속 — 좋아요 승격 시 재사용(§4) |
+| turn별 이력 제외 여부(§6.31) | SQLite `conversation_turns.exclude_history` (V11) | 영속 — 질문 버블의 `이력 제외` 표시, 재사용이 복사 |
+| 입력줄의 이력 제외 체크 | 페이지 상태(hidden `#form-exclude-history`) | 저장 안 함 — 페이지 로드·RAG↔Direct 토글에서 풀린다 |
 | 선택 테마 (light/dark) | `localStorage` | 브라우저 영속 |
 
 대화 제목은 첫 질문 직후 비동기(Virtual Thread)로 LLM 요약 생성 후 업데이트.

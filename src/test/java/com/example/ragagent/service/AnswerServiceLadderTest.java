@@ -171,6 +171,64 @@ class AnswerServiceLadderTest {
         assertThat(result.budgetNote()).isEqualTo("컨텍스트 한도로 이전 대화 대신 다시 쓴 질문으로 답했습니다.");
     }
 
+    // ── §6.31 이력 제외 ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("§6.31 — 이력 제외면 [이전 대화] 가 없고(직전 Direct 요약도), 안내는 더한 문서 수를 사실로 말한다")
+    void excludedHistoryLeavesTheBlockOut() {
+        windows.record("lm", WINDOW, ProviderContextWindows.Source.CONFIGURED);
+        stub(0, PASS);
+        AgentState s = state(docs(3, 100), turn("앞질문", 50)).toBuilder()
+                .excludeHistory(true).historyBoost(4).lastAnswerDigest("직전요약문").build();
+
+        AgentState result = service.execute(s);
+
+        assertThat(lastPrompt()).doesNotContain("[이전 대화]", "앞질문", "직전요약문").contains("문서3-");
+        assertThat(result.budgetNote()).isEqualTo("이전 대화를 제외하고 문서를 4개 더 사용했습니다.");
+    }
+
+    @Test
+    @DisplayName("§6.31 — 후속 질문이면 이력 자리에 다시 쓴 질문 한 줄(이유는 사용자의 선택)")
+    void excludedHistoryKeepsTheCondensedQuestion() {
+        windows.record("lm", WINDOW, ProviderContextWindows.Source.CONFIGURED);
+        stub(0, PASS);
+        AgentState s = state(docs(3, 100), turn("앞질문", 50)).toBuilder()
+                .question("그 포트는 어디서 바꿔?").searchQuestion("서버 포트 설정은 어디서 바꾸나")
+                .excludeHistory(true).build();
+
+        AgentState result = service.execute(s);
+
+        assertThat(lastPrompt()).contains("[이전 대화]\n(이번 답변에서는 이전 대화를 제외했다. 이 질문을 이전 대화에 비추어 다시 쓰면: "
+                + "서버 포트 설정은 어디서 바꾸나)").doesNotContain("앞질문");
+        assertThat(result.budgetNote()).isEqualTo("이전 대화를 제외했습니다.");
+    }
+
+    @Test
+    @DisplayName("§6.31 — 창에 막혀 문서를 덜면 그 사실을 덧붙이고, 남는 자리에 이력을 되돌려 채우지 않는다")
+    void excludedHistoryWithTrimmingSaysBothAndNeverBackfillsHistory() {
+        windows.record("lm", WINDOW, ProviderContextWindows.Source.CONFIGURED);
+        stub(0, PASS);
+        int perDoc = 1_000;
+        int fit = (int) ((answerBudget() - 400) / perDoc);
+        AgentState s = state(docs(fit + 2, perDoc), turn("짧은앞질문", 10)).toBuilder()
+                .excludeHistory(true).historyBoost(4).build();
+
+        AgentState result = service.execute(s);
+
+        assertThat(lastPrompt()).doesNotContain("짧은앞질문");
+        assertThat(result.budgetNote()).isEqualTo("이전 대화를 제외하고 문서를 4개 더 검색했습니다. "
+                + "컨텍스트 한도로 검색된 문서 %d개 중 %d개만 사용했습니다.".formatted(fit + 2, result.lastSent().docKeys().size()));
+    }
+
+    @Test
+    @DisplayName("§6.31 안내 문구 — 부스트 없음 · 덜어냄 없음/있음")
+    void exclusionNoteText() {
+        assertThat(AnswerService.exclusionNoteText(0, 10, 10)).isEqualTo("이전 대화를 제외했습니다.");
+        assertThat(AnswerService.exclusionNoteText(3, 13, 13)).isEqualTo("이전 대화를 제외하고 문서를 3개 더 사용했습니다.");
+        assertThat(AnswerService.exclusionNoteText(0, 10, 8))
+                .isEqualTo("이전 대화를 제외했습니다. 컨텍스트 한도로 검색된 문서 10개 중 8개만 사용했습니다.");
+    }
+
     @Test
     @DisplayName("§6.30 A — 교체는 답변 프롬프트에 실린 것 안에서만 고른다(보이지 않은 문서는 밀지 않는다)")
     void evictionStaysWithinTheSentDocuments() {

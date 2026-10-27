@@ -55,7 +55,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
@@ -148,8 +148,9 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `feedback` | TEXT | | `LIKE` / `DISLIKE` / NULL. `DISLIKE` 턴은 이력 프롬프트에서 빠집니다 |
 | `response_mode` | TEXT | | 응답 모드 `S`/`N`/`C` — 요청값이 아니라 그래프 결과(`result.responseMode()`)입니다(검색 0건이면 `S`로 바뀜) |
 | `selected_tags` | TEXT | | 이 턴에서 켠 검색 스코프 태그 (CSV, 빈 문자열 = 없음) |
-| `reused_from_turn_id` | INTEGER | | 재사용 턴이면 원본 턴 id. 재사용 턴은 원본의 모드·`direct_mode`·`selected_tags`를 복사해 저장합니다 |
+| `reused_from_turn_id` | INTEGER | | 재사용 턴이면 원본 턴 id. 재사용 턴은 원본의 모드·`direct_mode`·`selected_tags`·`exclude_history`를 복사해 저장합니다 |
 | `direct_mode` | INTEGER | NOT NULL, 0 | 1 = Direct 턴 (검색 없음) |
+| `exclude_history` | INTEGER | NOT NULL, 0 | (V11) 1 = 이 턴의 RAG 답변이 이전 대화를 보지 않았다 — 사용자가 "이력 제외"를 켰다(PLAN §6.31). 요청값이 아니라 그래프 결과(`result.excludeHistory()`)라 Direct 턴·`meta` 로 판정된 턴은 늘 0 입니다. 켠 턴에만 저장 직후 UPDATE 로 적습니다(`markHistoryExcluded`). 질문 버블의 `이력 제외` 표시가 읽고, 재사용 후보는 원본 행의 값을 씁니다. 이 턴도 다음 턴들의 이력에는 평소처럼 실립니다 |
 | `retrieval_metrics` | TEXT | | 출처별 검색 진단 JSON 배열 — `label`, `preview`, `chunk_id`, `doc_id`, `page_or_slide`, `similarity`, `retrieval_share`, `axis_ranks`, `answer_share`, `stale`, `prompt_excluded`. `/admin` 검색 진단 패널이 읽습니다 |
 | `verification` | TEXT | | 답변 검증 스냅샷 JSON — `grounded`, `generative`, `evalReason`, `envNote`, `inventedSymbols`, `budgetNote`, `condensedQuestion`, `empty`. 다시 연 대화의 검증 배지 재료입니다. NULL = 검증 기록 없음(컬럼 이전 턴, meta·Direct·`S` 턴) |
 | `clarified_question` | TEXT | | (V6) 답변 뒤에 다듬은 질문 — 이 대화를 모르는 사람도 읽을 수 있고 그 답변이 다룬 범위를 말하는 한 문장(`PostAnswerService`). 질문 추천·재사용이 이 문장으로 맞추고 보여 주며, 대화 화면은 원문과 다를 때 원문 아래 `(…)` 줄로 보여 줍니다. `question`(원문)은 덮어쓰지 않습니다. 값: 다듬은 질문 / 원문과 같은 값(시도했고 원문으로 충분했거나 결과를 버렸다) / NULL(아직 안 함·대상 아님·호출 실패·빈 응답·읽을 수 없는 응답 — 다시 시도할 수 있다). 대상은 재사용 후보 턴(N·RAG·출처 있음)이고, 답변 아래 추가 질문(`llm.follow-up-questions-enabled`)이 켜져 있으면 같은 호출로 S·C·Direct 턴에도 적힌다 — 그 값은 화면 표시용일 뿐 재사용 후보 판정(모드·출처 술어)을 바꾸지 않는다. 재사용 턴은 고른 문장을 질문과 이 칸에 함께 적습니다. 이 기능 이전의 재사용 후보 턴(NULL)은 `/admin` 의 과거 질문 다듬기(`ClarifiedQuestionBackfill`)가 최신순으로 채운다 — 실패한 턴은 NULL 로 남아 다음 실행이 다시 집는다. 추가 질문은 이 테이블이 아니라 `thread_follow_up`(§4.6)에 대화마다 마지막 답변의 것만 둔다 |
@@ -412,7 +413,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 6.5 `flyway_schema_history`
 
-Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V10 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
+Flyway 표준 테이블입니다 — `installed_rank`(PK), `version`, `description`, `type`, `script`, `checksum`, `installed_by`, `installed_on`, `execution_time`, `success`. 새로 만든 DB에는 V1~V11 적용 기록이, 옛 런타임 DDL로 만들어진 이력 없는 파일에는 `<< Flyway Baseline >>`(버전 3) 한 줄과 V4 이후 적용 기록이 남습니다(§2.1). 앱 코드는 이 테이블을 읽지 않습니다.
 
 ---
 

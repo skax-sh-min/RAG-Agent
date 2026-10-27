@@ -789,6 +789,49 @@ class ChatControllerHtmxTest {
         verify(memoryService).saveClarifiedQuestion(99L, "sqlite 연결 설정 방법");
     }
 
+    @Test
+    @DisplayName("§6.31 — 원본이 이력 제외로 답했으면 재사용 턴에도 그 표시를 복사하고 응답에 싣는다")
+    void reuse_copiesTheHistoryExclusion() throws Exception {
+        when(questionReuseService.reuseLookup(eq(42L)))
+                .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
+                        true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1"),
+                        "N", false, "", true));
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenReturn(99L);
+
+        mvc.perform(post("/api/v1/questions/reuse")
+                        .param("turnId", "42").param("threadId", "t-new").param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"excludeHistory\":true")));
+
+        verify(memoryService).markHistoryExcluded(99L);
+    }
+
+    @Test
+    @DisplayName("§6.31 — 이력 제외로 답한 턴의 질문 버블에만 표시가 붙고, 두 글자 표기·data-question 에는 섞이지 않는다")
+    void historyExcludedTurnCarriesItsOwnMark() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "평소 질문", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false),
+                new MemoryRepository.Turn(2L, "이력 뺀 질문", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false, true)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 입력줄의 체크박스와 숨은 필드 — 기본 꺼짐
+        assertThat(html).contains("id=\"exclude-history-toggle\"", "name=\"excludeHistory\" value=\"false\"");
+        // 기록 루프의 표시는 켠 턴 하나에만
+        assertThat(html.split("<span class=\"bubble-user-flag\"", -1)).as("표시가 정확히 하나").hasSize(2);
+        assertThat(html).contains("data-question=\"이력 뺀 질문\"", "data-response-mode=\"RN\"");
+    }
+
     /**
      * 답변 뒤에 다듬은 질문은 원문과 다를 때만 원문 아래 괄호 줄로 보이고, 질문 내비게이션이 읽을
      * data-clarified-question 도 그때만 심긴다(같은지 판정은 컨트롤러 한 곳 — PostAnswerService.differs).

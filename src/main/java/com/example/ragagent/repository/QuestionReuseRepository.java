@@ -55,7 +55,8 @@ public class QuestionReuseRepository {
     private static final String ANSWER_SHAPE_COLUMNS =
             "COALESCE(NULLIF(src.response_mode, ''), t.response_mode) AS response_mode, " +
             "COALESCE(src.direct_mode, t.direct_mode, 0) AS direct_mode, " +
-            "COALESCE(src.selected_tags, t.selected_tags, '') AS selected_tags";
+            "COALESCE(src.selected_tags, t.selected_tags, '') AS selected_tags, " +
+            "COALESCE(src.exclude_history, t.exclude_history, 0) AS exclude_history";
 
     /**
      * 답변 뒤에 다듬은 질문(V6, {@code PostAnswerService}). 후보가 스스로 재사용 턴이면 그 행에 없을 수
@@ -79,7 +80,8 @@ public class QuestionReuseRepository {
             rs.getString("response_mode"),
             rs.getInt("direct_mode") != 0,
             rs.getString("selected_tags"),
-            rs.getString("clarified_question"));
+            rs.getString("clarified_question"),
+            rs.getInt("exclude_history") != 0);
 
     /**
      * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
@@ -640,7 +642,7 @@ public class QuestionReuseRepository {
     }
 
     /**
-     * 추천·재사용 후보 한 건. 뒤의 셋({@code responseMode}·{@code directMode}·{@code selectedTags})은
+     * 추천·재사용 후보 한 건. {@code responseMode}·{@code directMode}·{@code selectedTags}·{@code excludeHistory}(§6.31)는
      * 그 답변이 만들어진 모양이다({@link #ANSWER_SHAPE_COLUMNS}) — 재사용 턴을 저장할 때 원본에서
      * 그대로 복사해, 재사용한 답변의 두 글자 표기·이력 렌더·좋아요 프리필의 태그 스코프가 원본과
      * 같아지게 한다.
@@ -648,7 +650,16 @@ public class QuestionReuseRepository {
     public record CandidateTurn(long turnId, String userId, String threadId,
                                 String question, String answer, String createdAt,
                                 String responseMode, boolean directMode, String selectedTags,
-                                String clarifiedQuestion) {
+                                String clarifiedQuestion, boolean excludeHistory) {
+        /** §6.31 이전의 모양 — 이력 제외 없음. */
+        public CandidateTurn(long turnId, String userId, String threadId,
+                             String question, String answer, String createdAt,
+                             String responseMode, boolean directMode, String selectedTags,
+                             String clarifiedQuestion) {
+            this(turnId, userId, threadId, question, answer, createdAt, responseMode, directMode, selectedTags,
+                    clarifiedQuestion, false);
+        }
+
         /** 답변 모양을 모르는 후보 — 옛 행과 같은 기본값(모드 미상 → N, RAG, 태그 없음). 테스트 편의용. */
         public CandidateTurn(long turnId, String userId, String threadId,
                              String question, String answer, String createdAt) {

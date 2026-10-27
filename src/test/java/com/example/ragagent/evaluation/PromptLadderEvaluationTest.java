@@ -105,6 +105,8 @@ class PromptLadderEvaluationTest {
     private final String label = System.getProperty("ladder-eval.label", "run");
     private final int window = Integer.getInteger("ladder-eval.window", 0);
     private final int stride = Math.max(1, Integer.getInteger("ladder-eval.stride", 2));
+    /** §6.31 — 측정하는 턴에 "이력 제외"를 켠다(앞 턴 fixture 를 만드는 prepare 에는 걸지 않는다). */
+    private final boolean excludeHistory = Boolean.getBoolean("ladder-eval.exclude-history");
     private final Path out = Path.of(System.getProperty("ladder-eval.out", "target/ladder-eval"));
     private final Path priorsFile = Path.of(System.getProperty("ladder-eval.priors", "target/ladder-eval/priors.json"));
     private final Set<String> sections = Arrays.stream(System.getProperty("ladder-eval.sections", "long,fu1,fu2,fu3")
@@ -263,14 +265,14 @@ class PromptLadderEvaluationTest {
             Prior kept = existing.get(id);
             if (kept != null && !kept.answer().isBlank()) { priors.add(kept); continue; }
             GoldQuery g = gold.get(id);
-            Turn t = ask("prep-" + id + "-" + System.nanoTime(), g.question(), false);
+            Turn t = ask("prep-" + id + "-" + System.nanoTime(), g.question(), false, false);
             priors.add(new Prior(id, g.question(), t.answer(), false));
             System.out.printf("[prepare] %d %s %d자 error=%s%n", ++n, id, t.answer().length(), t.error());
         }
         for (AfterDirect d : AFTER_DIRECT) {
             Prior kept = existing.get(d.id());
             if (kept != null && !kept.answer().isBlank()) { priors.add(kept); continue; }
-            Turn t = ask("prep-" + d.id() + "-" + System.nanoTime(), d.directQuestion(), true);
+            Turn t = ask("prep-" + d.id() + "-" + System.nanoTime(), d.directQuestion(), true, false);
             priors.add(new Prior(d.id(), d.directQuestion(), t.answer(), true));
             System.out.printf("[prepare] %d %s(Direct) %d자 error=%s%n", ++n, d.id(), t.answer().length(), t.error());
         }
@@ -328,13 +330,14 @@ class PromptLadderEvaluationTest {
         Logs logs = Logs.attach();
         Turn t;
         try {
-            t = ask(thread, question, false);
+            t = ask(thread, question, false, excludeHistory);
         } finally {
             logs.detach();
         }
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("label", label);
         row.put("window", window);
+        row.put("excludeHistory", excludeHistory);
         row.put("topK", props.searchTopKSafe());
         row.put("section", section);
         row.put("id", id);
@@ -367,12 +370,12 @@ class PromptLadderEvaluationTest {
     /** 채팅 한 턴의 결과 — 화면이 받는 SSE 이벤트를 모은 것. */
     record Turn(String answer, Map<String, Object> done, int retries, long elapsedMs, String error) {}
 
-    private Turn ask(String thread, String question, boolean direct) {
+    private Turn ask(String thread, String question, boolean direct, boolean excludeHistory) {
         // 화면은 대화의 라우팅 모드를 늘 숨은 필드로 보낸다(chat.html #form-routing-mode) — 같은 값을 싣는다.
         String routingMode = threadMeta.getOrCreate(USER, thread, VERSION).routingMode();
         Capture capture = new Capture();
         long start = System.nanoTime();
-        chat.run(USER, new ChatForm(question, thread, VERSION, routingMode, direct, "", "N"), capture);
+        chat.run(USER, new ChatForm(question, thread, VERSION, routingMode, direct, "", "N", excludeHistory), capture);
         long elapsed = (System.nanoTime() - start) / 1_000_000;
         Map<String, Object> done = capture.done == null ? Map.of() : capture.done;
         Object finalAnswer = done.get("finalAnswer");

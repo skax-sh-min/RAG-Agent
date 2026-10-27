@@ -256,9 +256,11 @@ public class StreamingAgentService {
                 }
             }
             // carry the selected search-scope tags + response mode into the graph state.
+            // §6.31 이력 제외도 — 블로킹 경로(AgentService.chat)와 같다.
             initial = initial.toBuilder()
                     .selectedTags(form.selectedTags())
                     .responseMode(form.responseModeOrDefault())
+                    .excludeHistory(form.excludesHistory())
                     .build();
 
             listener = new SseGraphListener(emitter, lastActivityNanos);
@@ -312,10 +314,11 @@ public class StreamingAgentService {
                 String partial = listener.getAccumulatedAnswer();
                 if (!partial.isBlank()) {
                     try {
-                        memoryService.addTurn(userId, form.threadId(), form.question(),
+                        long partialId = memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
                             TagUtils.toMetaValue(form.selectedTags()), form.isDirectMode());
+                        if (form.excludesHistory()) memoryService.markHistoryExcluded(partialId);
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {

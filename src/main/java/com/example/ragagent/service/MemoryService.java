@@ -269,6 +269,18 @@ public class MemoryService {
      * 답변 뒤에 다듬은 질문을 저장한다(PostAnswerService). {@code saveVerification} 과 같이 <b>실패해도
      * 삼킨다</b> — 이미 저장된 턴에 덧붙이는 표시·재사용 보조 값이라, 쓰기 사고가 답변을 되돌릴 일이 아니다.
      */
+    /**
+     * §6.31 — 이력 제외로 답한 턴을 표시한다. 버블 표시·재사용 복사용 기록이라 실패가 답변 저장을 무르지 않는다
+     * ({@link #saveClarifiedQuestion} 과 같은 처리).
+     */
+    public void markHistoryExcluded(long turnId) {
+        try {
+            repository.markHistoryExcluded(turnId);
+        } catch (Exception e) {
+            log.warn("[HISTORY-EXCLUDE] 이력 제외 표시 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
     public void saveClarifiedQuestion(long turnId, String clarifiedQuestion) {
         try {
             repository.saveClarifiedQuestion(turnId, clarifiedQuestion);

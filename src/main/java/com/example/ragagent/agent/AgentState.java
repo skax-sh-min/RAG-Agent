@@ -71,9 +71,14 @@ public record AgentState(
         SentPrompt lastSent,         // §6.30 — 가장 최근 답변 시도가 실제로 보낸 문서·이력 절단(+ 그 답변을 평가한 검증이
                                      // 근거로 썼다고 보고한 문서). 재시도의 교체·조기 종료·이력 유지·뺄 순서가 검색
                                      // 결과가 아니라 이것을 읽는다. null = 아직 답변 전(또는 RAG 답변이 아닌 턴)
-        String lastAnswerDigest      // §6.30 칸 4 — 직전 턴이 Direct 였을 때 그 답변의 `## 요약`(없으면 앞 1,200자).
+        String lastAnswerDigest,     // §6.30 칸 4 — 직전 턴이 Direct 였을 때 그 답변의 `## 요약`(없으면 앞 1,200자).
                                      // 이력에는 Direct 답변이 요약을 뗀 본문으로 실려 있어 파싱으로는 얻을 수 없으므로
                                      // 이력을 불러올 때 따로 실어 온다. null = 해당 없음
+        boolean excludeHistory,      // §6.31 — 사용자가 "이력 제외"를 켰다: RAG 답변 프롬프트에 [이전 대화] 를 싣지 않고 그 자리만큼
+                                     // 문서를 더 검색한다. Direct·meta 턴에서는 늘 false 다(요청 가드 · AgentGraph 의 Direct 분기)
+                                     // — 저장되는 값이 실제로 한 것이어야 한다
+        int historyBoost             // §6.31 — 이력 제외로 검색이 최종 컷에 <b>실제로</b> 더한 문서 수(검증 쪽 상한으로 줄어든 뒤).
+                                     // 안내 문구가 읽는다. 0 = 더하지 않았음
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -121,7 +126,7 @@ public record AgentState(
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
                 0, List.of(), null, null,
-                null, null);
+                null, null, false, 0);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -231,6 +236,8 @@ public record AgentState(
         private String lastRejection;
         private SentPrompt lastSent;
         private String lastAnswerDigest;
+        private boolean excludeHistory;
+        private int historyBoost;
 
         Builder() {}
 
@@ -270,6 +277,8 @@ public record AgentState(
             this.lastRejection      = s.lastRejection;
             this.lastSent           = s.lastSent;
             this.lastAnswerDigest   = s.lastAnswerDigest;
+            this.excludeHistory     = s.excludeHistory;
+            this.historyBoost       = s.historyBoost;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -304,6 +313,8 @@ public record AgentState(
         public Builder lastRejection(String v)             { this.lastRejection = v;      return this; }
         public Builder lastSent(SentPrompt v)              { this.lastSent = v;           return this; }
         public Builder lastAnswerDigest(String v)          { this.lastAnswerDigest = v;   return this; }
+        public Builder excludeHistory(boolean v)           { this.excludeHistory = v;     return this; }
+        public Builder historyBoost(int v)                 { this.historyBoost = v;       return this; }
         /**
          * 이 시도가 본 문서로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). 본 문서는 답변 프롬프트에
          * 실린 집합이다(§6.30 B, {@link AgentState#repeatsLastRejection} 와 같은 키).
@@ -331,7 +342,7 @@ public record AgentState(
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
                     retrievalRetries, excludedDocIds, searchQuestion, lastRejection,
-                    lastSent, lastAnswerDigest);
+                    lastSent, lastAnswerDigest, excludeHistory, historyBoost);
         }
     }
 }
