@@ -76,6 +76,8 @@ final class TurnPersistence {
                 result.responseMode().name(), TagUtils.toMetaValue(turn.selectedTags()),
                 turn.directMode());
 
+        // §6.31 — 요청이 아니라 결과에서 읽는다(응답 모드와 같은 규칙): meta 로 판정돼 이력으로 답한 턴은 그래프가 껐다.
+        if (result.excludeHistory()) memoryService.markHistoryExcluded(turnId);
         memoryService.saveTurnImageRefs(turnId, turn.userId(), turn.threadId(), result.imageRefs());
         memoryService.saveRetrievalMetrics(turnId, result.sources());
         memoryService.saveVerification(turnId, new VerificationSnapshot(

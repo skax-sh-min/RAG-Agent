@@ -248,7 +248,7 @@ public class ChatController {
             log.debug("[postChat] threadId={} directMode={} routingMode={} question={}",
                     form.threadId(), form.isDirectMode(), rm, form.question());
             ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm,
-                    form.isDirectMode(), form.selectedTags(), form.responseModeOrDefault());
+                    form.isDirectMode(), form.selectedTags(), form.responseModeOrDefault(), form.excludesHistory());
             ChatResponse resp = agentService.chat(ctx, req);
             log.debug("[postChat] done — provider={} tokens={}/{} directMode={}",
                     resp.usedProvider(), resp.totalInputTokens(), resp.totalOutputTokens(), form.isDirectMode());
@@ -340,7 +340,8 @@ public class ChatController {
                 form.routingMode(),
                 form.directMode(),
                 form.tags(),
-                selected.name());
+                selected.name(),
+                form.excludeHistory());
     }
 
     /**
@@ -356,7 +357,8 @@ public class ChatController {
                 request.routingMode(),
                 request.directMode(),
                 request.selectedTags(),
-                settingsService.effectiveResponseMode(request.responseMode()));
+                settingsService.effectiveResponseMode(request.responseMode()),
+                request.excludeHistory());
     }
 
     /**
@@ -435,22 +437,25 @@ public class ChatController {
         // 새 턴의 질문은 이미 다듬은 문장이다(QuestionReuseService.reuseLookup) — 같은 값을 다듬은 질문으로도
         // 적어 두면 화면엔 한 줄로 보이고, 이 턴을 다시 다듬으려는 시도(백필)도 생기지 않는다.
         memoryService.saveClarifiedQuestion(savedTurnId, lookup.question());
+        // §6.31 — 원본 답변이 이력 없이 만들어졌으면 그 사실도 복사한다(모드·검색 축·태그와 같은 규칙 — 버블 표시가 원본과 같게).
+        if (lookup.excludeHistory()) memoryService.markHistoryExcluded(savedTurnId);
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
         threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
 
-        // responseMode/directMode 를 함께 내려 화면이 같은 두 글자 표기를 달게 한다 — 폼에 선택된
+        // responseMode/directMode(+ 이력 제외 표시)를 함께 내려 화면이 같은 표기를 달게 한다 — 폼에 선택된
         // 모드로 그리면 새로고침(서버 렌더)과 어긋난다.
-        return ResponseEntity.ok(Map.of(
-            "reused", true,
-            "turnId", savedTurnId,
-            "question", lookup.question(),
-            "answer", lookup.answer(),
-            "sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId()),
-            "sourceChunkIds", lookup.sourceChunkIds(),
-            "sourceTurnId", lookup.sourceTurnId(),
-            "provider", "db-reuse",
-            "responseMode", responseMode,
-            "directMode", lookup.directMode()));
+        return ResponseEntity.ok(Map.ofEntries(
+            Map.entry("reused", true),
+            Map.entry("turnId", savedTurnId),
+            Map.entry("question", lookup.question()),
+            Map.entry("answer", lookup.answer()),
+            Map.entry("sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId())),
+            Map.entry("sourceChunkIds", lookup.sourceChunkIds()),
+            Map.entry("sourceTurnId", lookup.sourceTurnId()),
+            Map.entry("provider", "db-reuse"),
+            Map.entry("responseMode", responseMode),
+            Map.entry("directMode", lookup.directMode()),
+            Map.entry("excludeHistory", lookup.excludeHistory())));
     }
 
     /**

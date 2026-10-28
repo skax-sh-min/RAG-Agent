@@ -256,7 +256,9 @@ const I18N = {
     llmTooltip:          /*[[#{nav.llm.tooltip}]]*/ 'Local LLM concurrency only (external API providers not included)',
     llmBlockedTooltip:   /*[[#{nav.llm.tooltip.blocked}]]*/ 'Local LLM failed to respond - retrying in {0}s. Check GET /api/v1/llm/ping',
     llmTableTotal:       /*[[#{llm.table.total}]]*/ 'Total',
-    llmNoProviders:      /*[[#{llm.no.providers}]]*/ 'No providers configured.'
+    llmNoProviders:      /*[[#{llm.no.providers}]]*/ 'No providers configured.',
+    historyExcludedMark:        /*[[#{chat.exclude-history.mark}]]*/ 'no history',
+    historyExcludedMarkTooltip: /*[[#{chat.exclude-history.mark.tooltip}]]*/ 'This answer was given without the earlier conversation'
 };
 </script>
 
@@ -510,6 +512,22 @@ const I18N = {
         const mode = responseMode || 'N';
         const direct = directMode === true || directMode === 'true';
         return (direct ? 'D' : 'R') + mode;
+    }
+
+    /*
+     * §6.31 '이력 제외'로 보낸 질문의 표시(HTML) — 켜지 않았으면 빈 문자열. 두 글자 표기에 섞지 않는다: 그 표기는 렌더러 넷과
+     * 서버 규칙(Turn.responseModeLabel)이 함께 지키는 두 축이고, data-question/data-response-mode 를 읽는 질문 내비게이션도
+     * 그대로여야 한다. 서버 렌더(chat.html 기록 루프)는 같은 모양을 템플릿으로 그린다. 값은 폼의 hidden 필드라 문자열
+     * 'true' 로도 온다(bubbleModeLabel 의 directMode 와 같다).
+     */
+    function bubbleHistoryMark(excludeHistory) {
+        if (!(excludeHistory === true || excludeHistory === 'true')) return '';
+        /* 이 파일 전역에는 escHtml 이 없다(chat-stream.js·chat.html 이 각자 둔다) — 번들 문구지만 속성에 들어가므로 직접 막는다. */
+        const esc = function (s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        };
+        return '<span class="bubble-user-flag" title="' + esc(I18N.historyExcludedMarkTooltip) + '">'
+             + esc(I18N.historyExcludedMark) + '</span>';
     }
 
     /*

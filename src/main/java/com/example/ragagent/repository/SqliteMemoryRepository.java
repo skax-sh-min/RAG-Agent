@@ -59,7 +59,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
             rs.getString("feedback"),
             rs.getString("response_mode"),
             rs.getString("selected_tags"),
-            rs.getInt("direct_mode") != 0);
+            rs.getInt("direct_mode") != 0,
+            rs.getInt("exclude_history") != 0);
 
     public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
@@ -228,7 +229,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         return jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
-            "COALESCE(t.direct_mode, 0) AS direct_mode " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode, COALESCE(t.exclude_history, 0) AS exclude_history " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id ASC",
@@ -244,13 +245,28 @@ public class SqliteMemoryRepository implements MemoryRepository {
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
-            "COALESCE(t.direct_mode, 0) AS direct_mode " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode, COALESCE(t.exclude_history, 0) AS exclude_history " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id DESC LIMIT ?",
                 TURN_ROW_MAPPER,
                 userId, threadId, fetchLimit);
         return rows.reversed();
+    }
+
+    @Override
+    public Optional<Turn> getLastTurn(String userId, String threadId) {
+        List<Turn> rows = jdbc.query(
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode, COALESCE(t.exclude_history, 0) AS exclude_history " +
+            "FROM conversation_turns t " +
+            REUSE_SOURCE_JOIN +
+            "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "ORDER BY t.id DESC LIMIT 1",
+                TURN_ROW_MAPPER,
+                userId, threadId);
+        return rows.stream().findFirst();
     }
 
     @Override
@@ -267,7 +283,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
-            "COALESCE(t.direct_mode, 0) AS direct_mode " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode, COALESCE(t.exclude_history, 0) AS exclude_history " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE t.id = ? AND t.user_id = ? AND t.thread_id = ?",
@@ -360,6 +376,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 rs -> { out.put(rs.getLong("id"), rs.getString("verification")); },
                 turnIds.toArray());
         return out;
+    }
+
+    @Override
+    public void markHistoryExcluded(long turnId) {
+        jdbc.update("UPDATE conversation_turns SET exclude_history = 1 WHERE id = ?", turnId);
     }
 
     @Override

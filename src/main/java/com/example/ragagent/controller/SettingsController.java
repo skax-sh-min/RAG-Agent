@@ -1,6 +1,8 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.service.ProviderCatalog;
 import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.ThinkingPreviewService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -9,6 +11,9 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * LLM/RAG settings page.
@@ -32,10 +37,13 @@ public class SettingsController {
 
     private final SettingsService settingsService;
     private final ThinkingPreviewService thinkingPreview;
+    private final ProviderCatalog providerCatalog;
 
-    public SettingsController(SettingsService settingsService, ThinkingPreviewService thinkingPreview) {
+    public SettingsController(SettingsService settingsService, ThinkingPreviewService thinkingPreview,
+                              ProviderCatalog providerCatalog) {
         this.settingsService = settingsService;
         this.thinkingPreview = thinkingPreview;
+        this.providerCatalog = providerCatalog;
     }
 
     @GetMapping("/settings")
@@ -130,5 +138,107 @@ public class SettingsController {
         // 창이 바뀌면 생각 수준 카드의 예산 숫자가 전부 달라진다 — 카드가 이 이벤트를 듣고 다시 불러온다.
         response.setHeader("HX-Trigger", THINKING_STALE_EVENT);
         return "fragments/settings-providers :: providers";
+    }
+
+    // ── 프로바이더 편집 (ProviderCatalog) ─────────────────────────────────────
+    //
+    // 주소·모델·type·role·우선순위·추가·삭제는 저장만 하고 다음 기동에, 컨텍스트는 저장 즉시 반영된다. API 키는 받지 않는다.
+    // 성공하면 표 조각 전체(#llm-providers)를 돌려주고, 실패하면 편집 칸(#provider-editor)에 사유와 함께 폼을 다시 그린다 —
+    // 400 으로 돌려주면 화면에는 "요청 실패(400)" 토스트만 남아 무엇을 고칠지 알 수 없다.
+
+    /** 편집 폼 — {@code name} 이 없으면 새 프로바이더(LOCAL). */
+    @GetMapping("/admin/settings/provider/editor")
+    public String providerEditor(@RequestParam(required = false) String name, Model ui) {
+        fillEditor(ui, providerCatalog.formFor(name), null);
+        return "fragments/settings-providers :: editor";
+    }
+
+    @PostMapping("/admin/settings/provider/save")
+    public String saveProvider(@RequestParam(required = false) String name,
+                               @RequestParam(required = false) String baseUrl,
+                               @RequestParam(required = false) String model,
+                               @RequestParam(required = false) String type,
+                               @RequestParam(required = false) String role,
+                               @RequestParam(required = false) String priority,
+                               @RequestParam(required = false) String contextSize,
+                               @RequestParam(defaultValue = "false") boolean create,
+                               Model ui, HttpServletResponse response) {
+        ProviderCatalog.Edit edit = null;
+        try {
+            edit = new ProviderCatalog.Edit(name, baseUrl, model, type, role,
+                    parseInt(priority, "우선순위"), parseInt(contextSize, "컨텍스트"), create);
+            ProviderCatalog.SaveResult result = providerCatalog.save(edit);
+            return providersWith(result, ui, response);
+        } catch (IllegalArgumentException e) {
+            ProviderCatalog.Edit shown = edit != null ? edit
+                    : new ProviderCatalog.Edit(name, baseUrl, model, type, role, null, null, create);
+            fillEditor(ui, shown, e.getMessage());
+            retargetToEditor(response);
+            return "fragments/settings-providers :: editor";
+        }
+    }
+
+    /** 삭제 — properties 정의는 재기동 뒤 숨기고, 아직 돌지 않는 추가분은 바로 지운다. */
+    @PostMapping("/admin/settings/provider/delete")
+    public String deleteProvider(@RequestParam String name, Model ui, HttpServletResponse response) {
+        try {
+            return providersWith(providerCatalog.delete(name), ui, response);
+        } catch (IllegalArgumentException e) {
+            return editorError(e, ui, response);
+        }
+    }
+
+    /** 되돌리기 — 화면에 남긴 편집을 지운다(컨텍스트는 즉시, 나머지는 재기동 뒤). */
+    @PostMapping("/admin/settings/provider/revert")
+    public String revertProvider(@RequestParam String name, Model ui, HttpServletResponse response) {
+        try {
+            return providersWith(providerCatalog.revert(name), ui, response);
+        } catch (IllegalArgumentException e) {
+            return editorError(e, ui, response);
+        }
+    }
+
+    private String providersWith(ProviderCatalog.SaveResult result, Model ui, HttpServletResponse response) {
+        ui.addAttribute("providers", settingsService.providerRows());
+        ui.addAttribute("probeResult", null);
+        ui.addAttribute("providerEditResult", result);
+        // 컨텍스트가 바뀌면 생각 수준 카드의 예산 숫자가 달라진다 — 재탐지와 같은 이벤트.
+        if (result.contextChanged()) response.setHeader("HX-Trigger", THINKING_STALE_EVENT);
+        return "fragments/settings-providers :: providers";
+    }
+
+    private void fillEditor(Model ui, ProviderCatalog.Edit form, String error) {
+        ui.addAttribute("form", form);
+        ui.addAttribute("formError", error);
+        String name = form.name();
+        ui.addAttribute("formDeclaredContext",
+                form.create() || name == null ? null : providerCatalog.declaredContext(name).orElse(null));
+        ui.addAttribute("formHasApiKey", !form.create() && name != null && providerCatalog.hasApiKey(name));
+        // 수동 컨텍스트는 탐지가 안 될 때만 — 선언됐거나 탐지값이 있으면 칸을 잠근다(declared / probed).
+        ui.addAttribute("formContextLock",
+                form.create() || name == null ? null : providerCatalog.contextLock(name).orElse(null));
+        ui.addAttribute("formRoles", List.of("LOCAL", "NORMAL", "PREMIUM"));
+        ui.addAttribute("formTypes", Arrays.stream(TaskType.values()).map(Enum::name).toList());
+    }
+
+    /** 표의 버튼(삭제·되돌리기)이 거절됐다 — 사유만 편집 칸에. */
+    private String editorError(IllegalArgumentException e, Model ui, HttpServletResponse response) {
+        ui.addAttribute("formError", e.getMessage());
+        retargetToEditor(response);
+        return "fragments/settings-providers :: editor-error";
+    }
+
+    private static void retargetToEditor(HttpServletResponse response) {
+        response.setHeader("HX-Retarget", "#provider-editor");
+        response.setHeader("HX-Reswap", "innerHTML");
+    }
+
+    private static Integer parseInt(String raw, String label) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return Integer.parseInt(raw.trim().replace(",", ""));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(label + "는 숫자여야 합니다: " + raw);
+        }
     }
 }

@@ -98,6 +98,22 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("§6.31 — RAG 로 물었는데 meta 로 판정되면 이력 제외를 끈 채 DIRECT_ANSWER 로 간다(이력이 곧 답, 저장값도 끈 것)")
+    void metaTurnDropsTheHistoryExclusion() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("meta").build());
+        org.mockito.ArgumentCaptor<AgentState> seen = org.mockito.ArgumentCaptor.forClass(AgentState.class);
+        when(directAnswerService.execute(seen.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST).toBuilder()
+                .excludeHistory(true).historyBoost(4).build());
+
+        assertThat(seen.getValue().excludeHistory()).isFalse();
+        assertThat(result.excludeHistory()).isFalse();
+        assertThat(result.historyBoost()).isZero();
+    }
+
+    @Test
     @DisplayName("classifier 가 non-meta 분류 → RETRIEVAL → ANSWER 진행")
     void classifier_nonMeta_goesToRetrieval() {
         when(classifierService.execute(any()))
@@ -374,6 +390,30 @@ class AgentGraphTest {
         assertThat(AgentState.rejectionKey(AgentState.RetryGate.INSUFFICIENT, List.of(a, b)))
                 .isEqualTo(AgentState.rejectionKey(AgentState.RetryGate.INSUFFICIENT, List.of(b, a)))
                 .isNotEqualTo(AgentState.rejectionKey(AgentState.RetryGate.UNGROUNDED, List.of(a, b)));
+    }
+
+    @Test
+    @DisplayName("§6.30 B — 조기 종료는 검색 결과가 아니라 답변 프롬프트에 실린 문서로 비교한다")
+    void rejectionComparesTheDocumentsTheModelSaw() {
+        Document a = new Document("a", "x", java.util.Map.of());
+        Document b = new Document("b", "y", java.util.Map.of());
+        Document c = new Document("c", "z", java.util.Map.of());
+        com.example.ragagent.model.SentPrompt sawAB = new com.example.ragagent.model.SentPrompt(
+                List.of("a", "b"), null, List.of());
+        AgentState first = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(a, b)).lastSent(sawAB)
+                .rememberRejection(AgentState.RetryGate.INSUFFICIENT).build();
+
+        // 재검색이 c 를 더 가져왔지만 사다리가 잘라 모델은 같은 a, b 를 봤다 — 같은 재료다
+        AgentState sameSeen = first.toBuilder().retrievedDocs(List.of(a, b, c)).lastSent(sawAB).build();
+        assertThat(sameSeen.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)).isTrue();
+        // 조기 종료 로그의 청크 수도 비교한 집합의 크기다(검색 결과 3개가 아니라)
+        assertThat(sameSeen.seenDocCount()).isEqualTo(2);
+
+        // c 가 실렸으면 재료가 바뀌었다
+        AgentState newSeen = first.toBuilder().retrievedDocs(List.of(a, b, c))
+                .lastSent(new com.example.ragagent.model.SentPrompt(List.of("a", "b", "c"), null, List.of())).build();
+        assertThat(newSeen.repeatsLastRejection(AgentState.RetryGate.INSUFFICIENT)).isFalse();
     }
 
     @Test

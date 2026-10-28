@@ -161,6 +161,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final ProviderThinkingDialects thinkingDialects;
     /** 프로바이더 표의 "상태" 열이 읽는, 서버에 실제로 물어본 마지막 결과. */
     private final ProviderConnectivity connectivity;
+    /** 화면의 프로바이더 편집 — 행마다 출처·재기동 대기·기동 검증 실패를 붙인다. {@code null} = 편집 없는 구성(테스트). */
+    private final ProviderCatalog providerCatalog;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
@@ -183,12 +185,23 @@ public class SettingsService implements AppProperties.OverrideSource {
                 thinkingDialects, new ProviderConnectivity());
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    /** 프로바이더 편집을 쓰지 않는 호출부(테스트)를 위한 축약 — 모든 행이 properties 그대로로 그려진다. */
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
                            ProviderToggle providerToggle, ProviderContextWindows contextWindows,
                            StorageQuotaService storageQuotaService, ProviderThinkingDialects thinkingDialects,
                            ProviderConnectivity connectivity) {
+        this(repo, props, audit, circuitBreaker, providerToggle, contextWindows, storageQuotaService,
+                thinkingDialects, connectivity, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SettingsService(SettingsOverrideRepository repo, AppProperties props,
+                           AuditLogger audit, CircuitBreaker circuitBreaker,
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows,
+                           StorageQuotaService storageQuotaService, ProviderThinkingDialects thinkingDialects,
+                           ProviderConnectivity connectivity, ProviderCatalog providerCatalog) {
+        this.providerCatalog = providerCatalog;
         this.connectivity = connectivity;
         this.thinkingDialects = thinkingDialects;
         this.repo = repo;
@@ -404,7 +417,7 @@ public class SettingsService implements AppProperties.OverrideSource {
      */
     private List<ProviderRow> providerRows(boolean recheck) {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return visibleProviders().stream()
+        List<ProviderRow> rows = new ArrayList<>(visibleProviders().stream()
                 .map(cfg -> {
                     Instant until = blocked.get(cfg.name());
                     return new ProviderRow(
@@ -419,9 +432,23 @@ public class SettingsService implements AppProperties.OverrideSource {
                             providerToggle.isEnabled(cfg.name()),
                             contextWindowLabel(cfg.name()),
                             providerThinking(cfg),
-                            connectionOf(cfg, recheck));
+                            connectionOf(cfg, recheck),
+                            providerCatalog == null ? null : providerCatalog.editOf(cfg.name()));
                 })
-                .toList();
+                .toList());
+        // 재기동하면 추가될, 아직 돌지 않는 프로바이더 — 맨 아래에 흐리게. 상태·토글·생각 제어 칸은 비운다(그릴 사실이 없다).
+        if (providerCatalog != null) {
+            boolean localOnly = isLocalOnlyDeployment();
+            for (AppProperties.ProviderConfig cfg : providerCatalog.pendingAdditions()) {
+                if (localOnly && !cfg.isLocal()) continue;
+                rows.add(new ProviderRow(cfg.name(), cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
+                        cfg.priority(), cfg.model(), cfg.baseUrl(), false, false, null, false,
+                        cfg.declaredContextSize() == null ? "-"
+                                : "%,d (%s)".formatted(cfg.declaredContextSize(), "수동 입력"),
+                        null, ProviderConnection.notConfigured(), providerCatalog.editOf(cfg.name())));
+            }
+        }
+        return rows;
     }
 
     /**
@@ -472,8 +499,11 @@ public class SettingsService implements AppProperties.OverrideSource {
      *
      * @param before {@code contextWindowLabel()} 형식의 이전 값 — 무엇이 바뀌었는지 보이려면 새 값만으로는 부족하다
      * @param outcome 화면 배지와 문구를 가르는 값
+     * @param belowSupported 이 줄이 끝난 뒤 기록된 창이 지원하는 최소(16K)보다 작은가 — 결과가 무엇이든(선언·실패 포함)
+     *                       지금 기록된 값으로 판정한다. 버튼을 누른 운영자는 로그를 보지 않을 수 있어서 화면에도 띄운다
      */
-    public record ReprobeRow(String provider, String before, String after, ReprobeOutcome outcome) {}
+    public record ReprobeRow(String provider, String before, String after, ReprobeOutcome outcome,
+                             boolean belowSupported) {}
 
     /** 재탐지 한 번의 결과 전체. {@code restartNeeded} 는 아래 {@link #reprobeContextWindows()} 참고. */
     public record ReprobeResult(List<ReprobeRow> rows, boolean restartNeeded, String restartDetail) {}
@@ -524,22 +554,30 @@ public class SettingsService implements AppProperties.OverrideSource {
         for (AppProperties.ProviderConfig cfg : visibleProviders()) {
             if (!cfg.isEnabled() || !cfg.isLocal()) continue;   // 클라우드는 이 엔드포인트가 없다
             String before = contextWindowLabel(cfg.name());
-            if (cfg.declaredContextSize() != null) {
-                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.SKIPPED_DECLARED));
+            // 기록된 출처로 가른다 — 기동 때 굳은 설정(cfg)이 아니라. 건너뛰는 것은 context-size 선언뿐이다: 화면에서 넣은 수동
+            // 컨텍스트(MANUAL)는 탐지가 안 될 때의 대체값이라 여기서 탐지가 성공하면 덮고, 실패하면 그대로 둔다(ProviderCatalog).
+            // 기동 때 굳은 cfg 에는 수동 값이 contextSize 로 섞여 있으므로 cfg.declaredContextSize() 로 가르면 안 된다.
+            boolean declaredNow = contextWindows.find(cfg.name()).map(w -> w.source().declared()).orElse(false);
+            if (declaredNow) {
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.SKIPPED_DECLARED,
+                        belowSupported(cfg.name())));
                 continue;
             }
             int old = contextWindows.tokensOrZero(cfg.name());
             Integer found = ContextWindowProbe.probe(cfg.apiBase(), cfg.model(),
                     llm.connectTimeoutSeconds(), llm.readTimeoutSeconds()).orElse(null);
             if (found == null) {
-                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.FAILED));
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.FAILED,
+                        belowSupported(cfg.name())));
                 continue;
             }
             contextWindows.record(cfg.name(), found, ProviderContextWindows.Source.PROBED);
+            ProviderContextWindows.warnIfBelowSupportedMinimum(cfg.name(), found,
+                    ProviderContextWindows.Source.PROBED, "재탐지");
             String after = contextWindowLabel(cfg.name());
             boolean changed = found != old;
             rows.add(new ReprobeRow(cfg.name(), before, after,
-                    changed ? ReprobeOutcome.UPDATED : ReprobeOutcome.UNCHANGED));
+                    changed ? ReprobeOutcome.UPDATED : ReprobeOutcome.UNCHANGED, belowSupported(cfg.name())));
 
             if (changed) {
                 int requested = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
@@ -558,6 +596,11 @@ public class SettingsService implements AppProperties.OverrideSource {
         return new ReprobeResult(rows, !restartReasons.isEmpty(), String.join(", ", restartReasons));
     }
 
+    /** 지금 기록된 이 프로바이더의 창이 지원하는 최소(16K)보다 작은가 — 모르면 {@code false}. */
+    private boolean belowSupported(String providerName) {
+        return ProviderContextWindows.belowSupportedMinimum(contextWindows.tokensOrZero(providerName));
+    }
+
     /**
      * {@code "8,192 (탐지됨)"} 처럼 값과 <b>출처</b>를 함께 적는다 — 운영자가 직접 적은 숫자인지 앱이
      * 서버에게 물어본 숫자인지가 신뢰도를 가른다. 탐지값은 기동 시점의 관측이라 모델을 다른 크기로
@@ -568,8 +611,11 @@ public class SettingsService implements AppProperties.OverrideSource {
      */
     private String contextWindowLabel(String providerName) {
         return contextWindows.find(providerName)
-                .map(w -> "%,d (%s)".formatted(w.tokens(),
-                        w.source() == ProviderContextWindows.Source.CONFIGURED ? "설정됨" : "탐지됨"))
+                .map(w -> "%,d (%s)".formatted(w.tokens(), switch (w.source()) {
+                    case CONFIGURED -> "설정됨";
+                    case MANUAL -> "수동 입력";
+                    case PROBED -> "탐지됨";
+                }))
                 .orElse("-");
     }
 

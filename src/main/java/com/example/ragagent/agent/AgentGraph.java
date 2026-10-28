@@ -108,6 +108,9 @@ public class AgentGraph {
                     yield afterClassify(state);
                 }
                 case DIRECT_ANSWER -> {
+                    // §6.31 — 이력 제외는 RAG 답변의 손잡이다. RAG 로 물었는데 분류기가 meta 로 판정한 턴은 이력이 곧 답이라
+                    // 무시하고, 저장되는 값(TurnPersistence 가 결과에서 읽는다)도 실제로 한 것으로 맞춘다.
+                    state = state.toBuilder().excludeHistory(false).historyBoost(0).build();
                     state = (listener == GraphListener.NOOP)
                             ? directAnswerService.execute(state)
                             : directAnswerService.executeStreaming(state, listener);
@@ -134,7 +137,7 @@ public class AgentGraph {
                             // 재료다. 소진과 같이 다룬다(아래로 내려가 CRITIC — 그 게이트는 다른 실패라 따로 판단한다).
                             log.info("[AgentGraph] retry stopped early reason=ANSWER_INSUFFICIENT thread={} — rejected again "
                                     + "on the same {} chunk(s) after retry #{}; another search round would bring the same material (detail={})",
-                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                                    state.threadId(), state.seenDocCount(), state.retryCount(), state.evalReason());
                         } else {
                             state = state.toBuilder().incrementRetry().incrementRetrievalRetry()
                                     .rememberRejection(AgentState.RetryGate.INSUFFICIENT).build();
@@ -168,7 +171,7 @@ public class AgentGraph {
                             // 같은 재료로 한 번 더 써 봐야 같은 쪽으로 기운다.
                             log.info("[AgentGraph] retry stopped early reason=CRITIC_UNGROUNDED thread={} — ungrounded again "
                                     + "on the same {} chunk(s) after retry #{} (detail={})",
-                                    state.threadId(), state.retrievedDocs().size(), state.retryCount(), state.evalReason());
+                                    state.threadId(), state.seenDocCount(), state.retryCount(), state.evalReason());
                             yield Node.FINALIZE;
                         }
                         state = state.toBuilder().incrementRetry()

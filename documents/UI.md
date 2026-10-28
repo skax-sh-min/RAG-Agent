@@ -281,7 +281,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
-| POST | `/admin/settings/context-window/reprobe` | `fragments/settings-providers :: providers` | §6.26 A5 — 등록된 LOCAL 프로바이더의 컨텍스트 창을 지금 다시 탐지해 프로바이더 표 전체를 되돌린다(프로바이더별 결과 배지 포함). 감사 `settings.context-window.reprobe` |
+| POST | `/admin/settings/context-window/reprobe` | `fragments/settings-providers :: providers` | §6.26 A5 — 등록된 LOCAL 프로바이더의 컨텍스트 창을 지금 다시 탐지해 프로바이더 표 전체를 되돌린다(프로바이더별 결과 배지 포함 — 창이 16K 미만이면 **16K 미만 — 지원 밖** 배지). 감사 `settings.context-window.reprobe` |
+| GET | `/admin/settings/provider/editor` | `fragments/settings-providers :: editor` | 프로바이더 편집 폼(`name`) — 없으면 새 프로바이더(LOCAL) 폼. 표 조각 안의 `#provider-editor` 에 열린다 |
+| POST | `/admin/settings/provider/save` | `…:: providers` / 실패 시 `…:: editor` | 저장(`name`·`baseUrl`·`model`·`type`·`role`·`priority`·`contextSize`·`create`) — 컨텍스트는 즉시, 나머지는 재기동 뒤. 검증 실패는 400 이 아니라 사유와 입력값을 담은 폼을 `HX-Retarget: #provider-editor` 로 돌려준다. 컨텍스트가 바뀌면 `HX-Trigger: thinking-preview-stale`. 감사 `settings.provider.save` |
+| POST | `/admin/settings/provider/delete` | `…:: providers` / 실패 시 `…:: editor-error` | 삭제(`name`) — properties 정의는 재기동 뒤 숨김, 아직 돌지 않는 추가분은 바로 지움. 감사 `settings.provider.delete` |
+| POST | `/admin/settings/provider/revert` | `…:: providers` / 실패 시 `…:: editor-error` | 화면 편집 되돌리기(`name`) — 컨텍스트는 즉시, 나머지는 재기동 뒤 properties 값으로. 감사 `settings.provider.revert` |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
   - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·질의 확장 최소 길이·재시도 후보 확대·검색 문서 수(topK)·질의 확장 · 독립화·하이브리드 검색·**큐레이션 검색·큐레이션 가중치·큐레이션 최소 유사도**
@@ -292,11 +296,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
   - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 4종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 0.1]`)·C(응용) 창의(`llm.creative-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다.
     이 넷은 **`/settings` 스펙 범위와 `llmSafe()`의 clamp가 같은 값**이라, 환경변수로 범위를 벗어난 값을 줘도 같은 상한에서 잘린다 — 화면이 거부하는 값이 뒤에서 적용되는 일이 없다. 한쪽만 고치면 그 성질이 깨진다.
   - **응용(C) 모드**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
-  - **출력 상한 (max-tokens)** — 블로킹 호출의 출력 상한(`llm.max-tokens`, INT 1,000~32,000, step 500) — 단순한 출력 길이 손잡이가 아니다. 대화 이력 예산(×0.5) · MD 교정 섹션 크기 · 인덱싱 출력 예약 · 컨텍스트 입력 예산이 모두 여기서 파생되므로, 내리면 그 다섯이 함께 내려간다. 범위의 바닥이 0 이 아닌 이유가 그것이다.
+  - **출력 상한 (max-tokens)** — 블로킹 호출의 출력 상한(`llm.max-tokens`, INT 8,000~64,000, step 500) — 단순한 출력 길이 손잡이가 아니다. 대화 이력 예산(×0.5) · MD 교정 섹션 크기 · 인덱싱 출력 예약 · 컨텍스트 입력 예산이 모두 여기서 파생되므로, 내리면 그 다섯이 함께 내려간다. 범위의 바닥이 0 이 아닌 이유가 그것이다.
   - **초과 시 제외 문서 수** — 컨텍스트 초과 재시도당 제외할 문서 수(`llm.shrink-step`, INT 1~10, 기본 **1**) — LLM 서버가 프롬프트를 컨텍스트 초과로 거절했을 때 재시도마다 덜어낼 문서 수(§6.26-9). 값이 클수록 왕복이 줄지만 버려지는 근거가 늘어난다; 재시도 상한이 5회라 **이 값 × 5** 가 도달 가능한 최대 축소폭이다.
   - **프로바이더 표의 열 순서는 상태 → 활성화 → 생각 제어**(마지막은 관리자만)다. **상태**는 미설정 · 접속불가 · 정상 세 단계(+ 확인하는 동안의 "확인 중")다 — 미설정은 설정이 갖춰지지 않아(주소·키 없음) 서버가 만들어지지 않은 것이고, 나머지는 화면을 열 때 모델 목록 API 로 **실제로 접속해 본 결과**다. 페이지는 서버를 기다리지 않고 "확인 중"으로 먼저 그려진 뒤 `GET /settings/llm-status` 가 칸을 채운다(죽은 서버의 연결 타임아웃 3초가 페이지를 붙잡지 않게). 배지의 말풍선에 응답 시간 또는 접속하지 못한 사유가 있고, 서킷 브레이커가 건너뛰는 중이면 "차단 중"이 덧붙는다(접속 여부와 별개의 사실). 토글·재탐지 뒤의 표는 마지막 확인을 그대로 보여 준다. **생각 제어**는 호출 지점별 생각 수준 설정이 이 프로바이더로 가는 요청에 실리는지를 **사용자 설정 적용 / 서버 설정 사용 / Unknown** 셋으로 말한다(필드 이름·방식·거부 기억은 말풍선).
   - **조회 전용 그룹의 "재기동 필요"는 그룹 제목 옆에 한 번**(검색 · 저장 용량 · 쿼리 임베딩 캐시) — 항목마다 붙이지 않는다. **생각(추론) 수준 카드는 접힌 채로 시작한다**(머리말을 눌러 펴고 닫으며, 펴 둔 상태는 [다시 계산]·창 재탐지로 카드가 갱신된 뒤에도 이 화면을 연 동안 유지된다).
-  - **컨텍스트 다시 탐지** 버튼(LLM 라우팅 카드 **제목 줄 오른쪽 끝**, `isAdmin` 일 때만 렌더 — 프로바이더 표 조각 `#llm-providers` 밖에 둔다: 표는 토글·재탐지마다 통째로 바뀌므로 그 안에 두면 버튼도 매번 다시 그려진다) — 등록된 LOCAL 프로바이더에게 컨텍스트 창을 지금 다시 물어본다(§6.26 A5, `POST /admin/settings/context-window/reprobe` → 프로바이더 표 전체를 되돌려 `컨텍스트` 열이 제자리에서 갱신된다). 결과는 조각 안, 표 위에 프로바이더별 배지로 남고(**갱신됨** / **변화 없음** / **응답 없음 — 이전 값 유지** / **선언됨 — 탐지 안 함**), **"물어봤고 같았다"와 "안 물어봤다"를 반드시 구분해 보여야 한다** — 후자로 오해하면 버튼이 고장 난 것처럼 보인다. 출력 예약이 새 창과 어긋나면 재기동 안내가 함께 뜬다(그 값은 빈 생성 시점에 굳는다).
+  - **컨텍스트 다시 탐지** 버튼(LLM 라우팅 카드 **제목 줄 오른쪽 끝**, `isAdmin` 일 때만 렌더 — 프로바이더 표 조각 `#llm-providers` 밖에 둔다: 표는 토글·재탐지마다 통째로 바뀌므로 그 안에 두면 버튼도 매번 다시 그려진다) — 등록된 LOCAL 프로바이더에게 컨텍스트 창을 지금 다시 물어본다(§6.26 A5, `POST /admin/settings/context-window/reprobe` → 프로바이더 표 전체를 되돌려 `컨텍스트` 열이 제자리에서 갱신된다). 결과는 조각 안, 표 위에 프로바이더별 배지로 남고(**갱신됨** / **변화 없음** / **응답 없음 — 이전 값 유지** / **선언됨 — 탐지 안 함**, 그리고 창이 16K 미만이면 **16K 미만 — 지원 밖**), **"물어봤고 같았다"와 "안 물어봤다"를 반드시 구분해 보여야 한다** — 후자로 오해하면 버튼이 고장 난 것처럼 보인다. 출력 예약이 새 창과 어긋나면 재기동 안내가 함께 뜬다(그 값은 빈 생성 시점에 굳는다).
   - **저장 용량**(조회 전용) — 문서 저장 사용량(`documents`+`converted`+`images`, `documents/backup/` 제외)과 상한(`app.upload.max-total-size`). 상한은 재기동 필요이며 `/settings`에서 고칠 수 없다(배포 정책이고, 핫 키의 수치 타입이 GB 단위를 담지 못한다). 사용량을 함께 내는 이유는, 상한만 적혀 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이기 때문이다. 이 값은 30초 memoize된다 — `/settings`는 모든 인증 모드에서 게스트 개방이라 렌더가 곧 무제한 디렉터리 walk 트리거가 되어선 안 된다(업로드 검사 경로는 이 캐시를 쓰지 않고 매번 다시 잰다)
   - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
@@ -306,6 +310,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - **편집 칸에 마우스를 올리면 허용 범위가 툴팁으로 뜬다** — 숫자 칸은 `설정 가능 범위 1 ~ 1000 (입력 단위 1)`, bool 칸은 `설정 가능 값 true 또는 false`(`settings.range.number`/`.bool`). 툴팁은 행이 아니라 `<input>`/`<select>` 자신에 붙어 있어(타입별로 요소가 이미 갈라져 있으므로 조건 분기가 없다) 조작할 칸 바로 옆에 뜬다. 경계값은 `Double`이라 그대로 찍으면 `1.0 ~ 1000.0`이 되므로 `SettingItem.minLabel()/maxLabel()/stepLabel()`이 다듬는다(레코드 컴포넌트가 아닌 일반 메서드 — `SourceRef.staleBadge()` 선례). `data-bs-trigger="hover"`를 명시하는데, Bootstrap 기본값 `'hover focus'`로 두면 값을 고치려고 클릭한 순간 툴팁이 떠서 아래 행을 가린 채 blur까지 남는다.
   - 툴팁 재초기화 훅은 `htmx:afterSwap`이 아니라 **`htmx.onLoad`**여야 한다: `hx-swap=outerHTML`은 기존 행을 DOM에서 떼어내므로 그 행에서 발화하는 `afterSwap`이 `document.body`까지 버블링하지 못할 수 있고, `htmx:load`는 **새로 삽입된** 노드에서 발화하니 항상 도달한다. 편집 가능한 행에 툴팁이 생기기 전에는 스왑되는 행에 툴팁이 하나도 없어 드러나지 않던 차이다.
 - 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정)과 기본 라우팅 모드는 조회 전용으로만 노출된다. **`max-tokens`는 §6.26 A6 이후 LLM 핫 그룹의 편집 가능한 행이다** — 프로바이더 빈의 `defaultOptions`에 구워지는 값은 여전히 기동 시점 것이지만, 그건 옵션을 안 싣는 프레임워크 내부 호출자의 폴백일 뿐이고 앱의 모든 블로킹 호출은 자기 옵션을 실어 보내 `MaxTokensCappingChatModel`의 호출마다 재계산되는 상한을 받는다.
+- **LLM 라우팅 표의 열**: 우선순위(맨 왼쪽) · 프로바이더 · role · 모델 · 컨텍스트 · 접속 주소 · API 키(설정됨/없음만) · 상태 · 활성화 · 생각 제어(관리자) · 편집(관리자, 맨 오른쪽).
+- **프로바이더 편집**(관리자, `ProviderCatalog`) — 제목 줄의 [로컬 프로바이더 추가]와 행마다 [편집]이 표 위(`#provider-editor`)에 폼을 연다. 폼: 우선순위 · 이름(새 프로바이더만) · role · type · 컨텍스트(자동 탐지가 안 될 때만 — 탐지값이 있거나 선언됐으면 칸이 잠긴다. 넣은 값은 나중에 탐지가 성공하면 덮이고, 실패하면 남는다) · 모델 · 접속 주소. **API 키 칸은 없다**(.env 로만) — 그래서 추가는 LOCAL 만 되고, 키 있는 프로바이더는 접속 주소의 호스트·포트를 바꿀 수 없다. **컨텍스트는 저장 즉시**, 나머지는 **재기동 뒤** 반영되며 그동안 이름 옆에 배지가 붙는다: `화면에서 고침`/`화면에서 추가`(출처) · `재기동 후 적용: 모델·접속 주소…` · `재기동 후 추가`(아직 돌지 않는 행 — 흐리게, 상태·활성화·생각 제어 칸이 비어 있다) · `재기동 후 삭제` · `기동 검증 실패`(지난 기동에서 화면 값으로 모델 검증에 실패해 설정 파일 값으로 떴다 — 사유는 말풍선). 화면에 남긴 것이 있으면 [되돌리기]가 보인다. 저장이 성공하면 표 조각 전체가 바뀌어 폼이 닫히고 위에 안내가 남는다.
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드(LLM 자체 — `max-tokens`는 편집 가능해지면서 LLM 핫 그룹으로 옮겨졌고, 요약 칸에 남겨 두면 같은 값이 두 곳에 다른 조작 가능성으로 보인다), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
@@ -394,10 +400,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **드롭다운 전체 숨김**: 위 표는 LOCAL_ONLY 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
 
-### 입력 바 상단 행 (버전 · 태그 칩 · 응답 모드)
+### 입력 바 상단 행 (버전 · 태그 칩 · 이력 제외 · 응답 모드)
 
-한 행에 좌측부터 **버전 셀렉터 → 태그 칩 → (여백) → 응답 모드 토글**을 배치한다(`flex-grow-1` 스페이서로
-응답 모드를 행 오른쪽 끝에 붙임).
+한 행에 좌측부터 **버전 셀렉터 → 태그 칩 → (여백) → 이력 제외 체크박스 → 세로 구분선 → 응답 모드 토글**을 배치한다
+(`flex-grow-1` 스페이서로 뒤의 셋을 행 오른쪽 끝에 붙임). 구분선(Bootstrap `.vr` + `.chat-option-divider` — 글자 높이로 줄여
+가운데 정렬)은 두 손잡이가 다른 축(이 메시지가 무엇을 보는가 / 답변의 성격)이라 체크박스가 `응답옵션`의 일부로 읽히지 않게 가른다. 좁은 화면에서는 `flex-wrap` 으로 다음 줄로 내려간다(375px 에서 가로 넘침 없음).
 
 > **태그 입력창은 없다**: 검색 스코프 태그는 이 행의 **칩을 클릭해서만** 토글한다(별도 텍스트 입력창 없음).
 > 칩 토글 결과는 hidden 필드 `#chat-tags-input`(`name="tags"`)에 쉼표로 모여 전송되므로 서버 계약은 그대로다.
@@ -433,6 +440,20 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 | S | `S` | 요약 하나로 (`## 요약` 섹션만) | **1,000자 이내** + 4~7줄 |
 | N | `N` | 문서에 충실하게, 5섹션 (기본값) | 숫자 없음 — "구체적이고 자세하게" |
 | C | `C` | 문서를 **재료로** 코드·설정 생성, 4섹션 | 숫자 없음 — "구체적이고 자세하게" |
+
+**이력 제외 체크박스 (PLAN §6.31)**: `#exclude-history-toggle`(라벨 `chat.exclude-history.label`, 툴팁은 감싼
+`#exclude-history-wrapper` 의 Bootstrap Tooltip — `chat.exclude-history.tooltip`). 값은 hidden 필드
+`#form-exclude-history`(`name="excludeHistory"`, `true`/`false`)로 가서 HTMX 폼·SSE 의 `FormData(form)` 가 그대로 싣는다(태그 칩의
+`#chat-tags-input` 선례). 켜면 그 메시지의 RAG 답변 프롬프트에서 `[이전 대화]` 를 빼고 그 자리만큼 문서를 더 검색한다
+(`RetrievalService.historyBoostFor`). 수명은 응답 모드와 같되 **저장하지 않는다** — 보낸 뒤에도 남고, RAG↔Direct 토글(어느 방향이든
+해제)과 페이지 로드(새 대화·다시 연 대화)에서 풀린다. Direct 에서는 비활성(`updateExcludeHistoryAvailability`) — 실을 문서가 없고
+이력이 유일한 재료다. 서버도 같은 판정을 따로 건다(`ChatForm.excludesHistory()` · `ChatRequest` 의 가드).
+
+**질문 버블의 `이력 제외` 표시**: 켠 턴의 질문 버블에 두 글자 표기(`[RN]`) 다음 작은 테두리 표시(`.bubble-user-flag`)가 붙는다 —
+표기에는 섞지 않는다(렌더러 넷·규칙의 출처 둘, `data-question`·`data-response-mode` 도 그대로). 모양은 `base.html` 의
+`bubbleHistoryMark()` 하나이고 클라이언트 렌더러 셋(스트리밍 · 재사용 · HTMX 낙관적 버블)이 부른다. 서버 렌더(기록 루프)는 같은 마크업을
+`turn.excludeHistory` 로 그린다(`HistoryExclusionRendererConventionTest` 가 넷을 고정). 답변 아래 안내 줄(`budgetNote` 자리)에는
+"이전 대화를 제외하고 문서를 N개 더 사용했습니다."가 사실로 나온다 — 창에 막혀 문서를 덜었으면 축소 안내 문장이 뒤에 붙는다.
 
 **옛 `L`(원문 최대)은 제거됐다** — 같은 검색 결과를 받아 재료가 동일했고 실측 분량이 M과 4.6%밖에
 차이 나지 않았다(PLAN §6.24). 화이트리스트(`CREATIVE_MODE_ENABLED`가 켜져 있으면 `['S','N','C']`, 꺼져 있으면 `['S','N']`)에
@@ -711,6 +732,8 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 | 대화 이력 텍스트 | SQLite `conversation_turns` | 영속 |
 | 대화 제목·버전·라우팅 모드·태그 | SQLite `thread_meta` | 영속 |
 | turn별 응답 모드·검색 스코프 태그 | SQLite `conversation_turns` (`response_mode`, `selected_tags`) | 영속 — 좋아요 승격 시 재사용(§4) |
+| turn별 이력 제외 여부(§6.31) | SQLite `conversation_turns.exclude_history` (V11) | 영속 — 질문 버블의 `이력 제외` 표시, 재사용이 복사 |
+| 입력줄의 이력 제외 체크 | 페이지 상태(hidden `#form-exclude-history`) | 저장 안 함 — 페이지 로드·RAG↔Direct 토글에서 풀린다 |
 | 선택 테마 (light/dark) | `localStorage` | 브라우저 영속 |
 
 대화 제목은 첫 질문 직후 비동기(Virtual Thread)로 LLM 요약 생성 후 업데이트.

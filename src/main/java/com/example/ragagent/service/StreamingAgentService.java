@@ -228,6 +228,9 @@ public class StreamingAgentService {
                         CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                                 () -> resolveHistory(userId, form.threadId(), false,
                                         form.responseModeOrDefault(), rm, form.question()), exec);
+                        // §6.30 칸 4 — 블로킹 경로(AgentService.chat)와 같다.
+                        CompletableFuture<String> digestF = CompletableFuture.supplyAsync(
+                                () -> memoryService.lastDirectAnswerDigest(userId, form.threadId()), exec);
                         // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
                         // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
                         // 독립화를 기다린다.
@@ -241,7 +244,7 @@ public class StreamingAgentService {
                         AgentState.Builder builder =
                                 AgentState.of(form.question(), form.version(), form.threadId(),
                                                 userId, historyF.join(), rm, false, locale)
-                                        .toBuilder().questionType(typeF.join());
+                                        .toBuilder().questionType(typeF.join()).lastAnswerDigest(digestF.join());
                         if (condensed != null) {
                             builder.searchQuestion(condensed.searchQuestion())
                                    .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
@@ -253,9 +256,11 @@ public class StreamingAgentService {
                 }
             }
             // carry the selected search-scope tags + response mode into the graph state.
+            // §6.31 이력 제외도 — 블로킹 경로(AgentService.chat)와 같다.
             initial = initial.toBuilder()
                     .selectedTags(form.selectedTags())
                     .responseMode(form.responseModeOrDefault())
+                    .excludeHistory(form.excludesHistory())
                     .build();
 
             listener = new SseGraphListener(emitter, lastActivityNanos);
@@ -309,10 +314,11 @@ public class StreamingAgentService {
                 String partial = listener.getAccumulatedAnswer();
                 if (!partial.isBlank()) {
                     try {
-                        memoryService.addTurn(userId, form.threadId(), form.question(),
+                        long partialId = memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
                             TagUtils.toMetaValue(form.selectedTags()), form.isDirectMode());
+                        if (form.excludesHistory()) memoryService.markHistoryExcluded(partialId);
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {
@@ -596,12 +602,18 @@ public class StreamingAgentService {
                 : memoryService.getHistory(userId, threadId, budget, askingDirect);
     }
 
+    /**
+     * 비었거나 모르는 값이면 {@code COST_FIRST} — 블로킹 경로의 {@code ChatRequest} 와 같은 기본값이다.
+     * {@code null} 을 돌려주던 동안은 {@code AgentState.of()} 가 뒤늦게 기본값을 채워 RAG 턴은 멀쩡했지만,
+     * 그 전에 도는 Direct 턴의 이력 예산({@code MemoryService.maxConversationChars})이 그 {@code null} 로
+     * 사이트의 라우팅을 물어 NPE 로 턴이 실패했다(라우팅 모드 없이 보낸 요청 · 저장된 모드 값이 틀린 대화).
+     */
     private static RoutingMode parseRoutingMode(String value) {
-        if (value == null || value.isBlank()) return null;
+        if (value == null || value.isBlank()) return RoutingMode.COST_FIRST;
         try {
             return RoutingMode.valueOf(value);
         } catch (IllegalArgumentException e) {
-            return null;
+            return RoutingMode.COST_FIRST;
         }
     }
 }

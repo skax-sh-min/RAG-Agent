@@ -426,11 +426,8 @@ public class ThinkingPreviewService {
                 ResponseMode mode = answerModeOf(site);
                 long fixed = AnswerService.answerFixedCost(c.promptTokens(mode.answerSystemPromptKey()),
                         c.questionTokens, 0);
-                long chunk = koreanTokens(c.chunkSize);
-                List<Long> docs = Collections.nCopies(c.topK, chunk);
-                int empty = PromptBudget.fitByPrefix(docs, Long::longValue, fixed, input).size();
-                int withHistory = PromptBudget.fitByPrefix(docs, Long::longValue,
-                        fixed + koreanTokens(c.historyChars), input).size();
+                int empty = ladderDocs(c, fixed, input, 0);
+                int withHistory = ladderDocs(c, fixed, input, c.historyChars);
                 yield new Meaning(Meaning.Kind.DOCS, empty, true,
                         msg("settings.thinking.meaning.docs", empty, c.topK, withHistory),
                         msg("settings.thinking.unit.docs"));
@@ -509,6 +506,20 @@ public class ThinkingPreviewService {
             case BATCH -> msg("settings.thinking.unit.batch");
             case SHORT, IMAGE -> "";
         };
+    }
+
+    /**
+     * 답변 프롬프트에 문서가 몇 개 들어가는가 — 답변 경로가 쓰는 축소 사다리({@code PromptLadder}, PLAN §6.30)를 같은 순서로 부른다.
+     * 이력이 있으면 바닥(top-K 의 절반) 아래로 내려가기 전에 이력을 먼저 줄이므로, "이력이 상한이면"의 수는 이력 크기를 그냥 빼서는
+     * 나오지 않는다. 이력은 상한 크기의 한 턴으로 둔다 — 실제 이력은 대개 여러 턴이라 칸 2 가 직전 턴을 남긴 채 바닥에서 멈출 수
+     * 있어, 이 수는 그 경우의 근사다(한 턴이면 칸 5 가 이력을 통째로 빼고 문서를 되돌려 채운다).
+     */
+    private static int ladderDocs(Ctx c, long fixed, long input, int historyChars) {
+        List<Long> docs = Collections.nCopies(c.topK, koreanTokens(c.chunkSize));
+        String history = historyChars <= 0 ? "" : "Q: 가\nA: " + "가".repeat(Math.max(1, historyChars - 1));
+        PromptLadder.Input in = new PromptLadder.Input(docs, PromptLadder.rankRemovalOrder(c.topK),
+                PromptLadder.floor(c.topK, c.topK), HistoryPolicy.parse(history), null, null, fixed, null);
+        return PromptLadder.plan(in, input).at(0, 1).keptDocs().size();
     }
 
     /**

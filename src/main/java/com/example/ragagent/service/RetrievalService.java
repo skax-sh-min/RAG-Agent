@@ -160,7 +160,10 @@ public class RetrievalService {
                     extraDocs, state.threadId());
             extraDocs = 0;
         }
-        int effectiveTopK = defaultTopK + extraDocs + modeBoost;
+        // §6.31 이력 제외 — 이력이 차지하던 자리만큼 문서를 더 검색한다(historyBoostFor). 재시도 +1·모드 부스트와 더해진다.
+        int baseTopK = defaultTopK + extraDocs + modeBoost;
+        int historyBoost = historyBoostFor(state, baseTopK);
+        int effectiveTopK = baseTopK + historyBoost;
         List<Document> unique;
         // Empty on the expansion-failure fallback path below, which skips fusion entirely — every
         // consumer must therefore tolerate a missing entry rather than assume one exists.
@@ -278,6 +281,18 @@ public class RetrievalService {
         // 키워드 축으로만 찾힌 청크는 본문이 chunk_fts 의 검색용 파생 텍스트다 — 답변·검증·출처 미리보기로 가기 전에
         // 저장된 원문으로 되돌린다(최종 컷에 남은 것만, 조회 한 번).
         unique = withStoredText(unique);
+        // §6.31 — 부스트로 들어온 문서가 검증 발췌에 다 들어가는지는 실제 문서 크기로 잰다(검색 전에는 알 수 없다). 넘치면
+        // 꼬리(= 부스트분)부터 덜어 낸다. 기본 컷(baseTopK)은 건드리지 않는다 — 켜지 않은 턴과 같은 문서는 늘 실린다.
+        int appliedBoost = Math.max(0, Math.min(historyBoost, unique.size() - baseTopK));
+        if (appliedBoost > 0) {
+            int fits = historyBoostThatFits(state, unique, baseTopK, appliedBoost, listener != GraphListener.NOOP);
+            if (fits < appliedBoost) {
+                log.info("[RETRIEVAL] 이력 제외 부스트 {}→{} — 검증 발췌 예산에 맞춰 줄였다 thread={}",
+                        appliedBoost, fits, state.threadId());
+                unique = unique.subList(0, baseTopK + fits);
+            }
+            appliedBoost = fits;
+        }
 
         // § 표시 이름 — one batch lookup for the whole turn's retrieved chunks instead of one
         // query per chunk; formatSource() falls back to the real filename for any docId absent
@@ -369,7 +384,69 @@ public class RetrievalService {
                 .retrievalWarnings(warnings)
                 .imageRefs(imageRefs)
                 .needsRetry(false)
+                .historyBoost(appliedBoost)
                 .build();
+    }
+
+    /**
+     * §6.31 — 이력 제외를 켠 턴에 최종 컷에 더할 문서 수: {@code 이력 상한 ÷ chunk-size}(내림). 이력 상한은 RAG 턴이 늘 쓰는
+     * {@link MemoryService#maxConversationChars()} 의 식이라 기본값에서 6,000 ÷ 1,500 = +4 다.
+     *
+     * <p><b>왜 이력 상한인가.</b> 이력을 최대 그만큼 빼고 같은 양의 문서를 넣는 <b>교환</b>이라 답변 프롬프트의 최악 크기가
+     * 지금(문서 topK + 이력 상한)과 같다 — 창을 몰라도 지금보다 위험해지지 않고, 창을 추정하지 않으므로 "모름" 원칙을 건드리지
+     * 않는다. 실제 이력 길이로 잡으면 새 대화에서 체크가 아무 일도 하지 않고, 창으로 채우면 창을 모르는 배포에서 쓸 수 없다.
+     *
+     * <p><b>검증 쪽에는 교환이 없다</b>(검증 프롬프트에는 원래 이력이 없다) — 문서만큼 그대로 커진다. 그래서 상한이 둘이다:
+     * 여기서는 {@code (기본 컷 + 부스트) × chunk-size} 가 검증의 발췌 글자 상한({@code AnswerService.MAX_EVAL_EXCERPT_CHARS})을
+     * 넘지 않게, 검색 뒤에는 창을 알면 실제 문서 크기로 발췌 예산을 잰다({@link #historyBoostThatFits}).
+     */
+    private int historyBoostFor(AgentState state, int baseTopK) {
+        if (!state.excludeHistory()) return 0;
+        int chunkSize = props.chunkSizeSafe();
+        if (chunkSize <= 0) return 0;
+        int boost = MemoryService.conversationChars(props.llmSafe().maxTokens()) / chunkSize;
+        int excerptRoom = AnswerService.MAX_EVAL_EXCERPT_CHARS / chunkSize - baseTopK;
+        return Math.max(0, Math.min(boost, excerptRoom));
+    }
+
+    /**
+     * §6.31 — 부스트분 가운데 검증 발췌 예산에 들어가는 수. {@link #hasContextHeadroomFor} 와 같은 판정이되, 이미 검색이 끝나
+     * <b>실제 문서</b>로 잰다(기본 컷 {@code base} 개를 먼저 싣고, 그 뒤를 하나씩). 답변 크기는 직전 답변이 있으면 그것(재시도),
+     * 없으면(첫 시도) 그 모드의 답변 출력 예약으로 추정한다 — 답변이 그보다 길 수는 없다.
+     *
+     * <p>창을 모르면 그대로 둔다 — 답변 쪽 최악은 지금과 같고, 검증이 넘치면 서버의 초과 오류가 축소 재시도로 간다.
+     *
+     * @param streaming 이 턴이 스트리밍으로 답하는가 — 답변 출력 예약이 달라진다({@code AgentGraph} 가 스트리밍이면 실제 리스너를,
+     *                  블로킹이면 {@code NOOP} 을 넘긴다)
+     */
+    private int historyBoostThatFits(AgentState state, List<Document> docs, int base, int boost, boolean streaming) {
+        ThinkingSite evalSite = state.responseMode().evalThinkingSite();
+        String evalProvider = llmRouter.findProviderName(evalSite.taskType(), evalSite.routingMode(state.routingMode()));
+        int window = contextWindows.tokensOrZero(evalProvider);
+        if (window <= 0) return boost;
+
+        long answerTokens;
+        if (state.answer() != null && !state.answer().isBlank()) {
+            answerTokens = TokenEstimator.estimate(state.answer());
+        } else {
+            ThinkingSite answerSite = state.responseMode().ragThinkingSite();
+            String answerProvider = llmRouter.findProviderName(answerSite.taskType(),
+                    answerSite.routingMode(state.routingMode()));
+            answerTokens = AnswerService.answerReservation(thinkingBudget, answerSite, answerProvider,
+                    state.responseMode(), streaming, props.llmSafe().maxTokens()).tokens();
+        }
+        long budget = new PromptBudget(window, AnswerService.evalReservation(thinkingBudget, evalSite, evalProvider,
+                props.llmSafe().maxTokens()).tokens()).inputBudget();
+        long used = answerTokens + TokenEstimator.estimate(state.question()) + EVAL_OVERHEAD_TOKENS;
+        for (int i = 0; i < base; i++) used += TokenEstimator.estimate(docs.get(i).getText());
+        int fits = 0;
+        while (fits < boost) {
+            long next = TokenEstimator.estimate(docs.get(base + fits).getText());
+            if (budget - used - next <= 0) break;
+            used += next;
+            fits++;
+        }
+        return fits;
     }
 
     /**

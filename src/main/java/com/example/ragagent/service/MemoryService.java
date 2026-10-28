@@ -76,6 +76,20 @@ public class MemoryService {
     }
 
     /**
+     * §6.30 칸 4 — 직전 턴이 <b>Direct</b> 였으면 그 답변의 요약({@code ## 요약}, 없으면 앞 1,200자 — {@link HistoryPolicy#digest}).
+     * 아니면 {@code null}.
+     *
+     * <p>이력 문자열에서 얻을 수 없어 따로 읽는다: Direct 답변은 다음 RAG 턴의 이력에 {@code ## 요약}·{@code ## 참고} 를 뗀 본문으로
+     * 실리기 때문이다(§10.13 — 그 턴에는 복제될 문서가 없었다). RAG 턴은 이미 그 요약으로 실려 있어 줄일 것이 없다.
+     */
+    public String lastDirectAnswerDigest(String userId, String threadId) {
+        return repository.getLastTurn(userId, threadId)
+                .filter(MemoryRepository.Turn::directMode)
+                .map(t -> HistoryPolicy.digest(t.answer()))
+                .orElse(null);
+    }
+
+    /**
      * Char budget applied to conversation history (LLM_MAX_TOKENS × 0.5, floor 1,000).
      * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
      * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
@@ -255,6 +269,18 @@ public class MemoryService {
      * 답변 뒤에 다듬은 질문을 저장한다(PostAnswerService). {@code saveVerification} 과 같이 <b>실패해도
      * 삼킨다</b> — 이미 저장된 턴에 덧붙이는 표시·재사용 보조 값이라, 쓰기 사고가 답변을 되돌릴 일이 아니다.
      */
+    /**
+     * §6.31 — 이력 제외로 답한 턴을 표시한다. 버블 표시·재사용 복사용 기록이라 실패가 답변 저장을 무르지 않는다
+     * ({@link #saveClarifiedQuestion} 과 같은 처리).
+     */
+    public void markHistoryExcluded(long turnId) {
+        try {
+            repository.markHistoryExcluded(turnId);
+        } catch (Exception e) {
+            log.warn("[HISTORY-EXCLUDE] 이력 제외 표시 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
     public void saveClarifiedQuestion(long turnId, String clarifiedQuestion) {
         try {
             repository.saveClarifiedQuestion(turnId, clarifiedQuestion);

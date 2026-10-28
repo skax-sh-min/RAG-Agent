@@ -9,10 +9,26 @@ public record ChatForm(
         String routingMode,
         Boolean directMode,
         String tags,
-        String responseMode
+        String responseMode,
+        Boolean excludeHistory
 ) {
+    /** §6.31 이전의 모양 — 이력 제외 없음. 정규 생성자가 바인딩에 쓰이므로(레코드) 이 생성자는 코드에서만 부른다. */
+    public ChatForm(String question, String threadId, String version, String routingMode,
+                    Boolean directMode, String tags, String responseMode) {
+        this(question, threadId, version, routingMode, directMode, tags, responseMode, null);
+    }
+
     public boolean isDirectMode() {
         return Boolean.TRUE.equals(directMode);
+    }
+
+    /**
+     * §6.31 — 이 메시지의 RAG 답변이 이전 대화를 보지 않는가. <b>Direct 면 언제나 {@code false}</b> — 실을 문서가 없고 이력이
+     * 유일한 재료다. 화면은 Direct 에서 체크박스를 비활성화하지만 손으로 만든 요청은 그 화면을 거치지 않으므로, 응답 모드의
+     * C 가드({@link #responseModeOrDefault()})와 같은 자리에서 서버가 따로 건다.
+     */
+    public boolean excludesHistory() {
+        return Boolean.TRUE.equals(excludeHistory) && !isDirectMode();
     }
 
     /** Lenient parse of the comma-separated tag input (never throws — empty on blank/invalid). */

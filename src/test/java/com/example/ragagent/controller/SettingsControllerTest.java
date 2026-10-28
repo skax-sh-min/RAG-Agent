@@ -5,6 +5,7 @@ import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.SettingItem;
 import com.example.ragagent.model.ThinkingPreview;
+import com.example.ragagent.service.ProviderCatalog;
 import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.ThinkingPreviewService;
 import org.junit.jupiter.api.DisplayName;
@@ -31,7 +32,8 @@ class SettingsControllerTest {
 
     private final SettingsService service = mock(SettingsService.class);
     private final ThinkingPreviewService thinking = mock(ThinkingPreviewService.class);
-    private final SettingsController controller = new SettingsController(service, thinking);
+    private final ProviderCatalog catalog = mock(ProviderCatalog.class);
+    private final SettingsController controller = new SettingsController(service, thinking, catalog);
 
     private static SettingItem sampleItem() {
         return new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "80",

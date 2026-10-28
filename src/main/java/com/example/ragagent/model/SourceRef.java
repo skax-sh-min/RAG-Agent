@@ -84,8 +84,18 @@ public record SourceRef(
 
     /** 예산 축소로 프롬프트에서 빠졌다고 표시한 사본. */
     public SourceRef markPromptExcluded() {
+        return withPromptExcluded(true);
+    }
+
+    /**
+     * 표시를 주어진 값으로 맞춘 사본 — 켜기만 하는 {@link #markPromptExcluded} 와 달리 끌 수도 있다. 같은 턴에서 답변이 두 번
+     * 이상 만들어지면(검증 실패 재시도·PROGRESSIVE 업그레이드) 마지막 답변의 프롬프트가 표시를 정해야 하는데, 앞 시도에서
+     * 빠졌던 출처가 이번에는 실렸을 수 있다.
+     */
+    public SourceRef withPromptExcluded(boolean excluded) {
+        if (excluded == promptExcluded) return this;
         return new SourceRef(label, preview, chunkId, docId, pageOrSlide,
-                similarity, retrievalShare, axisRanks, answerShare, staleStatus, true);
+                similarity, retrievalShare, axisRanks, answerShare, staleStatus, excluded);
     }
 
     /**

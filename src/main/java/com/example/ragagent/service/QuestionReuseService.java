@@ -313,7 +313,7 @@ public class QuestionReuseService {
             .distinct()
             .toList();
         return ReuseLookup.reusable(turn.turnId(), question, turn.answer(), turn.threadId(), chunkIds,
-                turn.responseMode(), turn.directMode(), turn.selectedTags());
+                turn.responseMode(), turn.directMode(), turn.selectedTags(), turn.excludeHistory());
     }
 
     public List<SourceRef> sourceRefsForTurn(long turnId) {
@@ -534,7 +534,7 @@ public class QuestionReuseService {
     public record Suggestion(long turnId, String question, String answerPreview, Origin origin, String askedAt) {}
 
     /**
-     * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags} 는 재사용되는
+     * 재사용 판정 결과. {@code responseMode}·{@code directMode}·{@code selectedTags}·{@code excludeHistory}(§6.31) 는 재사용되는
      * <b>답변이 만들어진 모양</b>(원본 턴의 값, 원본이 다시 재사용 턴이면 그 원본의 값 —
      * {@code QuestionReuseRepository.ANSWER_SHAPE_COLUMNS})이다. 컨트롤러는 새 턴을 저장할 때 이 셋을
      * 그대로 복사한다 — 요청 쪽 폼 값이나 자리표시자를 쓰면 새로고침 전후로 두 글자 표기가 달라지고,
@@ -544,16 +544,27 @@ public class QuestionReuseService {
     public record ReuseLookup(boolean reusable, String reason, Long sourceTurnId,
                               String question, String answer, String sourceThreadId,
                               List<String> sourceChunkIds,
-                              String responseMode, boolean directMode, String selectedTags) {
+                              String responseMode, boolean directMode, String selectedTags,
+                              boolean excludeHistory) {
+        /** §6.31 이전의 모양 — 원본 턴이 이력 제외로 답하지 않았다. */
+        public ReuseLookup(boolean reusable, String reason, Long sourceTurnId,
+                           String question, String answer, String sourceThreadId,
+                           List<String> sourceChunkIds,
+                           String responseMode, boolean directMode, String selectedTags) {
+            this(reusable, reason, sourceTurnId, question, answer, sourceThreadId, sourceChunkIds,
+                    responseMode, directMode, selectedTags, false);
+        }
+
         static ReuseLookup reusable(long sourceTurnId, String question, String answer, String sourceThreadId,
                                     List<String> sourceChunkIds,
-                                    String responseMode, boolean directMode, String selectedTags) {
+                                    String responseMode, boolean directMode, String selectedTags,
+                                    boolean excludeHistory) {
             return new ReuseLookup(true, null, sourceTurnId, question, answer, sourceThreadId, sourceChunkIds,
-                    responseMode, directMode, selectedTags == null ? "" : selectedTags);
+                    responseMode, directMode, selectedTags == null ? "" : selectedTags, excludeHistory);
         }
 
         static ReuseLookup notReusable(String reason, String question) {
-            return new ReuseLookup(false, reason, null, question, null, null, List.of(), null, false, "");
+            return new ReuseLookup(false, reason, null, question, null, null, List.of(), null, false, "", false);
         }
     }
 

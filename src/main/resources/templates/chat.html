@@ -165,6 +165,9 @@
                             <div class="bubble-user p-3">
                                 <div><span class="bubble-user-mode"
                                            th:text="'[' + ${turn.responseModeLabel} + '] '">[RN] </span><span
+                                        class="bubble-user-flag" th:if="${turn.excludeHistory}"
+                                        th:title="#{chat.exclude-history.mark.tooltip}"
+                                        th:text="#{chat.exclude-history.mark}">이력 제외</span><span
                                         th:text="${turn.question}"></span></div>
                                 <div class="bubble-user-clarified" th:if="${cq != null}"
                                      th:text="'(' + ${cq} + ')'">(다듬은 질문)</div>
@@ -413,6 +416,23 @@
                              서버도 같은 규칙을 독립적으로 건다(ChatForm/ChatRequest — 구 L은 서버 가드가
                              없어 손으로 만든 요청이 통과했다).
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
+                        <!-- §6.31 이력 제외 — 켜면 이 메시지의 RAG 답변 프롬프트에서 [이전 대화] 를 빼고 그 자리만큼 문서를 더 검색한다.
+                             응답 모드와 같은 수명이다: 보낸 뒤에도 남고, RAG↔Direct 토글과 새 대화(페이지 로드)에서 풀린다 —
+                             그래서 localStorage 에 두지 않는다. Direct 에서는 비활성(실을 문서가 없고 이력이 유일한 재료다). 서버도 같은
+                             판정을 따로 건다(ChatForm.excludesHistory / ChatRequest — 손으로 만든 요청). 값은 아래 hidden 필드로 간다
+                             (태그 칩의 #chat-tags-input 처럼 HTMX 폼과 SSE 의 FormData 가 그대로 싣는다). -->
+                        <div class="form-check mb-0 d-flex align-items-center gap-1" id="exclude-history-wrapper"
+                             data-bs-toggle="tooltip" th:title="#{chat.exclude-history.tooltip}">
+                            <input class="form-check-input mt-0" type="checkbox" id="exclude-history-toggle"
+                                   autocomplete="off" style="cursor:pointer;"/>
+                            <label class="form-check-label small text-muted mb-0" for="exclude-history-toggle"
+                                   style="cursor:pointer; white-space:nowrap;"
+                                   th:text="#{chat.exclude-history.label}">이력 제외</label>
+                        </div>
+                        <input type="hidden" id="form-exclude-history" name="excludeHistory" value="false"/>
+                        <!-- 이력 제외(이 메시지가 무엇을 보는가)와 응답옵션(답변의 성격)은 다른 축이다 — 붙어 있으면 체크박스가
+                             응답옵션의 일부로 읽혀서 세로 구분선으로 가른다(Bootstrap .vr, 높이는 app.css). -->
+                        <div class="vr chat-option-divider" aria-hidden="true"></div>
                         <span class="small text-muted" th:text="#{chat.response.group.label}">응답옵션</span>
                         <div id="response-mode-group" class="btn-group btn-group-sm" role="group"
                              th:attr="aria-label=#{chat.response.tooltip}">
@@ -860,6 +880,9 @@
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
         updateResponseModeAvailability(isDirect);
+        /* §6.31 — 이력 제외도 어느 방향이든 푼다(응답 모드와 같은 수명). Direct 에서는 비활성. */
+        setExcludeHistory(false);
+        updateExcludeHistoryAvailability(isDirect);
         /* RAG ↔ Direct 를 오갈 때는 응답 모드를 **항상** 기본값(N)으로 되돌린다 — 어느 방향이든,
            직전 선택이 무엇이었든. 두 축은 성격이 달라(검색 여부 vs 답변의 성격) 한쪽을 바꾼 뒤에도
            남아 있는 다른 쪽 선택은 "내가 고른 것"이 아니라 "직전 대화에서 흘러온 것"에 가깝다.
@@ -1028,6 +1051,23 @@
         new bootstrap.Tooltip(el, {delay: {show: 100, hide: 0}});
     });
 
+    /* ── §6.31 이력 제외 체크박스 → hidden 폼 필드 ──────────────────────────────
+       저장하지 않는다(새 대화·새로고침에서 풀린다). Direct 에서는 비활성 — 실제 방어는 서버(ChatForm.excludesHistory)다. */
+    const excludeHistoryToggle = document.getElementById('exclude-history-toggle');
+    const excludeHistoryInput  = document.getElementById('form-exclude-history');
+    function setExcludeHistory(on) {
+        excludeHistoryToggle.checked = on;
+        excludeHistoryInput.value = on ? 'true' : 'false';
+    }
+    function updateExcludeHistoryAvailability(isDirect) {
+        excludeHistoryToggle.disabled = isDirect;
+        if (isDirect) setExcludeHistory(false);
+    }
+    excludeHistoryToggle.addEventListener('change', function () { setExcludeHistory(this.checked); });
+    setExcludeHistory(false);   /* 브라우저가 되돌려 놓은 체크 상태(뒤로 가기 캐시)를 믿지 않는다 */
+    updateExcludeHistoryAvailability(directToggle.checked);
+    new bootstrap.Tooltip(document.getElementById('exclude-history-wrapper'), {delay: {show: 100, hide: 0}});
+
     /* Sync routing mode → hidden form field + PATCH thread if it exists.
        Selector is absent entirely when the deployment default is LOCAL_ONLY (localOnlyDeployment=true). */
     const routingModeSelect = document.getElementById('routing-mode-select');
@@ -1152,7 +1192,7 @@
     }
     initSourcePopovers(document);
 
-    function appendReusedTurn(question, answer, turnId, provider, sources, responseMode, directMode) {
+    function appendReusedTurn(question, answer, turnId, provider, sources, responseMode, directMode, excludeHistory) {
         // 추가 질문 칩은 가장 최근 답변 아래에만 둔다 — 재사용된 답변이 그 자리를 넘겨받는다(chat-stream.js).
         if (typeof window.clearChatFollowUps === 'function') window.clearChatFollowUps();
         const t = formatBubbleTime(new Date());
@@ -1172,7 +1212,7 @@
         userBubble.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
-                `<div><span class="bubble-user-mode">[${escHtml(reuseMode)}] </span>${escHtml(question)}</div>` +
+                `<div><span class="bubble-user-mode">[${escHtml(reuseMode)}] </span>${bubbleHistoryMark(excludeHistory)}${escHtml(question)}</div>` +
                 `<small class="text-white bubble-user-time">🕐 ${escHtml(t)}</small>` +
             `</div>` +
             `</div>`;
@@ -1237,7 +1277,7 @@
                 questionInput.value = '';
                 questionInput.style.height = 'auto';
                 appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse', data.sources || [],
-                                 data.responseMode, data.directMode === true);
+                                 data.responseMode, data.directMode === true, data.excludeHistory === true);
                 return;
             }
             submitWithFallback(data.question || '', data.message || '기존 답변 검증에 실패하여 일반 질의로 전환합니다.');
@@ -1482,7 +1522,7 @@
             bubble.innerHTML =
                 `<div class="me-1">` +
                 `<div class="bubble-user p-3">` +
-                    `<div><span class="bubble-user-mode">[${escHtml(optimisticMode)}] </span>${escHtml(q)}</div>` +
+                    `<div><span class="bubble-user-mode">[${escHtml(optimisticMode)}] </span>${bubbleHistoryMark(excludeHistoryInput.value)}${escHtml(q)}</div>` +
                     `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
                 `</div>` +
                 `</div>`;

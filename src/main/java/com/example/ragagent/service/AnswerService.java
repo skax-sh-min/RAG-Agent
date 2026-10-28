@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.model.SentPrompt;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.llm.LlmProvider;
@@ -41,6 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
+import java.util.function.IntSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -82,7 +84,7 @@ public class AnswerService {
      * 32k model the effective ceiling is closer to 20,000 chars and must come from {@code topK} /
      * {@code chunk-size} rather than from this constant. See OPERATOR_MANUAL §8.
      */
-    private static final int MAX_EVAL_EXCERPT_CHARS = 32_000;
+    static final int MAX_EVAL_EXCERPT_CHARS = 32_000;   // §6.31 이력 제외 부스트의 상한도 이 값을 읽는다(RetrievalService)
 
     /**
      * Output cap for the evaluation call only.
@@ -308,10 +310,15 @@ public class AnswerService {
     /**
      * 답변 프롬프트에서 <b>줄일 수 없는</b> 몫 — 시스템 프롬프트 + 질문 + 검색 경고 + 섹션 머리말. {@link #fitToBudget} 이
      * 문서·이력에 남길 자리를 이 값으로 잰다. {@code /settings} 의 생각 수준 미리보기가 같은 함수로 "문서가 몇 개 들어가는가"를
-     * 낸다(§6.29 ⑦-바).
+     * 낸다(§6.29 ⑦-바). 첫 시도의 모양이다 — 재시도는 {@code [직전 시도 메모]} 를 더한다(아래 오버로드).
      */
     static long answerFixedCost(long systemTokens, long questionTokens, long warningTokens) {
-        return systemTokens + questionTokens + warningTokens + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
+        return answerFixedCost(systemTokens, questionTokens, warningTokens, 0);
+    }
+
+    /** 위 몫에 검증 실패 재시도의 {@code [직전 시도 메모]}({@link #retryFeedback})까지 — §6.30 고정비. */
+    static long answerFixedCost(long systemTokens, long questionTokens, long warningTokens, long retryNoteTokens) {
+        return systemTokens + questionTokens + warningTokens + retryNoteTokens + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
     }
 
     /** 검증 프롬프트에서 발췌를 뺀 고정 몫 — 시스템 프롬프트 + 답변 전문 + 질문 + 응답 스키마. */
@@ -371,13 +378,13 @@ public class AnswerService {
     public AgentState execute(AgentState state) {
         AgentState noDocs = answerWithoutDocuments(state, GraphListener.NOOP);
         if (noDocs != null) return noDocs;
-        return executeBlocking(withBudgetNote(state));
+        return executeBlocking(state);
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
         AgentState noDocs = answerWithoutDocuments(state, listener);
         if (noDocs != null) return noDocs;
-        return executeStreamingNormal(withBudgetNote(state), listener);
+        return executeStreamingNormal(state, listener);
     }
 
     /**
@@ -425,34 +432,26 @@ public class AnswerService {
     }
 
     /**
-     * 축소가 일어났으면 그 사실을 state 에 실어 둔다 — 사용자에게 보여주기 위해서다.
+     * 이 답변을 만든 프롬프트가 <b>실제로 실은 것</b>을 state 에 남긴다 — 사용자 안내, 출처의 {@code 미사용} 표시, 그리고
+     * 재시도가 읽는 보낸 집합({@code lastSent}, §6.30).
      *
      * <p><b>안내가 필요한 이유는 출처 목록이 줄지 않기 때문이다.</b> 축소는 프롬프트에만 걸리고
      * {@code state.sources()} 는 검색된 전부를 그대로 들고 있어서, 안내가 없으면 사용자는 화면의
      * 출처 10개를 모델이 다 읽고 답한 것으로 믿는다. 실제로는 그중 몇 개만 프롬프트에 들어갔다.
      *
-     * <p><b>두 진입점에서만 부른다.</b> 여기서 세워 둔 값은 아래 모든 경로의 {@code toBuilder()}
-     * 복사를 타고 그대로 흘러가므로(PROGRESSIVE 업그레이드가 만드는 새 state 포함) 경로마다
-     * 심을 필요가 없다. {@link #fitToBudget} 자체는 {@link #buildAnswerPrompt} 가 다시 부르지만
-     * 같은 입력에 같은 함수라 결과가 갈리지 않는다 — 로직을 복제하는 대신 한 함수를 두 번 부른다.
+     * <p><b>실제로 보낸 시도의 {@link Fitted} 를 받는다.</b> 예전에는 호출이 끝난 뒤 예산 계산을 한 번 더 돌려 다시 만들었는데,
+     * 그 재현은 늘 스트리밍 예약과 처음 고른 프로바이더 기준이라 블로킹 경로·PROGRESSIVE 업그레이드(창이 다른 프로바이더)에서
+     * 보낸 것과 어긋날 수 있었다. 이제 재시도의 판단까지 이 값을 읽으므로 재현이 아니라 사실이어야 한다.
+     *
+     * <p>안내는 <b>덮어쓴다</b>(없으면 지운다) — 같은 턴의 앞 시도가 남긴 안내가 이번 답변의 프롬프트를 말하게 두지 않는다.
      */
-    private AgentState withBudgetNote(AgentState state) {
-        return withBudgetNote(state, 0);
-    }
-
-    /**
-     * @param shrinkLevel 실제로 성공한 시도의 축소 단계. 초과 재시도가 있었다면 <b>호출이 끝난 뒤</b>
-     *                    그 단계로 다시 불러야 한다 — 안 그러면 화면은 0단계 기준으로 안내하고 모델은
-     *                    그보다 적은 문서를 봤다는 상태가 남는다. 이미 표시된 출처를 다시 표시하는 것은
-     *                    무해하므로(chunkId 기준, 멱등) 덧칠하면 된다.
-     */
-    private AgentState withBudgetNote(AgentState state, int shrinkLevel) {
-        // 안내는 사용자가 실제로 겪는 경로 기준이어야 한다 — 채팅의 유일한 전송 경로는 스트리밍이다.
-        Fitted fitted = fitToBudget(state, likelyProvider(state), true, shrinkLevel);
-        if (fitted.note() == null) return state;
+    private static AgentState withSent(AgentState state, Fitted fitted) {
+        SentPrompt sent = new SentPrompt(fitted.documents().stream().map(SentPrompt::keyOf).toList(),
+                fitted.cut(), List.of());
         return state.toBuilder()
                 .budgetNote(fitted.note())
                 .sources(markExcludedSources(state.sources(), fitted.documents()))
+                .lastSent(sent)
                 .build();
     }
 
@@ -464,6 +463,8 @@ public class AnswerService {
      * 정렬되므로({@code SourceRef.DISPLAY_ORDER}) "뒤에서 N개"라는 위치 규칙은 화면에 닿기 전에
      * 무너진다. chunk id 를 모르는 출처(구 기록·폴백 경로)는 건드리지 않는다 — 확인할 수 없는 것을
      * 빠졌다고 표시하면 그 표시 자체를 믿을 수 없게 된다.
+     *
+     * <p>표시를 <b>켜기만 하지 않고 맞춘다</b> — 같은 턴의 앞 시도에서 빠졌던 출처가 이번 답변의 프롬프트에는 실렸을 수 있다.
      */
     private static List<SourceRef> markExcludedSources(List<SourceRef> sources, List<Document> keptDocs) {
         if (sources.isEmpty()) return sources;
@@ -472,8 +473,7 @@ public class AnswerService {
                 .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
         return sources.stream()
-                .map(s -> (s.chunkId() != null && !keptIds.contains(s.chunkId()))
-                        ? s.markPromptExcluded() : s)
+                .map(s -> s.chunkId() == null ? s : s.withPromptExcluded(!keptIds.contains(s.chunkId())))
                 .toList();
     }
 
@@ -483,16 +483,19 @@ public class AnswerService {
         final AgentState requested = state;   // 아래에서 state 를 다시 대입하므로 람다는 이쪽을 본다
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         ChatOptions options = answerOptions(state);
-        Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(requested, "ANSWER", level -> {
+        Fitted[] sent = new Fitted[1];   // 성공한 시도가 실제로 실은 것 — withSent 가 읽는다
+        Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(requested, "ANSWER", () -> true,
+                () -> answerShrinkLevels(requested, likelyProvider(requested), false, false), level -> {
             // 블로킹 — answerOptions() 가 maxTokens 를 실어 보내므로 그만큼 실제로 예약된다.
-            String userPrompt = buildAnswerPrompt(requested, likelyProvider(requested), false, level);
+            Built built = buildAnswerPrompt(requested, likelyProvider(requested), false, level, false);
+            sent[0] = built.fitted();
             ThinkingSite site = answerSite(requested);
             return llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(requested.routingMode()),
-                    model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
+                    model -> model.call(buildPrompt(systemPrompt, built.text(), options)));
         });
         LlmRouter.LlmResult result = attempt.value();
         String answer = truncate(enforceSummaryOnly(result.text() == null ? "" : result.text(), state.responseMode()));
-        state = withBudgetNote(state, attempt.level()).toBuilder()
+        state = withSent(state, sent[0]).toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(likelyProvider(state))
                      .answer(answer)
@@ -510,10 +513,10 @@ public class AnswerService {
         // 차단하고 다음 프로바이더로 스트림을 다시 연다(StreamFailover). 블로킹 호출이 라우터에서 받던 보호를 채팅 화면도 받는다.
         StreamFailover.Served<Shrunk<Streamed>> served = StreamFailover.run(llmRouter,
                 answerSite(requested).taskType(), answerSite(requested).routingMode(requested.routingMode()),
-                emitted::get, p -> streamAnswer(p, requested, systemPrompt, listener, emitted));
+                emitted::get, p -> streamAnswer(p, requested, systemPrompt, listener, emitted, false));
         LlmProvider provider = served.provider();   // 전환이 있었다면 처음 고른 프로바이더가 아니다
         Shrunk<Streamed> attempt = served.value();
-        state = withBudgetNote(state, attempt.level());
+        state = withSent(state, attempt.value().fitted());
         String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (TokenEstimator) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
@@ -559,19 +562,20 @@ public class AnswerService {
         String premiumName;
         String premiumAnswer;
         int inputTokens, outputTokens;
-        int shrinkLevel;
+        Fitted premiumFitted;
+        // 2차는 재시도가 아니라 창이 다른 호출이므로 사다리를 처음부터 돈다(fresh — §6.30 C).
         if (listener != null) {
             AtomicBoolean emitted = new AtomicBoolean();
             // 일반 스트리밍과 같은 장애 전환 — 업그레이드 안내는 시도마다 그 프로바이더 이름으로 다시 나간다.
             StreamFailover.Served<Shrunk<Streamed>> served = StreamFailover.run(llmRouter,
                     answerSite(state).taskType(), RoutingMode.QUALITY_FIRST, emitted::get, p -> {
                         listener.onUpgrade(p.name());
-                        return streamAnswer(p, state, systemPrompt, listener, emitted);
+                        return streamAnswer(p, state, systemPrompt, listener, emitted, true);
                     });
             premiumName = served.provider().name();
             Shrunk<Streamed> attempt = served.value();
             premiumAnswer = attempt.value().answer();
-            shrinkLevel = attempt.level();
+            premiumFitted = attempt.value().fitted();
             String promptText = systemPrompt + attempt.value().userPrompt();
             llmRouter.recordApproxUsage(premiumName, promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
@@ -579,22 +583,23 @@ public class AnswerService {
         } else {
             LlmProvider premiumProvider = llmRouter.routeProvider(answerSite(state).taskType(), RoutingMode.QUALITY_FIRST);
             premiumName = premiumProvider.name();
-            Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(state, "ANSWER-PREMIUM", level -> {
-                String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false, level);
+            Fitted[] sent = new Fitted[1];
+            Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(state, "ANSWER-PREMIUM", () -> true,
+                    () -> answerShrinkLevels(state, premiumProvider.name(), false, true), level -> {
+                Built built = buildAnswerPrompt(state, premiumProvider.name(), false, level, true);
+                sent[0] = built.fitted();
                 return llmRouter.executeGatedWithUsage(
                         answerSite(state).taskType(), RoutingMode.QUALITY_FIRST,
-                        model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state))));
+                        model -> model.call(buildPrompt(systemPrompt, built.text(), answerOptions(state))));
             });
             premiumAnswer = attempt.value().text();
-            shrinkLevel = attempt.level();
+            premiumFitted = sent[0];
             inputTokens = attempt.value().inputTokens();
             outputTokens = attempt.value().outputTokens();
         }
-        // 업그레이드 답변이 축소된 프롬프트로 만들어졌다면 그 사실도 사용자에게 가야 한다 —
-        // 화면에 남는 것은 이 마지막 답변이다.
-        if (shrinkLevel > 0) {
-            resultState = withBudgetNote(resultState, shrinkLevel);
-        }
+        // 화면에 남는 것은 이 마지막 답변이다 — 안내·출처 표시·보낸 집합을 그 프롬프트 기준으로 다시 세운다. 업그레이드는
+        // 창이 더 큰 프로바이더로 가는 일이 많아, 1차의 축소 안내가 그대로 남으면 화면이 실제보다 적게 봤다고 말한다.
+        resultState = withSent(resultState, premiumFitted);
         return resultState.toBuilder()
                           .answer(truncate(premiumAnswer))
                           .usedProvider(premiumName)
@@ -607,8 +612,9 @@ public class AnswerService {
     // ── 컨텍스트 초과 후 축소 재시도 (§6.26-9) ───────────────────────────────
 
     /**
-     * 재시도 횟수의 상한. 한 번에 덜어낼 문서 수는 {@code app.llm.shrink-step}(기본 1) 이므로 기본
-     * 설정에서 topK=10 이면 10→9→8→7→6→5 까지 간다.
+     * <b>검증 호출</b>의 축소 재시도 상한. 검증 발췌는 한 번에 {@code app.llm.shrink-step}(기본 1) 개씩 꼬리부터 덜어내므로 기본
+     * 설정에서 topK=10 이면 10→9→8→7→6→5 까지 간다. 답변 호출의 상한은 사다리가 정한다({@code PromptLadder.Plan.maxLevel} —
+     * 이력 칸 수 + 문서 걸음 같은 5개).
      *
      * <p><b>왜 절반씩이 아닌가.</b> 처음에는 이진 축소였다 — 왕복이 log(n) 이라는 이유였는데, 그
      * 계산은 <b>왕복만</b> 세고 버려지는 근거는 세지 않는다. 사전 예산({@code fitToBudget})이 이미 창에
@@ -621,17 +627,14 @@ public class AnswerService {
      * {@code RAG-LLM-003} 이 무엇을 고쳐야 하는지 이름을 대 주는 편이 낫다. 초과는 생성 전에 거절되므로
      * 실패한 시도의 왕복은 빠르다 — 느린 것은 마지막 성공한 호출 하나뿐이다.
      */
-    private static final int MAX_SHRINK_ATTEMPTS = 5;
+    private static final int MAX_EVAL_SHRINK_ATTEMPTS = 5;
 
-    /** 성공한 시도의 결과와 <b>그때의 축소 단계</b>. 단계가 있어야 사용자 안내를 다시 세울 수 있다. */
+    /** 성공한 시도의 결과와 <b>그때의 축소 단계</b>. */
     private record Shrunk<T>(T value, int level) {}
 
-    private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag, IntFunction<T> attempt) {
-        return withShrinkRetry(state, tag, () -> true, attempt);
-    }
-
     /**
-     * 컨텍스트 초과로 실패하면 프롬프트를 {@code app.llm.shrink-step} 개씩 줄여 다시 시도한다.
+     * 컨텍스트 초과로 실패하면 프롬프트를 한 걸음 더 줄여 다시 시도한다 — 답변은 사다리의 다음 걸음(§6.30), 검증은 발췌
+     * {@code app.llm.shrink-step} 개.
      *
      * <p><b>사전 예산이 있는데도 이것이 필요한 이유.</b> {@code fitToBudget} 은 {@code TokenEstimator}
      * 의 <b>추정</b> 위에 서 있고(창을 아예 모르면 아무것도 자르지 않는다), 추정이 빗나가면 그대로
@@ -643,31 +646,30 @@ public class AnswerService {
      * 라우터의 프로바이더 순회(다른 프로바이더로 넘어가며 재시도)와는 층이 다르고 서로 방해하지
      * 않는다 — 저쪽이 "다른 곳에 물어본다"면 이쪽은 "더 작게 물어본다"다.
      *
-     * <p><b>축소는 사용자에게 보여야 한다.</b> 성공한 단계를 함께 돌려주는 이유가 그것이다 —
-     * 호출부가 {@link #withBudgetNote} 를 그 단계로 다시 세워 안내 문구와 출처의 {@code 미사용}
-     * 표시를 실제로 보낸 프롬프트와 맞춘다. 안 그러면 화면은 0단계 기준으로 말하고 모델은 3단계를
-     * 봤다는 상태가 된다.
+     * <p><b>축소는 사용자에게 보여야 한다.</b> 답변 경로는 성공한 시도가 실제로 실은 것({@link Fitted})을 들고 나와
+     * {@link #withSent} 가 안내 문구와 출처의 {@code 미사용} 표시를 그것과 맞춘다.
      *
-     * @param canRetry 재시도해도 되는 상황인지 — 스트리밍은 <b>토큰이 하나라도 나갔으면</b> 안 된다
-     *                 (화면에 앞부분이 두 번 찍힌다). 초과는 생성 전에 거절되므로 실제로는 늘 참이지만,
-     *                 그 가정이 깨졌을 때 사용자가 보는 것이 중복 텍스트라 조건으로 못 박아 둔다.
+     * @param canRetry  재시도해도 되는 상황인지 — 스트리밍은 <b>토큰이 하나라도 나갔으면</b> 안 된다
+     *                  (화면에 앞부분이 두 번 찍힌다). 초과는 생성 전에 거절되므로 실제로는 늘 참이지만,
+     *                  그 가정이 깨졌을 때 사용자가 보는 것이 중복 텍스트라 조건으로 못 박아 둔다.
+     * @param maxLevels 이 호출에서 의미 있게 줄일 수 있는 횟수 — <b>첫 초과에서야</b> 묻는다(대부분의 호출은 초과하지 않고,
+     *                  답변 쪽은 사다리를 다시 세워야 답할 수 있다)
      */
-    private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag,
-                                          BooleanSupplier canRetry, IntFunction<T> attempt) {
-        int maxLevel = maxShrinkLevel(state);
-        int step = props.llmSafe().shrinkStep();
+    private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag, BooleanSupplier canRetry,
+                                          IntSupplier maxLevels, IntFunction<T> attempt) {
+        int maxLevel = -1;
         for (int level = 0; ; level++) {
             try {
                 return new Shrunk<>(attempt.apply(level), level);
             } catch (RuntimeException e) {
-                if (level >= maxLevel || !isContextOverflow(e) || !canRetry.getAsBoolean()) throw e;
-                log.warn("[SHRINK] {} 컨텍스트 초과 — 프롬프트를 줄여 다시 시도한다. thread={} "
-                         + "시도 {}/{}, 문서 {}→{}개(app.llm.shrink-step={}). 사전 예산은 토큰 추정 위에 "
+                if (!isContextOverflow(e) || !canRetry.getAsBoolean()) throw e;
+                if (maxLevel < 0) maxLevel = maxLevels.getAsInt();
+                if (level >= maxLevel) throw e;
+                log.warn("[SHRINK] {} 컨텍스트 초과 — 한 걸음 더 줄여 다시 시도한다(답변은 축소 사다리의 다음 걸음, "
+                         + "검증은 발췌). thread={} 시도 {}/{} (app.llm.shrink-step={}). 사전 예산은 토큰 추정 위에 "
                          + "서 있어 여기까지 오는 일 자체는 정상이지만, 잦다면 app.search-top-k 를 "
                          + "낮추거나(핫, /settings) 프로바이더의 컨텍스트를 키우십시오.",
-                        tag, state.threadId(), level + 1, maxLevel,
-                        shrinkDocs(state.retrievedDocs(), level, step).size(),
-                        shrinkDocs(state.retrievedDocs(), level + 1, step).size(), step);
+                        tag, state.threadId(), level + 1, maxLevel, props.llmSafe().shrinkStep());
             }
         }
     }
@@ -683,50 +685,35 @@ public class AnswerService {
     }
 
     /**
-     * 이 턴에서 의미 있게 줄일 수 있는 시도 횟수.
-     *
-     * <p>문서가 1개뿐이면 더 덜어낼 것이 없어 <b>같은 요청을 반복</b>하게 된다 — 그때는 이력이
-     * 남아 있을 때만 한 번을 준다. 상한을 두지 않으면 결정적으로 실패하는 요청에 왕복만 쓴다.
+     * 답변 호출에서 의미 있게 줄일 수 있는 시도 횟수 — 사다리가 사전 예산 다음에 남겨 둔 걸음 수
+     * ({@code PromptLadder.Plan.maxLevel}). 아무것도 바꾸지 않는 칸은 사다리에 없으므로 같은 요청을 되풀이하지 않는다
+     * (문서 1개 · 이력 없음이면 0).
      */
-    private int maxShrinkLevel(AgentState state) {
-        int byDocs = docShrinkSteps(state.retrievedDocs().size(), props.llmSafe().shrinkStep());
-        String history = state.conversationHistory();
-        boolean hasHistory = history != null && !history.isBlank();
-        return Math.min(MAX_SHRINK_ATTEMPTS, hasHistory ? byDocs + 1 : byDocs);
+    private int answerShrinkLevels(AgentState state, String providerName, boolean streaming, boolean fresh) {
+        return ladderFor(state, providerName, streaming, fresh).plan().maxLevel(props.llmSafe().shrinkStep());
+    }
+
+    /** 검증 호출에서 의미 있게 줄일 수 있는 시도 횟수 — 검증에는 이력이 없어 발췌 걸음뿐이다. */
+    private int evalShrinkLevels(AgentState state) {
+        return Math.min(MAX_EVAL_SHRINK_ATTEMPTS,
+                docShrinkSteps(state.retrievedDocs().size(), props.llmSafe().shrinkStep()));
     }
 
     /** 문서가 1개만 남을 때까지 필요한 시도 횟수. {@code n <= 1} 이면 0 — 더 줄일 것이 없다. */
     private static int docShrinkSteps(int n, int step) {
-        return n <= 1 ? 0 : (n - 1 + step - 1) / step;
+        int s = Math.max(1, step);
+        return n <= 1 ? 0 : (n - 1 + s - 1) / s;
     }
 
     /**
-     * 시도마다 문서를 {@code step} 개씩 — 뒤(최저 관련도)부터 버린다. {@code fitToBudget} 의 순서
-     * 규칙과 같다.
+     * 검증 발췌의 축소 재시도 — 시도마다 문서를 {@code step} 개씩 뒤(최저 관련도)부터 버린다.
      *
-     * <p><b>최상위 문서는 남는다</b>: 다 버리면 프롬프트가 "문서를 찾을 수 없습니다"가 되어, 초과를
-     * 피하려다 검색이 성공한 질문에 모른다고 답하게 된다.
+     * <p><b>최상위 문서는 남는다</b>: 다 버리면 검증할 근거가 없다.
      */
-    private static List<Document> shrinkDocs(List<Document> docs, int level, int step) {
+    private static List<Document> dropTail(List<Document> docs, int level, int step) {
         if (level <= 0 || docs.size() <= 1) return docs;
         int keep = Math.max(1, docs.size() - level * Math.max(1, step));
         return docs.subList(0, keep);
-    }
-
-    /**
-     * 이력은 <b>문서를 다 줄인 뒤에야</b> 손댄다 — 이 앱이 축소에서 지키는 순서(문서 → 이력)를 재시도
-     * 에서도 그대로 따른다. 문서가 이미 1개면 첫 시도부터 이력이 반씩 줄고, topK 가 크면 상한
-     * ({@link #MAX_SHRINK_ATTEMPTS}) 안에서는 이력에 닿지 않는다. 그래도 되는 이유는 이력이 설정으로
-     * 이미 묶여 있고({@code MemoryService} 가 {@code max-tokens} 의 절반) 창을 밀어붙이는 쪽은
-     * 문서라서다.
-     *
-     * <p>이쪽만 여전히 <b>반씩</b>인 것은 이력에는 "몇 개"라는 단위가 없기 때문이다 — 턴 길이가
-     * 제각각이라 개수로 세면 어떤 대화에서는 아무것도 안 줄고 어떤 대화에서는 통째로 사라진다.
-     */
-    private String shrinkHistory(String history, int level, int docCount) {
-        int shift = level - docShrinkSteps(docCount, props.llmSafe().shrinkStep());
-        if (shift <= 0 || history == null || history.isBlank()) return history;
-        return trimHistory(history, TokenEstimator.estimate(history) >> shift);
     }
 
     /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE). */
@@ -745,9 +732,10 @@ public class AnswerService {
      * 호출부가 프롬프트 길이로 입력 토큰을 추정해야 하는데, 예전에는 그러려고 <b>같은 프롬프트를
      * 한 번 더 조립했다</b>. 그 재조립은 {@code fitToBudget()} 까지 다시 돌리는 데다(문서 토큰
      * 추정이 청크 수만큼 반복된다) 재현이지 사실이 아니다 — 실제로 보낸 것과 어긋날 여지를 남기느니
-     * 보낸 값을 그대로 들고 나오는 편이 싸고 정확하다.
+     * 보낸 값을 그대로 들고 나오는 편이 싸고 정확하다. 같은 이유로 그 프롬프트가 실은 것({@link Fitted})도 함께 나온다
+     * ({@link #withSent}).
      */
-    private record Streamed(String answer, String userPrompt) {}
+    private record Streamed(String answer, String userPrompt, Fitted fitted) {}
 
     /**
      * <b>토큰이 하나라도 나갔으면 재시도하지 않는다</b> — 화면에 앞부분이 두 번 찍히기 때문이다.
@@ -759,15 +747,17 @@ public class AnswerService {
      * 않는다")을 프로바이더 장애 전환에도 적용하기 위해서다. 첫 토큰을 리스너에 넘기기 <b>전에</b> 세운다: 넘기는 도중 연결이
      * 끊겨 예외가 나도 "이미 나갔다"로 읽혀야 한다.
      */
-    private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
-                                          String systemPrompt, GraphListener listener, AtomicBoolean emitted) {
+    private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state, String systemPrompt,
+                                          GraphListener listener, AtomicBoolean emitted, boolean fresh) {
         StringBuilder full = new StringBuilder();
-        String[] sent = {""};
-        Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted.get(), level -> {
+        Built[] sent = {null};
+        Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted.get(),
+                () -> answerShrinkLevels(state, provider.name(), provider.stream(), fresh), level -> {
             // 조립은 여기서 한 번만 한다. 축소 재시도가 돌면 마지막 시도의 프롬프트가 남고,
             // 그것이 실제로 나간 값이다. 호출 전에 담아 두므로 호출이 실패해도 값이 비지 않는다.
-            String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
-            sent[0] = userPrompt;
+            Built built = buildAnswerPrompt(state, provider.name(), provider.stream(), level, fresh);
+            sent[0] = built;
+            String userPrompt = built.text();
             // 생각 델타는 "나간 토큰"이 아니다 — 화면에 아무것도 찍히지 않았으므로 축소 재시도를 막지 않는다.
             try {
                 callOrStream(provider, state, systemPrompt, userPrompt,
@@ -780,7 +770,7 @@ public class AnswerService {
             }
             return null;
         });
-        return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());
+        return new Shrunk<>(new Streamed(full.toString(), sent[0].text(), sent[0].fitted()), attempt.level());
     }
 
     /**
@@ -858,7 +848,7 @@ public class AnswerService {
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             EvalExcerpts[] used = new EvalExcerpts[1];
-            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL", level -> {
+            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL", () -> true, () -> evalShrinkLevels(state), level -> {
                 EvalExcerpts excerpts = evalExcerptsFor(state, answer, systemPrompt,
                         evalConverter.getFormat(), level);
                 used[0] = excerpts;
@@ -901,6 +891,7 @@ public class AnswerService {
                     .envNote(envNote)
                     .usedDocIndices(out.usedDocs())
                     .excludedDocIds(evictionsFor(state, out.sufficient(), out.usedDocs(), excerpts))
+                    .lastSent(withReportedUse(state, out.usedDocs(), excerpts))
                     .build();
         } catch (Exception e) {
             log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
@@ -973,7 +964,7 @@ public class AnswerService {
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             EvalExcerpts[] used = new EvalExcerpts[1];
-            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL-C", level -> {
+            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL-C", () -> true, () -> evalShrinkLevels(state), level -> {
                 EvalExcerpts excerpts = evalExcerptsFor(state, answer, systemPrompt,
                         creativeEvalConverter.getFormat(), level);
                 used[0] = excerpts;
@@ -1049,13 +1040,34 @@ public class AnswerService {
     private static List<String> evictionsFor(AgentState state, boolean sufficient,
                                              List<Integer> usedDocs, EvalExcerpts excerpts) {
         if (sufficient) return state.excludedDocIds();
-        Set<String> fresh = RetrievalEviction.select(state.retrievedDocs(), usedDocs, excerpts.trimmed());
+        // §6.30 A — 답변 프롬프트에 실린 것 안에서만 고른다. 실리지 않은 문서는 보이지도 않았으니 "안 쓰임"이 아니라 "모름"이다.
+        Set<String> fresh = RetrievalEviction.selectAmongSent(state.retrievedDocs(),
+                state.lastSent() == null ? null : state.lastSent().docKeys(), usedDocs, excerpts.included());
         if (fresh.isEmpty()) return state.excludedDocIds();
         List<String> merged = new ArrayList<>(state.excludedDocIds());
         fresh.stream().filter(id -> !merged.contains(id)).forEach(merged::add);
         log.info("[EVAL] 재시도에서 밀어낼 청크 {}개 (근거 미사용 + 하위 순위) thread={}",
                 fresh.size(), state.threadId());
         return merged;
+    }
+
+    /**
+     * 검증이 근거로 썼다고 보고한 문서를 보낸 집합에 붙인다 — 다음 재시도가 문서를 뺄 순서(§6.30 D)를 정하는 재료다. {@code [Dn]}
+     * 은 검증 발췌의 번호(검색 결과 순서의 접두사)라, 재검색으로 목록이 바뀌기 전에 여기서 문서 키로 바꿔 둔다. 발췌 밖의 번호는
+     * 버린다(모델이 지어낸 번호).
+     */
+    private static SentPrompt withReportedUse(AgentState state, List<Integer> usedDocs, EvalExcerpts excerpts) {
+        SentPrompt sent = state.lastSent();
+        if (sent == null) return null;
+        List<String> keys = new ArrayList<>();
+        if (usedDocs != null) {
+            for (Integer n : usedDocs) {
+                if (n == null || n < 1 || n > excerpts.included() || n > state.retrievedDocs().size()) continue;
+                String key = SentPrompt.keyOf(state.retrievedDocs().get(n - 1));
+                if (!keys.contains(key)) keys.add(key);
+            }
+        }
+        return sent.withUsedDocKeys(keys);
     }
 
     /**
@@ -1157,7 +1169,7 @@ public class AnswerService {
      */
     private EvalExcerpts evalExcerptsFor(AgentState state, String answer, String systemPrompt,
                                          String schema, int shrinkLevel) {
-        return buildEvalExcerpts(shrinkDocs(state.retrievedDocs(), shrinkLevel, props.llmSafe().shrinkStep()),
+        return buildEvalExcerpts(dropTail(state.retrievedDocs(), shrinkLevel, props.llmSafe().shrinkStep()),
                 evalExcerptTokenBudget(state, systemPrompt, answer, schema),
                 state.retrievedDocs().size());
     }
@@ -1366,15 +1378,16 @@ public class AnswerService {
      *                     그래서 이 메서드는 호출마다 예산을 다시 계산한다 — 중복 계산이 아니라
      *                     호출부마다 답이 달라야 하는 값이다.
      * @param shrinkLevel  컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조.
+     * @param fresh        사다리를 처음부터 돈다(PROGRESSIVE 2차) — 검증 실패 재시도의 규칙(§6.30 C·D)을 쓰지 않는다
      */
-    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
-                                     int shrinkLevel) {
+    private Built buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
+                                    int shrinkLevel, boolean fresh) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
         // 무엇을 버릴지도 여기서만 알 수 있다(라우터는 프롬프트 안을 못 본다). 창을 모르면
         // fitToBudget 이 원본을 그대로 돌려주므로 예전과 동작이 같다.
-        Fitted fitted = fitToBudget(state, providerName, streaming, shrinkLevel);
+        Fitted fitted = fitToBudget(state, providerName, streaming, shrinkLevel, fresh);
 
         if (!fitted.history().isBlank()) {
             sb.append("[이전 대화]\n").append(fitted.history()).append("\n\n");
@@ -1407,7 +1420,7 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
-        appendRetryFeedback(sb, state);
+        sb.append(retryFeedback(state));
 
         String question = PromptInjectionGuard.wrap(state.question());
         sb.append("[질문]\n").append(question);
@@ -1415,8 +1428,11 @@ public class AnswerService {
         if (log.isDebugEnabled()) {
             logPromptSize(answerPromptSize(state, providerName, streaming, fitted, docsContext, question));
         }
-        return sb.toString();
+        return new Built(sb.toString(), fitted);
     }
+
+    /** 조립한 사용자 메시지와 그것이 실은 것 — 보낸 시도의 {@link Fitted} 를 {@link #withSent} 까지 들고 간다. */
+    private record Built(String text, Fitted fitted) {}
 
     /**
      * 답변 프롬프트가 무엇으로 얼마나 채워졌는지 — 구성 요소별 토큰·바이트.
@@ -1450,7 +1466,9 @@ public class AnswerService {
         return size.render("%s | thread=%s mode=%s%s%s".formatted(tail, state.threadId(),
                 state.responseMode().name() + (state.directMode() ? "(Direct)" : ""),
                 state.retryCount() > 0 ? " retry=" + state.retryCount() : "",
-                fitted.note() != null ? " [축소됨]" : ""));
+                (state.excludeHistory() ? fitted.docs().size() < state.retrievedDocs().size() : fitted.note() != null)
+                        ? " [축소됨]" : "")
+                + (state.excludeHistory() ? " [이력 제외]" : ""));
     }
 
     /**
@@ -1505,24 +1523,49 @@ public class AnswerService {
      * 문서에 없는 내용을 지어내고, 그러면 고치려던 지표(근거)가 더 나빠진다. 그래서 문구는 "다시
      * 확인하라 / 없으면 없다고 말하라"이고, 이 블록을 답변에 언급하지 말라는 제약이 같은 블록 안에
      * 붙는다(시스템 프롬프트 6개를 건드리는 대신 — 블록이 있을 때만 그 제약도 존재하면 된다).
+     *
+     * <p>문자열로 돌려주는 이유는 사다리가 이 블록을 <b>고정비</b>로 세야 하기 때문이다(§6.30) — 예전 고정비는 시스템
+     * 프롬프트·질문·경고·머리말만 세어, 재시도마다 이 블록(고정 문구 약 110자 + 반려 사유)만큼 과소 추정했다.
      */
-    private static void appendRetryFeedback(StringBuilder sb, AgentState state) {
-        if (state.retryCount() <= 0) return;
+    private static String retryFeedback(AgentState state) {
+        if (state.retryCount() <= 0) return "";
         String reason = state.evalReason();
-        if (reason == null || reason.isBlank()) return;
-        sb.append("[직전 시도 메모]\n")
-          .append("직전 답변은 다음 이유로 반려됐다: ").append(reason).append('\n')
-          .append("이번에는 그 부분을 문서에서 다시 확인하고 답하라. ")
-          .append("문서에 없으면 지어내지 말고 없다고 밝혀라. ")
-          .append("이 메모 자체는 내부 기록이므로 답변에 언급하지 마라.\n\n");
+        if (reason == null || reason.isBlank()) return "";
+        return "[직전 시도 메모]\n"
+             + "직전 답변은 다음 이유로 반려됐다: " + reason + '\n'
+             + "이번에는 그 부분을 문서에서 다시 확인하고 답하라. "
+             + "문서에 없으면 지어내지 말고 없다고 밝혀라. "
+             + "이 메모 자체는 내부 기록이므로 답변에 언급하지 마라.\n\n";
+    }
+
+    /**
+     * §6.30 칸 5 — 이력을 전부 뺀 자리에 넣는 한 줄. 후속 질문이면(§10.12 독립화가 질문을 다시 썼으면) 지시어 풀이를 그 문장이
+     * 넘겨받는다 — 이미 계산된 값이라 추가 호출이 없다. 독립화가 빗나가도 {@code [질문]} 원문은 그대로라 모델이 비교할 수 있다.
+     * 독립 질문이면 {@code null}(이력이 그냥 빠진다).
+     */
+    static String condensedHistoryLine(AgentState state) {
+        if (!state.wasCondensed()) return null;
+        return "(이전 대화는 길이 한도로 생략했다. 이 질문을 이전 대화에 비추어 다시 쓰면: "
+                + state.searchQuestion().replaceAll("\\s+", " ").strip() + ")";
+    }
+
+    /**
+     * §6.31 — 사용자가 이력 제외를 켠 턴의 {@code [이전 대화]} 자리. 칸 5 와 같은 한 줄이되 이유가 다르다(길이 한도가 아니라
+     * 사용자의 선택). 독립 질문이면 {@code null} — 블록 자체가 빠진다.
+     */
+    static String excludedHistoryLine(AgentState state) {
+        if (!state.wasCondensed()) return null;
+        return "(이번 답변에서는 이전 대화를 제외했다. 이 질문을 이전 대화에 비추어 다시 쓰면: "
+                + state.searchQuestion().replaceAll("\\s+", " ").strip() + ")";
     }
 
     /**
      * 예산에 맞춘 결과 — 무엇이 얼마나 남았는지.
      *
      * @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}.
+     * @param cut  이력을 어떻게 줄였는가 — 보낸 집합({@code SentPrompt})에 실려 다음 재시도가 읽는다(§6.30 C)
      */
-    private record Fitted(List<SizedDoc> docs, String history, String note) {
+    private record Fitted(List<SizedDoc> docs, String history, String note, SentPrompt.HistoryCut cut) {
 
         /** 원본 {@link Document} 만 필요한 자리({@link #markExcludedSources}) 를 위해. */
         List<Document> documents() {
@@ -1539,8 +1582,8 @@ public class AnswerService {
      * 한 번 돌았다. 예산을 재려면 어차피 정규화해야 하므로 그때 만든 값을 조립까지 들고 간다.
      *
      * <p>{@code normalized} 가 {@code null} 인 경우가 하나 있다 — <b>창을 몰라</b> 예산 계산
-     * 자체를 건너뛴 경로다. 거기서까지 미리 정규화하면, 개수만 보면 되는
-     * {@code withBudgetNote()} 가 문서 전량을 정규화하게 되어 없애려던 낭비가 그 경로에서
+     * 자체를 건너뛴 경로다. 거기서까지 미리 정규화하면, 개수만 보면 되는 축소 재시도의 상한
+     * 계산({@code answerShrinkLevels()})까지 문서 전량을 정규화하게 되어 없애려던 낭비가 그 경로에서
      * 되살아난다. 그래서 그 경로는 {@link #unmeasured} 로 남기고 정규화는 조립 시점으로 미룬다.
      */
     private record SizedDoc(Document doc, String normalized, long tokens) {
@@ -1563,81 +1606,125 @@ public class AnswerService {
     }
 
     /**
-     * 프롬프트가 프로바이더의 창에 들어가도록 <b>문서를 먼저</b>, 그래도 넘치면 <b>대화 이력을</b>
-     * 오래된 것부터 덜어낸다.
+     * 프롬프트가 프로바이더의 창에 들어가도록 줄인다 — §6.30 축소 사다리({@link PromptLadder}): 잃는 것이 작은 조각부터
+     * (과거 질문 자르기 → 직전 1턴만 → 문서를 바닥까지 → 직전 답변을 요약으로 → 이력 전부 → 문서 1개), 멈춘 뒤 남는 자리는
+     * 되돌려 채운다.
      *
-     * <p><b>문서를 먼저 버리는 이유.</b> 검색 결과는 RRF 점수 내림차순이라 뒤쪽이 최저 관련도이고,
-     * 그 문서들이 답변에 기여하지 않는 일은 흔하다(§ 응답 참여도 — 검색 1위조차 한 글자도 기여하지
-     * 않는 경우가 있어 출처 표시 순서를 참여도 우선으로 바꿨다). 반면 대화 이력이 사라지면 사용자는
-     * "방금 말한 걸 잊었다"로 즉시 체감한다. 덜 아픈 쪽을 먼저 버린다.
+     * <p><b>예전 순서(문서 → 이력)를 바꾼 이유.</b> 그 순서의 근거는 "하위 문서는 답변에 기여하지 않는 일이 흔하고, 이력이
+     * 사라지면 사용자가 즉시 체감한다"였고 그 관찰은 여전히 맞다 — 그래서 사다리도 하위 문서를 이력의 <b>큰</b> 조각(직전 턴)보다
+     * 먼저 뺀다. 바뀐 사정은 둘이다: 그 순서는 "문서 1개 + 이력 전부"를 언제나 골라 긴 독립 질문(로그·코드 붙여넣기)에서 근거가
+     * 거의 다 사라졌고, 이력의 <b>작은</b> 조각(먼 턴·과거 질문 원문)까지 문서보다 귀하게 다뤘다. 그래서 문서에 바닥(top-k 의
+     * 50%)을 두고, 그 아래로 내려가기 전에 이력을 먼저 줄인다.
      *
-     * <p>이력은 {@code "Q: …\nA: …"} 를 빈 줄로 이어 붙인 형식이라(오래된 것이 앞) 턴 경계에서
-     * 자를 수 있다. 답변 본문에도 빈 줄이 있을 수 있으므로 <b>빈 줄 다음에 {@code "Q: "} 가 오는
-     * 자리</b>만 경계로 본다 — 문자 인덱스로 자르면 반쪽짜리 턴이 남아 모델을 더 헷갈리게 한다.
+     * @param shrinkLevel 컨텍스트 초과 후 재시도 횟수(§6.26-9). {@code 0} 이면 사전 예산이고, 한 번마다 사다리의 다음 걸음
+     *                    (이력 칸 하나, 또는 문서 {@code app.llm.shrink-step} 개)으로 내려간다. 창을 몰라 사전 예산이 no-op
+     *                    인 배포에서도 걸음은 그대로 적용된다 — 자동 복구가 가장 필요한 배포가 거기다.
+     * @param fresh       사다리를 처음부터 돈다(PROGRESSIVE 2차). 아니면 검증 실패 재시도에서 §6.30 C·D 를 쓴다
      */
-    private Fitted fitToBudget(AgentState state, String providerName, boolean streaming) {
-        return fitToBudget(state, providerName, streaming, 0);
-    }
-
-    /**
-     * @param shrinkLevel 컨텍스트 초과 후 재시도 횟수(§6.26-9). {@code 0} 이면 예전 동작 그대로이고,
-     *                    한 번마다 문서가 {@code app.llm.shrink-step} 개씩 줄어든다.
-     *                    <b>예산 계산보다 먼저</b> 적용된다 —
-     *                    창을 모르면 예산 단계가 통째로 no-op 이라, 축소를 그쪽에 얹으면 정작
-     *                    자동 복구가 가장 필요한 "창 모름" 배포에서 아무 일도 일어나지 않는다.
-     */
-    private Fitted fitToBudget(AgentState state, String providerName, boolean streaming, int shrinkLevel) {
-        List<Document> allDocs = state.retrievedDocs();
-        String fullHistory = state.conversationHistory();
-        List<Document> docs = shrinkDocs(allDocs, shrinkLevel, props.llmSafe().shrinkStep());
-        String history = shrinkHistory(fullHistory, shrinkLevel, allDocs.size());
-        PromptBudget budget = budgetFor(state, providerName, streaming);
-        if (budget == null) {
-            // 창 모름 → 예산 축소는 하지 않는다. 다만 재시도 축소는 창과 무관하게 적용된다.
-            // 정규화도 하지 않는다 — 이 경로에는 잴 것이 없고, 여기서 미리 돌리면 안내 문구만
-            // 필요한 withBudgetNote() 까지 문서 전량을 정규화한다(SizedDoc 참고).
-            return new Fitted(docs.stream().map(SizedDoc::unmeasured).toList(), history,
-                    noteFor(allDocs.size(), docs.size(), fullHistory, history));
-        }
-
-        // 문서당 정확히 한 번만 정규화·추정한다 — 아래 두 계산과 buildAnswerPrompt() 의 조립이
-        // 모두 이 값을 쓴다. 예전에는 셋이 각자 normalize() 를 다시 돌렸다.
-        List<SizedDoc> sized = docs.stream().map(SizedDoc::measured).toList();
-
-        // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
-        // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
-        long fixedCost = answerFixedCost(TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode())),
-                TokenEstimator.estimate(state.question()),
-                TokenEstimator.estimate(String.join("\n", state.retrievalWarnings())));
-        long limit = budget.inputBudget();
-
-        List<SizedDoc> keptDocs = PromptBudget.fitByPrefix(sized, SizedDoc::tokens,
-                fixedCost + TokenEstimator.estimate(history), limit);
-
-        // 문서를 줄여도 안 들어가면 이력을 오래된 턴부터 덜어낸다.
-        long docCost = keptDocs.stream().mapToLong(SizedDoc::tokens).sum();
-        String keptHistory = trimHistory(history, limit - fixedCost - docCost);
-
-        String note = noteFor(allDocs.size(), keptDocs.size(), fullHistory, keptHistory);
+    private Fitted fitToBudget(AgentState state, String providerName, boolean streaming, int shrinkLevel,
+                               boolean fresh) {
+        Ladder ladder = ladderFor(state, providerName, streaming, fresh);
+        PromptLadder.Result r = ladder.plan().at(shrinkLevel, props.llmSafe().shrinkStep());
+        List<SizedDoc> kept = r.keptDocs().stream().map(ladder.sized()::get).toList();
+        int total = state.retrievedDocs().size();
+        String note = noteFor(total, kept.size(), r, state.wasCondensed());
+        boolean excluded = state.excludeHistory();
         if (note != null) {
-            log.warn("[BUDGET] 컨텍스트 창 {}토큰(출력 예약 {}) → 입력 예산 {}토큰에 맞춰 축소: "
-                     + "문서 {}→{}개, 이력 {}→{}자 (재시도 축소 단계 {}). app.search-top-k / "
-                     + "app.chunk-size 를 낮추거나 프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
-                    budget.contextWindow(), budget.outputReservation(), limit,
-                    allDocs.size(), keptDocs.size(), lengthOf(fullHistory), lengthOf(keptHistory),
+            PromptBudget budget = ladder.budget();
+            log.warn("[BUDGET] {} → 축소 사다리 칸 {}까지: 문서 {}→{}개(바닥 {}), 이력 {}→{}자{} (재시도 축소 단계 {}). "
+                     + "app.search-top-k / app.chunk-size 를 낮추거나 프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
+                    budget == null ? "창 모름"
+                            : "컨텍스트 창 %d토큰(출력 예약 %d) → 입력 예산 %d토큰".formatted(budget.contextWindow(),
+                                    budget.outputReservation(), budget.inputBudget()),
+                    r.highestRung(), total, kept.size(), ladder.floor(), lengthOf(ladderHistory(state)),
+                    lengthOf(r.history()), r.cut().allDropped() && r.history().length() > 0 ? "(다시 쓴 질문 한 줄)" : "",
                     shrinkLevel);
         }
-        return new Fitted(keptDocs, keptHistory, note);
+        if (excluded) {
+            // §6.31 — 이력은 사다리에 넣지 않았다(ladderFor). 자리에는 후속 질문의 다시 쓴 질문 한 줄만, 안내는 사용자가 고른
+            // 것을 사실로 말한다 — 축소 안내와 문구를 가른다.
+            String line = excludedHistoryLine(state);
+            return new Fitted(kept, line == null ? "" : line,
+                    exclusionNoteText(state.historyBoost(), total, kept.size()), r.cut());
+        }
+        return new Fitted(kept, r.history(), note, r.cut());
+    }
+
+    /** 세운 사다리 — 문서별 크기와 함께(조립이 그 정규화 결과를 그대로 쓴다, {@link SizedDoc}). */
+    private record Ladder(List<SizedDoc> sized, PromptLadder.Plan plan, PromptBudget budget, int floor) {}
+
+    /**
+     * 이 턴의 사다리를 세운다 — 사전 예산({@link #fitToBudget})과 축소 재시도의 상한({@link #answerShrinkLevels})이 같은 것을
+     * 본다.
+     *
+     * <p><b>재시도 모드</b>(검증 실패로 다시 답하는 시도, {@code fresh} 아님): 직전 시도가 이력에 한 절단을 먼저 다시 하고 넘치는
+     * 몫은 문서로 흡수하며(§6.30 C — 근거가 모자라서 한 재시도가 맥락까지 깎지 않게), 문서를 빼는 순서는 순위가 아니라 "직전에
+     * 봤지만 안 쓴 것 → 새로 들어온 것 → 쓴 것"이다(D — 재시도가 가져온 새 근거가 가장 먼저 잘리지 않게. 검증이 쓴 문서를 보고하지
+     * 않았으면 직전에 실린 것은 전부 "쓴 것"으로 지킨다 — {@link PromptLadder#retryRemovalOrder}).
+     */
+    private Ladder ladderFor(AgentState state, String providerName, boolean streaming, boolean fresh) {
+        List<Document> docs = state.retrievedDocs();
+        PromptBudget budget = budgetFor(state, providerName, streaming);
+        // 창을 모르면 정규화하지 않는다 — 잴 것이 없고, 정규화는 조립 시점으로 미룬다(SizedDoc 참고).
+        // 창을 알면 문서당 정확히 한 번만 정규화·추정하고 조립까지 그 값을 쓴다.
+        List<SizedDoc> sized = docs.stream().map(budget == null ? SizedDoc::unmeasured : SizedDoc::measured).toList();
+        // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
+        // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
+        // §6.31 이력 제외 — "사다리를 칸 5 에서 시작"과 같다: 사다리에는 빈 이력을 넘기고(되돌려 채우기가 이력을 다시 싣지
+        // 않게), 그 자리에 갈 다시 쓴 질문 한 줄은 고정비로 센다. 직전 Direct 답변의 요약(칸 4)도 싣지 않는다.
+        boolean excluded = state.excludeHistory();
+        long fixedCost = budget == null ? 0 : answerFixedCost(
+                TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode())),
+                TokenEstimator.estimate(state.question()),
+                TokenEstimator.estimate(String.join("\n", state.retrievalWarnings())),
+                TokenEstimator.estimate(retryFeedback(state)))
+                + (excluded ? TokenEstimator.estimate(excludedHistoryLine(state)) : 0);
+        SentPrompt previous = state.lastSent();
+        boolean retry = !fresh && state.retryCount() > 0 && previous != null;
+        List<Integer> order = retry
+                ? PromptLadder.retryRemovalOrder(docs.stream().map(SentPrompt::keyOf).toList(),
+                        new java.util.HashSet<>(previous.docKeys()), new java.util.HashSet<>(previous.usedDocKeys()))
+                : PromptLadder.rankRemovalOrder(docs.size());
+        int floor = PromptLadder.floor(props.searchTopKSafe(), docs.size());
+        PromptLadder.Input in = new PromptLadder.Input(sized.stream().map(SizedDoc::tokens).toList(), order, floor,
+                HistoryPolicy.parse(ladderHistory(state)), excluded ? null : state.lastAnswerDigest(),
+                excluded ? null : condensedHistoryLine(state), fixedCost, retry ? previous.historyCut() : null);
+        return new Ladder(sized, PromptLadder.plan(in, budget == null ? -1 : budget.inputBudget()), budget, floor);
     }
 
     /**
      * 안내 문구 — <b>원본 대비</b> 무엇이 줄었는지. 예산 축소와 재시도 축소가 같은 문장을 쓰는 이유는
      * 사용자에게 그 둘이 같은 사실이기 때문이다: 화면의 출처 목록만큼을 모델이 다 보지는 못했다.
+     *
+     * <p>칸 1(과거 질문 자르기)만 쓴 축소는 말하지 않는다 — 그 턴은 답변이 대표하고, 사용자가 겪는 차이가 없다.
      */
-    private static String noteFor(int totalDocs, int keptDocs, String fullHistory, String keptHistory) {
-        boolean historyTrimmed = lengthOf(keptHistory) < lengthOf(fullHistory);
-        if (keptDocs >= totalDocs && !historyTrimmed) return null;
-        return budgetNoteText(totalDocs, keptDocs, historyTrimmed);
+    private static String noteFor(int totalDocs, int keptDocs, PromptLadder.Result r, boolean condensed) {
+        HistoryNote history = r.historyRemoved()
+                ? (r.cut().allDropped() && condensed ? HistoryNote.REPLACED : HistoryNote.REMOVED)
+                : r.cut().partlyDropped() ? HistoryNote.PARTLY : HistoryNote.NONE;
+        if (keptDocs >= totalDocs && history == HistoryNote.NONE) return null;
+        return budgetNoteText(totalDocs, keptDocs, history);
+    }
+
+    /** 이력에 대해 사용자에게 할 말 — 사다리가 이력을 얼마나 줄였는가. */
+    enum HistoryNote { NONE, PARTLY, REMOVED, REPLACED }
+
+    /** 사다리가 받는 이력 — §6.31 이력 제외면 비어 있다(이력 자체는 불러 둔다: meta 로 판정되면 그 턴은 이력으로 답한다). */
+    private static String ladderHistory(AgentState state) {
+        return state.excludeHistory() ? "" : state.conversationHistory();
+    }
+
+    /**
+     * §6.31 — 이력 제외를 켠 턴의 안내. 경고가 아니라 사용자가 고른 것의 결과를 말한다: 이전 대화를 빼고 문서를 몇 개 더
+     * 실었는가({@code boost} — 검색이 실제로 더한 수, 검증 쪽 상한으로 0 일 수 있다). 그래도 창에 막혀 문서를 덜어냈으면 그 사실을
+     * 축소 안내와 같은 문장으로 덧붙인다 — 출처 목록은 줄지 않으므로 그 문장이 없으면 모델이 다 본 것으로 읽힌다.
+     */
+    static String exclusionNoteText(int boost, int totalDocs, int keptDocs) {
+        boolean trimmed = keptDocs < totalDocs;
+        String head = boost <= 0 ? "이전 대화를 제외했습니다."
+                : (trimmed ? "이전 대화를 제외하고 문서를 %d개 더 검색했습니다." : "이전 대화를 제외하고 문서를 %d개 더 사용했습니다.")
+                        .formatted(boost);
+        return trimmed ? head + " " + budgetNoteText(totalDocs, keptDocs, HistoryNote.NONE) : head;
     }
 
     private static int lengthOf(String s) {
@@ -1651,23 +1738,21 @@ public class AnswerService {
      * 렌더되는데, 그때의 로케일은 답변한 시점의 로케일과 다를 수 있다({@code evalReason}·
      * {@code envNote} 가 모델이 쓴 한국어 문장을 그대로 저장하는 것과 같은 자리다).
      */
-    private static String budgetNoteText(int totalDocs, int keptDocs, boolean historyTrimmed) {
+    static String budgetNoteText(int totalDocs, int keptDocs, HistoryNote history) {
         StringBuilder sb = new StringBuilder();
         if (keptDocs < totalDocs) {
             sb.append("컨텍스트 한도로 검색된 문서 %d개 중 %d개만 사용했습니다".formatted(totalDocs, keptDocs));
         }
-        if (historyTrimmed) {
-            sb.append(sb.isEmpty() ? "컨텍스트 한도로 " : ", ").append("이전 대화 일부를 제외했습니다");
+        String historyText = switch (history) {
+            case NONE -> null;
+            case PARTLY -> "이전 대화 일부를 제외했습니다";
+            case REMOVED -> "이전 대화를 제외했습니다";
+            case REPLACED -> "이전 대화 대신 다시 쓴 질문으로 답했습니다";
+        };
+        if (historyText != null) {
+            sb.append(sb.isEmpty() ? "컨텍스트 한도로 " : ", ").append(historyText);
         }
         return sb.append(".").toString();
-    }
-
-    /**
-     * 오래된 쪽부터 버려 예산에 맞춘다 — 규칙과 그 근거는 {@link HistoryPolicy#trimToBudget}.
-     * §10.13 에서 Direct 경로({@code DirectAnswerService})도 같은 절단을 쓰게 되면서 그쪽으로 옮겼다.
-     */
-    private static String trimHistory(String history, long budget) {
-        return HistoryPolicy.trimToBudget(history, budget);
     }
 
     /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */

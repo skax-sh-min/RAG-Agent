@@ -238,4 +238,57 @@ class HistoryPolicyTest {
         assertThat(HistoryPolicy.promptTurnCap(0)).isEqualTo(1);
         assertThat(HistoryPolicy.promptTurnCap(-5)).isEqualTo(1);
     }
+
+    // ── §6.30 이력 조각 ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("§6.30 — 두 이력 경로의 모양을 나누고, 다시 이으면 원문과 같다")
+    void parseRoundTripsBothShapes() {
+        String fallback = "Q: 하나\nA: 일\n\nQ: 둘\nA: 이\n\n- 목록";
+        String summary = "[Conversation Summary]\nQ: 옛\nA: 요약\n\n[Recent]\nQ: 하나\nA: 일\n\nQ: 둘\nA: 이";
+        String recentOnly = "[Recent]\nQ: 하나\nA: 일";
+
+        HistoryPolicy.ParsedHistory f = HistoryPolicy.parse(fallback);
+        assertThat(f.lead()).isNull();
+        assertThat(f.turns()).extracting(HistoryPolicy.Turn::question).containsExactly("하나", "둘");
+        assertThat(f.turns().get(1).answer()).isEqualTo("이\n\n- 목록");
+
+        HistoryPolicy.ParsedHistory s = HistoryPolicy.parse(summary);
+        assertThat(s.lead()).isEqualTo("[Conversation Summary]\nQ: 옛\nA: 요약");
+        assertThat(s.recentHeader()).isTrue();
+        assertThat(s.turns()).hasSize(2);
+
+        for (String h : java.util.List.of(fallback, summary, recentOnly)) {
+            HistoryPolicy.ParsedHistory p = HistoryPolicy.parse(h);
+            assertThat(HistoryPolicy.render(p.lead(), p.recentHeader(), p.turns())).isEqualTo(h);
+        }
+    }
+
+    @Test
+    @DisplayName("§6.30 — 턴으로 읽히지 않는 이력은 덩어리 하나로 다룬다(반쪽 턴을 만들지 않는다)")
+    void parseFallsBackToOneChunk() {
+        HistoryPolicy.ParsedHistory p = HistoryPolicy.parse("요약문 한 줄\n둘째 줄");
+        assertThat(p.lead()).isEqualTo("요약문 한 줄\n둘째 줄");
+        assertThat(p.turns()).isEmpty();
+        assertThat(HistoryPolicy.parse("").isEmpty()).isTrue();
+    }
+
+    @Test
+    @DisplayName("§6.30 칸 1 — 덩어리 안의 질문 줄만 자르고(여러 줄 질문 포함) 답변 줄은 그대로")
+    void capQuestionsInside() {
+        String block = "[Conversation Summary]\nQ: 가나다라\n마바\nA: 답변이 길다\n\nQ: 짧\nA: 답";
+        assertThat(HistoryPolicy.capQuestionsIn(block, 3))
+                .isEqualTo("[Conversation Summary]\nQ: 가나다…(생략)\nA: 답변이 길다\n\nQ: 짧\nA: 답");
+        assertThat(HistoryPolicy.capQuestionsIn("A: 질문 없음", 3)).isEqualTo("A: 질문 없음");
+    }
+
+    @Test
+    @DisplayName("§6.30 칸 4 — 요약은 '## 요약' 섹션, 없으면 앞 1,200자(RAG 턴이 이력에 실리는 모양과 같다)")
+    void digestIsTheRagRendering() {
+        String withSummary = "## 요약\n핵심 한 줄\n\n## 상세 설명\n" + "본".repeat(3_000);
+        assertThat(HistoryPolicy.digest(withSummary))
+                .isEqualTo(HistoryPolicy.renderAnswer(withSummary, "N", false, false));
+        String plain = "본".repeat(3_000);
+        assertThat(HistoryPolicy.digest(plain)).hasSize(HistoryPolicy.RECENT_ANSWER_CAP + 1);
+    }
 }

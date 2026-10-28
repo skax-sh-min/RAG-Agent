@@ -254,6 +254,33 @@ class ThinkingPreviewParityTest {
     }
 
     @Test
+    @DisplayName("§6.30 — 이력이 상한일 때의 문서 수도 미리보기와 같다(답변 경로와 같은 축소 사다리를 부른다)")
+    void answerPromptWithHistoryAtTheCapMatchesThePreview() {
+        for (ThinkingLevel level : List.of(ThinkingLevel.OFF, ThinkingLevel.HIGH)) {
+            ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()
+                    .file(ThinkingPreviewHarness.levels(ThinkingSite.ANSWER_RAG_S, level)).build();
+            List<Prompt> streamed = new ArrayList<>();
+            streamingProvider(h, streamed, "답변");
+            // 미리보기가 가정하는 이력 — 상한 크기의 한 턴(ThinkingPreviewService.ladderDocs). 문서는 다른 글자로 세어 구별한다.
+            int historyChars = MemoryService.conversationChars(h.props.llmSafe().maxTokens());
+            String history = "Q: 가\nA: " + "가".repeat(historyChars - 1);
+            List<Document> docs = new ArrayList<>();
+            for (int i = 0; i < 10; i++) docs.add(new Document("다".repeat(CHUNK)));
+            AgentState state = AgentState.of("가".repeat(ThinkingPreviewService.QUESTION_CHARS), "v1", "t1", history,
+                    RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).retrievedDocs(docs).build();
+
+            answerService(h).executeStreaming(state, new GraphListener() {});
+
+            int held = occurrences(textOf(streamed.get(0)), "다".repeat(CHUNK));
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("이력이 상한이면 (\\d+)개")
+                    .matcher(h.row(ThinkingSite.ANSWER_RAG_S).cell(level).meaning().text());
+            assertThat(m.find()).as("미리보기 문구").isTrue();
+            assertThat(held).as("%s — 이력이 상한일 때 프롬프트에 실린 청크 수".formatted(level))
+                    .isEqualTo(Integer.parseInt(m.group(1)));
+        }
+    }
+
+    @Test
     @DisplayName("검증 — 요청의 max_tokens 와 프롬프트의 발췌 수가 미리보기와 같다(중간: 예약 4,096 · 발췌 k/10)")
     void evalRequestAndExcerptsMatchThePreview() {
         ThinkingPreviewHarness h = ThinkingPreviewHarness.builder()

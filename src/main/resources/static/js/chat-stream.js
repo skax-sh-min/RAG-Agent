@@ -145,7 +145,7 @@
 
     // ── DOM builders ─────────────────────────────────────────────────────────
 
-    function appendUserBubble(question, responseMode, directMode, bubbleId) {
+    function appendUserBubble(question, responseMode, directMode, bubbleId, excludeHistory) {
         const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
         // .user-turn + data-question: chat.html's question navigation (the floating
@@ -166,7 +166,7 @@
         wrap.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
-                `<div><span class="bubble-user-mode">[${escHtml(mode)}] </span>${escHtml(question)}</div>` +
+                `<div><span class="bubble-user-mode">[${escHtml(mode)}] </span>${bubbleHistoryMark(excludeHistory)}${escHtml(question)}</div>` +
                 `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
             `</div>` +
             `</div>`;
@@ -1022,7 +1022,8 @@
     async function submitStream(formData, question) {
         const bubbleId = genId();
 
-        appendUserBubble(question, formData.get('responseMode'), formData.get('directMode'), bubbleId);
+        appendUserBubble(question, formData.get('responseMode'), formData.get('directMode'), bubbleId,
+                         formData.get('excludeHistory'));
         appendStreamingBubble(bubbleId);
         scrollToBottom(true);   // user just sent — re-anchor to bottom
 

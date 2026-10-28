@@ -57,6 +57,7 @@ class SettingsControllerRenderTest {
 
     @MockitoBean SettingsService settingsService;
     @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;   // §6.29 — 생각 수준 카드
+    @MockitoBean com.example.ragagent.service.ProviderCatalog providerCatalog;          // 프로바이더 편집
     @MockitoBean AppProperties props;               // GlobalModelAdvice + SecurityConfig
     @MockitoBean ThreadContextResolver threadContextResolver; // WebMvcConfig
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel; // WebConfig.chatClient()
@@ -163,6 +164,95 @@ class SettingsControllerRenderTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("local")));
 
         verify(settingsService).setProviderEnabled("local", false);
+    }
+
+    @Test
+    @DisplayName("프로바이더 표 — 우선순위가 첫 열이고, 관리자에게 편집 열과 편집 상태(출처·재기동 대기·기동 검증 실패)가 보인다")
+    void providerTableShowsPriorityFirstAndEditState() throws Exception {
+        var edited = new SettingsView.ProviderEdit(SettingsView.ProviderEdit.Origin.EDITED,
+                SettingsView.ProviderEdit.Pending.CHANGE, List.of("model", "base-url"), "model typo not found", null);
+        var added = new SettingsView.ProviderEdit(SettingsView.ProviderEdit.Origin.ADDED,
+                SettingsView.ProviderEdit.Pending.ADD, List.of(), null, null);
+        when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(
+                new ProviderRow("local", "LOCAL", 7, "qwen", "http://localhost:1234/v1", true, false, null, true, "-",
+                        null, null, edited),
+                new ProviderRow("local-3", "LOCAL", 2, "m3", "http://b:1/v1", false, false, null, false, "-",
+                        null, SettingsView.ProviderConnection.notConfigured(), added)));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String html = mvc.perform(post("/admin/settings/provider/toggle").locale(Locale.KOREAN)
+                        .param("name", "local").param("enabled", "true")
+                        .with(user(admin)).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("<td class=\"ps-3 text-center\">7</td>");
+        assertThat(html.indexOf("우선순위")).as("우선순위 머리글이 프로바이더 머리글보다 앞").isLessThan(html.indexOf(">프로바이더<"));
+        assertThat(html).contains("/admin/settings/provider/editor?name=local", "/admin/settings/provider/revert",
+                "#prov-edit-0", "id=\"provider-editor\"");
+        assertThat(html).contains("화면에서 고침", "재기동 후 적용", "모델", "접속 주소", "기동 검증 실패",
+                "화면에서 추가", "재기동 후 추가");
+        // 아직 돌지 않는 행에는 상태 칸이 없다 — 같은 요소의 th:replace 가 th:unless 보다 먼저 돌아 "미설정" 이 그려지던 자리
+        assertThat(html).contains("id=\"prov-status-0\"").doesNotContain("id=\"prov-status-1\"");
+    }
+
+    @Test
+    @DisplayName("GET /admin/settings/provider/editor — 폼이 현재 값으로 그려지고, 이름은 바꿀 수 없으며 API 키 칸은 없다")
+    void providerEditorRenders() throws Exception {
+        when(providerCatalog.formFor("local")).thenReturn(new com.example.ragagent.service.ProviderCatalog.Edit(
+                "local", "http://x:1/v1", "qwen", "BOTH", "LOCAL", 1, 32_768, false));
+        when(providerCatalog.declaredContext("local")).thenReturn(java.util.Optional.of(16_384));
+        when(providerCatalog.hasApiKey("local")).thenReturn(false);
+
+        String html = mvc.perform(get("/admin/settings/provider/editor").param("name", "local").locale(Locale.KOREAN))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("/admin/settings/provider/save", "value=\"http://x:1/v1\"", "value=\"qwen\"",
+                "value=\"32768\"", "16,384 (설정값)", "readonly", "/admin/settings/provider/delete",
+                "API 키는 화면에서 받지 않습니다");
+        assertThat(html).doesNotContain("name=\"apiKey\"");
+    }
+
+    @Test
+    @DisplayName("POST /admin/settings/provider/save — 검증 실패면 400 이 아니라 사유와 입력값을 담은 폼이 편집 자리로 돌아온다")
+    void providerSaveErrorRetargetsTheEditor() throws Exception {
+        when(providerCatalog.save(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalArgumentException("서버의 모델 목록에 'typo' 가 없습니다"));
+
+        mvc.perform(post("/admin/settings/provider/save").locale(Locale.KOREAN)
+                        .param("name", "local").param("baseUrl", "http://x:1/v1").param("model", "typo")
+                        .param("type", "BOTH").param("role", "LOCAL").param("priority", "1").param("create", "false")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("HX-Retarget", "#provider-editor"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("typo")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("value=\"http://x:1/v1\"")));
+    }
+
+    @Test
+    @DisplayName("POST /admin/settings/provider/save — 성공하면 표 조각과 안내가 오고, 컨텍스트가 바뀌었으면 생각 수준 카드를 다시 부른다")
+    void providerSaveSuccessReturnsTheTable() throws Exception {
+        when(providerCatalog.save(org.mockito.ArgumentMatchers.any())).thenReturn(
+                new com.example.ragagent.service.ProviderCatalog.SaveResult("local",
+                        List.of("settings.provider.note.restart", "settings.provider.note.context"), true));
+        when(settingsService.providerRows()).thenReturn(
+                List.of(new ProviderRow("local", "LOCAL", 1, "qwen", "http://x:1/v1", true, false, null, true, "-")));
+
+        mvc.perform(post("/admin/settings/provider/save").locale(Locale.KOREAN)
+                        .param("name", "local").param("baseUrl", "http://x:1/v1").param("model", "qwen")
+                        .param("type", "BOTH").param("role", "LOCAL").param("priority", "1").param("contextSize", "32,768")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("HX-Trigger", SettingsController.THINKING_STALE_EVENT))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("id=\"llm-providers\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("재기동하면 적용됩니다.")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("컨텍스트는 바로 반영됐습니다.")));
+
+        verify(providerCatalog).save(new com.example.ragagent.service.ProviderCatalog.Edit(
+                "local", "http://x:1/v1", "qwen", "BOTH", "LOCAL", 1, 32_768, false));
     }
 
     @Test
@@ -452,22 +542,29 @@ class SettingsControllerRenderTest {
     }
 
     @Test
-    @DisplayName("프로바이더 표 — 열 순서는 상태 → 활성화 → 생각 제어(관리자)이고, 비관리자에게는 생각 제어가 없다")
+    @DisplayName("프로바이더 표 — 우선순위가 맨 왼쪽, 상태 → 활성화 → 생각 제어 → 편집(관리자)이고, 비관리자에게는 뒤의 둘이 없다")
     void providerTableColumnOrder() throws Exception {
         when(settingsService.setProviderEnabled("local", true)).thenReturn(List.of(providerRow("local", null)));
 
         String admin = providersFragment(Locale.KOREAN);
 
+        int priority = admin.indexOf(">우선순위</th>");
+        int provider = admin.indexOf(">프로바이더</th>");
         int status = admin.indexOf(">상태</th>");
         int enabled = admin.indexOf(">활성화</th>");
         int thinking = admin.indexOf(">생각 제어</th>");
-        assertThat(status).isPositive();
+        int edit = admin.indexOf(">편집</th>");
+        assertThat(priority).as("우선순위가 첫 열이다").isPositive().isLessThan(provider);
+        assertThat(status).isGreaterThan(provider);
         assertThat(enabled).as("활성화가 생각 제어보다 앞이다").isGreaterThan(status);
         assertThat(thinking).isGreaterThan(enabled);
-        // 활성화 칸의 오른쪽 여백(pe-3)은 마지막 열이 아니게 되면 필요 없다 — 마지막이 된 생각 제어가 받는다
-        assertThat(admin).contains("<th class=\"pe-3\">생각 제어</th>").doesNotContain("<th class=\"pe-3\">활성화</th>");
+        assertThat(edit).as("편집이 마지막 열이다").isGreaterThan(thinking);
+        // 왼쪽 여백(ps-3)은 첫 열이 된 우선순위가, 오른쪽 여백(pe-3)은 마지막 열이 된 편집이 받는다
+        assertThat(admin).contains("<th class=\"ps-3 text-center\">우선순위</th>", "<th class=\"pe-3 text-end\">편집</th>",
+                        "<th>생각 제어</th>")
+                .doesNotContain("<th class=\"pe-3\">활성화</th>");
 
-        // 비관리자(관리 전용 인증)에게는 생각 제어 열이 없고, 활성화가 마지막 열이라 여백을 받는다
+        // 비관리자(관리 전용 인증)에게는 생각 제어·편집 열이 없고, 활성화가 마지막 열이라 여백을 받는다
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
                 "number", true, false, null, 1.0, 1000.0, 1.0);
         when(settingsService.buildView()).thenReturn(new SettingsView(
@@ -478,7 +575,8 @@ class SettingsControllerRenderTest {
         AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
         String guest = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(guest).doesNotContain(">생각 제어<").contains("<th class=\"pe-3\">활성화</th>");
+        assertThat(guest).doesNotContain(">생각 제어<", ">편집</th>", "/admin/settings/provider/editor")
+                .contains("<th class=\"pe-3\">활성화</th>");
     }
 
     @Test

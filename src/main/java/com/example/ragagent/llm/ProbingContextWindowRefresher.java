@@ -81,7 +81,7 @@ public class ProbingContextWindowRefresher implements ContextWindowRefresher {
         if (provider.role() != ProviderRole.LOCAL) return;
 
         Optional<ProviderContextWindows.ContextWindow> known = contextWindows.find(provider.name());
-        if (known.isPresent() && known.get().source() == ProviderContextWindows.Source.CONFIGURED) {
+        if (known.isPresent() && known.get().source().declared()) {
             log.warn("[CTX-REPROBE] provider={} 컨텍스트 초과가 났지만 창({}토큰)은 설정에 선언된 값이라 "
                      + "탐지로 덮지 않는다 — app.llm.providers[].context-size 가 서버의 실제 값보다 크지 않은지 "
                      + "확인할 것.", provider.name(), known.get().tokens());
@@ -132,6 +132,8 @@ public class ProbingContextWindowRefresher implements ContextWindowRefresher {
             log.warn("[CTX-REPROBE] provider={} 컨텍스트 창을 {} → {}토큰으로 고쳤다 "
                      + "(서버가 다른 설정으로 재시작된 것으로 보인다). 다음 요청부터 이 값으로 예산을 짠다.",
                     provider.name(), before.map(String::valueOf).orElse("모름"), tokens);
+            ProviderContextWindows.warnIfBelowSupportedMinimum(provider.name(), tokens,
+                    ProviderContextWindows.Source.PROBED, "자동 재탐지");
         } catch (Exception e) {
             // 자가 치유는 실패해도 아무것도 나빠지지 않는다 — 원래 요청은 이미 초과로 끝났다.
             log.warn("[CTX-REPROBE] provider={} 재탐지 중 오류: {}", provider.name(), e.toString());

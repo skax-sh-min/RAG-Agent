@@ -103,6 +103,21 @@ public class ProviderConnectivity {
         }
     }
 
+    /**
+     * 기록하지 않는 한 번의 확인 — {@code /settings} 에서 프로바이더 편집을 저장하기 전에 <b>새</b> 주소·모델을 묻는다
+     * ({@code ProviderCatalog}). 결과를 표의 상태 칸 기록({@link #last})에 넣지 않는 이유: 그 칸은 지금 돌고 있는 설정의 상태이고,
+     * 저장한 값은 재기동 뒤에야 쓰인다. {@link #REUSE_WINDOW} 도 따르지 않는다 — 방금 물었더라도 다른 주소다.
+     */
+    public static Result checkNow(AppProperties.ProviderConfig cfg) {
+        Clock clock = Clock.systemUTC();
+        try {
+            LlmPing.Reach reach = probe(cfg);
+            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+        } catch (RuntimeException e) {
+            return new Result(false, null, null, LlmPing.describe(e), clock.instant());
+        }
+    }
+
     private boolean isFresh(String name, Instant now) {
         Result last = results.get(name);
         return last != null && Duration.between(last.checkedAt(), now).compareTo(REUSE_WINDOW) < 0;

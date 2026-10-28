@@ -149,6 +149,7 @@ class ManagementOnlyAuthorizationTest {
     // §6.29 — 생각 수준 카드(/admin/settings/thinking)의 게이트를 확인하려고 SettingsController 를 슬라이스에 넣었다.
     @MockitoBean com.example.ragagent.service.SettingsService settingsService;
     @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;
+    @MockitoBean com.example.ragagent.service.ProviderCatalog providerCatalog;   // 프로바이더 편집
 
     private AppUserDetails adminUser() {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);

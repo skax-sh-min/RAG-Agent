@@ -1,8 +1,10 @@
 package com.example.ragagent.service;
 
-import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.SentPrompt;
 import org.springframework.ai.document.Document;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -96,12 +98,50 @@ public final class RetrievalEviction {
         return kept.isEmpty() ? candidates.subList(0, 1) : kept;
     }
 
-    /** 청크 식별자 — 벡터 스토어 id 를 쓰고, 없으면 파일명+페이지로 대신한다. */
+    /**
+     * §6.30 A — 교체를 <b>보낸 집합 안에서만</b> 고른다. 답변 프롬프트에 실리지 않은 문서는 "모름"이라 밀지도 지키지도 않는다 —
+     * 다음 검색에서 다시 경쟁하고, 교체로 비운 자리에는 대개 바로 그 문서들이 올라와 실린다. 사다리 없이도 생기던 오류다:
+     * 예산 때문에 빠진 문서가 <b>보이지도 않았는데</b> "안 쓰임"으로 밀려났다(가드 ②가 검증 쪽에서 막는 것과 같은 모양).
+     *
+     * <p>따라 바뀌는 것 둘:
+     * <ul>
+     *   <li>검증의 {@code [Dn]} 은 <b>검증 발췌</b>의 번호다(검색 결과 순서의 접두사). 보낸 집합은 접두사가 아닐 수 있어
+     *       (재시도의 뺄 순서) 위치로는 못 맞추므로, 문서로 바꿔 보낸 집합 안의 위치로 다시 센다.</li>
+     *   <li>가드 ②는 "검증이 <b>보낸 문서를 전부</b> 봤는가"로 묻는다 — 보내지 않은 문서를 검증이 못 본 것은 교체 판단과
+     *       무관하다. 검증 발췌 자체는 그대로 검색 결과 전체를 본다(§6.30 적용 범위).</li>
+     * </ul>
+     * 보낸 집합이 검색 결과 전부이면 {@link #select} 와 결과가 같다.
+     *
+     * @param retrievedDocs      검색 결과 (RRF 내림차순) — 검증 발췌가 이 순서의 접두사다
+     * @param sentKeys           답변 프롬프트에 실린 문서의 키({@code SentPrompt.keyOf}). {@code null} = 전부 실렸다
+     * @param evalUsedDocNumbers 검증이 보고한 1-based {@code [Dn]} 번호(검증 발췌 기준)
+     * @param excerptsIncluded   검증 발췌에 실린 문서 수
+     */
+    public static Set<String> selectAmongSent(List<Document> retrievedDocs, Collection<String> sentKeys,
+                                              List<Integer> evalUsedDocNumbers, int excerptsIncluded) {
+        if (retrievedDocs == null || retrievedDocs.isEmpty()) return Set.of();
+        List<Document> sent = new ArrayList<>();
+        boolean evalSawAllSent = true;
+        for (int i = 0; i < retrievedDocs.size(); i++) {
+            Document d = retrievedDocs.get(i);
+            if (sentKeys != null && !sentKeys.contains(SentPrompt.keyOf(d))) continue;
+            sent.add(d);
+            if (i >= excerptsIncluded) evalSawAllSent = false;
+        }
+        List<Integer> usedInSent = new ArrayList<>();
+        if (evalUsedDocNumbers != null) {
+            for (Integer n : evalUsedDocNumbers) {
+                if (n == null || n < 1 || n > retrievedDocs.size()) continue;
+                int at = sent.indexOf(retrievedDocs.get(n - 1));
+                if (at >= 0 && !usedInSent.contains(at + 1)) usedInSent.add(at + 1);
+            }
+        }
+        return select(sent, usedInSent, !evalSawAllSent);
+    }
+
+    /** 청크 식별자 — 벡터 스토어 id 를 쓰고, 없으면 파일명+페이지로 대신한다({@code SentPrompt.keyOf} 와 같은 키). */
     static String idOf(Document doc) {
-        if (doc == null) return null;
-        if (doc.getId() != null && !doc.getId().isBlank()) return doc.getId();
-        Object file = doc.getMetadata().get(MetaKey.FILENAME);
-        Object page = doc.getMetadata().get(MetaKey.PAGE_OR_SLIDE);
-        return file == null ? null : file + "#" + page;
+        String key = SentPrompt.keyOf(doc);
+        return key.isEmpty() ? null : key;
     }
 }

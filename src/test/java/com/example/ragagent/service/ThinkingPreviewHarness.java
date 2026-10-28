@@ -87,7 +87,7 @@ public final class ThinkingPreviewHarness {
     public static final class Builder {
         int window = 16_384;
         int maxTokens = 10_000;
-        /** 프로바이더 자신의 {@code max-tokens} — 없으면 전역값을 따른다. 전역값은 1,000 아래로 내려가지 않는다(clamp). */
+        /** 프로바이더 자신의 {@code max-tokens} — 없으면 전역값을 따른다. 전역값은 8,000 아래로 내려가지 않는다(clamp). */
         Integer providerMaxTokens = null;
         int readTimeoutSeconds = 600;
         ThinkingDialect dialect = ThinkingDialect.TEMPLATE_KWARGS;

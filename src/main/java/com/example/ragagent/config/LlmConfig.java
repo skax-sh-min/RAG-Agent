@@ -7,9 +7,11 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.ProviderCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
@@ -34,6 +36,18 @@ public class LlmConfig {
 
     private static final Logger log = LoggerFactory.getLogger(LlmConfig.class);
 
+    /**
+     * {@code /settings} 에서 고친 프로바이더 정의 — 이 설정 클래스의 {@code @Bean} 메서드보다 먼저 주입되므로, 그 클래스가 기동 때
+     * 묶는 목록({@code AppProperties.bindProviderOverlay})이 아래 {@code props.llmSafe()} 에 이미 얹혀 있다. 테스트가
+     * {@code new LlmConfig()} 로 부르면 {@code null} = 편집 없음.
+     */
+    private ProviderCatalog providerCatalog;
+
+    @Autowired(required = false)
+    public void setProviderCatalog(ProviderCatalog providerCatalog) {
+        this.providerCatalog = providerCatalog;
+    }
+
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
                                 CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
@@ -42,6 +56,8 @@ public class LlmConfig {
                                 TokenEstimateCalibration tokenCalibration,
                                 ProviderThinkingDialects thinkingDialects,
                                 ThinkingObservations thinkingObservations) {
+        // 화면에서 고친 LOCAL 프로바이더를 먼저 혼자 검증한다 — 실패하면 properties 정의로 되돌린 목록이 아래에 읽힌다.
+        precheckEditedLocalProviders(props);
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -117,21 +133,30 @@ public class LlmConfig {
                     // 컨텍스트 창: 운영자 선언이 최우선, 없으면 서버에 물어본다(LOCAL 만 — 클라우드
                     // 프로바이더는 이 엔드포인트가 없고, 컨텍스트가 넉넉해 문제가 되지도 않는다).
                     // 못 구하면 기록하지 않는다 = "모른다". 0 이나 추측값을 넣지 않는 것이 중요하다.
-                    Integer declaredCtx = cfg.declaredContextSize();
+                    // /settings 에서 넣은 수동 컨텍스트는 선언이 아니라 "탐지가 안 될 때의 대체값"이다(ProviderCatalog) — 병합된
+                    // cfg 의 contextSize 에 섞여 오므로 선언으로 읽지 말고, 탐지를 먼저 해 본 뒤 실패했을 때만 쓴다.
+                    boolean manual = providerCatalog != null && providerCatalog.hasManualContext(cfg.name());
+                    Integer declaredCtx = manual ? null : cfg.declaredContextSize();
                     Integer effectiveCtx = declaredCtx;
+                    ProviderContextWindows.Source ctxSource = ProviderContextWindows.Source.CONFIGURED;
                     if (effectiveCtx != null) {
-                        contextWindows.record(cfg.name(), effectiveCtx,
-                                ProviderContextWindows.Source.CONFIGURED);
+                        contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
                     } else if (cfg.isLocal() && !startedUnreachable.contains(cfg.name())) {
                         // 방금 닿지 않은 서버에 다시 물으면 연결 타임아웃을 한 번 더 물 뿐이다 — 창은 "모름"으로 두고,
                         // 서버가 돌아온 뒤 컨텍스트 초과(자동 재탐지)나 /settings 의 재탐지 버튼이 채운다.
                         effectiveCtx = ContextWindowProbe.probe(apiBase, effectiveModel,
                                 connectTimeoutSeconds, readTimeoutSeconds).orElse(null);
+                        ctxSource = ProviderContextWindows.Source.PROBED;
                         if (effectiveCtx != null) {
-                            contextWindows.record(cfg.name(), effectiveCtx,
-                                    ProviderContextWindows.Source.PROBED);
+                            contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
                         }
                     }
+                    if (effectiveCtx == null && manual) {
+                        effectiveCtx = cfg.contextSize();
+                        ctxSource = ProviderContextWindows.Source.MANUAL;
+                        contextWindows.record(cfg.name(), effectiveCtx, ctxSource);
+                    }
+                    ProviderContextWindows.warnIfBelowSupportedMinimum(cfg.name(), effectiveCtx, ctxSource, "기동");
 
                     // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
                     // 기동 시점의 값은 defaultOptions 에 굽고 경고를 내는 데만 쓰고, 실제 상한은 아래
@@ -323,6 +348,35 @@ public class LlmConfig {
                   -> app.llm.providers[N].max-tokens 를 창보다 충분히 작게 두거나, 서버의 컨텍스트를 키우세요.""",
                 providerName, requested, contextTokens, capped);
         return capped;
+    }
+
+    /**
+     * {@code /settings} 에서 재기동 칸(주소·모델·type·role·우선순위)을 고친 LOCAL 프로바이더 — 화면에서 추가한 것 포함 — 를 G3 보다 먼저
+     * <b>혼자</b> 검증한다. 실패하면 이유가 무엇이든({@code /v1/models} 에 닿지 않음 · 모델 없음 · 모호함) 그 프로바이더를 properties
+     * 정의로 되돌리고({@link ProviderCatalog#fallBackAtStartup}) 기동을 이어 간다 — 화면에서 넣은 값의 오타가 기동을 막으면 그 값을
+     * 되돌릴 화면에 닿을 수 없기 때문이다. 되돌린 정의는 아래의 평소 G3 를 그대로 지난다(properties 자체가 틀렸다면 예전처럼 멈춘다).
+     *
+     * <p>복제본 예외({@link #verifyLocalModels})를 여기 적용하지 않는 이유: 화면에서 고친 서버가 마침 꺼져 있었다면 그 값이 맞는지
+     * 확인할 길이 없고, 확인하지 못한 값으로 띄우는 것보다 알던 정의로 띄우는 쪽이 낫다. 고친 값은 화면에 남아 다음 기동에 다시 시도된다.
+     */
+    private void precheckEditedLocalProviders(AppProperties props) {
+        if (providerCatalog == null) return;
+        AppProperties.LlmConfig llmCfg = props.llmSafe();
+        if (llmCfg.verifyLocalModelsOnStartup() != null && !llmCfg.verifyLocalModelsOnStartup()) return;
+        for (AppProperties.ProviderConfig cfg : providerCatalog.editedLocalProviders()) {
+            try {
+                verifyLocalModel(cfg.name(), cfg.apiBase(), cfg.model(),
+                        llmCfg.connectTimeoutSeconds(), llmCfg.readTimeoutSeconds());
+            } catch (RuntimeException e) {
+                String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                log.error("""
+                        [LLM STARTUP CHECK] provider=[{}] /settings 에서 고친 값(주소 {} · 모델 {})으로 검증에 실패했다 — {}
+                          -> 이번 기동은 application.properties 정의로 띄운다(화면에서 추가한 프로바이더면 등록하지 않는다).
+                          -> 고친 값은 /settings 에 그대로 남아 있다: 고치거나 [되돌리기] 하고 다시 기동하세요.""",
+                        cfg.name(), cfg.baseUrl(), cfg.model(), reason);
+                providerCatalog.fallBackAtStartup(cfg.name(), reason);
+            }
+        }
     }
 
     /**

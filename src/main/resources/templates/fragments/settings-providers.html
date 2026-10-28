@@ -38,6 +38,11 @@
                 <span class="text-muted font-monospace"
                       th:unless="${row.outcome.name() == 'UPDATED'}"
                       th:text="${row.after}">8,192</span>
+                <!--/* 지원하는 최소 창(16K = max-tokens 하한 × 2) 아래 — 로그에도 같은 WARN 이 남는다(ProviderContextWindows). */-->
+                <span th:if="${row.belowSupported}" class="badge bg-danger"
+                      data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+                      th:title="#{settings.reprobe.below-minimum.hint}"
+                      th:text="#{settings.reprobe.below-minimum}">below 16K</span>
             </div>
             <div th:if="${probeResult.rows.isEmpty()}" class="text-muted"
                  th:text="#{settings.reprobe.none}">No local provider to probe.</div>
@@ -50,44 +55,80 @@
         </div>
     </div>
 
-    <!--/* [컨텍스트 다시 탐지] 버튼은 settings.html 의 카드 제목 줄에 있다 — 이 조각은 응답마다 통째로 바뀐다. */-->
+    <!--/* [컨텍스트 다시 탐지]·[프로바이더 추가] 버튼은 settings.html 의 카드 제목 줄에 있다 — 이 조각은 응답마다 통째로 바뀐다. */-->
+
+    <!--/* 프로바이더 편집(ProviderCatalog) — 편집 폼은 이 자리에 열리고(GET /admin/settings/provider/editor), 저장이 성공하면 이 조각이
+         통째로 바뀌어 폼이 닫히고 결과 안내가 남는다. 실패하면 응답이 이 자리(#provider-editor)로 다시 향해 폼과 사유를 그린다. */-->
+    <div id="provider-editor" class="px-3"></div>
+    <div th:if="${providerEditResult != null}" class="px-3 pt-3">
+        <div class="alert alert-success py-2 mb-2 small">
+            <div class="fw-semibold" th:text="${providerEditResult.name}">local</div>
+            <div th:each="n : ${providerEditResult.notes}" th:text="#{${n}}">note</div>
+        </div>
+    </div>
 
     <div class="table-responsive">
     <table class="table table-sm mb-0 align-middle">
         <thead class="table-light">
         <tr>
-            <th class="ps-3" th:text="#{settings.col.provider}">Provider</th>
+            <th class="ps-3 text-center" th:text="#{settings.col.priority}">Priority</th>
+            <th th:text="#{settings.col.provider}">Provider</th>
             <th th:text="#{settings.col.role}">Role</th>
-            <th class="text-center" th:text="#{settings.col.priority}">Priority</th>
             <th th:text="#{settings.col.model}">Model</th>
             <th class="text-center" th:text="#{settings.col.context-window}">Context</th>
             <th th:text="#{settings.col.base-url}">Endpoint URL</th>
             <th th:text="#{settings.col.key}">API Key</th>
             <th th:text="#{settings.col.status}">Status</th>
             <th th:classappend="${!isAdmin} ? 'pe-3'" th:text="#{settings.col.enabled}">Enabled</th>
-            <th th:if="${isAdmin}" class="pe-3" th:text="#{settings.col.thinking-control}">Thinking control</th>
+            <th th:if="${isAdmin}" th:text="#{settings.col.thinking-control}">Thinking control</th>
+            <th th:if="${isAdmin}" class="pe-3 text-end" th:text="#{settings.col.edit}">Edit</th>
         </tr>
         </thead>
         <tbody>
-        <tr th:each="p, iter : ${providers}" th:classappend="${!p.enabled} ? 'opacity-50'">
-            <td class="ps-3 fw-semibold" th:text="${p.name}">local</td>
+        <tr th:each="p, iter : ${providers}" th:classappend="${!p.enabled or p.pendingAdd()} ? 'opacity-50'">
+            <td class="ps-3 text-center" th:text="${p.priority}">0</td>
+            <td>
+                <span class="fw-semibold" th:text="${p.name}">local</span>
+                <!--/* 편집 상태 — 출처(화면에서 고침·추가) · 다음 기동에 일어날 일 · 지난 기동의 검증 실패 */-->
+                <span th:if="${p.edit.origin.name() == 'EDITED'}" class="badge bg-light text-dark border ms-1"
+                      th:text="#{settings.provider.origin.edited}">edited</span>
+                <span th:if="${p.edit.origin.name() == 'ADDED'}" class="badge bg-light text-dark border ms-1"
+                      th:text="#{settings.provider.origin.added}">added here</span>
+                <span th:if="${p.edit.pending.name() == 'CHANGE'}" class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1">
+                    <span th:text="#{settings.provider.pending.change}">after restart</span>:
+                    <th:block th:each="f, st : ${p.edit.pendingFields}"><span
+                            th:text="#{${'settings.provider.field.' + f}}">model</span><span th:unless="${st.last}">·</span></th:block>
+                </span>
+                <span th:if="${p.edit.pending.name() == 'ADD'}" class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1"
+                      th:text="#{settings.provider.pending.add}">added after restart</span>
+                <span th:if="${p.edit.pending.name() == 'DELETE'}" class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1"
+                      th:text="#{settings.provider.pending.delete}">removed after restart</span>
+                <span th:if="${p.edit.startupFailure != null}" class="badge bg-danger ms-1"
+                      data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+                      th:title="#{settings.provider.startup-failed.hint(${p.edit.startupFailure})}"
+                      th:text="#{settings.provider.startup-failed}">startup check failed</span>
+            </td>
             <td><span class="badge bg-secondary" th:text="${p.role}">LOCAL</span></td>
-            <td class="text-center" th:text="${p.priority}">0</td>
             <td class="small" th:text="${p.model}">model</td>
             <td class="small text-center text-nowrap" th:text="${p.contextWindow}">-</td>
             <td class="small text-truncate d-inline-block" style="max-width:180px;" tabindex="0"
                 th:text="${p.baseUrl}" th:title="${p.baseUrl}">http://localhost:1234/v1</td>
             <td>
+                <th:block th:unless="${p.pendingAdd()}">
                 <span th:if="${p.configured}" class="badge bg-success"
                       th:text="#{settings.key.set}">set</span>
                 <span th:unless="${p.configured}" class="badge bg-light text-dark border"
                       th:text="#{settings.key.none}">none</span>
+                </th:block>
             </td>
             <td>
-                <!--/* 상태 — 설정 + 서버에 실제로 접속해 본 결과(아래 status 조각). 처음에는 "확인 중" 이고 /settings/llm-status 가 채운다. */-->
-                <span th:replace="~{::status(${p}, ${iter.index}, false)}"></span>
+                <!--/* 상태 — 설정 + 서버에 실제로 접속해 본 결과(아래 status 조각). 처음에는 "확인 중" 이고 /settings/llm-status 가 채운다.
+                     재기동하면 추가될 행은 아직 돌지 않으므로 물어볼 것이 없다. */-->
+                <!--/* th:block 으로 감싸야 한다 — 같은 요소에서는 th:replace 가 th:unless 보다 먼저 돌아 조건이 무시된다. */-->
+                <th:block th:unless="${p.pendingAdd()}"><span th:replace="~{::status(${p}, ${iter.index}, false)}"></span></th:block>
             </td>
-            <td th:classappend="${!isAdmin} ? 'pe-3'">
+            <td th:if="${p.pendingAdd()}" th:classappend="${!isAdmin} ? 'pe-3'"></td>
+            <td th:unless="${p.pendingAdd()}" th:classappend="${!isAdmin} ? 'pe-3'">
                 <!-- name travels with the toggle button via hx-include; unique id avoids clashes
                      when a load-balanced pair shares a name -->
                 <input type="hidden" th:id="'prov-' + ${iter.index}" name="name" th:value="${p.name}"/>
@@ -117,8 +158,8 @@
                  세 가지뿐이다: 사용자 설정 적용(필드를 싣는다) · 서버 설정 사용(싣지 않는다 — 지정하지 않은 원격 서버이거나 서버가 거부해 뺐다) ·
                  Unknown(등록되지 않아 요청이 가지 않는다). 필드 이름·dialect·구분하는 수준은 말풍선(설명)으로 내렸다.
                  서버가 그 필드를 알아듣는지는 이 앱이 알 수 없다 — 알아듣는 서버에 실었다는 것까지가 이 칸의 말이다. */-->
-            <td th:if="${isAdmin}" class="small pe-3 text-nowrap">
-                <th:block th:switch="${p.thinkingControl.name()}">
+            <td th:if="${isAdmin}" class="small text-nowrap">
+                <th:block th:unless="${p.pendingAdd()}" th:switch="${p.thinkingControl.name()}">
                     <span th:case="'APPLIED'" class="badge bg-success"
                           th:with="dialectText=${p.thinking.auto} ? ${#messages.msg('settings.thinking.dialect.auto', p.thinking.resolved.value())} : ${p.thinking.configured.value()}"
                           data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
@@ -140,9 +181,22 @@
                           th:text="#{settings.thinking.control.unknown}">Unknown</span>
                 </th:block>
             </td>
+            <!--/* 편집(관리자) — 폼은 표 위의 #provider-editor 에 열린다. [되돌리기] 는 화면에 남긴 것이 있을 때만. */-->
+            <td th:if="${isAdmin}" class="pe-3 text-end text-nowrap">
+                <input type="hidden" th:id="'prov-edit-' + ${iter.index}" name="name" th:value="${p.name}"/>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                        th:attr="hx-get=@{/admin/settings/provider/editor(name=${p.name})}"
+                        hx-target="#provider-editor" hx-swap="innerHTML"
+                        th:text="#{settings.btn.provider-edit}">Edit</button>
+                <button th:if="${p.edit.revertible()}" type="button" class="btn btn-sm btn-outline-secondary py-0 ms-1"
+                        hx-post="/admin/settings/provider/revert"
+                        th:attr="hx-include='#prov-edit-' + ${iter.index},hx-confirm=#{settings.provider.confirm.revert(${p.name})}"
+                        hx-target="#llm-providers" hx-swap="outerHTML"
+                        th:text="#{settings.btn.provider-revert}">Revert</button>
+            </td>
         </tr>
         <tr th:if="${providers.isEmpty()}">
-            <td colspan="10" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
+            <td colspan="11" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
                 No providers configured.
             </td>
         </tr>
@@ -181,6 +235,95 @@
           th:title="#{settings.status.blocked.hint}"
           th:text="#{llm.status.blocked}">Blocked</span>
 </span>
+
+<!-- ── 프로바이더 편집 폼 (ProviderCatalog) ─────────────────────────────────────────────────────────
+     GET /admin/settings/provider/editor 가 #provider-editor 안에 그린다. 저장이 성공하면 표 조각 전체가 바뀌어 폼이 닫히고 결과
+     안내가 남는다. 실패하면 서버가 응답을 이 자리로 돌려(HX-Retarget) 입력한 값과 사유를 그대로 보여 준다.
+     API 키 칸은 일부러 없다 — 키는 .env 로만 받는다. 이름은 새 프로바이더일 때만 바꿀 수 있다(편집의 키다). -->
+<div th:fragment="editor" class="border rounded p-3 my-3 bg-body-tertiary small">
+    <form hx-post="/admin/settings/provider/save" hx-target="#llm-providers" hx-swap="outerHTML">
+        <input type="hidden" name="create" th:value="${form.create}"/>
+        <div class="fw-semibold mb-2"
+             th:text="${form.create} ? #{settings.provider.add.title} : #{settings.provider.edit.title(${form.name})}">Edit provider</div>
+        <div th:if="${formError != null}" class="alert alert-danger py-2" th:text="${formError}">error</div>
+        <div class="row g-2">
+            <div class="col-4 col-md-1">
+                <label class="form-label mb-0" for="pe-priority" th:text="#{settings.provider.field.priority}">Priority</label>
+                <input id="pe-priority" type="number" name="priority" min="0" max="99" required
+                       class="form-control form-control-sm" th:value="${form.priority}"/>
+            </div>
+            <div class="col-8 col-md-3">
+                <label class="form-label mb-0" for="pe-name" th:text="#{settings.provider.field.name}">Name</label>
+                <input id="pe-name" type="text" name="name" maxlength="40" required autocomplete="off"
+                       class="form-control form-control-sm" th:value="${form.name}" th:readonly="${!form.create}"/>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label mb-0" for="pe-role" th:text="#{settings.provider.field.role}">Role</label>
+                <select id="pe-role" name="role" class="form-select form-select-sm">
+                    <option th:each="r : ${formRoles}" th:value="${r}" th:text="${r}"
+                            th:selected="${r == form.role}" th:disabled="${form.create and r != 'LOCAL'}">LOCAL</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label mb-0" for="pe-type" th:text="#{settings.provider.field.type}">Type</label>
+                <select id="pe-type" name="type" class="form-select form-select-sm">
+                    <option th:each="t : ${formTypes}" th:value="${t}" th:text="${t}"
+                            th:selected="${t == form.type}">BOTH</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label mb-0" for="pe-context" th:text="#{settings.provider.field.context}">Context</label>
+                <!--/* 수동 입력은 탐지가 안 될 때의 대체값 — 선언됐거나 탐지값이 있으면 잠근다(disabled 는 전송되지 않고, 서버는 그것을
+                     "그대로"로 읽는다). */-->
+                <input id="pe-context" type="number" name="contextSize" min="1024" step="1"
+                       class="form-control form-control-sm"
+                       th:value="${formContextLock == null} ? ${form.contextSize} : null"
+                       th:disabled="${formContextLock != null}"
+                       th:placeholder="${formContextLock == 'probed'} ? #{settings.provider.context.placeholder.probed}
+                               : (${formDeclaredContext != null}
+                                   ? #{settings.provider.context.placeholder.declared(${#numbers.formatInteger(formDeclaredContext, 1, 'COMMA')})}
+                                   : #{settings.provider.context.placeholder})"/>
+            </div>
+            <div class="col-12 col-md-5">
+                <label class="form-label mb-0" for="pe-model" th:text="#{settings.provider.field.model}">Model</label>
+                <input id="pe-model" type="text" name="model" maxlength="200" required autocomplete="off"
+                       class="form-control form-control-sm" th:value="${form.model}"/>
+            </div>
+            <div class="col-12 col-md-7">
+                <label class="form-label mb-0" for="pe-base-url" th:text="#{settings.provider.field.base-url}">Endpoint URL</label>
+                <input id="pe-base-url" type="url" name="baseUrl" required autocomplete="off"
+                       placeholder="http://127.0.0.1:1234/v1"
+                       class="form-control form-control-sm font-monospace" th:value="${form.baseUrl}"/>
+            </div>
+        </div>
+        <ul class="text-secondary mt-2 mb-2 ps-3">
+            <li th:text="#{settings.provider.apply-note}">Context applies immediately; everything else after a restart.</li>
+            <li th:text="#{settings.provider.context-note}">Manual context is only for when detection fails.</li>
+            <li th:text="#{settings.provider.key-note}">API keys are set in .env only.</li>
+            <li th:if="${formHasApiKey}" th:text="#{settings.provider.key-host-note}">The host cannot change.</li>
+            <li th:if="${form.create}" th:text="#{settings.provider.add-local-note}">Only LOCAL can be added here.</li>
+        </ul>
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-sm btn-primary" th:text="#{settings.btn.provider-save}">Save</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    onclick="document.getElementById('provider-editor').innerHTML = ''"
+                    th:text="#{settings.btn.provider-cancel}">Cancel</button>
+            <!--/* 폼 안의 버튼이라 폼의 값(name)이 함께 간다 — hx-include 를 더하면 name 이 두 번 실려 "local,local" 로 묶인다. */-->
+            <button th:unless="${form.create}" type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                    hx-post="/admin/settings/provider/delete"
+                    th:attr="hx-confirm=#{settings.provider.confirm.delete(${form.name})}"
+                    hx-target="#llm-providers" hx-swap="outerHTML"
+                    th:text="#{settings.btn.provider-delete}">Delete</button>
+        </div>
+    </form>
+</div>
+
+<!-- ── 표의 버튼(삭제·되돌리기)이 거절됐을 때 — 사유만 편집 자리에 ──────────────────────────────── -->
+<div th:fragment="editor-error" class="alert alert-danger py-2 my-3 small d-flex align-items-start">
+    <span class="flex-grow-1" th:text="${formError}">error</span>
+    <button type="button" class="btn-close btn-sm ms-2" aria-label="close"
+            onclick="document.getElementById('provider-editor').innerHTML = ''"></button>
+</div>
 
 <!-- ── GET /settings/llm-status 의 응답 — 표의 상태 칸 전부를 한 번에 바꿔 끼운다 ──────────────────── -->
 <th:block th:fragment="statuses(providers)">

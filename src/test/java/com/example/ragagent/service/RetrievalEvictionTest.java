@@ -128,4 +128,56 @@ class RetrievalEvictionTest {
         List<Document> five = docs(5);
         assertThat(RetrievalEviction.withoutExcluded(five, Set.of())).isSameAs(five);
     }
+
+    // ── §6.30 A — 보낸 집합 안에서만 ───────────────────────────────────────
+
+    private static List<String> keys(List<Document> docs) {
+        return docs.stream().map(Document::getId).toList();
+    }
+
+    @Test
+    @DisplayName("§6.30 A — 다 보냈으면 예전 select 와 같다")
+    void amongSent_allSentMatchesSelect() {
+        List<Document> ten = docs(10);
+        assertThat(RetrievalEviction.selectAmongSent(ten, keys(ten), List.of(1, 2, 3), 10))
+                .isEqualTo(select(ten, List.of(1, 2, 3), false));
+        assertThat(RetrievalEviction.selectAmongSent(ten, null, List.of(1, 2, 3), 10))
+                .isEqualTo(select(ten, List.of(1, 2, 3), false));
+    }
+
+    @Test
+    @DisplayName("§6.30 A — 답변 프롬프트에 실리지 않은 문서는 밀어내지 않는다(보이지도 않았다)")
+    void amongSent_unsentDocsAreNotEvicted() {
+        List<Document> ten = docs(10);
+        List<String> sent = keys(ten.subList(0, 6));   // 사다리가 하위 4개를 뺐다
+
+        Set<String> evicted = RetrievalEviction.selectAmongSent(ten, sent, List.of(1, 2), 10);
+
+        assertThat(evicted).doesNotContain("id-6", "id-7", "id-8", "id-9")
+                .as("보낸 6개 안에서 — 하위 절반(3..5) 에서 최대 2개").containsExactly("id-5", "id-4");
+    }
+
+    @Test
+    @DisplayName("§6.30 A — 가드 ②는 '검증이 보낸 문서를 전부 봤는가'로 묻는다")
+    void amongSent_guardTwoLooksAtTheSentDocsOnly() {
+        List<Document> ten = docs(10);
+        List<String> sent = keys(ten.subList(0, 6));
+
+        assertThat(RetrievalEviction.selectAmongSent(ten, sent, List.of(1, 2), 6))
+                .as("검증 발췌는 6개에서 잘렸지만 보낸 것은 전부 봤다 — 밀어낸다").isNotEmpty();
+        assertThat(RetrievalEviction.selectAmongSent(ten, sent, List.of(1, 2), 5))
+                .as("보낸 문서 하나를 검증이 못 봤다 — 밀지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("§6.30 A — [Dn] 은 검증 발췌의 번호다: 보낸 집합이 접두사가 아니어도 문서로 맞춘다")
+    void amongSent_mapsEvalNumbersThroughDocuments() {
+        List<Document> six = docs(6);
+        // 재시도의 뺄 순서로 index 1 이 빠지고 나머지가 실렸다 — 위치로 맞추면 [D6] 이 보낸 집합의 6번째(없음)를 가리킨다
+        List<String> sent = List.of("id-0", "id-2", "id-3", "id-4", "id-5");
+
+        Set<String> evicted = RetrievalEviction.selectAmongSent(six, sent, List.of(1, 6), 6);
+
+        assertThat(evicted).as("[D6] = id-5 는 쓰였다 — 하위 구간에서 안 쓰인 id-4 만").containsExactly("id-4");
+    }
 }
