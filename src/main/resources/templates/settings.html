@@ -36,12 +36,12 @@
     <div class="card mb-4" id="display-settings">
         <div class="card-header fw-semibold" th:text="#{settings.display.title}">Display</div>
         <div class="card-body">
-            <p class="text-secondary small mb-3" th:text="#{settings.display.hint}">
-                Saved in this browser only. Anyone can change it.
-            </p>
             <!-- 좌우 2단 — 왼쪽은 설정(언어 · 채팅 글자 크기), 오른쪽은 미리보기. 좁은 화면(< lg)에서는 위아래로 쌓인다. -->
             <div class="row g-4">
                 <div class="col-md-5" id="display-settings-controls">
+                    <p class="text-secondary small mb-3" th:text="#{settings.display.hint}">
+                        Saved in this browser only. Anyone can change it.
+                    </p>
                     <!-- 언어 — 헤더에서 옮겨 왔다. 링크라서 누르면 ?lang= 으로 페이지를 다시 연다(CookieLocaleResolver 가 이 브라우저에
                          쿠키로 남긴다). 글자 크기와 달리 즉시 적용되는 것이 아니라 새로 그려지므로 라디오가 아니라 링크다. -->
                     <div class="mb-4">
