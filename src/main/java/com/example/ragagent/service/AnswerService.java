@@ -1267,7 +1267,7 @@ public class AnswerService {
         long usedTokens = 0;
         int included = 0;
         for (Document d : docs) {
-            String text = MarkdownNoiseNormalizer.normalize(d.getText());
+            String text = MarkdownNoiseNormalizer.normalizeForPrompt(d.getText());
             long tokens = TokenEstimator.estimate(text);
             if (!excerptFits(included, used, text.length(), usedTokens, tokens, tokenBudget)) break;
             if (included > 0) sb.append("\n---\n");
@@ -1590,7 +1590,7 @@ public class AnswerService {
 
         /** 예산을 재면서 정규화까지 마친 청크. */
         static SizedDoc measured(Document d) {
-            String normalized = MarkdownNoiseNormalizer.normalize(d.getText());
+            String normalized = MarkdownNoiseNormalizer.normalizeForPrompt(d.getText());
             return new SizedDoc(d, normalized, TokenEstimator.estimate(normalized));
         }
 
@@ -1601,7 +1601,7 @@ public class AnswerService {
 
         /** 프롬프트에 실을 텍스트. {@link #unmeasured} 였다면 여기서 한 번 정규화한다. */
         String promptText() {
-            return normalized != null ? normalized : MarkdownNoiseNormalizer.normalize(doc.getText());
+            return normalized != null ? normalized : MarkdownNoiseNormalizer.normalizeForPrompt(doc.getText());
         }
     }
 

@@ -115,4 +115,56 @@ class MarkdownNoiseNormalizerTest {
 
         assertThat(result).isEqualTo("첫 줄\n\n둘째 줄");
     }
+
+    // ── normalizeForPrompt — LLM 프롬프트 전용 (임베딩/FTS 입력은 normalize 그대로) ──────────
+
+    @Test
+    @DisplayName("프롬프트용: 이미지 마커의 경로는 빠지고 마커와 바로 뒤의 설명 줄은 남는다")
+    void forPrompt_stripsImagePathButKeepsMarkerAndDescription() {
+        String text = "본문\n[이미지: images/af60c92d802a89aa/s4_img1.png]\n[이미지 설명: 배포 구성도]\n끝";
+
+        assertThat(MarkdownNoiseNormalizer.normalizeForPrompt(text))
+                .isEqualTo("본문\n[이미지]\n[이미지 설명: 배포 구성도]\n끝");
+    }
+
+    @Test
+    @DisplayName("프롬프트용: 표 셀 안의 이미지 마커도 같은 줄에서 경로만 빠진다")
+    void forPrompt_stripsImagePathInsideTableCell() {
+        String text = "| 구분 | 그림 |\n|---|---|\n| A | [이미지: images/x/a.png] |";
+
+        assertThat(MarkdownNoiseNormalizer.normalizeForPrompt(text))
+                .isEqualTo("| 구분 | 그림 |\n|---|---|\n| A | [이미지] |");
+    }
+
+    @Test
+    @DisplayName("프롬프트용: [페이지: N] 만 있는 줄은 사라지고, 앞뒤 빈 줄은 하나로 접힌다")
+    void forPrompt_dropsPageMarkerLines() {
+        String text = "첫 문단\n\n[페이지: 12]\n\n둘째 문단";
+
+        assertThat(MarkdownNoiseNormalizer.normalizeForPrompt(text)).isEqualTo("첫 문단\n\n둘째 문단");
+    }
+
+    @Test
+    @DisplayName("프롬프트용: 문장 속 [페이지: N] 언급은 줄 전체가 마커가 아니므로 남는다")
+    void forPrompt_keepsPageMentionInsideSentence() {
+        String text = "자세한 내용은 [페이지: 3] 을 참고";
+
+        assertThat(MarkdownNoiseNormalizer.normalizeForPrompt(text)).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("프롬프트용: 코드 펜스 안의 마커 문자열은 건드리지 않는다")
+    void forPrompt_leavesFenceInteriorAlone() {
+        String text = "```\n[이미지: images/x/a.png]\n[페이지: 3]\n```";
+
+        assertThat(MarkdownNoiseNormalizer.normalizeForPrompt(text)).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("normalize 는 그대로다 — 임베딩/FTS 입력과 청크 해시가 바뀌면 안 된다")
+    void normalize_stillKeepsImagePathAndPageMarker() {
+        String text = "[페이지: 2]\n[이미지: images/x/a.png]";
+
+        assertThat(MarkdownNoiseNormalizer.normalize(text)).isEqualTo(text);
+    }
 }
