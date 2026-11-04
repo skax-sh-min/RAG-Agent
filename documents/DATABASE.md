@@ -578,7 +578,7 @@ ORDER BY knn.distance
 | `doc_type` | 문자열 | 파일명으로 추정 — `guide`(이름에 guide) / `education`(edu·lesson) / `manual` | `curated_qa` | **`curated_qa`가 큐레이션 판정 키**입니다 — 출처 라벨("💬 큐레이션 Q&A")과 태그 필터 면제가 이 값을 봅니다 |
 | `source_type` | 문자열 | `file` / `ocr`(스캔 PDF) | `curated_qa` | |
 | `sha256` | 문자열 | 원본 파일 SHA-256 | — | |
-| `collected_at` | 문자열 | 인덱싱 시각 (ISO-8601 UTC) | — | |
+| `collected_at` | 문자열 | 인덱싱 시각 (ISO-8601 UTC) — 청크 재인덱싱(↺)도 갱신 | — | `/admin` 청크 목록의 수정일시 = `edited_at` 과 이 값 중 더 최신(`ChunkRow.lastModifiedAt()`) |
 | `chunk_index` | 정수 | 문서 안 순번 (0부터) | 분할 순번 | 페이지와 별개인 안정적 청크 순번 |
 | `page_or_slide` | 정수 | 페이지·슬라이드 번호 (없으면 청크 순번+1) | `1` | 출처 라벨 `p.N` |
 | `chapter_no` | 문자열 | `1.5.3` 형식 (H2~H6 기준), 헤딩 이전 구간·PPTX는 `0` | — | 출처 라벨 `ch N` (`0`이면 페이지로 대신) |

@@ -707,6 +707,22 @@ class AnswerServiceTest {
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
     }
 
+    @Test
+    @DisplayName("답변·검증 프롬프트 모두 이미지 경로와 [페이지: N] 줄을 싣지 않고, 이미지 설명은 그대로 싣는다")
+    void prompts_omitImagePathAndPageMarker_butKeepImageDescription() {
+        String chunk = "[페이지: 7]\n[이미지: images/af60c92d802a89aa/s7_img1.png]\n[이미지 설명: 배포 구성도]\n본문";
+        AgentState state = AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(new Document(chunk)))
+                .build();
+
+        List<String> prompts = capturePrompts(state);
+
+        assertThat(prompts).hasSize(2).allSatisfy(p -> {
+            assertThat(p).doesNotContain("s7_img1.png").doesNotContain("[페이지: 7]");
+            assertThat(p).contains("[이미지]").contains("[이미지 설명: 배포 구성도]");
+        });
+    }
+
     // ── 재시도 피드백 (§ 재시도 개선) ────────────────────────────────────────
 
     /** 프롬프트를 캡처하는 관용구 — 위 테스트들과 같은 2회(답변 + 검증) 호출 모양. */

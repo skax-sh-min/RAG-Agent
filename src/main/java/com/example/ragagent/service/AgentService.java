@@ -87,8 +87,24 @@ public class AgentService {
                 this(agentGraph, memoryService, classifierService, summarizerService, null, null);
         }
 
+    /**
+     * 질문 길이 한도(설정 상한 + 이 모델의 창). 생성자가 아니라 세터로 받는다 — 이 클래스는 테스트용 생성자를 여럿 들고 있어 생성자에
+     * 더하면 전부 흔들리고, 빈이 없는 자리(단위 테스트)는 {@link PromptInjectionGuard#validateChat} 의 기본 상한으로 떨어진다.
+     */
+    private QuestionLimit questionLimit;
+
+    @Autowired(required = false)
+    public void setQuestionLimit(QuestionLimit questionLimit) {
+        this.questionLimit = questionLimit;
+    }
+
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
-        PromptInjectionGuard.validate(request.question());
+        if (questionLimit != null) {
+            questionLimit.validate(request.question(), request.directMode(), request.routingMode(),
+                    request.responseMode(), false);
+        } else {
+            PromptInjectionGuard.validateChat(request.question());
+        }
         String userId = ctx.userId();
         log.debug("[AgentService] chat start — directMode={} routingMode={} thread={} locale={}",
                 request.directMode(), request.routingMode(), request.threadId(), ctx.locale().getLanguage());
@@ -131,6 +147,7 @@ public class AgentService {
                         // 그래프 바깥에서 일어난 호출이라 여기서 실어 준다 — 안 실으면 사용자가 보는
                         // LLM 호출 수·토큰이 실제보다 적게 나온다(classifyOnly 의 알려진 누락과 같은 함정).
                         builder.searchQuestion(condensed.searchQuestion())
+                               .searchKeywords(condensed.searchKeywords())
                                .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
                     }
                     initial = builder.build();
@@ -187,11 +204,11 @@ public class AgentService {
     private CompletableFuture<QuestionCondenser.Condensed> condenseAsync(
             String userId, String threadId, String question,
             java.util.Locale locale, java.util.concurrent.Executor exec) {
-        if (questionCondenser == null || !questionCondenser.gateOpen(question)) {
+        if (questionCondenser == null || !questionCondenser.needsPreparation(question)) {
             return CompletableFuture.completedFuture(null);
         }
         return CompletableFuture.supplyAsync(
-                () -> questionCondenser.condense(userId, threadId, question, locale).orElse(null), exec);
+                () -> questionCondenser.prepare(userId, threadId, question, locale).orElse(null), exec);
     }
 
     /**

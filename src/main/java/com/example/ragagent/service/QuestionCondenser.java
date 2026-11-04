@@ -92,7 +92,12 @@ public class QuestionCondenser {
      * 잡힌다({@code ClassifierService.classifyOnly()} 는 그 값을 버려서 호출 수가 하나 덜 세어진다 —
      * 같은 실수를 반복하지 않는다).
      */
-    public record Condensed(String searchQuestion, int inputTokens, int outputTokens) {}
+    public record Condensed(String searchQuestion, int inputTokens, int outputTokens, String searchKeywords) {
+        /** 짧은 후속 질문의 독립화 — 키워드 축은 검색 질문을 그대로 쓴다. */
+        public Condensed(String searchQuestion, int inputTokens, int outputTokens) {
+            this(searchQuestion, inputTokens, outputTokens, null);
+        }
+    }
 
     private final LlmRouter llmRouter;
     private final MemoryService memoryService;
@@ -164,6 +169,151 @@ public class QuestionCondenser {
             log.warn("[CONDENSE] 독립화 실패 — 원문으로 검색한다 thread={}: {}", threadId, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    // ── 긴 질문의 검색문·키워드 (LongQuestionQuery) ──────────────────────────────────
+
+    /**
+     * 검색 전에 이 질문의 검색 질의를 손봐야 하는가 — 긴 질문(1·2단계) 또는 짧은 후속 질문(독립화). 둘은 길이로 갈려 겹치지 않는다
+     * ({@link #gateOpen} 은 {@code search-multiquery-min-length} 미만, 긴 질문은 {@value LongQuestionQuery#SHORT_LIMIT}자 초과).
+     * 호출부가 이력을 읽기 전에 부르므로 순수하게 길이만 본다.
+     */
+    public boolean needsPreparation(String question) {
+        return LongQuestionQuery.isLong(question) || gateOpen(question);
+    }
+
+    /** 긴 질문이면 {@link #planLong}, 짧은 후속 질문이면 {@link #condense} — 두 호출부가 같은 한 줄로 부른다. */
+    public Optional<Condensed> prepare(String userId, String threadId, String question, Locale locale) {
+        if (LongQuestionQuery.isLong(question)) return Optional.of(planLong(threadId, question, locale));
+        return condense(userId, threadId, question, locale);
+    }
+
+    /**
+     * 긴 질문의 검색 질의. 1단계(결정적)는 늘 만들고, 2단계(LLM)는 {@link #distillGateOpen} 이 열려 있고 호출이 성공하면 그 결과를
+     * 얹는다 — 검색문은 LLM 이 만든 것으로 바꾸고, 키워드는 <b>합집합</b>(LLM 먼저, 결정적 추출이 뒤)이다.
+     */
+    Condensed planLong(String threadId, String question, Locale locale) {
+        String vectorQuery = LongQuestionQuery.headTail(question);
+        List<String> terms = LongQuestionQuery.keywordTerms(question);
+        int in = 0;
+        int out = 0;
+        if (distillGateOpen(question)) {
+            Optional<Distilled> d = distill(threadId, question, locale);
+            if (d.isPresent()) {
+                if (d.get().vectorQuery() != null) vectorQuery = d.get().vectorQuery();
+                terms = LongQuestionQuery.mergeTerms(d.get().keywords(), terms, LongQuestionQuery.MAX_MERGED_TERMS);
+                in = d.get().inputTokens();
+                out = d.get().outputTokens();
+            }
+        }
+        // 빈 문자열은 "긴 질문이라 따로 만들었지만 추릴 낱말이 없다"는 표지다(AgentState.usedLongQuestionQuery) — null 이 아니다.
+        String joined = LongQuestionQuery.joinTerms(terms);
+        return new Condensed(vectorQuery, in, out, joined == null ? "" : joined);
+    }
+
+    /** LLM 에 보내는 질문 상한. 넘으면 앞 {@value #DISTILL_HEAD_CHARS}자 + 뒤 {@value #DISTILL_TAIL_CHARS}자만 — 지시는 앞이나 뒤에 온다. */
+    static final int MAX_DISTILL_INPUT_CHARS = 8_000;
+    static final int DISTILL_HEAD_CHARS = 5_000;
+    static final int DISTILL_TAIL_CHARS = 3_000;
+
+    /** 벡터 검색문의 길이 상한. 넘으면 검색문을 <b>버린다</b>(잘라 쓰지 않는다 — {@link #MAX_CONDENSED_CHARS} 와 같은 이유). */
+    static final int MAX_DISTILLED_QUERY_CHARS = 300;
+
+    /** LLM 이 낸 키워드의 개수 상한. */
+    static final int MAX_DISTILLED_TERMS = 12;
+
+    private static final java.util.regex.Pattern QUERY_BLOCK =
+            java.util.regex.Pattern.compile("(?is)검색문\\s*[:：]\\s*(.+?)(?=(?:키워드\\s*[:：])|$)");
+    private static final java.util.regex.Pattern TERMS_BLOCK =
+            java.util.regex.Pattern.compile("(?is)키워드\\s*[:：]\\s*(.+?)(?=(?:검색문\\s*[:：])|$)");
+
+    /**
+     * 긴 질문에서 뽑은 <b>벡터 검색문</b>과 <b>키워드</b>, 그리고 그 호출의 토큰 사용량({@link Condensed} 와 같은 이유로 돌려준다).
+     * 둘 중 하나가 비어 있을 수 있다 — 호출부는 비어 있는 쪽을 1단계(결정적) 결과로 메운다.
+     */
+    public record Distilled(String vectorQuery, List<String> keywords, int inputTokens, int outputTokens) {}
+
+    /**
+     * 이 질문이 LLM 검색어 추출(2단계) 대상인가 — 길이가 {@value LongQuestionQuery#LLM_LIMIT}자를 넘고 질의 전처리 스위치가
+     * 켜져 있다. 스위치를 {@link #gateOpen} 과 공유한다: 둘 다 "검색 전에 질의를 LLM 으로 한 번 손보는" 호출이다. 이 게이트는
+     * 질의 확장({@code RetrievalService.shouldExpand})을 대신하므로(긴 질문은 확장을 건너뛴다) 한 턴의 질의 전처리 LLM 호출은
+     * 여전히 최대 하나다.
+     */
+    public boolean distillGateOpen(String question) {
+        return props.searchMultiqueryEnabledSafe() && LongQuestionQuery.needsLlm(question);
+    }
+
+    /**
+     * 긴 질문 → 벡터 검색문 + 키워드. {@link #distillGateOpen} 이 열렸을 때만 부른다. 이력은 쓰지 않는다 — 긴 질문은 대개
+     * 자립적이고, 이력까지 실으면 이미 큰 입력이 더 커진다.
+     *
+     * @return 둘 다 못 얻으면(호출·파싱 실패, 두 필드 모두 무효) {@link Optional#empty()} — 호출부는 1단계 결과로 검색한다
+     */
+    public Optional<Distilled> distill(String threadId, String question, Locale locale) {
+        try {
+            String systemPrompt = messageSource.getMessage("prompt.retrieval.distill", null, locale);
+            String userMessage = PromptInjectionGuard.wrap(clipForDistill(question));
+            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
+                    ThinkingSite.CONDENSE.taskType(), ThinkingSite.CONDENSE.fixedRoutingMode(),
+                    model -> model.call(new Prompt(
+                            List.of(new SystemMessage(systemPrompt), new UserMessage(userMessage)),
+                            options())));
+            Distilled parsed = parseDistilled(result.text(), result.inputTokens(), result.outputTokens());
+            if (parsed == null) {
+                log.debug("[DISTILL] 검색어 추출 결과 없음(파싱 실패) thread={}", threadId);
+                return Optional.empty();
+            }
+            log.info("[DISTILL] 긴 질문 검색어 추출 thread={} 질문={}자 검색문=[{}] 키워드={}",
+                    threadId, question.length(), parsed.vectorQuery(), parsed.keywords());
+            return Optional.of(parsed);
+        } catch (Exception e) {
+            // 검색을 멈출 이유가 아니다 — 1단계(앞+뒤, 결정적 키워드)로 검색한다.
+            log.warn("[DISTILL] 검색어 추출 실패 — 결정적 질의로 검색한다 thread={}: {}", threadId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** LLM 에 보낼 질문 — {@link #MAX_DISTILL_INPUT_CHARS} 를 넘으면 앞·뒤만, 가운데는 표시를 남기고 뺀다. */
+    static String clipForDistill(String question) {
+        String q = question.strip();
+        if (q.length() <= MAX_DISTILL_INPUT_CHARS) return q;
+        return q.substring(0, DISTILL_HEAD_CHARS) + "\n[… 중략 …]\n" + q.substring(q.length() - DISTILL_TAIL_CHARS);
+    }
+
+    /**
+     * {@code 검색문: …} / {@code 키워드: …} 두 줄을 읽는다. 검색문은 길이를 넘기면 버리고, 키워드는 쉼표·줄바꿈으로 갈라 감싼
+     * 따옴표·글머리를 벗기고 3글자 미만·40자 초과를 뺀 뒤 {@value #MAX_DISTILLED_TERMS}개까지. 둘 다 비면 {@code null}.
+     */
+    static Distilled parseDistilled(String response, int inputTokens, int outputTokens) {
+        if (response == null || response.isBlank()) return null;
+        String query = null;
+        var qm = QUERY_BLOCK.matcher(response);
+        if (qm.find()) {
+            String one = qm.group(1).strip().replaceAll("\\s+", " ");
+            one = stripWrappingQuotes(one);
+            if (!one.isEmpty() && one.length() <= MAX_DISTILLED_QUERY_CHARS) query = one;
+        }
+        List<String> terms = new ArrayList<>();
+        var tm = TERMS_BLOCK.matcher(response);
+        if (tm.find()) {
+            for (String part : tm.group(1).split("[,，、\\n]")) {
+                String term = stripWrappingQuotes(part.strip().replaceFirst("^[-*•·]\\s*", ""));
+                if (term.length() < LongQuestionQuery.MIN_TERM_LEN || term.length() > LongQuestionQuery.MAX_TERM_LEN) continue;
+                if (terms.stream().noneMatch(t -> t.equalsIgnoreCase(term))) terms.add(term);
+                if (terms.size() >= MAX_DISTILLED_TERMS) break;
+            }
+        }
+        if (query == null && terms.isEmpty()) return null;
+        return new Distilled(query, List.copyOf(terms), inputTokens, outputTokens);
+    }
+
+    private static String stripWrappingQuotes(String s) {
+        if (s.length() >= 2
+                && ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))
+                 || (s.startsWith("“") && s.endsWith("”")) || (s.startsWith("`") && s.endsWith("`")))) {
+            return s.substring(1, s.length() - 1).strip();
+        }
+        return s;
     }
 
     /**

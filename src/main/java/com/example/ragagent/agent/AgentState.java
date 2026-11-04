@@ -79,6 +79,10 @@ public record AgentState(
                                      // — 저장되는 값이 실제로 한 것이어야 한다
         int historyBoost             // §6.31 — 이력 제외로 검색이 최종 컷에 <b>실제로</b> 더한 문서 수(검증 쪽 상한으로 줄어든 뒤).
                                      // 안내 문구가 읽는다. 0 = 더하지 않았음
+        ,
+        String searchKeywords        // 긴 질문(LongQuestionQuery) — 키워드(BM25) 축이 쓸 검색어(공백으로 이은 낱말). 벡터 축·리랭커·
+                                     // 분류기가 쓰는 짧은 검색문은 searchQuestion 에 실린다. null = 해당 없음(키워드 축도
+                                     // effectiveSearchQuestion() 을 쓴다) — effectiveKeywordQuestion() 참고
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -126,7 +130,7 @@ public record AgentState(
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
                 0, List.of(), null, null,
-                null, null, false, 0);
+                null, null, false, 0, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -144,9 +148,29 @@ public record AgentState(
         return (searchQuestion == null || searchQuestion.isBlank()) ? question : searchQuestion;
     }
 
-    /** 이 턴에서 질의가 실제로 다시 쓰였는가 — 진단 표시가 읽는 값. */
+    /**
+     * 키워드(BM25/FTS) 축이 쓸 질의 — 긴 질문이면 질문 전체의 낱말을 추려 둔 검색어({@link #searchKeywords}), 아니면
+     * {@link #effectiveSearchQuestion()} 과 같다. 긴 질문 전체를 키워드 축에 넣으면 MATCH 식이 수천 개 항이 되고, 3글자
+     * 미만 낱말은 인덱스를 못 타는 LIKE 스캔으로 간다.
+     */
+    public String effectiveKeywordQuestion() {
+        return (searchKeywords == null || searchKeywords.isBlank()) ? effectiveSearchQuestion() : searchKeywords;
+    }
+
+    /**
+     * 긴 질문이라 검색 질의를 따로 만들었는가(LongQuestionQuery) — {@link #searchKeywords} 가 {@code null} 이 아니면 그렇다(추릴 낱말이
+     * 없었으면 빈 문자열). 이때 {@link #searchQuestion} 은 후속 질문의 독립화가 아니라 긴 질문의 짧은 검색문이다.
+     */
+    public boolean usedLongQuestionQuery() {
+        return searchKeywords != null;
+    }
+
+    /**
+     * 이 턴에서 짧은 후속 질문이 실제로 독립화됐는가 — 진단 표시와 "이전 대화에 비추어 다시 쓰면" 한 줄이 읽는 값. 긴 질문의 검색문은
+     * 포함하지 않는다: 그것은 이력과 무관한 검색용 요약이라 "이전 대화에 비추어 다시 쓴 질문"이라고 말하면 거짓이다.
+     */
     public boolean wasCondensed() {
-        return searchQuestion != null && !searchQuestion.isBlank()
+        return !usedLongQuestionQuery() && searchQuestion != null && !searchQuestion.isBlank()
                 && !searchQuestion.equals(question);
     }
 
@@ -238,6 +262,7 @@ public record AgentState(
         private String lastAnswerDigest;
         private boolean excludeHistory;
         private int historyBoost;
+        private String searchKeywords;
 
         Builder() {}
 
@@ -279,6 +304,7 @@ public record AgentState(
             this.lastAnswerDigest   = s.lastAnswerDigest;
             this.excludeHistory     = s.excludeHistory;
             this.historyBoost       = s.historyBoost;
+            this.searchKeywords     = s.searchKeywords;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -315,6 +341,7 @@ public record AgentState(
         public Builder lastAnswerDigest(String v)          { this.lastAnswerDigest = v;   return this; }
         public Builder excludeHistory(boolean v)           { this.excludeHistory = v;     return this; }
         public Builder historyBoost(int v)                 { this.historyBoost = v;       return this; }
+        public Builder searchKeywords(String v)            { this.searchKeywords = v;     return this; }
         /**
          * 이 시도가 본 문서로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). 본 문서는 답변 프롬프트에
          * 실린 집합이다(§6.30 B, {@link AgentState#repeatsLastRejection} 와 같은 키).
@@ -342,7 +369,7 @@ public record AgentState(
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
                     retrievalRetries, excludedDocIds, searchQuestion, lastRejection,
-                    lastSent, lastAnswerDigest, excludeHistory, historyBoost);
+                    lastSent, lastAnswerDigest, excludeHistory, historyBoost, searchKeywords);
         }
     }
 }

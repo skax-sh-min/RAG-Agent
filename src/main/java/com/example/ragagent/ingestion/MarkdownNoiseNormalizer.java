@@ -18,6 +18,11 @@ public final class MarkdownNoiseNormalizer {
     private static final Pattern LIST_MARKER = Pattern.compile("^(\\s*(?:[-*+]|\\d+[.)])\\s+)(.*)$");
     private static final Pattern BLANK_RUN = Pattern.compile("\n{3,}");
 
+    // Prompt-only scaffolding (see normalizeForPrompt): "[이미지: images/ab12…/s4_img1.png]" carries a
+    // file path the LLM can't use, and a line that is only "[페이지: 3]" is an indexing page marker.
+    private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지:[^\\]]*]");
+    private static final Pattern PAGE_MARKER_LINE = Pattern.compile("\\[페이지:\\s*\\d+]");
+
     // Deliberately conservative: an unrecognized symbol-only line is left untouched rather than
     // risk a false positive — a miss just costs a few tokens, a false positive corrupts content.
     private static final String DECORATIVE_CHARS = "-=_~*#+.·•‧━─═";
@@ -26,6 +31,26 @@ public final class MarkdownNoiseNormalizer {
     private MarkdownNoiseNormalizer() {}
 
     public static String normalize(String text) {
+        return normalize(text, false);
+    }
+
+    /**
+     * {@link #normalize} plus two indexing-scaffolding cleanups for the text sent to the answer/verification
+     * LLM <b>only</b> — never for embedding/FTS input ({@code SearchTextBuilder}) or anything stored or shown:
+     * <ul>
+     *   <li>{@code [이미지: <경로>]} → {@code [이미지]} — the path is meaningless to the model; the marker itself
+     *       stays so the {@code [이미지 설명: …]} line that follows still reads as that image's description.</li>
+     *   <li>a line consisting only of {@code [페이지: N]} is dropped.</li>
+     * </ul>
+     * Code-fence interiors are left untouched, like every other rule here. Kept separate from
+     * {@code normalize()} on purpose: changing that would change the embedding/FTS text and the stored chunk
+     * hash ({@code chunk_fts_key.content_hash}), i.e. force a re-index and flip every reuse snapshot to "modified".
+     */
+    public static String normalizeForPrompt(String text) {
+        return normalize(text, true);
+    }
+
+    private static String normalize(String text, boolean forPrompt) {
         if (text == null) return "";
         String[] lines = text.split("\n", -1);
         StringBuilder out = new StringBuilder(text.length());
@@ -39,12 +64,14 @@ public final class MarkdownNoiseNormalizer {
             String processed;
             if (isFenceLine || wasInsideFence) {
                 processed = line;                 // code fence delimiter/interior: untouched
+            } else if (forPrompt && PAGE_MARKER_LINE.matcher(trimmed).matches()) {
+                processed = null;                 // prompt only: page marker line
             } else if (isTableLine(trimmed)) {
-                processed = line;                 // table row/separator: untouched
+                processed = forPrompt ? stripImagePath(line) : line;   // table row/separator
             } else if (isDecorativeLine(trimmed)) {
                 processed = null;                 // drop the whole line
             } else {
-                processed = stripEmphasis(line);
+                processed = stripEmphasis(forPrompt ? stripImagePath(line) : line);
             }
             if (processed != null) {
                 if (!out.isEmpty()) out.append('\n');
@@ -52,6 +79,10 @@ public final class MarkdownNoiseNormalizer {
             }
         }
         return BLANK_RUN.matcher(out).replaceAll("\n\n").strip();
+    }
+
+    private static String stripImagePath(String line) {
+        return line.indexOf("[이미지:") < 0 ? line : IMAGE_PATH_MARKER.matcher(line).replaceAll("[이미지]");
     }
 
     private static boolean isTableLine(String trimmed) {

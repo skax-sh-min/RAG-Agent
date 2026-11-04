@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.service.QuestionLimit;
 import com.example.ragagent.security.PromptInjectionGuard;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.web.MdcPropagation;
@@ -168,6 +169,17 @@ public class ChatController {
         Thread.ofVirtual().start(MdcPropagation.wrap(() -> summarizerService.precompute(userId, threadId, locale)));
     }
 
+    /**
+     * 질문 길이 한도(설정 상한 + 이 모델의 창). 생성자가 아니라 세터로 받는다 — 이 클래스는 테스트용 생성자를 여럿 들고 있어 생성자에
+     * 더하면 전부 흔들리고, 빈이 없는 자리(단위 테스트)는 {@link PromptInjectionGuard#validateChat} 의 기본 상한으로 떨어진다.
+     */
+    private QuestionLimit questionLimit;
+
+    @Autowired(required = false)
+    public void setQuestionLimit(QuestionLimit questionLimit) {
+        this.questionLimit = questionLimit;
+    }
+
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamChat(ThreadContext ctx,
                                  @ModelAttribute ChatForm form,
@@ -178,7 +190,8 @@ public class ChatController {
         // SSE error 이벤트로 보낸다(completeWithError 는 비동기 재디스패치에서 ProblemDetail 을 text/event-stream 으로
         // 쓰려다 실패할 뿐 화면에 아무 말도 하지 않는다). StreamingAgentService.run() 도 같은 검사를 첫 줄에 둔다.
         try {
-            PromptInjectionGuard.validate(normalizedForm.question());
+            if (questionLimit != null) questionLimit.validate(normalizedForm, true);
+            else PromptInjectionGuard.validateChat(normalizedForm.question());
         } catch (IllegalArgumentException e) {
             try {
                 emitter.send(SseEmitter.event().name("error")
@@ -490,5 +503,7 @@ public class ChatController {
         model.addAttribute("creativeModeEnabled", settingsService.creativeModeEnabled());
         model.addAttribute("sourcePreviewEnabled", settingsService.sourcePreviewEnabled());
         model.addAttribute("retrievalMetricsEnabled", settingsService.retrievalMetricsEnabled());
+        model.addAttribute("maxQuestionChars", questionLimit != null
+                ? questionLimit.configuredMax() : PromptInjectionGuard.MAX_CHAT_QUESTION_LEN);
     }
 }

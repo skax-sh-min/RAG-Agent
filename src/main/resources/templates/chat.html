@@ -488,6 +488,9 @@
                             <i class="bi bi-send-fill"></i>
                         </button>
                     </div>
+                    <!-- 글자 수 — 긴 질문(500자 초과)부터만 보인다. 막지는 않는다: 상한·모델 창 기준 거절은 서버가 문구와 함께 한다. -->
+                    <div id="question-counter" class="form-text text-end mt-0 d-none"
+                         th:title="#{chat.input.counter.title}"><span id="question-counter-now">0</span> / <span id="question-counter-max">10000</span></div>
                 </form>
             </div>
         </div>
@@ -636,6 +639,24 @@
     const directLabel     = document.getElementById('direct-mode-label');
     const directModeInput = document.getElementById('form-direct-mode');
     const suggestBox      = document.getElementById('question-suggest-box');
+    // 질문 글자 수 표시 — 상한은 서버 설정(app.chat.max-question-chars), 표시 시작은 LongQuestionQuery.SHORT_LIMIT.
+    const MAX_QUESTION_CHARS = /*[[${maxQuestionChars}]]*/ 10000;
+    const QUESTION_COUNTER_FROM = /*[[${T(com.example.ragagent.service.LongQuestionQuery).SHORT_LIMIT}]]*/ 500;
+    (function () {
+        const counter = document.getElementById('question-counter');
+        const now = document.getElementById('question-counter-now');
+        const max = document.getElementById('question-counter-max');
+        if (!counter || !questionInput) return;
+        max.textContent = MAX_QUESTION_CHARS.toLocaleString();
+        const update = function () {
+            const n = questionInput.value.length;
+            now.textContent = n.toLocaleString();
+            counter.classList.toggle('d-none', n <= QUESTION_COUNTER_FROM);
+            counter.classList.toggle('text-danger', n > MAX_QUESTION_CHARS);
+        };
+        questionInput.addEventListener('input', update);
+        update();
+    })();
     let suggestTimer      = null;
     let suggestSeq        = 0;
     const SOURCE_PREVIEW_ENABLED = /*[[${sourcePreviewEnabled}]]*/ true;

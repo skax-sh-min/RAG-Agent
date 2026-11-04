@@ -121,6 +121,8 @@ public class RetrievalService {
         // 독립화됐으면 그 결과, 아니면 원문이다. 답변 프롬프트는 이 값을 쓰지 않는다
         // (AgentState.effectiveSearchQuestion() 참고) — 재작성이 빗나가도 검색만 틀린다.
         String searchQuestion = state.effectiveSearchQuestion();
+        // 키워드(BM25) 축은 긴 질문에서 따로 추린 검색어를 본다(없으면 위와 같다) — AgentState.effectiveKeywordQuestion() 참고.
+        String keywordQuestion = state.effectiveKeywordQuestion();
         // Read hot-editable tuning fresh each call so /settings overrides apply live.
         boolean retryEscalate = props.searchRetryEscalateSafe();
         int candidateMultiplier = props.searchCandidateMultiplierSafe();
@@ -202,7 +204,7 @@ public class RetrievalService {
                 Executor exec = MdcPropagation.propagating(pool);   // 축별 검색 로그도 이 턴의 traceId 로
                 CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
                         () -> hybridEnabled
-                                ? ragService.keywordSearch(state.version(), searchQuestion, fetchK)
+                                ? ragService.keywordSearch(state.version(), keywordQuestion, fetchK)
                                 : List.<Document>of(),
                         exec);
                 // §10.10 — curated-Q&A axis: single search against the original question (not
@@ -210,7 +212,7 @@ public class RetrievalService {
                 // the point), scoped to the reserved "curated" version namespace.
                 CompletableFuture<CuratedHits> curatedF = CompletableFuture.supplyAsync(
                         () -> curatedQaEnabled
-                                ? curatedAxis(state.userId(), searchQuestion, fetchK, hybridEnabled)
+                                ? curatedAxis(state.userId(), searchQuestion, keywordQuestion, fetchK, hybridEnabled)
                                 : CuratedHits.EMPTY,
                         exec);
                 // 게이트는 **원문 길이**로 판단한다 — 독립화된 질의는 원문보다 길어지는 것이 정상이라
@@ -522,6 +524,10 @@ public class RetrievalService {
     boolean shouldExpand(String question) {
         if (!props.searchMultiqueryEnabledSafe()) return false;
         if (question == null) return false;
+        // 긴 질문은 확장하지 않는다 — 전문을 변형 3개로 다시 쓰느라 출력이 질문만큼 커진다. 그 자리는 LongQuestionQuery 가
+        // 대신한다(1단계는 LLM 없이, 2단계는 QuestionCondenser.distill 이 검색문·키워드를 만든다). 한 턴의 질의 전처리 LLM 호출이
+        // 최대 하나라는 규칙은 그대로다.
+        if (LongQuestionQuery.isLong(question)) return false;
         // Hot-editable — read fresh so a /settings override applies without a restart.
         return question.strip().length() >= props.searchMultiqueryMinLengthSafe();
     }
@@ -592,13 +598,18 @@ public class RetrievalService {
      * (0.3~0.35)과 OR 로 묶인 키워드 검색으로는 관련 없는 항목 하나가 거의 모든 답변의 출처에 끼었다(골든셋 26문항 중
      * 25, SEARCH_EVALUATION §3.7).
      */
-    private CuratedHits curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
+    /**
+     * 긴 질문이면 벡터 절반과 키워드 절반이 <b>다른 질의</b>를 본다 — 벡터는 짧은 검색문, 키워드(와 그 내용어 문턱)는 추려 둔 검색어.
+     * 짧은 질문에서는 둘이 같은 문자열이라 위 오버로드와 동작이 같다.
+     */
+    private CuratedHits curatedAxis(String userId, String vectorQuestion, String keywordQuestion,
+                                    int fetchK, boolean hybridEnabled) {
         List<Document> vectorHits =
-                ragService.search(userId, question, CuratedQaService.CURATED_VERSION, fetchK);
+                ragService.search(userId, vectorQuestion, CuratedQaService.CURATED_VERSION, fetchK);
         List<Document> keywordHits = hybridEnabled
-                ? ragService.keywordSearch(CuratedQaService.CURATED_VERSION, question, fetchK)
+                ? ragService.keywordSearch(CuratedQaService.CURATED_VERSION, keywordQuestion, fetchK)
                 : List.of();
-        CuratedHits gated = gateCurated(vectorHits, keywordHits, question, props.searchCuratedQaMinSimilaritySafe());
+        CuratedHits gated = gateCurated(vectorHits, keywordHits, keywordQuestion, props.searchCuratedQaMinSimilaritySafe());
         if (log.isDebugEnabled() && (gated.vector().size() < vectorHits.size() || !keywordHits.isEmpty())) {
             log.debug("[RETRIEVAL] 큐레이션 축 — 벡터 {}개 중 {}개 통과(최소 유사도), 키워드 {}개 중 키워드로만 {}개 받음",
                     vectorHits.size(), gated.vector().size(), keywordHits.size(), gated.keyword().size());

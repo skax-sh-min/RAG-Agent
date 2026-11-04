@@ -165,11 +165,23 @@ public class StreamingAgentService {
     private static final DateTimeFormatter DB_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
+    /**
+     * 질문 길이 한도(설정 상한 + 이 모델의 창). 생성자가 아니라 세터로 받는다 — 이 클래스는 테스트용 생성자를 여럿 들고 있어 생성자에
+     * 더하면 전부 흔들리고, 빈이 없는 자리(단위 테스트)는 {@link PromptInjectionGuard#validateChat} 의 기본 상한으로 떨어진다.
+     */
+    private QuestionLimit questionLimit;
+
+    @Autowired(required = false)
+    public void setQuestionLimit(QuestionLimit questionLimit) {
+        this.questionLimit = questionLimit;
+    }
+
     public void run(String userId, ChatForm form, SseEmitter emitter) {
         // 공개 채팅 진입점의 첫 호출(AgentService.chat() 과 같은 규칙). 이 경로에만 빠져 있던 동안 화면의 질문은
         // 길이 제한(2,000자) 없이 들어갔다 — 17,500자 질문이 답변·검증 프롬프트를 창에 맞추느라 문서를 덜어냈다.
         try {
-            PromptInjectionGuard.validate(form.question());
+            if (questionLimit != null) questionLimit.validate(form, true);
+            else PromptInjectionGuard.validateChat(form.question());
         } catch (IllegalArgumentException e) {
             trySendError(emitter, e.getMessage());
             emitter.complete();
@@ -247,6 +259,7 @@ public class StreamingAgentService {
                                         .toBuilder().questionType(typeF.join()).lastAnswerDigest(digestF.join());
                         if (condensed != null) {
                             builder.searchQuestion(condensed.searchQuestion())
+                                   .searchKeywords(condensed.searchKeywords())
                                    .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
                         }
                         initial = builder.build();
@@ -581,11 +594,11 @@ public class StreamingAgentService {
     private CompletableFuture<QuestionCondenser.Condensed> condenseAsync(
             String userId, String threadId, String question, Locale locale,
             java.util.concurrent.Executor exec) {
-        if (questionCondenser == null || !questionCondenser.gateOpen(question)) {
+        if (questionCondenser == null || !questionCondenser.needsPreparation(question)) {
             return CompletableFuture.completedFuture(null);
         }
         return CompletableFuture.supplyAsync(
-                () -> questionCondenser.condense(userId, threadId, question, locale).orElse(null), exec);
+                () -> questionCondenser.prepare(userId, threadId, question, locale).orElse(null), exec);
     }
 
     /**
