@@ -64,19 +64,6 @@ public class VisionDescriptionService {
             표: 환경별(dev/stg/prd) DB 접속 URL 비교, 열은 구분·URL·계정
             """;
 
-    /**
-     * 유형별 프롬프트. 유형 분류({@code ImageTypeClassifier}, {@code classify-type=true})가 켜져 있어도 설명 형식은 {@link #CAPTION_PROMPT}
-     * 하나다 — 형식은 모델이 설명 앞머리에 직접 고르므로 유형마다 문구를 달리할 이유가 없고, 분류 결과는 {@code image_descriptions.image_type}
-     * 에 기록되는 용도로 남는다.
-     */
-    public static final Map<String, String> PROMPTS = Map.of(
-            "diagram",    CAPTION_PROMPT,
-            "screenshot", CAPTION_PROMPT,
-            "chart",      CAPTION_PROMPT,
-            "photo",      CAPTION_PROMPT,
-            "other",      CAPTION_PROMPT
-    );
-
     /** {@link #describe} 가 실패했을 때 돌려주는 자리표시자인가 — 성공한 설명은 {@link #cleanCaption} 이 대괄호를 없애므로 {@code [} 로 시작하지 않는다. */
     public static boolean isPlaceholder(String description) {
         return description == null || description.isBlank() || description.startsWith("[이미지 설명");
@@ -116,7 +103,7 @@ public class VisionDescriptionService {
     }
 
     /**
-     * 출력 예약 — 설명은 최대 4문장({@link #PROMPTS})인데 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진
+     * 출력 예약 — 설명은 한두 문장({@link #CAPTION_PROMPT})인데 상한을 싣지 않던 동안은 프로바이더에 기동 때 구워진
      * {@code max-tokens}(기본 12,000) 전체가 예약됐다 — 이미지 입력 토큰이 큰 비전 호출에서 그 예약이 이미지 자리를 먹는다
      * (PLAN §6.29 열린 항목 (d)). 값의 근거는 {@code ClassifierService.MAX_OUTPUT_TOKENS} 와 같다.
      */

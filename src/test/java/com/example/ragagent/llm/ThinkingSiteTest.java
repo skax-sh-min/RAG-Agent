@@ -45,11 +45,11 @@ class ThinkingSiteTest {
     }
 
     @Test
-    @DisplayName("출하 기본값 — 22곳 전부 끔: 6단계 실측은 검증·응용 답변에서 낮게가 이득이라 했지만 출하값은 속도를 택했다")
+    @DisplayName("출하 기본값 — 21곳 전부 끔: 6단계 실측은 검증·응용 답변에서 낮게가 이득이라 했지만 출하값은 속도를 택했다")
     void shippedDefaults() {
         // 실측(2026-10-07)에서 생각이 이득을 준 곳은 EVAL·EVAL_CREATIVE(문서가 받쳐 주지 않는 답을 잡는 비율 6% → 44%)와
         // ANSWER_RAG_C(응용 코드가 문서의 API 를 따르는 정도)였다. 그래도 출하값은 이 셋까지 끔이다 — 대가는 잡는 비율이
-        // 6% 로 떨어지는 것이고, 되찾으려면 그 줄을 low 로 올린다. 측정하지 못한 요약·이미지 셋도 끔이다.
+        // 6% 로 떨어지는 것이고, 되찾으려면 그 줄을 low 로 올린다. 측정하지 못한 요약·이미지 둘도 끔이다.
         // 출하값에 낮게 이상을 다시 두려면 이 테스트와 application.properties 의 줄, 운영 문서의 "권장 프로파일"을 함께 고친다.
         assertThat(Arrays.stream(ThinkingSite.values())
                 .filter(s -> s.shippedDefault() != ThinkingLevel.OFF))

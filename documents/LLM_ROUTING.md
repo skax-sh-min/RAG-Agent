@@ -53,7 +53,6 @@
 │    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
 │    VisionDescriptionService → VISION                                 │
-│    ImageTypeClassifier      → LIGHT_BOTH  (멀티모달: LIGHT_BOTH/BOTH) │
 │    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
 │    CuratedQuestionSuggester → MICRO_TEXT  (/admin 큐레이션 편집의 "본문으로 구체화", 배경 호출) │
 │    PostAnswerService        → MICRO_TEXT  (답변 뒤 질문 다듬기·추가 질문, 턴마다 배경 호출) │
@@ -65,7 +64,7 @@
 │    켬으로 나가면 max_tokens 에 생각 여유 — ThinkingBudget(창 25% 상한)  │
 │    /settings 의 생각 수준 카드(관리자 전용)가 호출 지점마다 이 라우팅이  │
 │    고른 프로바이더·dialect·창으로 예약·입력 예산을 미리 계산해 보인다   │
-│    출하값은 22곳 전부 끔 — 실측(llama.cpp b11433 + gemma-4-E2B)은       │
+│    출하값은 21곳 전부 끔 — 실측(llama.cpp b11433 + gemma-4-E2B)은       │
 │    응답 검증·응용(C) 답변에만 낮게를 권했다. 이 서버는 요청 단위        │
 │    생각 토큰 예산(reasoning_budget_tokens)도 받지만 쓰지 않는다         │
 │    (2026-10-12 측정: 예산을 줄인 만큼 검증의 탐지가 사라졌다)           │
@@ -104,9 +103,9 @@ TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻�
 
 **행(프로바이더 type)과 열(요청 task)은 서로 다른 축이다.** 6개 값이 양쪽에 다 등장하지만 요청으로 쓰이는 것은 5개뿐이다 — 앱은 **`BOTH`를 태스크로 요청하지 않는다**. `BOTH`는 프로바이더 설정값과 `LlmRouter.hasEnabledProviderFor()`류의 판정에만 등장하므로, 표의 `BOTH` 행(프로바이더 능력)과 태스크로서의 `BOTH`를 같은 것으로 읽으면 안 된다.
 
-`LIGHT_BOTH`는 양쪽에 다 쓰인다 — 프로바이더 type이자, `ImageTypeClassifier`(이미지 유형 분류)가 "멀티모달이면 되고 대형일 필요는 없다"는 뜻으로 내는 요청이다. 그래서 `LIGHT_BOTH` 요청은 **`LIGHT_BOTH`와 `BOTH`가 받고**, 텍스트 전용 3종과 `VISION` 전용은 거부한다(이 요청은 경량 텍스트 + 이미지를 함께 요구한다).
+`LIGHT_BOTH`는 프로바이더 type이자 요청 타입이다 — "멀티모달이면 되고 대형일 필요는 없다"는 뜻이다. 그래서 `LIGHT_BOTH` 요청은 **`LIGHT_BOTH`와 `BOTH`가 받고**, 텍스트 전용 3종과 `VISION` 전용은 거부한다(이 요청은 경량 텍스트 + 이미지를 함께 요구한다). **지금은 이 요청을 내는 호출부가 없다** — 유일했던 이미지 유형 분류기(`ImageTypeClassifier`)를 2026-11-04 에 걷어냈다. 프로바이더 type 으로서의 `LIGHT_BOTH`(= `VISION` 요청도 받는 범용 로컬 모델)는 그대로 유효하다.
 
-> **예전에는 `case LIGHT_BOTH` 분기가 자기 자신을 빼놓아 `BOTH`만 이 요청을 받을 수 있었다.** 즉 이 값이 존재하는 이유인 "범용 로컬 LLM"으로 등록하면, 이미지 설명(`VISION` 요청)은 되는데 유형 분류만 그 모델에서 못 돌았다. `TEXT`가 사다리를 못 올라가던 것과 같은 모양의 구멍이었고 같은 방식으로 메웠다.
+> **예전에는 `case LIGHT_BOTH` 분기가 자기 자신을 빼놓아 `BOTH`만 이 요청을 받을 수 있었다.** 즉 이 값이 존재하는 이유인 "범용 로컬 LLM"으로 등록하면, 이미지 설명(`VISION` 요청)은 되는데 `LIGHT_BOTH` 요청(당시의 이미지 유형 분류)만 그 모델에서 못 돌았다. `TEXT`가 사다리를 못 올라가던 것과 같은 모양의 구멍이었고 같은 방식으로 메웠다.
 
 ### RoutingMode
 
@@ -430,7 +429,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출 — §10.8.2로 청크를 배치 묶음당 1콜로 호출, `app.indexing.keyword-batch-size`) |
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `DirectAnswerService` | `VisionDescriptionService` |
-| `RerankerService` (opt-in) | `ImageTypeClassifier` |
+| `RerankerService` (opt-in) | |
 | `RetrievalService`의 MultiQuery 확장 모델(`RoutedChatModel` — 호출마다 `executeGatedWithUsage` 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
 | `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
@@ -509,7 +508,7 @@ CREATE TABLE llm_usage (
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
-  - **이미지 유형 분류(`ImageTypeClassifier`)는 요청 타입이 `VISION`이 아니라 `LIGHT_BOTH`** 라 `type=VISION` 전용 모델로는 내려가지 않는다(경량 텍스트도 함께 요구하므로). 후보는 `LIGHT_BOTH`/`BOTH`이며, `local-vision`을 따로 등록해도 이 호출만은 범용 모델이 받는다
+  - (2026-11-04 이전에는 이미지 유형 분류가 `LIGHT_BOTH` 요청이라 `type=VISION` 전용 모델로 내려가지 못했다 — 그 호출부가 사라져 이제 이미지 호출은 전부 `VISION` 요청이다)
   - 문서 업로드 화면의 이미지 설명 가능 여부는 `DocumentController`가 `LlmRouter.hasEnabledProviderFor(VISION)`으로 판단한다 — `supports()`에서 능력을 파생하므로 화면 표시와 실제 라우팅 조건이 항상 일치한다. 예전에는 `hasEnabledProviderType(BOTH, VISION)`이라는 **타입 이름 목록** 검사였고 `LIGHT_BOTH`가 빠져 있어, 이미지 설명이 실제로 동작하는 배포에서 "이미지 설명 추가" 체크박스가 비활성화됐다
   - ⚠️ `local-vision` 예제는 `role=LOCAL, priority=0` — **소형(MICRO_TEXT) 오프로드 모델과 같은 role+priority**다. `hasMicroTextOffloadProvider()`가 `supports(MICRO_TEXT)`까지 확인하는 이유가 이것이다(§9): 타입을 안 보면 Vision 모델 하나 등록한 것만으로 "소형 모델 있음"으로 오판해, `findFirst`가 정작 그 프로바이더를 건너뛰고 요약 같은 잡무를 `priority=1` 답변 모델로 보낸다. 증상은 "소형 모델을 등록한 적 없는데 `/llm-usage`에 `summary:` 사용량이 답변 모델 이름으로 잡힌다"
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
@@ -534,7 +533,6 @@ CREATE TABLE llm_usage (
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
 | MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 모델(`TEXT`/`BOTH`)만 eligible |
 | 이미지 설명 (`VISION`) | **큰 모델** | 소형은 이미지 미지원 (`type=VISION`/`LIGHT_BOTH`/`BOTH`만 eligible) |
-| 이미지 유형 분류 (`LIGHT_BOTH`) | **큰 모델** | 경량 텍스트 + 이미지를 함께 요구 → `LIGHT_BOTH`/`BOTH`만 eligible (`VISION` 전용도 거부) |
 
 - **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다 — `TEXT`가 `MICRO_TEXT`를 흡수하게 된 지금은 첫 항목에서 이미 해결되므로 이 목록은 이중 안전장치로만 남아 있다(제거해도 동작은 같지만, 라우팅 실패 시 생성자에서 앱이 기동조차 못 하는 자리라 그대로 둔다).
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.

@@ -387,7 +387,7 @@ class ThinkingPreviewServiceTest {
         assertThat(classify.cell(ThinkingLevel.LOW).thinkingRoom()).as("예약 3,072 − 응답 필요분 20").isEqualTo(3_052);
 
         for (ThinkingSite site : List.of(ThinkingSite.RERANK, ThinkingSite.TITLE,
-                ThinkingSite.IMAGE_DESCRIBE, ThinkingSite.IMAGE_TYPE)) {
+                ThinkingSite.IMAGE_DESCRIBE)) {
             Cell off = h.row(site).cell(ThinkingLevel.OFF);
             assertThat(off.reservedTokens()).as(site.name()).isEqualTo(2_048);
             assertThat(off.use()).as(site.name()).isEqualTo(ThinkingPreview.Use.REQUEST);

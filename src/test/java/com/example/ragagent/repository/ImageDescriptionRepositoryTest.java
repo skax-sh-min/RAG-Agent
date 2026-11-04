@@ -44,8 +44,8 @@ class ImageDescriptionRepositoryTest {
     @Test
     @DisplayName("findAll — 저장된 경로만 반환, 없는 경로는 결과에서 제외")
     void findAll_returnsOnlyStoredPaths() {
-        repo.save("/img/a.png", "설명 A", "diagram", "local");
-        repo.save("/img/b.png", "설명 B", "photo", "local");
+        repo.save("/img/a.png", "설명 A", "local");
+        repo.save("/img/b.png", "설명 B", "local");
 
         Map<String, String> result = repo.findAll(List.of("/img/a.png", "/img/b.png", "/img/missing.png"));
 
@@ -56,8 +56,8 @@ class ImageDescriptionRepositoryTest {
     @Test
     @DisplayName("save — 같은 경로로 다시 저장하면 UPSERT(덮어쓰기), 행 1개 유지")
     void save_sameKeyTwice_upsertsInsteadOfDuplicating() {
-        repo.save("/img/a.png", "첫 설명", "diagram", "local");
-        repo.save("/img/a.png", "갱신된 설명", "chart", "gemini");
+        repo.save("/img/a.png", "첫 설명", "local");
+        repo.save("/img/a.png", "갱신된 설명", "gemini");
 
         Map<String, String> result = repo.findAll(List.of("/img/a.png"));
 

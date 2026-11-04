@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class VisionCaptionTest {
 
     @Test
-    @DisplayName("프롬프트: 형식 어휘 · 한두 문장 · 일반 서술 금지 · 구조를 깨는 문자 금지를 담고, 모든 유형이 같은 프롬프트를 쓴다")
+    @DisplayName("프롬프트: 형식 어휘 · 한두 문장 · 일반 서술 금지 · 구조를 깨는 문자 금지를 담는다")
     void promptStatesTheContract() {
         String p = VisionDescriptionService.CAPTION_PROMPT;
 
@@ -18,7 +18,6 @@ class VisionCaptionTest {
                 .contains("한두 문장")
                 .contains("소프트웨어 개발 환경")      // 금지 예시로 실제 코퍼스의 상투구를 든다
                 .contains("대괄호와 세로선");
-        assertThat(VisionDescriptionService.PROMPTS.values()).containsOnly(p);
     }
 
     @Test

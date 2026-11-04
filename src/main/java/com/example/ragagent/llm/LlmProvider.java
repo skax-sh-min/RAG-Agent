@@ -26,8 +26,8 @@ public record LlmProvider(
      * axis; {@code LIGHT_BOTH}/{@code BOTH} combine the two.
      *
      * <p>{@code LIGHT_BOTH} appears on both sides — as a provider type and as a request
-     * ({@code ImageTypeClassifier} is the only caller that asks for it, meaning "a multimodal model,
-     * nothing heavyweight required"). Its branch used to list only the tasks <em>below</em> it and
+     * (no call site asks for it any more — the image type classifier that did was removed — but it
+     * still means "a multimodal model, nothing heavyweight required"). Its branch used to list only the tasks <em>below</em> it and
      * omit itself, which left {@code BOTH} as the sole type able to serve that request: registering
      * the local model as {@code LIGHT_BOTH} — the "범용 로컬 LLM" the value exists for — made image
      * type classification the one image task that could not run on it, while image description

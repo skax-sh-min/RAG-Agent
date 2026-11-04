@@ -58,8 +58,6 @@ public enum ThinkingSite {
             Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_TEXT), 0, true),
     IMAGE_DESCRIBE("image-describe", Group.INDEX, ThinkingLevel.OFF,
             Route.fixed(RoutingMode.COST_FIRST, TaskType.VISION), 150),
-    IMAGE_TYPE("image-type", Group.INDEX, ThinkingLevel.OFF,
-            Route.fixed(RoutingMode.COST_FIRST, TaskType.LIGHT_BOTH), 10),
     MD_CORRECT_VISION("md-correct-vision", Group.INDEX, ThinkingLevel.OFF,
             Route.fixed(RoutingMode.LOCAL_ONLY, TaskType.VISION), 150),
     CURATED_SUGGEST("curated-suggest", Group.ADMIN, ThinkingLevel.OFF,
