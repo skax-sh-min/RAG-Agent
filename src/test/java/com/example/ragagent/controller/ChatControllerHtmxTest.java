@@ -357,11 +357,11 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("POST /ui/chat/stream — 2,000자를 넘는 질문은 SSE error 이벤트로 거절하고 스레드를 만들지 않는다")
+    @DisplayName("POST /ui/chat/stream — 10,000자를 넘는 질문은 SSE error 이벤트로 거절하고 스레드를 만들지 않는다")
     void streamChat_overlongQuestion_rejectedWithoutCreatingThread() throws Exception {
         when(props.sseTimeoutMs()).thenReturn(300_000L);
         org.springframework.test.web.servlet.MvcResult result = mvc.perform(post("/ui/chat/stream")
-                        .param("question", "a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_QUESTION_LEN + 1))
+                        .param("question", "a".repeat(com.example.ragagent.security.PromptInjectionGuard.MAX_CHAT_QUESTION_LEN + 1))
                         .param("threadId", "t1")
                         .param("version", "latest")
                         .with(csrf()))

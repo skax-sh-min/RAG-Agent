@@ -96,6 +96,33 @@ class AgentServiceTest {
     }
 
     @Test
+    @DisplayName("긴 질문: 분류기는 전문이 아니라 짧은 검색문을 보고, 상태에는 검색문·키워드·LLM 토큰이 실린다 — 답변용 question 은 전문 그대로")
+    void chat_longQuestion_carriesSearchQueryAndKeywords() {
+        QuestionCondenser condenser = mock(QuestionCondenser.class);
+        String longQuestion = "가".repeat(800);
+        when(condenser.needsPreparation(longQuestion)).thenReturn(true);
+        when(condenser.prepare(anyString(), eq("t1"), eq(longQuestion), any()))
+                .thenReturn(java.util.Optional.of(new QuestionCondenser.Condensed("짧은 검색문", 900, 40, "FooService BarHandler")));
+        when(memoryService.getHistory(anyString(), eq("t1"), anyInt(), anyBoolean())).thenReturn("");
+        when(classifierService.classifyOnly(anyString(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+        AgentService svc = new AgentService(agentGraph, memoryService, classifierService, summarizerService, null, condenser);
+
+        svc.chat(CTX, new ChatRequest(longQuestion, "v1", "t1", RoutingMode.COST_FIRST));
+
+        verify(classifierService).classifyOnly(eq("짧은 검색문"), any());
+        ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).run(captor.capture());
+        AgentState initial = captor.getValue();
+        assertThat(initial.question()).isEqualTo(longQuestion);
+        assertThat(initial.effectiveSearchQuestion()).isEqualTo("짧은 검색문");
+        assertThat(initial.effectiveKeywordQuestion()).isEqualTo("FooService BarHandler");
+        assertThat(initial.wasCondensed()).isFalse();
+        assertThat(initial.totalInputTokens()).isEqualTo(900);
+        assertThat(initial.totalOutputTokens()).isEqualTo(40);
+    }
+
+    @Test
     @DisplayName("ChatResponse 매핑 — AgentState 모든 필드가 응답에 정확히 전이")
     void chat_mapsAgentStateToChatResponse() {
         when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");

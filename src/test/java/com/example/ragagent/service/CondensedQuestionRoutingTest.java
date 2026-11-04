@@ -155,6 +155,34 @@ class CondensedQuestionRoutingTest {
         assertThat(prompt.getValue().getContents()).contains(CONDENSED);
     }
 
+    // ── 긴 질문(LongQuestionQuery) ───────────────────────────────────────────
+
+    @Test
+    @DisplayName("긴 질문: 벡터 축(문서·큐레이션)은 짧은 검색문, 키워드 축(문서·큐레이션)은 추린 검색어로 검색하고 질의 확장은 돌지 않는다")
+    void longQuestionSplitsVectorAndKeywordQueries() {
+        RagService ragService = mock(RagService.class);
+        when(ragService.search(anyString(), anyString(), anyString(), anyInt())).thenReturn(List.of(doc("vector")));
+        when(ragService.searchBatch(anyString(), any(), anyString(), anyInt())).thenReturn(List.of(List.of(doc("vector"))));
+        when(ragService.keywordSearch(anyString(), anyString(), anyInt())).thenReturn(List.of(doc("keyword")));
+        ChatModel expansionModel = mock(ChatModel.class);
+
+        String longQuestion = "가".repeat(800);   // 15자 이상이라 예전이라면 확장이 돌았을 길이
+        AgentState state = AgentState.of(longQuestion, "latest", "t1", "", RoutingMode.COST_FIRST).toBuilder()
+                .searchQuestion("짧은 검색문").searchKeywords("FooService BarHandler").build();
+
+        retrievalService(ragService, expansionModel).execute(state);
+
+        verify(expansionModel, never()).call(any(Prompt.class));
+        // 벡터: 문서 축 + 큐레이션 축 모두 검색문
+        verify(ragService).searchBatch(eq("anonymous"), eq(List.of("짧은 검색문")), eq("latest"), anyInt());
+        verify(ragService).search(eq("anonymous"), eq("짧은 검색문"), eq(CuratedQaService.CURATED_VERSION), anyInt());
+        // 키워드: 문서 축 + 큐레이션 축 모두 추린 검색어 — 800자 전문이 MATCH 식으로 가지 않는다
+        verify(ragService).keywordSearch(eq("latest"), eq("FooService BarHandler"), anyInt());
+        verify(ragService).keywordSearch(eq(CuratedQaService.CURATED_VERSION), eq("FooService BarHandler"), anyInt());
+        verify(ragService, never()).keywordSearch(anyString(), eq(longQuestion), anyInt());
+        verify(ragService, never()).searchBatch(anyString(), eq(List.of(longQuestion)), anyString(), anyInt());
+    }
+
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
 
     private static RetrievalService retrievalService(RagService ragService, ChatModel expansionModel) {

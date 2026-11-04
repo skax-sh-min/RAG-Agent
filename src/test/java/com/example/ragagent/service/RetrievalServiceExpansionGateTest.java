@@ -68,6 +68,14 @@ class RetrievalServiceExpansionGateTest {
     }
 
     @Test
+    @DisplayName("500자를 넘는 긴 질문은 확장하지 않는다 — LongQuestionQuery 가 그 자리를 대신한다(질의 전처리 LLM 호출은 한 턴에 최대 하나)")
+    void longQuestion_neverExpands() {
+        RetrievalService svc = service(true, 0);
+        assertThat(svc.shouldExpand("가".repeat(500))).isTrue();
+        assertThat(svc.shouldExpand("가".repeat(501))).isFalse();
+    }
+
+    @Test
     @DisplayName("enabled=false → 길이 무관 확장 생략")
     void disabled_neverExpands() {
         RetrievalService svc = service(false, 0);
