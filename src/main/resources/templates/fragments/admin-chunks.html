@@ -85,6 +85,8 @@
                 <th style="width:50px;" class="text-center">페이지</th>
                 <th style="width:60px;" class="text-center">챕터</th>
                 <th style="width:130px;">키워드</th>
+                <!-- 수정일시: 좁은 화면에서는 숨긴다(xl = 1200px 이상에서만 표시). 행의 td 와 짝 -->
+                <th style="width:130px;" class="d-none d-xl-table-cell">수정일시</th>
                 <th style="width:80px;" class="text-center">작업</th>
             </tr>
             </thead>
@@ -97,7 +99,7 @@
                 <!-- Text preview -->
                 <td>
                     <div class="text-truncate" style="max-width:350px;"
-                         th:title="${chunk.textPreview()}"
+                         th:title="${chunk.tooltipPreview()}"
                          th:text="${chunk.textPreview()}"></div>
                 </td>
 
@@ -119,6 +121,14 @@
                 <td class="text-muted text-truncate" style="min-width:60px;max-width:180px;"
                     th:title="${chunk.keywords()}"
                     th:text="${#strings.abbreviate(chunk.keywords(), 60)}"></td>
+
+                <!-- 수정일시 = edited_at(관리자 편집)과 collected_at(인덱싱) 중 더 최신 값; 둘 다 없으면 빈 칸.
+                     th:replace 는 th:if 보다 먼저 처리되므로 th:block 으로 감싼다 -->
+                <td class="text-muted text-nowrap d-none d-xl-table-cell" style="font-size:0.72rem;">
+                    <th:block th:unless="${#strings.isEmpty(chunk.lastModifiedAt())}">
+                        <time th:replace="~{fragments/time :: utc(${chunk.lastModifiedAt()}, 'minute')}"></time>
+                    </th:block>
+                </td>
 
                 <!-- Actions -->
                 <td class="text-center">

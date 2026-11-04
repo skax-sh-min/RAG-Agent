@@ -184,6 +184,55 @@ class AdminServiceTest {
         assertThat(row.contextSummary()).isEmpty();
     }
 
+    // ── 청크 목록: 풍선 미리보기의 빈 줄 축약 · 수정일시 ─────────────────────
+
+    private static String tooltipOf(String preview) {
+        return new AdminService.ChunkRow("c1", preview, preview, Map.of()).tooltipPreview();
+    }
+
+    @Test
+    @DisplayName("풍선 미리보기: 연속된 줄바꿈은 하나로 줄고, 한 번뿐인 줄바꿈은 그대로다")
+    void tooltipPreview_collapsesConsecutiveNewlines() {
+        assertThat(tooltipOf("가\n\n나")).isEqualTo("가\n나");
+        assertThat(tooltipOf("가\n\n\n\n나")).isEqualTo("가\n나");
+        assertThat(tooltipOf("가\n나")).isEqualTo("가\n나");
+    }
+
+    @Test
+    @DisplayName("풍선 미리보기: CRLF 와 공백뿐인 빈 줄도 빈 줄로 센다")
+    void tooltipPreview_treatsCrlfAndBlankishLinesAsBlank() {
+        assertThat(tooltipOf("가\r\n\r\n나")).isEqualTo("가\n나");
+        assertThat(tooltipOf("가\n  \t\n나")).isEqualTo("가\n나");
+    }
+
+    @Test
+    @DisplayName("풍선 미리보기: 줄 안의 들여쓰기는 건드리지 않고, 저장 본문(fullText)도 그대로다")
+    void tooltipPreview_leavesIndentationAndFullTextAlone() {
+        AdminService.ChunkRow row = new AdminService.ChunkRow("c1", "a\n\n    code", "a\n\n    code", Map.of());
+        assertThat(row.tooltipPreview()).isEqualTo("a\n    code");
+        assertThat(row.fullText()).isEqualTo("a\n\n    code");
+    }
+
+    @Test
+    @DisplayName("lastModifiedAt: 하나만 있으면 그 값, 둘 다 있으면 더 최신 값, 없거나 읽을 수 없으면 빈 문자열")
+    void lastModifiedAt_picksTheLatestAvailableStamp() {
+        String indexed = "2026-11-01T00:00:00Z";
+        String edited = "2026-11-04T01:02:03.456Z";
+
+        assertThat(chunk(Map.of(MetaKey.COLLECTED_AT, indexed)).lastModifiedAt()).isEqualTo(indexed);
+        assertThat(chunk(Map.of(MetaKey.EDITED_AT, edited)).lastModifiedAt()).isEqualTo(edited);
+        // 편집이 인덱싱보다 나중 → 편집 시각
+        assertThat(chunk(Map.of(MetaKey.COLLECTED_AT, indexed, MetaKey.EDITED_AT, edited)).lastModifiedAt())
+                .isEqualTo(edited);
+        // 인덱싱이 편집보다 나중(편집 흔적이 남은 채 다시 만들어진 경우) → 인덱싱 시각
+        assertThat(chunk(Map.of(MetaKey.COLLECTED_AT, "2026-11-05T00:00:00Z", MetaKey.EDITED_AT, edited)).lastModifiedAt())
+                .isEqualTo("2026-11-05T00:00:00Z");
+        // 읽을 수 없는 쪽은 없는 것으로 친다
+        assertThat(chunk(Map.of(MetaKey.COLLECTED_AT, indexed, MetaKey.EDITED_AT, "garbage")).lastModifiedAt())
+                .isEqualTo(indexed);
+        assertThat(chunk(Map.of()).lastModifiedAt()).isEmpty();
+    }
+
     @Test
     @DisplayName("chunk_context 가 아예 없으면 둘 다 빈 문자열")
     void chunkContext_absent_isEmptyOnBothSides() {
@@ -743,6 +792,30 @@ class AdminServiceTest {
         assertThat(sent.getId()).isEqualTo("c1"); // enrichSingle()의 새 id가 아니라 원래 청크 id 유지
         assertThat(sent.getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("새키워드");
         assertThat(sent.getMetadata().get(MetaKey.CHUNK_CONTEXT)).isEqualTo("새맥락");
+    }
+
+    @Test
+    @DisplayName("reindexChunk — collected_at 은 재인덱싱 시각으로 갱신되고 edited_at 은 그대로다")
+    @SuppressWarnings("unchecked")
+    void reindexChunk_refreshesCollectedAtButKeepsEditedAt() {
+        ChromaApi api = mock(ChromaApi.class);
+        Map<String, String> meta = new HashMap<>();
+        meta.put(MetaKey.VERSION, "v1");
+        meta.put(MetaKey.COLLECTED_AT, "2020-01-01T00:00:00Z");
+        meta.put(MetaKey.EDITED_AT, "2020-02-02T00:00:00Z");
+        stubExistingChunk(api, "c1", "본문 텍스트", meta);
+        VectorStoreFacade vectorStore = mock(VectorStoreFacade.class);
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, vectorStore, mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+        java.time.Instant before = java.time.Instant.now();
+
+        assertThat(svc.reindexChunk("col", "c1", false)).isTrue();
+
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(eq(DocRegistry.SHARED), eq("v1"), captor.capture());
+        Map<String, Object> sent = captor.getValue().get(0).getMetadata();
+        assertThat(java.time.Instant.parse((String) sent.get(MetaKey.COLLECTED_AT))).isAfterOrEqualTo(before);
+        assertThat(sent.get(MetaKey.EDITED_AT)).isEqualTo("2020-02-02T00:00:00Z");
     }
 
     @Test

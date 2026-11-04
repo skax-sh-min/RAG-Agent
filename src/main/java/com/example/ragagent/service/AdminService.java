@@ -109,6 +109,39 @@ public class AdminService {
         public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
 
         /**
+         * 청크의 마지막 변경 시각(ISO-8601 UTC) — 관리자가 손으로 고친 시각({@link MetaKey#EDITED_AT})과
+         * 청크가 만들어진 시각({@link MetaKey#COLLECTED_AT}, 초기·재인덱싱 때 찍힌다) 중 <b>더 최신</b> 값.
+         * 하나만 있으면 그 값, 둘 다 없거나 읽을 수 없으면 빈 문자열.
+         *
+         * <p>{@code edited_at} 자체를 인덱싱 때 찍지 않는 이유: 재인덱싱 사전 경고의 "편집된 청크 N개"가 그 키의
+         * 존재로 세기 때문이다({@code countEditedChunks}). 화면에는 {@code fragments/time :: utc} 로
+         * 그려 보는 사람의 시간대로 바뀐다.
+         */
+        public String lastModifiedAt() {
+            java.time.Instant edited = parseInstant(metadata.get(MetaKey.EDITED_AT));
+            java.time.Instant collected = parseInstant(metadata.get(MetaKey.COLLECTED_AT));
+            if (edited == null && collected == null) return "";
+            if (edited == null) return collected.toString();
+            if (collected == null) return edited.toString();
+            return (edited.isAfter(collected) ? edited : collected).toString();
+        }
+
+        private static java.time.Instant parseInstant(String iso) {
+            if (iso == null || iso.isBlank()) return null;
+            try { return java.time.Instant.parse(iso.strip()); }
+            catch (java.time.format.DateTimeParseException e) { return null; }
+        }
+
+        /**
+         * 목록의 풍선(title) 미리보기용 본문 — 연속된 줄바꿈(사이에 공백뿐인 빈 줄 포함)은 한 번으로 줄인다.
+         * 청크 본문은 문단 사이 빈 줄이 흔한데, 풍선에서는 그것이 세로 공간만 먹는다. 목록 셀 자체는
+         * 한 줄 말줄임이라 영향이 없고, 저장된 본문({@link #fullText})은 건드리지 않는다.
+         */
+        public String tooltipPreview() {
+            return textPreview == null ? "" : textPreview.replaceAll("\\r?\\n(?:[ \\t]*\\r?\\n)+", "\n");
+        }
+
+        /**
          * 큐레이션 축(§10.10)의 청크인가. 이 축은 검색 텍스트를 만드는 규칙이 다르므로
          * ({@code 질문 + 본문}, 질문은 벡터 메타데이터에 없다) 문서 청크용 재인덱싱을
          * 그대로 태우면 안 된다 — {@link AdminService#reindexChunk} 참고.
@@ -670,6 +703,10 @@ public class AdminService {
         String previousHash = questionReuseService == null ? "" : questionReuseService.currentChunkHash(chunkId);
 
         Map<String, Object> meta = new HashMap<>(row.metadata());
+        // 이 청크가 마지막으로 색인된 시각. 목록의 수정일시는 이 값과 edited_at 중 최신을 보여준다.
+        // edited_at 은 건드리지 않는다 — "손으로 고친 청크"의 표식이고 재인덱싱 사전 경고가 그 존재로 센다.
+        // (저장은 위의 embed 가 성공해야 일어나므로 실패한 재인덱싱은 시각을 바꾸지 않는다.)
+        meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
         if (regenerateKeywords) {
             Document reEnriched = keywordExtractor.enrichSingle(new Document(row.fullText(), meta));
             meta.put(MetaKey.EXCERPT_KEYWORDS, reEnriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS));
