@@ -166,7 +166,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록 + 문서 레지스트리 |
+| GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록(왼쪽)·문서 레지스트리(오른쪽) 한 줄 + 청크 패널(전체 폭) |
 | GET | `/admin/chunks` | `fragments/admin-chunks :: table` | 컬렉션(또는 버전)·docId별 청크 페이지네이션 |
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) — 메타데이터는 `excerpt_keywords`·`chunk_context` 두 키만 저장본 위에 병합(`AdminService.mergeEditableMeta()`), 큐레이션 청크는 그 둘도 거부 |

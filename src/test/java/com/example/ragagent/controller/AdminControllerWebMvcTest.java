@@ -221,6 +221,19 @@ class AdminControllerWebMvcTest {
         verify(adminService).getChunks("manual_latest", null, 0, 20);
     }
 
+    @Test
+    @DisplayName("GET /admin/chunks — 파일명 칸용 docLabels(doc_id → 레지스트리 표시 이름)를 모델에 싣는다")
+    void chunks_exposesRegistryLabels() throws Exception {
+        when(adminService.getChunks(anyString(), any(), eq(0), eq(20))).thenReturn(List.of());
+        when(ragService.listDocuments(any())).thenReturn(List.of(
+                new com.example.ragagent.model.DocumentInfo("a_1", "a.pdf", "설치 가이드", "latest", 3, null, null, List.of(), List.of()),
+                new com.example.ragagent.model.DocumentInfo("b_2", "b.pdf", "latest", 1, null, null, List.of(), List.of())));
+
+        mvc.perform(get("/admin/chunks").with(user(ADMIN)).param("collection", "manual_latest"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("docLabels", java.util.Map.of("a_1", "설치 가이드", "b_2", "b.pdf")));
+    }
+
     // ── §10.10 step ④ — 큐레이션 Q&A 관리 ────────────────────────────────────
 
     @Test

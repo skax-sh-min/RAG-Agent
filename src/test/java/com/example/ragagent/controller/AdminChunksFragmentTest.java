@@ -22,6 +22,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AdminChunksFragmentTest {
 
     private static String render(List<AdminService.ChunkRow> chunks) {
+        return render(chunks, Map.of());
+    }
+
+    private static String render(List<AdminService.ChunkRow> chunks, Map<String, String> docLabels) {
         ClassLoaderTemplateResolver resolver = new ClassLoaderTemplateResolver();
         resolver.setPrefix("templates/");
         resolver.setSuffix(".html");
@@ -34,6 +38,7 @@ class AdminChunksFragmentTest {
         ctx.setVariable("collection", "latest");
         ctx.setVariable("docId", "");
         ctx.setVariable("documents", List.of());
+        ctx.setVariable("docLabels", docLabels);
         ctx.setVariable("chunks", chunks);
         ctx.setVariable("offset", 0);
         ctx.setVariable("limit", 20);
@@ -78,5 +83,27 @@ class AdminChunksFragmentTest {
 
         // title 속성만 본다 — 셀 본문(th:text)은 text-truncate 라 CSS 가 공백을 한 줄로 접는다
         assertThat(html).contains("title=\"첫 문단\n둘째 문단\"");
+    }
+
+    @Test
+    @DisplayName("수정일시 칸은 줄바꿈을 막지 않는다 — 폭이 모자라면 날짜와 시각이 두 줄이 된다")
+    void editedAtCell_mayWrapToTwoLines() {
+        String html = render(List.of(row("c1", "본문", Map.of(MetaKey.EDITED_AT, "2026-11-04T01:02:03Z"))));
+
+        int cell = html.indexOf("d-none d-xl-table-cell\" style=\"font-size:0.72rem;");
+        assertThat(cell).as("수정일시 칸").isPositive();
+        assertThat(html.substring(html.lastIndexOf("<td", cell), cell + 80)).doesNotContain("text-nowrap");
+    }
+
+    @Test
+    @DisplayName("파일명 칸은 문서 레지스트리의 표시 이름을 보이고, 레지스트리에 없으면 메타데이터 filename 으로 되돌린다")
+    void filenameCell_prefersRegistryLabel() {
+        String html = render(List.of(
+                        row("c1", "본문", Map.of(MetaKey.DOC_ID, "a_1", MetaKey.FILENAME, "a.pdf")),
+                        row("c2", "본문", Map.of(MetaKey.DOC_ID, "curated:7", MetaKey.FILENAME, "큐레이션"))),
+                Map.of("a_1", "설치 가이드"));
+
+        assertThat(html).contains("title=\"설치 가이드\"").doesNotContain("title=\"a.pdf\"");
+        assertThat(html).contains("title=\"큐레이션\"");
     }
 }

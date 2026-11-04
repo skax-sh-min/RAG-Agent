@@ -107,9 +107,11 @@
                 <td class="text-center text-muted" style="min-width:50px;" th:text="${chunk.chunkSize()}"></td>
 
                 <!-- Filename -->
+                <!-- 문서 레지스트리의 표시 이름(docLabels: doc_id → displayLabel)을 우선하고, 레지스트리에 없는 청크는 메타데이터 filename -->
                 <td class="text-muted text-truncate" style="min-width:60px;max-width:150px;"
-                    th:title="${chunk.filename()}"
-                    th:text="${chunk.filename()}"></td>
+                    th:with="label=${docLabels != null and docLabels.get(chunk.docId()) != null ? docLabels.get(chunk.docId()) : chunk.filename()}"
+                    th:title="${label}"
+                    th:text="${label}"></td>
 
                 <!-- Page/Slide -->
                 <td class="text-center text-muted" style="min-width:50px;" th:text="${chunk.pageSlide()}"></td>
@@ -124,7 +126,8 @@
 
                 <!-- 수정일시 = edited_at(관리자 편집)과 collected_at(인덱싱) 중 더 최신 값; 둘 다 없으면 빈 칸.
                      th:replace 는 th:if 보다 먼저 처리되므로 th:block 으로 감싼다 -->
-                <td class="text-muted text-nowrap d-none d-xl-table-cell" style="font-size:0.72rem;">
+                <!-- 폭이 모자라면 두 줄(날짜 / 시각)로 접는다 — 시각 문자열이 "날짜 시각" 이라 공백에서 줄이 바뀐다 -->
+                <td class="text-muted d-none d-xl-table-cell" style="font-size:0.72rem; min-width:5.5rem;">
                     <th:block th:unless="${#strings.isEmpty(chunk.lastModifiedAt())}">
                         <time th:replace="~{fragments/time :: utc(${chunk.lastModifiedAt()}, 'minute')}"></time>
                     </th:block>
