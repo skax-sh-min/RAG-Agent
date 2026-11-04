@@ -872,6 +872,26 @@ function openChunkEdit(chunkId, collection) {
                     ${isWide ? '' : previewTogglePane('chunk-text', 230)}
                     <div class="form-text text-warning small">※ 저장해도 벡터 임베딩은 갱신되지 않음 (원본 벡터 유지)</div>
                 </div>
+                <!-- 그림 추가·교체·삭제. 그림의 자리는 본문 속 [이미지: …] 마커라서 이 패널은 텍스트를 서버로 보내 바뀐 텍스트를
+                     받아 위 텍스트 칸에 넣을 뿐이다(규칙은 서버 ChunkImageEditor). 저장은 아래 「저장」 하나. -->
+                <div id="edit-images-panel" class="border rounded p-2">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="small fw-semibold"><i class="bi bi-images me-1"></i>이미지</span>
+                        <span id="edit-images-count" class="badge bg-secondary">0</span>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 ms-auto" id="edit-image-add-btn"
+                                title="텍스트 칸의 커서 위치에 그림을 넣습니다">
+                            <i class="bi bi-plus-lg me-1"></i>추가
+                        </button>
+                        <input type="file" id="edit-image-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                    </div>
+                    <div class="form-check form-switch mb-1">
+                        <input class="form-check-input" type="checkbox" id="edit-image-describe" checked>
+                        <label class="form-check-label small" for="edit-image-describe">추가·교체할 때 설명 자동 생성
+                            <span class="text-muted">(Vision 호출, 수 초)</span></label>
+                    </div>
+                    <div id="edit-images-list" class="d-flex flex-column gap-1"></div>
+                    <div class="form-text small">그림을 바꾼 뒤 「저장」 → 「이 청크만 재인덱싱」을 눌러야 검색에 반영됩니다. 설명은 본문의 일부로 함께 임베딩됩니다.</div>
+                </div>
                 <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>
@@ -909,6 +929,7 @@ function openChunkEdit(chunkId, collection) {
                 wirePreviewToggle('chunk-text', 'edit-text');
             }
             initTooltipsIn(body);
+            wireChunkImagePanel();
             // 스냅샷은 필드가 그려진 뒤에 떠야 한다(이동 시 변경 감지의 기준값).
             // metadata 는 저장 시 그대로 되돌려 보낼 원본이다(saveChunkEdit 참고) — 키워드·요약은
             // 전용 필드가 진짜 값이라 여기서 빼 두고, 저장할 때 그 필드 값으로 다시 채운다.
@@ -940,6 +961,153 @@ function initTooltipsIn(container) {
         if (existing) existing.dispose();
         new bootstrap.Tooltip(el, { delay: { show: 100, hide: 0 } });
     });
+}
+
+// ── 청크 편집의 그림 추가·교체·삭제 ─────────────────────────────────────────
+// 그림은 본문 속 [이미지: images/…] 마커로 존재하므로, 이 패널의 모든 동작은 "텍스트를 서버로 보내 바뀐 텍스트를 받아 텍스트 칸에
+// 넣는" 것이다. 마커·설명이 어디서 시작해 끝나는지, 지울 때 빈 줄이 남지 않게 하는 규칙은 전부 서버(ChunkImageEditor)에 있다 —
+// 이 프로젝트에는 JS 테스트 하네스가 없어서 여기에 규칙을 두면 검증할 길이 없다.
+let chunkImageReplaceIndex = null;   // 교체 중인 마커 순번. null 이면 "추가"
+let chunkImageBusy = false;
+let chunkImageRefreshTimer = null;
+
+function chunkImageHeaders() {
+    return Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders());
+}
+
+function wireChunkImagePanel() {
+    const textEl = document.getElementById('edit-text');
+    const addBtn = document.getElementById('edit-image-add-btn');
+    const input  = document.getElementById('edit-image-input');
+    const list   = document.getElementById('edit-images-list');
+    if (!textEl || !addBtn || !input || !list) return;
+    chunkImageReplaceIndex = null;
+    chunkImageBusy = false;
+
+    addBtn.addEventListener('click', () => { chunkImageReplaceIndex = null; input.click(); });
+    input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        input.value = '';   // 같은 파일을 연달아 골라도 change 가 다시 발생하게
+        if (file) uploadChunkImage(file);
+    });
+    list.addEventListener('click', ev => {
+        const btn = ev.target.closest('button[data-act]');
+        if (!btn || chunkImageBusy) return;
+        const index = Number(btn.dataset.index);
+        if (btn.dataset.act === 'replace') { chunkImageReplaceIndex = index; input.click(); }
+        else if (btn.dataset.act === 'remove') {
+            if (confirm('이 이미지(와 딸린 설명)를 본문에서 지울까요? 저장하기 전에는 이 패널을 닫아 되돌릴 수 있습니다.')) {
+                editChunkImages({ action: 'remove', index });
+            }
+        } else if (btn.dataset.act === 'describe') {
+            editChunkImages({ action: 'describe', index }, '설명을 만드는 중…');
+        }
+    });
+    // 텍스트를 손으로 고쳐도 목록이 따라오게 — 디바운스해서 서버 호출을 줄인다.
+    textEl.addEventListener('input', () => {
+        clearTimeout(chunkImageRefreshTimer);
+        chunkImageRefreshTimer = setTimeout(refreshChunkImages, 500);
+    });
+    refreshChunkImages();
+}
+
+function setChunkImageBusy(busy, label) {
+    chunkImageBusy = busy;
+    const panel = document.getElementById('edit-images-panel');
+    if (!panel) return;
+    panel.querySelectorAll('button').forEach(b => { b.disabled = busy; });
+    const addBtn = document.getElementById('edit-image-add-btn');
+    if (addBtn) addBtn.innerHTML = busy
+        ? '<span class="spinner-border spinner-border-sm me-1"></span>' + escHtml(label || '처리 중…')
+        : '<i class="bi bi-plus-lg me-1"></i>추가';
+}
+
+async function chunkImageJson(r) {
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+    if (!r.ok) throw new Error(d.message || d.detail || '요청에 실패했습니다.');
+    return d;
+}
+
+function refreshChunkImages() {
+    const textEl = document.getElementById('edit-text');
+    if (!textEl) return;
+    fetch('/admin/chunk-images/markers', {
+        method: 'POST', headers: chunkImageHeaders(), body: JSON.stringify({ text: textEl.value })
+    }).then(chunkImageJson).then(renderChunkImages).catch(() => { /* 목록은 보조 표시 — 실패해도 편집은 계속된다 */ });
+}
+
+function renderChunkImages(markers) {
+    const list = document.getElementById('edit-images-list');
+    const count = document.getElementById('edit-images-count');
+    if (!list) return;
+    count.textContent = markers.length;
+    if (!markers.length) {
+        list.innerHTML = '<div class="text-muted small">이 청크에는 그림이 없습니다.</div>';
+        return;
+    }
+    list.innerHTML = markers.map(m => {
+        const thumb = m.exists
+            ? `<img src="${escHtml(m.url)}" alt="" style="width:48px;height:48px;object-fit:cover;" class="rounded border flex-shrink-0">`
+            : `<span class="d-inline-flex align-items-center justify-content-center rounded border bg-light text-muted flex-shrink-0"
+                     style="width:48px;height:48px;" title="${m.unconvertible ? '변환할 수 없는 이미지' : '파일을 찾을 수 없음'}"><i class="bi bi-file-earmark-image"></i></span>`;
+        const desc = m.described
+            ? `<div class="small text-muted" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"
+                    title="${escHtml(m.description)}">${escHtml(m.description)}</div>`
+            : '<div class="small text-warning">설명 없음</div>';
+        const canDescribe = m.exists;
+        return `<div class="d-flex gap-2 align-items-start border-top pt-1">
+            ${thumb}
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="small font-monospace text-truncate" title="${escHtml(m.path)}">#${m.index + 1} ${escHtml(m.path)}</div>
+                ${desc}
+            </div>
+            <div class="btn-group btn-group-sm flex-shrink-0">
+                <button type="button" class="btn btn-outline-secondary py-0 px-1" data-act="replace" data-index="${m.index}" title="다른 그림으로 교체"><i class="bi bi-arrow-left-right"></i></button>
+                <button type="button" class="btn btn-outline-secondary py-0 px-1" data-act="describe" data-index="${m.index}" ${canDescribe ? '' : 'disabled'} title="${m.described ? '설명 다시 생성' : '설명 생성'}"><i class="bi bi-magic"></i></button>
+                <button type="button" class="btn btn-outline-danger py-0 px-1" data-act="remove" data-index="${m.index}" title="삭제"><i class="bi bi-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function uploadChunkImage(file) {
+    const replacing = chunkImageReplaceIndex;
+    const describe = document.getElementById('edit-image-describe').checked;
+    const textEl = document.getElementById('edit-text');
+    setChunkImageBusy(true, '올리는 중…');
+    const fd = new FormData();
+    fd.append('file', file);
+    fetch('/admin/chunk-images', { method: 'POST', headers: getCsrfHeaders(), body: fd })
+        .then(chunkImageJson)
+        .then(d => {
+            const offset = textEl.selectionStart != null ? textEl.selectionStart : textEl.value.length;
+            setChunkImageBusy(false);
+            return editChunkImages(replacing == null
+                ? { action: 'insert', path: d.path, offset, describe }
+                : { action: 'replace', index: replacing, path: d.path, describe },
+                describe ? '설명을 만드는 중…' : '반영 중…');
+        })
+        .catch(e => { setChunkImageBusy(false); showToast(e.message || '이미지 업로드에 실패했습니다.', 'danger'); });
+}
+
+// 서버에 편집을 시키고, 돌아온 본문을 텍스트 칸에 넣는다. 저장은 하지 않는다.
+function editChunkImages(req, busyLabel) {
+    const textEl = document.getElementById('edit-text');
+    setChunkImageBusy(true, busyLabel);
+    return fetch('/admin/chunk-images/edit', {
+        method: 'POST', headers: chunkImageHeaders(),
+        body: JSON.stringify(Object.assign({ text: textEl.value }, req))
+    })
+        .then(chunkImageJson)
+        .then(d => {
+            textEl.value = d.text;
+            textEl.dispatchEvent(new Event('input'));   // 미리보기·목록 갱신
+            renderChunkImages(d.markers);
+            if (d.warning) showToast(d.warning, 'warning');
+        })
+        .catch(e => showToast(e.message || '이미지 편집에 실패했습니다.', 'danger'))
+        .finally(() => setChunkImageBusy(false));
 }
 
 function saveChunkEdit(chunkId, collection) {

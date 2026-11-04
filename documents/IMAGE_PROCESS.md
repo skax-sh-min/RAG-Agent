@@ -351,14 +351,14 @@ MD 문서의 그림을 검색에 반영하고 싶다면 이미지를 지식 제�
 - `@ConditionalOnProperty` 없음 — 항상 빈으로 등록; Vision 프로바이더 미등록 시 fallback 문자열 반환
 - `LlmProviderExhaustedException` catch → `"[이미지 설명 불가: Vision 프로바이더 미등록]"` 반환
 
-내장 유형별 프롬프트 (`PROMPTS` 맵):
-| image_type | 프롬프트 핵심 |
-|-----------|-------------|
-| `diagram` | 구성 요소·관계·흐름 방향 |
-| `screenshot` | UI 요소 위치·화면 텍스트, 코드면 언어·핵심 로직 |
-| `chart` | 축·범례·관찰 트렌드 |
-| `photo` | 피사체·상황 1문장 |
-| `other` | 일반 설명 3문장 이내 |
+**설명 프롬프트 (`CAPTION_PROMPT`) — 형식 + 한두 문장, 한 줄.** 인덱싱(`MarkdownCorrectionService`)·지연 Vision·지식 제안 승인이 모두 같은 프롬프트를 쓴다. `PROMPTS` 맵의 다섯 유형(`diagram`/`screenshot`/`chart`/`photo`/`other`)도 전부 이 프롬프트를 가리킨다 — 형식은 모델이 설명 앞머리에 직접 고르므로(`image_type` 분류는 `image_descriptions.image_type` 에 기록되는 용도로만 남는다) 유형마다 문구를 달리할 이유가 없다.
+
+출력은 `형식: 설명` 한 줄이다. 예: `순서도: 로그인 요청 → 인증 서버 검증 → 세션 생성 → 메인 화면 이동` · `IDE 화면: UserService.java 12행에서 NullPointerException 으로 디버거가 멈춘 상태`.
+- **형식** 고정 어휘: 표, 다이어그램, 순서도, 구조도, 차트/그래프, IDE 화면, 터미널 화면, 웹/앱 화면, 소스코드, 로그, 문서 캡처, 풍경사진, 인물사진, 사진, 아이콘/로고, 기타 — 검색할 때 "표", "로그", "IDE 화면" 같은 단서가 된다.
+- **설명** 한두 문장·100자 안팎. 이미지에서 실제로 읽히는 것(제목, 클래스·메서드·파일명, 메뉴·버튼 이름, 오류 문구, 수치, 단계·구성 요소 이름과 순서)만. 소스코드·로그·표는 핵심 식별자·열 이름 몇 개만. **금지**: "이 이미지는 ~을 보여줍니다" 서두, "소프트웨어 개발 환경"·"다양한" 같은 일반적 표현, 색·배치 묘사, 추측. 장식 이미지는 `아이콘/로고: 장식용`.
+- **왜 바꿨나**: 예전 프롬프트("2~3문장으로 간단히", 유형별 최대 3~4문장)는 소형 모델이 "이 이미지는 소프트웨어 개발 환경에서 …를 보여줍니다" 같은 **어느 이미지에나 맞는 문장**을 쓰게 했다 — 실제 코퍼스의 설명 10개 중 8개가 그랬고, 그 문장이 청크의 임베딩·BM25 입력과 답변 프롬프트에 그대로 들어가 검색을 흐리고 토큰만 먹었다.
+- **응답 정리** (`VisionDescriptionService.cleanCaption`): 첫 줄만, 따옴표·글머리·"이 이미지는" 서두 제거, 공백 접기, `[ ]`→`( )`, `|`→`/`(설명은 `[이미지 설명: …]` 안에, 때로는 표 셀 안에 들어가므로 이 문자가 구조를 깬다), 300자 상한.
+- **이미 인덱싱된 문서에는 적용되지 않는다** — 청크 본문에 박힌 옛 설명은 재인덱싱(↺)하거나 청크 편집의 「설명 생성」으로 다시 만들어야 바뀐다. `image_descriptions` 캐시(지연 Vision)의 옛 행도 마찬가지다.
 
 **라우팅 동작**:
 - `LlmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST)` → `local-vision(VISION)` → `local(LIGHT_BOTH)` → `NORMAL(BOTH)` 순 fallback
@@ -933,6 +933,8 @@ public class ImageTypeClassifier {
 > **주의**: 설계 문서(13.4)에서는 `TaskType.VISION`으로 명시했으나 실제 구현은 `TaskType.LIGHT_BOTH`를 사용함. 분류 작업은 정밀 Vision 모델보다 저비용 멀티모달 모델로도 충분.
 
 ### 13.5 유형별 프롬프트
+
+> **설계 당시의 안이다.** 지금 구현은 다섯 유형이 모두 하나의 `CAPTION_PROMPT`(형식 + 한두 문장, §5)를 쓴다 — 아래는 바뀌기 전의 유형별 문구다.
 
 ```java
 private static final Map<String, String> PROMPTS = Map.of(

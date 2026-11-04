@@ -63,6 +63,13 @@ public class CuratedImageStore {
     /** Sub-directory of {@code {dataDir}/images/} that holds every submission image. */
     public static final String IMAGE_DIR = "submissions";
 
+    /**
+     * 관리자가 {@code /admin} 청크 편집에서 올리는 그림의 디렉터리. {@link #IMAGE_DIR} 와 <b>일부러 다르다</b> — 그쪽은
+     * {@link #sweepOrphans} 가 "제안·큐레이션 어디서도 참조하지 않는" 파일을 24시간 뒤 지우는데, 청크 본문의 마커는 그 참조 목록에 없어
+     * 같은 디렉터리에 두면 편집이 끝난 그림이 하루 뒤 사라진다. 문서 이미지 디렉터리(16자리 16진 해시)와도 겹치지 않는다.
+     */
+    public static final String CHUNK_IMAGE_DIR = "chunks";
+
     /** Only formats {@code DocumentController.getImage} is willing to serve inline as {@code image/*}. */
     public static final Set<String> ALLOWED_EXTENSIONS = Set.of("png", "jpg", "jpeg", "gif", "webp");
 
@@ -132,6 +139,18 @@ public class CuratedImageStore {
      * @throws UnsupportedFileTypeException extension not allowed, or magic bytes disagree (→ 422)
      */
     public String store(MultipartFile file) throws IOException {
+        return storeIn(file, IMAGE_DIR);
+    }
+
+    /**
+     * {@code /admin} 청크 편집기의 그림 업로드 — {@link #store} 와 같은 검사(확장자 허용 목록 → 크기 → 매직 바이트 → 해시 파일명 →
+     * 용량 상한)를 {@link #CHUNK_IMAGE_DIR} 에 적용한다. 호출 경로가 {@code /admin/**}(관리자 전용)이라는 점만 다르다.
+     */
+    public String storeChunkImage(MultipartFile file) throws IOException {
+        return storeIn(file, CHUNK_IMAGE_DIR);
+    }
+
+    private String storeIn(MultipartFile file, String dirName) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("이미지 파일이 비어 있습니다.");
         }
@@ -153,13 +172,13 @@ public class CuratedImageStore {
                 throw new UnsupportedFileTypeException("이미지 내용이 확장자와 일치하지 않습니다.");
             }
             String name = sha256Prefix(tmp) + "." + ext;
-            Path dir = imageDir();
+            Path dir = dataDir().resolve("images").resolve(dirName);
             Files.createDirectories(dir);
             // REPLACE_EXISTING is safe precisely because the name is the content hash: the only
             // file it can overwrite is a byte-identical one.
             Files.move(tmp, dir.resolve(name), StandardCopyOption.REPLACE_EXISTING);
-            log.info("[SUBMISSION] 본문 이미지 저장 {} ({} bytes)", name, file.getSize());
-            return "images/" + IMAGE_DIR + "/" + name;
+            log.info("[IMAGE] 본문 이미지 저장 {}/{} ({} bytes)", dirName, name, file.getSize());
+            return "images/" + dirName + "/" + name;
         } finally {
             try { Files.deleteIfExists(tmp); } catch (IOException ignored) { /* best effort */ }
         }
@@ -179,6 +198,11 @@ public class CuratedImageStore {
         Matcher m = IMAGE_MARKER.matcher(body);
         while (m.find()) paths.add(m.group(1).strip());
         return paths;
+    }
+
+    /** 이 경로가 허용된 모양이고 실제 파일을 가리키는가 — 클라이언트가 보낸 경로를 마커에 쓰기 전의 검사. */
+    public boolean isResolvable(String path) {
+        return path != null && SAFE_IMAGE_PATH.matcher(path).matches() && Files.isRegularFile(dataDir().resolve(path));
     }
 
     /** Distinct marker paths that point at a real, resolvable file under {@code {dataDir}/images/}. */

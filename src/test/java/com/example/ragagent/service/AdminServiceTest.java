@@ -213,6 +213,48 @@ class AdminServiceTest {
         assertThat(row.fullText()).isEqualTo("a\n\n    code");
     }
 
+    // ── 본문 편집이 image_paths 를 마커의 변화에 맞춘다 ──────────────────────
+
+    @Test
+    @DisplayName("그림을 넣으면 image_paths 에 더해지고, 빼면 그 경로만 빠진다")
+    void editKeepsImagePathsInStepWithMarkers() {
+        Map<String, String> stored = Map.of(MetaKey.IMAGE_PATHS, "images/d/a.png,images/d/b.png");
+        String oldText = "[이미지: images/d/a.png]\n[이미지: images/d/b.png]";
+
+        Map<String, String> after = AdminService.mergeEditableMeta(stored, null, oldText,
+                "[이미지: images/d/a.png]\n[이미지: images/chunks/c.png]");
+
+        assertThat(after.get(MetaKey.IMAGE_PATHS)).isEqualTo("images/d/a.png,images/chunks/c.png");
+    }
+
+    @Test
+    @DisplayName("마커가 하나도 남지 않으면 image_paths 키가 사라진다")
+    void removingEveryMarkerClearsTheKey() {
+        Map<String, String> after = AdminService.mergeEditableMeta(
+                Map.of(MetaKey.IMAGE_PATHS, "images/d/a.png"), null, "[이미지: images/d/a.png]", "그림 없음");
+
+        assertThat(after).doesNotContainKey(MetaKey.IMAGE_PATHS);
+    }
+
+    @Test
+    @DisplayName("본문에 마커가 없는 청크(스캔 PDF 등)의 image_paths 는 본문을 고쳐도 유지된다")
+    void markerlessImagePathsSurviveATextEdit() {
+        Map<String, String> after = AdminService.mergeEditableMeta(
+                Map.of(MetaKey.IMAGE_PATHS, "images/d/scan1.png"), null, "본문", "고친 본문");
+
+        assertThat(after.get(MetaKey.IMAGE_PATHS)).isEqualTo("images/d/scan1.png");
+    }
+
+    @Test
+    @DisplayName("본문이 바뀌지 않은 호출(newText=null)은 image_paths 를 건드리지 않는다")
+    void metadataOnlyEditLeavesImagePaths() {
+        Map<String, String> after = AdminService.mergeEditableMeta(
+                Map.of(MetaKey.IMAGE_PATHS, "images/d/a.png"), Map.of(MetaKey.EXCERPT_KEYWORDS, "k"), null, null);
+
+        assertThat(after.get(MetaKey.IMAGE_PATHS)).isEqualTo("images/d/a.png");
+        assertThat(after.get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("k");
+    }
+
     @Test
     @DisplayName("lastModifiedAt: 하나만 있으면 그 값, 둘 다 있으면 더 최신 값, 없거나 읽을 수 없으면 빈 문자열")
     void lastModifiedAt_picksTheLatestAvailableStamp() {

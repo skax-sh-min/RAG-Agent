@@ -30,16 +30,82 @@ public class VisionDescriptionService {
     private static final Logger log = LoggerFactory.getLogger(VisionDescriptionService.class);
     private static final AtomicBoolean UNSUPPORTED_VISION_LOGGED = new AtomicBoolean(false);
 
-    private static final String NO_OPTIONS_SUFFIX =
-            " 여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.";
+    /**
+     * 이미지 설명 프롬프트 — <b>형식 + 한두 문장</b>, 한 줄. 인덱싱({@code MarkdownCorrectionService})·지연 Vision·지식 제안 승인이
+     * 모두 이것을 쓴다.
+     *
+     * <p>예전 프롬프트("2~3문장으로 간단히", 유형별 최대 3~4문장)는 소형 모델이 {@code "이 이미지는 소프트웨어 개발 환경에서 …를
+     * 보여줍니다"} 같은 <b>어느 이미지에나 맞는 문장</b>을 쓰게 했다 — 실제 코퍼스의 설명 10개 중 8개가 그랬고, 그 문장이 청크의
+     * 임베딩·BM25 입력과 답변 프롬프트에 그대로 들어가 검색을 흐리고 토큰만 먹었다. 그래서 ① 형식을 고정 어휘에서 먼저 고르게 해
+     * (검색할 때 "표", "로그", "IDE 화면" 같은 단서가 된다) ② 설명은 이미지에서 <b>읽히는 구체적인 것</b>(이름·문구·수치·단계)만 한두
+     * 문장으로 ③ 일반적인 문구를 명시적으로 금지한다. 예시는 형식 참고용이며 소형 모델이 베끼기 쉬워 베끼지 말라고 적는다.
+     *
+     * <p>출력은 {@code 형식: 설명} 한 줄이다. 대괄호·세로선·줄바꿈은 {@link #cleanCaption} 이 없앤다 — 설명은 {@code [이미지 설명: …]}
+     * 안에, 때로는 표 셀 안에 들어가므로 {@code ]} 와 {@code |} 가 그 구조를 깨뜨린다.
+     */
+    public static final String CAPTION_PROMPT = """
+            이미지를 보고 아래 형식의 **한 줄**만 출력하세요.
+            형식: <형식>: <설명>
 
+            <형식>은 다음 중 가장 알맞은 하나입니다:
+            표, 다이어그램, 순서도, 구조도, 차트/그래프, IDE 화면, 터미널 화면, 웹/앱 화면, 소스코드, 로그, 문서 캡처, 풍경사진, 인물사진, 사진, 아이콘/로고, 기타
+
+            <설명> 규칙:
+            - 한두 문장, 100자 안팎. 문서를 검색할 때 단서가 될 정보만 적습니다.
+            - 이미지에서 실제로 읽히는 구체적인 것만 적습니다: 제목, 클래스·메서드·파일명, 메뉴·버튼 이름, 오류 문구, 수치, 단계·구성 요소 이름과 그 연결 순서.
+            - 소스코드·로그·표는 전체를 옮기지 말고 핵심 식별자나 열 이름 몇 개만 그대로 적습니다.
+            - 금지: "이 이미지는 ~을 보여줍니다" 같은 서두, "소프트웨어 개발 환경", "다양한", "여러 가지" 같은 일반적·추상적 표현, 색·배치·스타일 묘사, 추측.
+            - 읽히는 정보가 없는 장식 이미지·로고·아이콘이면 "아이콘/로고: 장식용"처럼 짧게 적습니다.
+            - 후보나 선택지를 나열하지 말고 한 줄만 출력합니다. 대괄호와 세로선(|)은 쓰지 않습니다.
+
+            예시(형식 참고용 — 내용을 베끼지 마세요):
+            순서도: 로그인 요청 → 인증 서버 검증 → 세션 생성 → 메인 화면 이동
+            IDE 화면: UserService.java 12행에서 NullPointerException 으로 디버거가 멈춘 상태
+            표: 환경별(dev/stg/prd) DB 접속 URL 비교, 열은 구분·URL·계정
+            """;
+
+    /**
+     * 유형별 프롬프트. 유형 분류({@code ImageTypeClassifier}, {@code classify-type=true})가 켜져 있어도 설명 형식은 {@link #CAPTION_PROMPT}
+     * 하나다 — 형식은 모델이 설명 앞머리에 직접 고르므로 유형마다 문구를 달리할 이유가 없고, 분류 결과는 {@code image_descriptions.image_type}
+     * 에 기록되는 용도로 남는다.
+     */
     public static final Map<String, String> PROMPTS = Map.of(
-            "diagram",    "이 다이어그램을 한국어로 설명하세요. 구성 요소와 흐름을 포함하여 최대 4문장." + NO_OPTIONS_SUFFIX,
-            "screenshot", "이 스크린샷의 내용을 한국어로 설명하세요. 화면에 표시된 주요 정보를 최대 3문장." + NO_OPTIONS_SUFFIX,
-            "chart",      "이 차트/그래프를 한국어로 분석하세요. 데이터 추세와 주요 수치를 포함하여 최대 4문장." + NO_OPTIONS_SUFFIX,
-            "photo",      "이 사진을 한국어로 간결하게 설명하세요. 최대 2문장." + NO_OPTIONS_SUFFIX,
-            "other",      "이 이미지를 한국어로 간결하게 설명하세요. 최대 3문장." + NO_OPTIONS_SUFFIX
+            "diagram",    CAPTION_PROMPT,
+            "screenshot", CAPTION_PROMPT,
+            "chart",      CAPTION_PROMPT,
+            "photo",      CAPTION_PROMPT,
+            "other",      CAPTION_PROMPT
     );
+
+    /** {@link #describe} 가 실패했을 때 돌려주는 자리표시자인가 — 성공한 설명은 {@link #cleanCaption} 이 대괄호를 없애므로 {@code [} 로 시작하지 않는다. */
+    public static boolean isPlaceholder(String description) {
+        return description == null || description.isBlank() || description.startsWith("[이미지 설명");
+    }
+
+    /** 설명 한 줄의 글자 수 상한 — 넘으면 마지막 공백에서 자르고 말줄임표를 붙인다. */
+    static final int MAX_CAPTION_CHARS = 300;
+
+    /**
+     * 모델의 응답을 {@code [이미지 설명: …]} 안에 넣어도 되는 한 줄로 정리한다: 첫 비어 있지 않은 줄, 감싼 따옴표·백틱·글머리 제거,
+     * 공백 접기, {@code [ ]} → {@code ( )}, {@code |} → {@code /}, {@link #MAX_CAPTION_CHARS} 자 상한. 모델이 서두("이 이미지는 ")를
+     * 붙이면 그것만 떼어 낸다 — 프롬프트가 금지하지만 작은 모델은 어긴다.
+     */
+    static String cleanCaption(String raw) {
+        if (raw == null) return "";
+        String line = raw.lines().map(String::strip).filter(s -> !s.isEmpty()).findFirst().orElse("");
+        line = line.replaceFirst("^(?:[-*•]\\s+|\\d+[.)]\\s+)", "");
+        if (line.length() >= 2 && ((line.startsWith("\"") && line.endsWith("\"")) || (line.startsWith("'") && line.endsWith("'"))
+                || (line.startsWith("`") && line.endsWith("`")) || (line.startsWith("“") && line.endsWith("”")))) {
+            line = line.substring(1, line.length() - 1).strip();
+        }
+        line = line.replaceFirst("^(?:이 )?(?:이미지|그림|사진)는\\s+", "");
+        line = line.replace('[', '(').replace(']', ')').replace('|', '/').replaceAll("\\s+", " ").strip();
+        if (line.length() > MAX_CAPTION_CHARS) {
+            int cut = line.lastIndexOf(' ', MAX_CAPTION_CHARS);
+            line = line.substring(0, cut > MAX_CAPTION_CHARS / 2 ? cut : MAX_CAPTION_CHARS).strip() + "…";
+        }
+        return line;
+    }
 
     private final LlmRouter llmRouter;
     private final AppProperties props;
@@ -75,7 +141,7 @@ public class VisionDescriptionService {
     }
 
     public String describe(byte[] imageBytes, String mimeType) {
-        return describe(imageBytes, mimeType, PROMPTS.get("other"));
+        return describe(imageBytes, mimeType, CAPTION_PROMPT);
     }
 
     public String describe(byte[] imageBytes, String mimeType, String prompt) {
@@ -85,7 +151,7 @@ public class VisionDescriptionService {
             String response = llmRouter.executeWithTracking(ThinkingSite.IMAGE_DESCRIBE.taskType(),
                     ThinkingSite.IMAGE_DESCRIBE.fixedRoutingMode(),
                     model -> model.call(new Prompt(userMessage, indexingOptions())));
-            return response == null ? "" : response;
+            return cleanCaption(response);
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());
             return "[이미지 설명 불가: Vision 프로바이더 미등록]";
