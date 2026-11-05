@@ -60,8 +60,8 @@ public final class ThinkingControl {
     }
 
     /**
-     * 일반 {@code ChatOptions} 의 공통 필드만 {@code OpenAiChatOptions} 로 옮긴다. Spring AI 1.x 는 이 변환을
-     * {@code ModelOptionsUtils.copyToTarget} 의 JSON 왕복으로 했는데, 2.0 의 옵션은 불변이라(세터 없음) 그 길이 막혔다.
+     * 일반 {@code ChatOptions} 의 공통 필드만 {@code OpenAiChatOptions} 로 옮긴다. 2.0 의 옵션은 불변이라(세터 없음)
+     * {@code ModelOptionsUtils.copyToTarget} 의 JSON 왕복 변환을 쓸 수 없다.
      * 이 앱이 일반 옵션으로 만나는 필드는 아래뿐이다(모델·온도·출력 상한·샘플링·정지열).
      */
     private static OpenAiChatOptions.Builder fromGeneric(ChatOptions source) {
@@ -94,8 +94,8 @@ public final class ThinkingControl {
      * 스트리밍({@code AnswerStreamer})이 <b>같은 이 함수</b>를 쓴다 — 두 경로의 변환이 갈라지지 않게. 원본은 건드리지 않는다
      * (옵션이 불변이다).
      *
-     * <p>Spring AI 1.x 에서는 이 앱이 {@code ChatCompletionRequest} 의 32개 컴포넌트를 손으로 복사했다. 2.0 의 옵션은
-     * {@code mutate()} 로 모든 값을 이어받는 빌더를 주므로 그 복사가 사라졌다 — 필드가 늘어도 떨어뜨릴 일이 없다.
+     * <p>2.0 의 옵션은 {@code mutate()} 로 모든 값을 이어받는 빌더를 주므로 필드를 손으로 복사하지 않는다 — 필드가 늘어도
+     * 떨어뜨릴 일이 없다.
      */
     public static OpenAiChatOptions applyTo(OpenAiChatOptions options, ThinkingWire wire) {
         Map<String, Object> body = options.getExtraBody() == null ? new HashMap<>() : new HashMap<>(options.getExtraBody());
@@ -110,8 +110,8 @@ public final class ThinkingControl {
      * 서버가 {@code wire} 로 실은 필드를 거부한 실패인가 — 그렇다면 그 필드의 본문 이름, 아니면 {@code null}.
      *
      * <p>판정은 서버가 한 말({@link LlmErrorText} — 메시지와 응답 본문)에 그 이름이 나오는가다. 블로킹·스트리밍 두 경로가
-     * 이 함수 하나를 쓴다 — 스트리밍의 WebClient 오류는 메시지에 본문이 없어서, 메시지만 보면 그 경로의 거부는 영영
-     * 알아보지 못한다. 부분 문자열이라, 다른 오류가 우연히 요청 본문을 되읊으며 그 이름을 담으면 그 프로바이더에서 생각
+     * 이 함수 하나를 쓴다 — 메시지에는 서버가 쓴 문장이 다 실리지 않을 수 있어, 메시지만 보면 거부를 놓칠 수 있다.
+     * 부분 문자열이라, 다른 오류가 우연히 요청 본문을 되읊으며 그 이름을 담으면 그 프로바이더에서 생각
      * 제어가 꺼질 뿐이다(그 경우에도 요청은 다시 나간다).
      */
     public static String rejectedField(Throwable e, ThinkingWire wire) {

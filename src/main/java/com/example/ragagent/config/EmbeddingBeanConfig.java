@@ -98,10 +98,9 @@ public class EmbeddingBeanConfig {
      *  com.example.ragagent.llm.LoggingChatModel} for chat calls. */
     private EmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
         String effectiveApiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
-        // maxRetries=1 (i.e. one retry): Spring AI 1.x's DEFAULT_RETRY_TEMPLATE attempted up to 10
-        // times with exponential backoff, causing the UI to show "벡터 DB 저장 중..." for several
-        // minutes on connection failures (e.g. LM Studio not running). The SDK's own retry has a
-        // short exponential backoff, so one retry keeps the old behaviour.
+        // maxRetries=1 (i.e. one retry): the SDK default is 2, and a long retry chain on connection
+        // failures (e.g. LM Studio not running) leaves the UI on "벡터 DB 저장 중..." for minutes. The
+        // SDK's own retry has a short exponential backoff, so a single retry keeps the wait bounded.
         com.openai.core.ClientOptions clientOptions = OpenAiClients.clientOptions(
                 rawUrl, effectiveApiKey, cfg.connectTimeoutSeconds(), cfg.readTimeoutSeconds(), 1);
         OpenAiEmbeddingModel raw = OpenAiEmbeddingModel.builder()

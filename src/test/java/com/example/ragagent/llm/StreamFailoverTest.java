@@ -35,8 +35,8 @@ import static org.mockito.Mockito.when;
 /**
  * 채팅 답변 스트리밍의 장애 전환 — "같은 로컬 서버 두 대 중 {@code local}({@code LOCAL_LLM_URL})이 죽었는데 {@code local-2} 는 멀쩡하다".
  *
- * <p>스트리밍은 {@code OpenAiApi} 를 직접 불러 라우터의 {@code executeGated} 순회를 우회하므로, 예전에는 {@code routeProvider} 가 고른
- * 죽은 서버로 가서 그대로 오류가 났다(같은 priority 의 둘이 한가하면 먼저 등록된 {@code local} 이 이긴다). 여기서 고정하는 것:
+ * <p>스트리밍은 원본 모델({@code rawModel})을 직접 불러 라우터의 {@code executeGated} 순회를 우회하므로, 전환이 없으면 {@code routeProvider} 가 고른
+ * 죽은 서버로 가서 그대로 오류가 난다(같은 priority 의 둘이 한가하면 먼저 등록된 {@code local} 이 이긴다). 여기서 고정하는 것:
  * 첫 토큰 전의 서버 장애는 차단하고 다음 서버로 넘어가고, 그 밖의 모든 것(첫 토큰 이후·읽기 타임아웃·사용자 중단·컨텍스트
  * 초과·4xx)은 건드리지 않는다 — 스트리밍은 채팅의 유일한 전송 경로라 오탐이 가장 비싸다.
  */
@@ -81,7 +81,7 @@ class StreamFailoverTest {
         return StreamFailover.run(router, TaskType.TEXT, RoutingMode.LOCAL_ONLY, () -> outputStarted, stream);
     }
 
-    /** 실제 스트리밍(WebClient)이 연결 거부에서 올리는 모양. */
+    /** 연결 거부의 모양 — WebClient 시절의 {@code WebClientRequestException}(분류기에 남은 잔재 갈래). 지금의 SDK 모양은 {@code StreamingFailoverWireTest} 가 본다. */
     private static RuntimeException refused() {
         return new WebClientRequestException(new ConnectException("Connection refused: getsockopt"),
                 HttpMethod.POST, URI.create("http://local/v1/chat/completions"), new HttpHeaders());
@@ -265,8 +265,8 @@ class StreamFailoverTest {
             reprobed.clear();
             RuntimeException failure = http(status, body, new HttpHeaders());
 
-            // 날것(WebClient 400/500)이 아니라 채팅 진입점이 잡는 타입으로 — 안 바꾸면 "400 Bad Request from POST …" 가
-            // 일반 오류로 떨어져 화면에 그대로 나가고 ERROR 로 찍혔다.
+            // 날것(HTTP 400/500 예외)이 아니라 채팅 진입점이 잡는 타입으로 — 안 바꾸면 서버의 날것 오류 문구가
+            // 일반 오류로 떨어져 화면에 그대로 나가고 ERROR 로 찍힌다.
             assertThatThrownBy(() -> run(r, false, stream("local", failure)))
                     .as("status %d", status)
                     .isInstanceOf(LlmContextOverflowException.class)

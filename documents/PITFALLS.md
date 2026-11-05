@@ -15,6 +15,7 @@
 | [규약·제약의 배경](#규약제약의-배경) | `CLAUDE.md` Key Constraints 각 규칙의 근거 |
 | [완료된 작업의 결정 근거와 실패 기록](#완료된-작업의-결정-근거와-실패-기록-planmd-에서-이관) | 완료 기능에서 유지해야 할 결정 |
 | [해소된 계획 이슈](#해소된-계획-이슈-planmd-에서-이관) | 닫힌 이슈의 결론 |
+| [Spring Boot 4 / Spring AI 2.0 마이그레이션](#spring-boot-4--spring-ai-20-마이그레이션-2026-11-05) | 업그레이드 뒤에도 조용히 깨질 수 있는 SDK·옵션·오류 모양·Jackson 3 의 전제 |
 
 ---
 
@@ -180,7 +181,7 @@ no-auth 모드의 방문자별 `userId`(`app.auth.guest-identity` = `shared`/`ip
 - **프롬프트를 스스로 만드는 프레임워크 호출**(`MultiQueryExpander` 의 `ChatClient`)은 옵션에 표시할 자리가 없어 그 모델 앞에 `ThinkingSiteChatModel` 을 끼워 지나가는 프롬프트마다 표시한다. `ChatClient.prompt().options(표시된 빌더)` 는 `stream()` 까지 표시가 간다.
 - **"서버 기본값" 수준은 두지 않았다.** 앱이 모르는 값이라 고르면 그 호출이 생각하는지 아무도 답할 수 없다. 수준은 넷뿐이고 사이트마다 구체적 기본값이 있으며(출하값은 `ThinkingSite` 와 `application.properties` 두 곳, `ThinkingSiteTest` 가 맞춘다), "서버가 정한다"는 프로바이더의 성질(dialect `none`)로만 남는다. **낮게인 사이트는 서버를 생각 끔으로 띄운 배포에서도 생각을 켠다**(요청이 서버 기본값을 덮는다). 출하값의 근거는 [생각 수준 실측과 출하 기본값](#생각-수준-실측과-출하-기본값-629-6단계).
 - **LM Studio 는 이 스위치를 문서화하지 않는다**(OpenAI 호환 경로의 지원 파라미터에 없다). 거부하지 않고 흘려 넘기면 효과 없이 계속 생각하므로 호출부의 출력 상한은 **스위치가 안 먹는 경우를 위해** 정한다. 그 상태를 숫자로 드러내는 것이 관측(`ThinkingObservations`)의 "끔으로 보냈는데 생각했다"다.
-- **생각 본문 관측.** Spring AI 2.0 은 블로킹 응답의 `reasoning_content` 를 메타데이터에 싣는다(1.x 는 버렸다). 키가 없는 서버·경로를 위해 폴백이 남아 있다 — 출력 토큰이 답변 추정의 두 배를 넘고 64 이상 남을 때만 그 초과분을 생각으로 센다(`MIN_EXCESS_TOKENS`; 근거 없는 "생각했다"가 "스위치 무시됨" 판정을 오염시키지 않게 긴 답변 앞의 짧은 생각은 놓치는 쪽을 택했다). 관측은 숫자만 남기고(프롬프트·생각 본문에 검색 문서가 들어 있다) 아무것도 자동 보정하지 않는다.
+- **생각 본문 관측.** 블로킹 응답의 `reasoning_content` 는 메타데이터(`reasoningContent`)에 실려 온다. 그 키가 없는 서버·경로를 위해 폴백이 남아 있다 — 출력 토큰이 답변 추정의 두 배를 넘고 64 이상 남을 때만 그 초과분을 생각으로 센다(`MIN_EXCESS_TOKENS`; 근거 없는 "생각했다"가 "스위치 무시됨" 판정을 오염시키지 않게 긴 답변 앞의 짧은 생각은 놓치는 쪽을 택했다). 관측은 숫자만 남기고(프롬프트·생각 본문에 검색 문서가 들어 있다) 아무것도 자동 보정하지 않는다.
 - **체인 맨 바깥인 이유**는 curl 로그(`LoggingChatModel`)가 실제로 나간 본문을 찍게 하려는 것이다 — 로그는 `extraBody` 항목과 `reasoning_effort` 를 본문 최상위에 찍는다(빠지면 그 curl 재현만 다른 수준으로 돈다). 수준은 값이 아니라 **함수**로 받는다(핫 편집 대상).
 
 ### `service/ThinkingPreviewService.java`
@@ -416,7 +417,7 @@ SQLite DB 의 정기 백업. 결정 셋:
 
 **사전 예산이 빗나가면 조금씩 덜어내 다시 시도한다**(`withShrinkRetry()`). 답변은 축소 사다리의 다음 걸음이다([`PromptLadder`](#servicepromptladderjava)) — 이력 칸이면 그 칸 하나, 문서 칸이면 `app.llm.shrink-step` 개(기본 1)씩, 상한 = 이력 칸 수 + 문서 걸음 5. 사전 예산이 되돌려 채웠다면 초과 뒤 첫 걸음은 그것부터 다시 뺀다. 검증은 사다리와 묶지 않고 발췌 꼬리를 덜어낸다(`MAX_EVAL_SHRINK_ATTEMPTS`=5). **선형 축소인 이유**: log(n) 왕복은 왕복만 세고 버려지는 근거를 세지 않는다 — 사전 예산이 창에 맞춘 뒤라 여기까지 오는 초과는 대개 아슬아슬해(`TokenEstimator` 오차 0.75~1.35) 반을 자르면 한 개면 됐을 자리에서 다섯 개를 버린다. 대신 상한이 필요하다. **여기 있는 이유**: `LlmRouter` 는 호출을 불투명한 클로저로 받아 프롬프트 안을 못 보므로 무엇을 버릴지 아는 곳이 여기뿐이다 — 라우터의 "다른 곳에 물어본다"와 층이 달라 방해하지 않는다.
 
-**초과 판정은 두 모양을 다 본다** — 블로킹은 라우터가 `LlmContextOverflowException` 으로 바꾸지만 스트리밍은 `rawModel` 직행이라 SDK 예외(스트리밍에서는 `CompletionException` 에 싸임)가 그대로 올라오므로 `LlmRouter.isContextOverflow()` 가 `public` 이다(마커 목록을 복사하면 한쪽만 고쳐진다). 서버의 문장은 메시지에 다 실리지 않을 수 있어 `LlmErrorText` 가 본문까지 읽는다 — 메시지만 보던 때는 이 판정이 스트리밍에서 늘 거짓이라 채팅 답변의 축소 재시도가 실제 서버에서 한 번도 발동하지 않았다(테스트는 메시지에 마커를 담은 가짜 예외로 통과했다). `AnswerStreamerWireTest` 가 진짜 SDK 클라이언트 + 내장 HTTP 서버(llama.cpp 의 실제 초과 본문)로 고정한다.
+**초과 판정은 두 모양을 다 본다** — 블로킹은 라우터가 `LlmContextOverflowException` 으로 바꾸지만 스트리밍은 `rawModel` 직행이라 SDK 예외(스트리밍에서는 `CompletionException` 에 싸임)가 그대로 올라오므로 `LlmRouter.isContextOverflow()` 가 `public` 이다(마커 목록을 복사하면 한쪽만 고쳐진다). 서버의 문장은 메시지에 다 실리지 않을 수 있어 `LlmErrorText` 가 본문까지 읽는다(llama.cpp 는 스트리밍 요청의 초과도 SSE 가 아니라 일반 HTTP 400 본문으로 돌려준다). 메시지에 마커를 담은 가짜 예외로는 이 판정이 실제 서버에서 맞는지 알 수 없어서 `AnswerStreamerWireTest` 가 진짜 SDK 클라이언트 + 내장 HTTP 서버(llama.cpp 의 실제 초과 본문)로 고정한다.
 
 **지켜야 할 세 가지**: (a) 성공한 시도가 실제로 실은 것(`Fitted`)으로 `withSent()` 를 세운다 — 아니면 화면은 0단계 기준으로 안내하고 모델은 더 적게 봤다는 상태가 남고, 재시도가 모델이 보지 않은 문서로 판단한다. (b) 검증 축소는 `buildEvalExcerpts(..., totalAvailable)` 로 **원본 문서 수**를 넘겨 `trimmed()` 를 참으로 유지한다 — 그래야 `unreliableNegative()` 가 그 `grounded=false` 를 판정 없음으로 떨어뜨린다. (c) 스트리밍은 **토큰이 하나라도 나갔으면** 재시도하지 않는다. 초과가 아닌 예외는 절대 재시도하지 않는다.
 
@@ -701,7 +702,7 @@ RAG 에서 검색이 비었을 때 문서 없는 프롬프트로 답변을 받�
 
 ### spring.autoconfigure.exclude must keep the Chroma ex
 
-`spring.autoconfigure.exclude` 는 Chroma 와 OpenAI 모델 여섯(chat/embedding/audio-speech/audio-transcription/image/moderation)을 모두 유지한다 — 하나라도 빼면 그 자동설정이 `LOCAL_LLM_KEY` 가 빈 로컬 전용 기동을 API 키 검증으로 깨뜨린다(CLAUDE.md "Spring AI auto-config excluded"). FQCN 이 업그레이드로 바뀌면 exclude 가 **조용히 무효**가 되므로 `AutoConfiguration.imports` 로 확인한다.
+`spring.autoconfigure.exclude` 는 Chroma 와 OpenAI 모델 여섯(chat/embedding/audio-speech/audio-transcription/image/moderation)을 모두 유지한다(CLAUDE.md "Spring AI auto-config excluded"). 앱이 채팅·임베딩 빈을 직접 만들어(`OpenAiClients`) 자동설정이 만드는 것은 어차피 쓰이지 않고, 1.x 에서는 하나라도 빼면 그 자동설정의 `openAiApi` 빈이 `Assert.hasText(api-key)` 로 `LOCAL_LLM_KEY` 가 빈 로컬 전용 기동을 깨뜨렸다. **2.0 에서도 그런지는 확인하지 않았다** — 2.0 에는 `OpenAiApi` 가 없고 자동설정은 SDK 클라이언트 빈(`openAiClient`)을 만든다(2.0.2 jar 로 확인; `OpenAiAutoConfigurationUtil` 에 `Assert.hasText` 가 없다). 그래서 풀 때는 `LOCAL_LLM_KEY` 를 비운 채 기동해 본 뒤에 푼다. FQCN 이 업그레이드로 바뀌면 exclude 가 **조용히 무효**가 되므로 `AutoConfiguration.imports` 로 확인한다(2.0.2 에서 7개 모두 유효).
 
 ### DocumentIndexer.index
 
@@ -938,7 +939,7 @@ DB·API 의 값은 UTC(`DbTimestamp`), 사람이 읽는 서버의 시계는 `app
 
 - **동시성 게이트**: `LlmRouter.executeGated()`/`acquirePermit()`(프로바이더별 `Semaphore`, `app.llm.providers[].concurrency` 아니면 `default-provider-concurrency` 3)는 **대화형 경로에만** 쓴다(`ClassifierService`, `AnswerService`, `DirectAnswerService`, `RerankerService`, `RoutedChatModel` 경유의 `MultiQueryExpander`). 인덱싱/백그라운드(`KeywordExtractor`, `MarkdownCorrectionService`, `TextToMarkdownService`, Vision/제목/요약 등)는 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)가 있고 기한을 쥔 동기 HTTP 호출자가 없으므로 일부러 게이트 없는 `executeWithTracking()` 이다. 게이트 대기가 시간 초과되면 `LlmBackpressureException`(`RAG-LLM-002`, HTTP 429 + `Retry-After`) — 용량 압박은 프로바이더 실패가 아니라 `LlmRouter` 의 일반 재시도/서킷 로직이 잡지 않는다.
 - **단일 비행**: `CachingEmbeddingModel` 이 Caffeine `Cache` 옆에 `ConcurrentHashMap<String, CompletableFuture<float[]>>` 를 둔다 — 텍스트 미스는 "소유자"(이번 호출의 다른 새 미스와 한 번의 delegate 호출로 배치)이거나, 같은 정규화 텍스트를 이미 계산 중인 다른 호출의 future 를 `join()` 하는 "합류자"가 된다. 소유자 실패는 합류자에게 전파되고 진행 중 항목을 지워 다음 호출이 새로 시도한다. 정확히 같은 텍스트만 합쳐진다(비슷한 질문은 여전히 미스; 의미 캐시는 보류).
-- **과부하 인지 서킷 차단**: 블로킹 경로는 SDK 예외의 상태 코드(`httpStatusOf`)로 429/402/503 을 `blockForOverload()` 로 보낸다 — 폴백 프로바이더가 남아 있으면 정상 차단(`Retry-After` 또는 `circuit-breaker-minutes`), 폴백이 없고(단일 LOCAL 배포) 명시적 `Retry-After` 도 없으면 짧은 고정 시간(`SHORT_BLOCK_SECONDS`=30)만 차단한다(하나뿐인 프로바이더를 수 분 막으면 일시적 용량 출렁임이 전면 장애가 된다). 명시적 `Retry-After` 는 폴백 유무와 무관하게 늘 존중한다. 그 밖의 상태(500/502/504 등)는 평평한 30초 차단이다. 1.x 에서는 Spring AI 가 오류를 `NonTransientAiException` 으로 감싸 상태 코드를 잃고 일반 실패로 떨어졌지만 SDK 는 상태·헤더를 가진 예외를 올리므로 지금은 블로킹도 같은 규칙을 탄다.
+- **과부하 인지 서킷 차단**: 블로킹 경로는 SDK 예외의 상태 코드(`httpStatusOf`)로 429/402/503 을 `blockForOverload()` 로 보낸다 — 폴백 프로바이더가 남아 있으면 정상 차단(`Retry-After` 또는 `circuit-breaker-minutes`), 폴백이 없고(단일 LOCAL 배포) 명시적 `Retry-After` 도 없으면 짧은 고정 시간(`SHORT_BLOCK_SECONDS`=30)만 차단한다(하나뿐인 프로바이더를 수 분 막으면 일시적 용량 출렁임이 전면 장애가 된다). 명시적 `Retry-After` 는 폴백 유무와 무관하게 늘 존중한다. 그 밖의 상태(500/502/504 등)는 평평한 30초 차단이다. SDK 예외가 상태 코드·헤더를 나르므로 블로킹도 스트리밍의 `failOver` 와 같은 규칙을 탄다.
 - **차단하면 안 되는 실패 넷**(프로바이더가 아픈 게 아니다). **셋은 서버가 만든 영어 메시지의 부분 문자열로 가르는데 이 앱이 통제하지 않는 값이라 `LlmFailureClassificationTest` 가 마커를 고정한다** — 서버(llama.cpp / LM Studio) 버전이 문구를 바꾸면 그 실패가 조용히 "차단해야 할 실패"로 재분류되고 증상이 정확히 이 판정들이 막으려던 사고다(실패하는 테스트도 신호도 없다). **마커는 지우지 말고 더한다**(옛 버전 서버가 돌 수 있다).
   - `isTimeoutLike` — 클라이언트 쪽 인터럽트/읽기 타임아웃(다시 던진다).
   - `isVisionUnsupported` — mmproj 부재: *영구* 한계라 기억해 두고 이후 이미지 작업이 건너뛴다.
@@ -1017,46 +1018,41 @@ DB·API 의 값은 UTC(`DbTimestamp`), 사람이 읽는 서버의 시계는 `app
 
 ## Spring Boot 4 / Spring AI 2.0 마이그레이션 (2026-11-05)
 
-Spring Boot 3.5.15 → 4.1.2, Spring AI 1.1.8 → 2.0.2 (Spring Framework 7 · Spring Security 7 · Jackson 3 · Flyway 12). 위 파일별 항목에서 `OpenAiApi`·`WebClient`·"Spring AI 1.1.8 이 …" 라고 쓴 곳은 **1.x 기준의 설명**이다 — 아래가 현재 동작이다.
+Spring Boot 3.5.15 → 4.1.2, Spring AI 1.1.8 → 2.0.2 (Spring Framework 7 · Spring Security 7 · Jackson 3 · Flyway 12). 여기에는 **지금 코드가 기대는 것 중 조용히 깨지는 것**만 둔다. 컴파일 오류로 드러나는 이름·패키지 변경(테스트 어노테이션 패키지, `JacksonException`, `ChromaApi.builder().jsonMapper(…)` …)과 1.x 에서 무엇이 달랐는지의 서사는 적지 않는다. 한 파일의 동작인 것(블로킹 응답의 `reasoning_content`, 스트리밍의 `include_usage` 기본 전송)은 그 파일 항목 — [`ThinkingControlChatModel`](#llmthinkingcontrolchatmodeljava) · [`AnswerStreamer`](#serviceanswerstreamerjava) — 에 있다.
 
-### OpenAI 모듈은 `OpenAiApi` 가 아니라 OpenAI Java SDK 다
-- `OpenAiApi`·`ChatCompletionRequest`·`RetryTemplate`·`org.springframework.ai.retry.*` 가 없다. 채팅·임베딩 모델은 SDK 의 `OpenAIClient`(동기, 블로킹) / `OpenAIClientAsync`(스트리밍) 위에 올라간다. 이 앱은 `OpenAiClients` 에서 클라이언트를 직접 만들어 `OpenAiChatModel.builder().openAiClient(…).openAiClientAsync(…)` 에 넘긴다.
-- **타임아웃은 옵션으로 못 정한다.** `OpenAiChatOptions.timeout(Duration)` 은 OkHttp 의 *callTimeout*(호출 전체 상한)이 되어, 20초로 두면 응답 중이든 아니든 20초에 끊고 연결 타임아웃도 따로 없다(실측). 모델 빌더의 `httpClientBuilderCustomizer` 로 준 타임아웃은 클라이언트 옵션의 타임아웃에 **덮여 무효**다(실측: 읽기 4초로 줬는데 7초 응답이 성공). 그래서 `ClientOptions.timeout(Timeout)` 에 connect/read/write 를 나눠 주고 `request` 는 0(호출 전체 무제한) — 블로킹은 응답 전체가 한 번의 읽기라 읽기 타임아웃이 곧 호출 상한이고, 스트리밍은 청크 사이 간격이라 청크가 오는 한 길이를 제한하지 않는다(예전 `RestClient`/`WebClient` 읽기 타임아웃과 같은 의미). 연결/읽기 타임아웃은 둘 다 `SocketTimeoutException` 이고 메시지로 갈린다(`"Connect timed out"` ↔ `"Read timed out"` — `LlmRouter.isConnectTimeout`).
-- **자동 재시도**: SDK 기본이 2회라 `maxRetries(0)` 으로 끈다(예전 `RetryTemplate(maxAttempts=1)`). 임베딩은 예전 `maxAttempts=2` 에 맞춰 `maxRetries(1)`.
-- **base-url**: SDK 는 base 뒤에 `/chat/completions` 를 그대로 붙인다. 예전 `OpenAiApi` 는 `/v1/chat/completions` 를 붙였기에 설정에서 `/v1` 을 걷어 냈다(`ProviderConfig.apiBase()` — 컨텍스트 탐지·G3 의 `/v1/models` 는 그대로 이것을 쓴다). `OpenAiClients.sdkBaseUrl()` 이 같은 설정이 같은 주소로 나가게 한다: `…/v1` 은 그대로, 경로 없는 주소(`https://api.openai.com`)는 `/v1` 을 붙이고, 다른 경로(`…/v1beta/openai/`)는 그대로 — 마지막은 예전엔 `/v1` 이 한 번 더 붙어 닿지 못하던 주소다.
-- **프로바이더당 모델이 둘이다**(`LlmProvider.chatModel` = 데코레이터 체인 맨 바깥 / `LlmProvider.rawModel` = 스트리밍 직행용). 같은 클라이언트를 쓰되 체인 쪽은 기본 옵션에 `maxTokens` 가 있고(옵션을 안 싣는 프레임워크 호출의 폴백) 스트리밍 쪽은 없다 — SDK 모델은 기본 옵션을 요청에 합치므로 같은 모델을 쓰면 채팅 답변 스트림에 `max_tokens` 가 새로 실린다(예전엔 안 실렸다).
+### OpenAI 모듈은 OpenAI Java SDK 위에 있다
+- 채팅·임베딩 모델은 SDK 의 `OpenAIClient`(동기, 블로킹) / `OpenAIClientAsync`(스트리밍) 위에 올라간다(`OpenAiApi`·`RetryTemplate` 은 없다). 이 앱은 `OpenAiClients` 에서 클라이언트를 직접 만들어 `OpenAiChatModel.builder().openAiClient(…).openAiClientAsync(…)` 에 넘긴다.
+- **타임아웃은 옵션으로 못 정한다.** `OpenAiChatOptions.timeout(Duration)` 은 OkHttp 의 *callTimeout*(호출 전체 상한)이 되어, 20초로 두면 응답 중이든 아니든 20초에 끊고 연결 타임아웃도 따로 없다(실측). 모델 빌더의 `httpClientBuilderCustomizer` 로 준 타임아웃은 클라이언트 옵션의 타임아웃에 **덮여 무효**다(실측: 읽기 4초로 줬는데 7초 응답이 성공). 그래서 `ClientOptions.timeout(Timeout)` 에 connect/read/write 를 나눠 주고 `request` 는 0(호출 전체 무제한) — 블로킹은 응답 전체가 한 번의 읽기라 읽기 타임아웃이 곧 호출 상한이고, 스트리밍은 청크 사이 간격이라 청크가 오는 한 길이를 제한하지 않는다. 연결/읽기 타임아웃은 둘 다 `SocketTimeoutException` 이고 메시지로 갈린다(`"Connect timed out"` ↔ `"Read timed out"` — `LlmRouter.isConnectTimeout`).
+- **자동 재시도는 끈다**: SDK 기본이 2회라 `maxRetries(0)` 으로 끈다(재시도·전환은 라우터가 한다). 임베딩만 `maxRetries(1)`.
+- **base-url**: SDK 는 base 뒤에 `/chat/completions`·`/embeddings` 를 그대로 붙인다. 설정의 base-url 은 `OpenAiClients.sdkBaseUrl()` 을 거쳐 SDK 에 간다 — `…/v1` 은 그대로, 경로 없는 주소(`https://api.openai.com`)는 `/v1` 을 붙이고, 다른 경로(`…/v1beta/openai/`)는 그대로. `/v1` 을 걷어 낸 `ProviderConfig.apiBase()` 는 컨텍스트 탐지·G3 가 `/v1/models` 를 직접 붙이는 쪽의 기준이다.
+- **프로바이더당 모델이 둘이다**(`LlmProvider.chatModel` = 데코레이터 체인 맨 바깥 / `LlmProvider.rawModel` = 스트리밍 직행용). 같은 클라이언트를 쓰되 체인 쪽은 기본 옵션에 `maxTokens` 가 있고(옵션을 안 싣는 프레임워크 호출의 폴백) 스트리밍 쪽은 없다 — SDK 모델은 기본 옵션을 요청에 합치므로 같은 모델을 쓰면 채팅 답변 스트림에 `max_tokens` 가 실려 버린다.
 
 ### 옵션이 불변이다
-- `OpenAiChatOptions` 에는 세터도 `copy()` 도 없다. 값을 바꾼 사본은 `mutate()`(모든 값을 이어받은 빌더) → `build()` 다. 그래서 `ThinkingControl.applyTo(옵션, wire)` 가 블로킹 체인과 스트리밍 직행이 **같이 쓰는** 하나의 변환이 됐다. `ChatClient.options()` 는 옵션이 아니라 **빌더**를 받는다(`.options(옵션.mutate())` 또는 `ThinkingControl.mark(builder, site)` 의 빌더 그대로).
+- `OpenAiChatOptions` 에는 세터도 `copy()` 도 없다. 값을 바꾼 사본은 `mutate()`(모든 값을 이어받은 빌더) → `build()` 다. `ThinkingControl.applyTo(옵션, wire)` 가 블로킹 체인과 스트리밍 직행이 **같이 쓰는** 하나의 변환이다. `ChatClient.options()` 는 옵션이 아니라 **빌더**를 받는다(`.options(옵션.mutate())` 또는 `ThinkingControl.mark(builder, site)` 의 빌더 그대로).
 - 일반 `ChatOptions` → `OpenAiChatOptions` 변환(`ModelOptionsUtils.copyToTarget`)이 막혀 `ThinkingControl.fromGeneric` 이 공통 필드(모델·온도·출력 상한·top-p·페널티·stop)만 옮긴다.
-- **`ChatModel.getOptions()` 가 기본 옵션의 이름이다.** `getDefaultOptions()` 는 `getOptions()` 에 위임하는 기본 메서드가 됐고 `getOptions()` 의 기본 구현은 *빈* `ChatOptions` 다. 데코레이터(`LoggingChatModel`·`MaxTokensCappingChatModel`·`ThinkingControlChatModel`·`ThinkingSiteChatModel`·`RoutedChatModel`·`TokenEstimateCalibration`)가 `getDefaultOptions()` 만 위임하면 `ChatClient.builder(model)` 이 빈 옵션을 이어받아 프로바이더 기본 옵션이 사라진다. `ChatClient.builder` 는 `getOptions().mutate()` 를 부르므로 테스트의 `mock(ChatModel.class)` 는 NPE 가 난다 — `LlmTestSupport.chatModelMock()`.
+- **`ChatModel.getOptions()` 가 기본 옵션의 이름이다.** `getDefaultOptions()` 는 `getOptions()` 에 위임하는 기본 메서드이고 `getOptions()` 의 기본 구현은 *빈* `ChatOptions` 다. 데코레이터(`LoggingChatModel`·`MaxTokensCappingChatModel`·`ThinkingControlChatModel`·`ThinkingSiteChatModel`·`RoutedChatModel`·`TokenEstimateCalibration`)가 `getDefaultOptions()` 만 위임하면 `ChatClient.builder(model)` 이 빈 옵션을 이어받아 프로바이더 기본 옵션이 사라진다. `ChatClient.builder` 는 `getOptions().mutate()` 를 부르므로 테스트의 `mock(ChatModel.class)` 는 NPE 가 난다 — `LlmTestSupport.chatModelMock()`.
 
-### 스트리밍·응답의 모양이 달라졌다
+### 스트리밍·응답의 모양
 - **생각 본문(`reasoningContent`)은 델타가 아니라 지금까지 쌓인 전체**로 매 청크에 붙는다(답 청크에도 같은 값이 계속 붙는다 — 실측 `think1`, `think1think2`, …). 답 본문은 여전히 델타다. `AnswerStreamer` 는 **길이가 늘었을 때만** 생각 델타로 센다(안 그러면 답을 흘리는 동안에도 "생각 중"이 켜져 있고 유휴 워치독이 틀린 활동을 센다). `ThinkingControlChatModel.StreamedResponses` 도 이어 붙이지 않고 교체한다.
-- **블로킹 응답도 `reasoningContent` 를 싣는다**(1.1.8 은 버렸다). `ThinkingObservations` 의 "출력 토큰 초과로 생각을 추정"은 키가 없는 서버/경로를 위한 폴백이다.
-- 스트리밍 요청에 `stream_options.include_usage=true` 가 **기본으로** 실린다. 서버가 마지막에 사용량 청크를 보내면 네이티브 사용량이 오고, 없으면 델타 수로 센다. 네이티브 사용량은 SDK 의 `CompletionUsage` 이고 앱은 `ThinkingObservations.ReportedUsage`(출력·생각 토큰 두 숫자)로 옮겨 쓴다(표본·테스트가 SDK 타입에 묶이지 않게).
-- 요청 본문은 같다(실측): `extraBody` 는 본문 최상위, `reasoning_effort`, `temperature`, `max_tokens`(옵션의 `maxTokens`).
+- 네이티브 사용량은 SDK 의 `CompletionUsage` 이고 앱은 `ThinkingObservations.ReportedUsage`(출력·생각 토큰 두 숫자)로 옮겨 쓴다(표본·테스트가 SDK 타입에 묶이지 않게).
 
-### 오류의 모양이 달라졌다 (분류 규칙의 입력)
-- 모든 HTTP 오류는 `OpenAIServiceException` 계열이고 `statusCode()`·`headers()`·`body()` 를 가진다. **스트리밍에서는 `CompletionException` 에 싸여 온다** — 원인 사슬을 타는 기존 분류(`httpStatusOf`·`retryAfterOf`·`LlmErrorText`)가 그대로 맞는다.
-- 메시지는 `"400: <본문>"` 이지만 SDK 가 `{"error":{…}}` 의 `message` 만 꺼내기도 하고(429 → `"429: slow down"`) `{"error":"terminated"}` 는 `error` 값만 남긴다(`500: "terminated"`) — 그래서 `REQUEST_TERMINATED_MARKERS` 에 `: "terminated"` 를 더했다. `LlmErrorText` 는 파싱된 본문도 함께 읽는다.
-- 서버에 닿지 못한 실패는 `OpenAIIoException("Request failed")` 이고 **원인 사슬 끝**에 `ConnectException`(거부)·`SocketTimeoutException`(타임아웃)이 있다. OkHttp 의 "응답 전 연결 끊김"은 Reactor Netty 의 `PrematureCloseException` 대신 `IOException("unexpected end of stream…")` 이라 `LlmRouter.isPrematureClose` 가 알아본다.
-- **동작이 하나 바뀌었다**: 블로킹 경로가 429/402/503 을 `blockForOverload`(Retry-After 존중, 넘길 상대가 없으면 짧게만 차단)로 처리한다. 1.x 에서는 `NonTransientAiException` 으로 감싸여 상태 코드를 잃고 일반 실패로 떨어졌다. 스트리밍의 `failOver` 가 처음부터 하던 규칙과 같아졌다.
+### 오류의 모양 (분류 규칙의 입력)
+- 모든 HTTP 오류는 `OpenAIServiceException` 계열이고 `statusCode()`·`headers()`·`body()` 를 가진다. **스트리밍에서는 `CompletionException` 에 싸여 온다** — 원인 사슬을 타는 분류(`httpStatusOf`·`retryAfterOf`·`LlmErrorText`)가 이 모양을 전제한다.
+- 메시지는 `"400: <본문>"` 이지만 SDK 가 `{"error":{…}}` 의 `message` 만 꺼내기도 하고(429 → `"429: slow down"`) `{"error":"terminated"}` 는 `error` 값만 남긴다(`500: "terminated"`) — 그래서 `REQUEST_TERMINATED_MARKERS` 에 `: "terminated"` 가 있다. `LlmErrorText` 는 파싱된 본문도 함께 읽는다.
+- 서버에 닿지 못한 실패는 `OpenAIIoException("Request failed")` 이고 **원인 사슬 끝**에 `ConnectException`(거부)·`SocketTimeoutException`(타임아웃)이 있다. OkHttp 의 "응답 전 연결 끊김"은 `IOException("unexpected end of stream…")` 이라 `LlmRouter.isPrematureClose` 가 알아본다.
 - 테스트는 `LlmTestSupport.badRequest/serverError/rateLimited/io` 로 진짜 SDK 예외를 만든다(메시지만 가진 `RuntimeException` 은 `LlmErrorText` 의 SDK 갈래를 안 탄다).
 
 ### Jackson 3
-- 패키지 `com.fasterxml.jackson.{databind,core}` → `tools.jackson.{databind,core}`, `JsonProcessingException` → 비검사 `JacksonException`(`catch (IOException)` 이 "던져지지 않는다" 컴파일 오류가 된다), 어노테이션만 `com.fasterxml.jackson.annotation` 그대로. 매퍼는 불변이라 `ObjectMapper.copy()` 대신 `rebuild()….build()`.
-- **`FAIL_ON_NULL_FOR_PRIMITIVES` 가 켜진 채 시작한다**(Jackson 2 는 꺼짐) — 기본형 컴포넌트를 가진 레코드를 읽을 때 필드가 없으면 예전엔 `false`/`0` 이었는데 이제는 예외다. 영향 세 곳을 모두 막았다: ① HTTP 요청 본문 — `spring.jackson.deserialization.fail-on-null-for-primitives=false`(안 막으면 `direct_mode` 를 뺀 REST 호출이 500), ② 저장된 blob(`RetrievalMetricsService`·`MemoryService.lenientMapper`), ③ **LLM 이 돌려준 판정 JSON** — `BeanOutputConverter` 가 기본 매퍼를 쓰면 `{"sufficient":false}` 가 통째로 읽히지 않아 *검증이 사라진다*(`LenientJson.MAPPER` 를 넘긴다).
+- **`FAIL_ON_NULL_FOR_PRIMITIVES` 가 켜진 채 시작한다** — 기본형 컴포넌트를 가진 레코드를 읽을 때 필드가 없으면 기본값(`false`/`0`)이 아니라 예외다. 영향 세 곳을 막았다: ① HTTP 요청 본문 — `spring.jackson.deserialization.fail-on-null-for-primitives=false`(안 막으면 `direct_mode` 를 뺀 REST 호출이 500), ② 저장된 blob(`RetrievalMetricsService`·`MemoryService.lenientMapper`), ③ **LLM 이 돌려준 판정 JSON** — `BeanOutputConverter` 가 기본 매퍼를 쓰면 `{"sufficient":false}` 가 통째로 읽히지 않아 *검증이 사라진다*(`LenientJson.MAPPER` 를 넘긴다).
 - Spring AI 2.0 은 내부에 Jackson 2 도 같이 쓴다(`openai-java` 가 가져온다) — 클래스패스에 둘 다 있는 것이 정상이다.
 
-### Boot 4 모듈화 · Security 7
-- 스타터: `spring-boot-starter-web`→`-webmvc`, `flyway-core`→`spring-boot-starter-flyway`(Boot 4 는 자동설정을 모듈로 쪼갰다), 테스트는 `-webmvc-test`·`-security-test` 를 따로 넣는다. 패키지 이동: `…test.autoconfigure.web.servlet.WebMvcTest` → `…webmvc.test.autoconfigure.WebMvcTest`, `…autoconfigure.jdbc.*` → `…jdbc.autoconfigure.*`, `…web.embedded.tomcat.TomcatServletWebServerFactory` → `…tomcat.servlet.TomcatServletWebServerFactory`.
+### Boot 4 · Security 7
+- Boot 4 는 자동설정을 모듈로 쪼갰다 — 스타터 이름이 맞아야 자동설정이 붙는다(예: `flyway-core` 가 아니라 `spring-boot-starter-flyway`).
 - **`spring-boot-starter-security-test` 가 없으면 `@WebMvcTest` 에 `springSecurity()` 가 안 걸려** `@WithMockUser`·`csrf()` 가 무시되고 모든 요청이 302(로그인)가 된다.
-- `DaoAuthenticationProvider` 는 `UserDetailsService` 를 생성자로 받고 인코더는 세터로 준다.
 - **웹잡스: `webjars-locator-core` → `webjars-locator-lite`.** core 의 `WebJarsResourceResolver` 가 Spring 7 에서 없어져 템플릿의 버전 없는 `/webjars/bootstrap/css/…` 가 **전부 404**(화면이 스타일 없이 뜬다 — 단위 테스트는 못 본다, 실기동에서만 보였다).
-- `ChromaApi.builder()` 는 `objectMapper(…)` 대신 `jsonMapper(JsonMapper)` — Boot 의 `JsonMapper` 빈을 받는다. Chroma 의 v2 경로는 그대로다. `spring.autoconfigure.exclude` 의 FQCN 7개도 그대로 유효하다(`AutoConfiguration.imports` 로 확인).
+- `spring.autoconfigure.exclude` 의 FQCN 7개는 그대로 유효하다. 제외의 이유가 2.0 에서도 맞는지는 [아래 규약 항목](#springautoconfigureexclude-must-keep-the-chroma-ex)에 있다.
 
 ### 정리하지 않은 것 · 확인하지 못한 것
-- `reactor-netty-http`·macOS Netty DNS 의존성과 `logging.level.reactor.netty.http.client` 는 WebClient 로 LLM 트래픽을 와이어 수준에서 로깅하려던 것인데 LLM 호출은 이제 OkHttp 다. 다른 Spring AI 모듈이 WebClient 를 쓸 수 있어 남겼다(지우려면 실기동 확인이 먼저). 와이어 로깅이 필요하면 `LlmCurlLogger`(DEBUG/TRACE)가 실제로 나간 본문을 찍는다.
-- 로컬 LM Studio 로 임베딩을 돌리면 `TrackingEmbeddingModel` 이 "did not report token usage" 경고를 한 번 낸다. 서버가 `usage` 를 안 보냈는지 2.0 응답에서 앱이 못 읽는 것인지는 가리지 못했다. 폴백(`TokenEstimator`)이 있어 동작에는 영향이 없다.
+- **WebClient/Reactor Netty 잔재.** LLM 호출은 이제 OkHttp 라 아래는 OpenAI 경로에서 더는 쓰이지 않는다. 다른 Spring AI 모듈이 WebClient 를 쓸 수 있어 남겼다 — 지우려면 실기동 확인이 먼저다. ① `pom.xml` 의 `reactor-netty-http`·macOS Netty DNS 의존성과 `application.properties` 의 `logging.level.reactor.netty.http.client`(WebClient 와이어 로깅용). ② `LlmRouter`(`isConnectionFailure`·`httpStatusOf`·`retryAfterOf`)·`LlmErrorText` 의 `WebClientResponseException`/`WebClientRequestException`/`PrematureCloseException` 갈래 — `RestClientResponseException` 은 `LlmPing`·Chroma 때문에 계속 쓰인다. ③ 이 갈래를 확인하는 단위 테스트(`LlmFailureClassificationTest`·`StreamFailoverTest`·`LlmErrorTextTest`·`ThinkingControlTest` 의 WebClient 예외 케이스와 일부 `@DisplayName`). 코드 주석은 2.0 기준으로 고쳤고 이 잔재는 주석에 잔재라고 적어 두었다. 와이어 수준 로깅이 필요하면 `LlmCurlLogger`(DEBUG/TRACE)가 실제로 나간 본문을 찍는다.
+- 로컬 LM Studio 로 임베딩을 돌리면 `TrackingEmbeddingModel` 이 "did not report token usage" 경고를 한 번 낸다. 서버가 `usage` 를 안 보냈는지 2.0 응답에서 앱이 못 읽는 것인지는 가리지 못했다(폴백 `TokenEstimator` 가 있어 동작에는 영향이 없다).
 - 실기동 확인은 **sqlite-vec + LM Studio(로컬)** 로 했다(Direct REST·Direct SSE·문서 업로드(임베딩)·RAG 질문(검색 → 답변 → 검증)·웹잡스). **Chroma 백엔드의 실기동은 하지 못했다**(단위 테스트까지만).

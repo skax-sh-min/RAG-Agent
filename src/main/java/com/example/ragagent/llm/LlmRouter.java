@@ -916,9 +916,10 @@ public class LlmRouter {
     }
 
     /**
-     * 서버에 <b>닿지 못했다</b>(또는 응답을 시작하기 전에 연결이 끊겼다) — 연결 거부·DNS 실패·경로 없음·연결 타임아웃, WebClient 가
-     * 요청을 보내다 난 I/O 오류({@code WebClientRequestException}), Reactor Netty 의 응답 전 연결 끊김
-     * ({@code PrematureCloseException}). 스트리밍의 {@link #failOver} 가 "이 서버는 지금 안 된다"의 근거로 쓴다.
+     * 서버에 <b>닿지 못했다</b>(또는 응답을 시작하기 전에 연결이 끊겼다) — 연결 거부·DNS 실패·경로 없음·연결 타임아웃, OkHttp 의
+     * 응답 전 연결 끊김({@code isPrematureClose}). WebClient/Reactor Netty 의 같은 실패({@code WebClientRequestException},
+     * {@code PrematureCloseException})도 알아보는데, OpenAI 경로는 더는 만들지 않는 잔재다. 스트리밍의 {@link #failOver} 가
+     * "이 서버는 지금 안 된다"의 근거로 쓴다.
      *
      * <p>블로킹 경로는 이 판정이 필요 없다 — 거기서는 읽기 타임아웃과 중단만 빼고 모든 실패가 차단 대상이라 연결 계열이 그 안에
      * 이미 들어 있다. 스트리밍은 알 수 없는 예외까지 차단하면 안 돼서 근거가 되는 모양을 하나씩 세어야 한다.
@@ -942,8 +943,8 @@ public class LlmRouter {
     }
 
     /**
-     * OkHttp(Spring AI 2.0 의 SDK 가 쓰는 HTTP 클라이언트)가 응답이 시작되기 전에 연결이 끊겼을 때 던지는 모양 — Reactor Netty 의
-     * {@code PrematureCloseException} 에 해당한다. 서버가 요청을 받다가 죽었거나 keep-alive 연결이 이미 닫혀 있던 경우다.
+     * OkHttp(Spring AI 2.0 의 SDK 가 쓰는 HTTP 클라이언트)가 응답이 시작되기 전에 연결이 끊겼을 때 던지는 모양.
+     * 서버가 요청을 받다가 죽었거나 keep-alive 연결이 이미 닫혀 있던 경우다.
      * 첫 토큰이 나간 뒤의 끊김은 스트리밍 쪽 {@link #failOver} 가 따로 걸러 건드리지 않는다.
      */
     private static boolean isPrematureClose(Throwable cur) {
@@ -955,7 +956,7 @@ public class LlmRouter {
                 || lowered.contains("stream was reset") || lowered.contains("connection closed");
     }
 
-    /** 원인 사슬에서 처음 만나는 HTTP 오류 응답의 상태 코드 — RestClient·WebClient 둘 다. 없으면 0. */
+    /** 원인 사슬에서 처음 만나는 HTTP 오류 응답의 상태 코드 — SDK 예외와 RestClient(·잔재인 WebClient) 예외. 없으면 0. */
     private static int httpStatusOf(Throwable t) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             if (cur instanceof OpenAIServiceException o) return o.statusCode();
@@ -998,16 +999,15 @@ public class LlmRouter {
      *
      * <p>서버마다 문구가 달라 메시지로 판정한다. 실제로 관측된 것은 LM Studio 의
      * {@code {"code":500,"message":"Context size has been exceeded."}} 인데, 이것이 HTTP 400 본문에
-     * 실려 오고 Spring AI 가 {@code NonTransientAiException} 으로 감싸므로 위 {@code catch
+     * 실려 오고 SDK 의 {@code OpenAIServiceException} 으로 올라오므로 위 {@code catch
      * (HttpStatusCodeException)} 가 아니라 일반 {@code catch} 로 떨어진다 — 그래서 여기서 걸러야 한다.
      *
      * <p><b>{@code "too many tokens"} 류는 일부러 넣지 않았다</b> — 레이트리밋 응답
      * ("Too many tokens per minute")과 문구가 겹쳐, 진짜 429 를 컨텍스트 초과로 잘못 읽으면
      * {@code blockForOverload()} 의 Retry-After 처리를 건너뛰게 된다.
      *
-     * <p><b>메시지가 아니라 서버가 한 말({@link LlmErrorText})을 본다.</b> 스트리밍 경로의 WebClient 오류는 메시지가
-     * {@code "400 Bad Request from POST …"} 뿐이고 마커는 응답 본문에만 있다 — 메시지만 보던 동안 위 "공개인 이유"의
-     * 축소 재시도는 실제 서버에서 한 번도 발동하지 않았다(2026-10-02, {@code LlmErrorText} 참고).
+     * <p><b>메시지가 아니라 서버가 한 말({@link LlmErrorText})을 본다.</b> 마커는 메시지에 다 실리지 않고 응답 본문에만 있을 수
+     * 있다 — llama.cpp 는 스트리밍 요청의 초과도 일반 HTTP 400 본문으로 돌려준다(2026-10-02, {@code LlmErrorText} 참고).
      */
     public static boolean isContextOverflow(Throwable t) {
         String text = LlmErrorText.of(t).toLowerCase(java.util.Locale.ROOT);
@@ -1046,7 +1046,7 @@ public class LlmRouter {
      * 그 프로바이더의 성질이 아니다.
      *
      * <p>판정을 메시지로 하는 이유도 같다 — 이 응답 역시 HTTP 400 본문에 실려
-     * {@code NonTransientAiException} 으로 감싸여 오므로 {@code catch (HttpStatusCodeException)} 에
+     * SDK 의 {@code OpenAIServiceException} 으로 올라오므로 {@code catch (HttpStatusCodeException)} 에
      * 걸리지 않는다. 마커를 {@code "terminated"} 한 단어가 아니라 JSON 조각으로 둔 것은 그 단어가
      * 다른 오류 문구에도 흔히 들어가기 때문이다(예: "connection terminated by peer" — 그건 진짜
      * 네트워크 장애라 차단하는 편이 맞다).

@@ -76,9 +76,9 @@ class LlmFailureClassificationTest {
         }
 
         /**
-         * 채팅 답변 스트리밍(WebClient)의 모양 — 메시지는 {@code "400 Bad Request from POST …"} 뿐이고 서버의 문장은
-         * 응답 본문에만 있다. 본문은 2026-10-02 llama.cpp(b10236)가 스트리밍 요청의 초과에 실제로 돌려준 그대로다.
-         * 메시지만 보던 동안 이 모양이 거짓이었고, 그래서 스트리밍 경로의 축소 재시도가 한 번도 발동하지 않았다.
+         * 메시지에 본문이 없는 HTTP 오류(WebClient 시절의 스트리밍 모양) — 메시지는 {@code "400 Bad Request from POST …"} 뿐이고
+         * 서버의 문장은 응답 본문에만 있다. 본문은 2026-10-02 llama.cpp(b10236)가 스트리밍 요청의 초과에 실제로 돌려준 그대로다.
+         * {@code LlmErrorText} 에 남은 WebClient 갈래를 확인한다 — 지금 OpenAI 경로의 실제 모양(SDK 예외)은 와이어 테스트가 본다.
          */
         @Test
         @DisplayName("WebClient 오류는 메시지에 본문이 없다 — 응답 본문까지 읽어야 알아본다(스트리밍 경로의 실제 모양)")
@@ -161,7 +161,7 @@ class LlmFailureClassificationTest {
         ConnectTimeoutException(String message) { super(message); }
     }
 
-    /** Reactor Netty 의 응답 전 연결 끊김 — 같은 이유로 클래스 이름으로 알아본다. */
+    /** Reactor Netty 의 응답 전 연결 끊김(분류기에 남은 잔재 갈래) — 같은 이유로 클래스 이름으로 알아본다. */
     static class PrematureCloseException extends IOException {
         PrematureCloseException(String message) { super(message); }
     }

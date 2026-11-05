@@ -34,8 +34,8 @@ public class ThinkingObservations {
     public static final int CAPACITY = 50;
 
     /**
-     * 응답 메시지 메타데이터에서 생각 본문을 찾는 키. Spring AI 1.1.8 은 블로킹 응답에서 서버의 {@code reasoning_content} 를 버렸지만(2026-10-02
-     * 확인) <b>2.0.2 는 이 키로 싣는다</b>(2026-11-05 확인) — 스트리밍에서는 델타가 아니라 <b>지금까지 쌓인 전체</b>다. 그래도 키가 없는
+     * 응답 메시지 메타데이터에서 생각 본문을 찾는 키. Spring AI 2.0.2 는 서버의 {@code reasoning_content} 를 이 키로 싣는다
+     * (2026-11-05 확인) — 스트리밍에서는 델타가 아니라 <b>지금까지 쌓인 전체</b>다. 그래도 키가 없는
      * 서버·경로를 위해 아래 {@link #MIN_EXCESS_TOKENS} 의 출력 토큰 초과 판정을 폴백으로 남긴다.
      */
     static final String REASONING_CONTENT_KEY = "reasoningContent";
@@ -186,8 +186,8 @@ public class ThinkingObservations {
      *   <li>생각 본문이 따로 왔다 — 생각 토큰은 (출력 토큰 − 답변 추정), 출력 토큰이 없으면 본문 추정. 앞쪽이 나은
      *       이유는 서버가 센 출력 토큰에 생각이 이미 들어 있기 때문이다 — 영어 생각 본문을 글자 4개당 1토큰으로 세면
      *       실측(227토큰 중 생각 ~225)의 2/3 쯤으로 모자란다.</li>
-     *   <li>둘 다 없다 — 1.x 의 블로킹 경로가 실제로 여기였다(Spring AI 1.1.8 이 생각 본문을 버리고, llama.cpp 는
-     *       생각 토큰을 보고하지 않는다). 출력 토큰이 답변 추정을 크게 넘을 때만 그 초과분을 생각으로 센다
+     *   <li>둘 다 없다 — 생각 본문을 싣지 않는 서버·경로이고 llama.cpp 는 생각 토큰도 보고하지 않는다.
+     *       출력 토큰이 답변 추정을 크게 넘을 때만 그 초과분을 생각으로 센다
      *       ({@link #MIN_EXCESS_TOKENS}).</li>
      * </ol>
      */
@@ -222,7 +222,7 @@ public class ThinkingObservations {
                     ? (int) Math.max(0, output - TokenEstimator.estimate(content))
                     : (int) TokenEstimator.estimate(reasoning);
         } else if (output != null) {
-            // 블로킹 경로의 실제 모양(Spring AI 가 생각 본문을 버린다) — 서버가 센 출력에는 생각이 들어 있으므로,
+            // 생각 본문도 생각 토큰 보고도 없는 서버·경로의 모양 — 서버가 센 출력에는 생각이 들어 있으므로,
             // 답변으로 설명되지 않는 몫이 크면 그것이 생각이다.
             long answer = TokenEstimator.estimate(content);
             long excess = output - answer;
@@ -278,9 +278,8 @@ public class ThinkingObservations {
     }
 
     /**
-     * 서버가 보고한 사용량 중 이 클래스가 쓰는 두 숫자. Spring AI 1.x 의 {@code OpenAiApi.Usage} 를 대신하는 이 앱의 작은
-     * 레코드다 — 2.0 의 원본({@code com.openai.models.completions.CompletionUsage})은 SDK 타입이라 표본·테스트가 그것에
-     * 묶이지 않게 한다.
+     * 서버가 보고한 사용량 중 이 클래스가 쓰는 두 숫자. 원본({@code com.openai.models.completions.CompletionUsage})은
+     * SDK 타입이라, 표본·테스트가 그것에 묶이지 않게 이 앱의 작은 레코드로 옮겨 쓴다.
      *
      * @param completionTokens 출력 토큰(생각 포함). 서버가 보고하지 않았으면 {@code null}
      * @param reasoningTokens  그중 생각 토큰({@code completion_tokens_details.reasoning_tokens}). 없으면 {@code null}

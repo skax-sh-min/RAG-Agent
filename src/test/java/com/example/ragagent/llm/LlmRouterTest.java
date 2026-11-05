@@ -270,8 +270,8 @@ class LlmRouterTest {
     @DisplayName("executeWithTracking — 컨텍스트 초과는 CircuitBreaker 를 차단하지 않음 (뒤따르는 작은 요청이 말려들지 않는다)")
     void contextOverflow_doesNotBlockCircuitBreaker() {
         ChatModel chatModel = mock(ChatModel.class);
-        // 실제 관측된 LM Studio 응답 — HTTP 400 본문 안에 500 이 들어 있고, Spring AI 가
-        // NonTransientAiException 으로 감싸므로 HttpStatusCodeException catch 에 걸리지 않는다.
+        // 실제 관측된 LM Studio 응답 — HTTP 400 본문 안에 500 이 들어 있고, SDK 예외는 HttpStatusCodeException 이
+        // 아니라서 그 catch 에 걸리지 않는다(여기서는 같은 메시지의 RuntimeException 으로 대신한다).
         when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException(
                 "400 - {\"error\":\"Engine protocol predict stream returned an error: "
                 + "{\\\"code\\\":500,\\\"message\\\":\\\"Context size has been exceeded.\\\"}\"}"));
@@ -488,8 +488,8 @@ class LlmRouterTest {
     @Test
     @DisplayName("서버가 요청을 끊으면(재시작·모델 리로드) 차단하지 않는다 — isTimeoutLike 의 거울상")
     void serverTerminatedRequest_doesNotBlockTheProvider() {
-        // 실측: 로컬 LLM 을 재시작하면 진행 중이던 응답에 이 본문이 돌아온다. HTTP 400 본문이라
-        // NonTransientAiException 으로 감싸여 오고, catch (HttpStatusCodeException) 에 걸리지 않는다.
+        // 실측: 로컬 LLM 을 재시작하면 진행 중이던 응답에 이 본문이 돌아온다. HTTP 400 본문이라 SDK 예외로 올라오고,
+        // catch (HttpStatusCodeException) 에 걸리지 않는다(여기서는 같은 메시지의 RuntimeException 으로 대신한다).
         ChatModel cm = mock(ChatModel.class);
         when(cm.call(any(Prompt.class)))
                 .thenThrow(new RuntimeException("400 - {\"error\":\"terminated\"}"));

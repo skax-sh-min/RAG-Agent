@@ -12,8 +12,8 @@ import java.nio.charset.StandardCharsets;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 서버가 한 말을 읽는 단일 출처({@link LlmErrorText}). 메시지에 본문이 없는 HTTP 오류(스트리밍 경로의 WebClient)에서
- * 본문까지 읽는지가 핵심이다 — 그게 빠지면 컨텍스트 초과·필드 거부 판정이 그 경로에서 조용히 거짓이 된다.
+ * 서버가 한 말을 읽는 단일 출처({@link LlmErrorText}). 메시지에 본문이 다 실리지 않는 HTTP 오류(SDK 예외, 그리고 잔재 갈래인
+ * WebClient)에서 본문까지 읽는지가 핵심이다 — 그게 빠지면 컨텍스트 초과·필드 거부 판정이 그 경로에서 조용히 거짓이 된다.
  */
 class LlmErrorTextTest {
 

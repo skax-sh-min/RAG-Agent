@@ -20,8 +20,8 @@ import java.util.Map;
 /**
  * Spring AI 2.0 의 OpenAI 모델이 내놓는 응답 청크와 SDK 예외를 테스트에서 만드는 도구.
  *
- * <p>1.x 의 테스트는 {@code OpenAiApi.ChatCompletionChunk} 를 직접 만들어 목에 흘렸다. 2.0 은 {@code OpenAiChatModel.stream()} 이
- * {@code ChatResponse} 를 내보내므로 같은 모양으로 만든다. 그 모양은 2026-11-05 실제 응답으로 확인한 것이다: 답 청크는 델타(조각)이고,
+ * <p>{@code OpenAiChatModel.stream()} 이 {@code ChatResponse} 를 내보내므로 목도 같은 모양으로 만든다. 그 모양은 2026-11-05
+ * 실제 응답으로 확인한 것이다: 답 청크는 델타(조각)이고,
  * 생각 본문({@code reasoningContent})은 델타가 아니라 <b>지금까지 쌓인 전체</b>로 매 청크에 붙는다.
  */
 public final class LlmTestSupport {

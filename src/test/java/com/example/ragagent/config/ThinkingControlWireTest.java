@@ -235,8 +235,8 @@ class ThinkingControlWireTest {
     @Test
     @DisplayName("블로킹 응답 — Spring AI 가 reasoning_content 를 버려도, 출력 토큰 초과로 생각한 호출로 센다")
     void thinkingIsObservedFromTheOutputTokens() throws IOException {
-        // 2026-10-02 llama.cpp(b10236) + gemma-4-E2B 실측 응답의 모양 — reasoning_tokens 는 보고하지 않는다. Spring AI
-        // 1.1.8 은 블로킹 응답에서 reasoning_content 를 메타데이터에 싣지 않으므로(같은 날 확인), 관측이 기댈 것은 usage 다.
+        // 2026-10-02 llama.cpp(b10236) + gemma-4-E2B 실측 응답의 모양 — reasoning_tokens 는 보고하지 않는다. 2.0 은
+        // reasoning_content 를 메타데이터에 싣지만 토큰 수는 usage(출력 227)에서 온다 — 답 '391' 로 설명되지 않는 몫이 생각이다.
         String thinkingResponse = "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"m\","
                 + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"391\","
                 + "\"reasoning_content\":\"Thinking Process: 17*23 = 391\"},\"finish_reason\":\"stop\"}],"

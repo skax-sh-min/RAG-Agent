@@ -14,18 +14,17 @@ import java.util.Set;
  * <p>오류를 서버 문구로 가르는 판정(컨텍스트 초과 {@link LlmRouter#isContextOverflow}, 생각 필드 거부
  * {@link ThinkingControl#rejectedField})이 읽는 단일 출처다.
  *
- * <p><b>Spring AI 2.0 이후</b> 채팅·임베딩 호출의 오류는 OpenAI SDK 의 {@link OpenAIServiceException}(상태 코드·헤더·파싱된
- * 본문을 가진다)이고, 스트리밍은 그것이 {@code CompletionException} 에 싸여 온다. 아래 서술은 1.x 의 WebClient/RestClient
- * 경로를 설명하며, 그 예외들도 계속 알아본다(이 앱의 날것 HTTP 호출이 쓴다).
+ * <p>채팅·임베딩 호출의 오류는 OpenAI SDK 의 {@link OpenAIServiceException}(상태 코드·헤더·파싱된 본문을 가진다)이고,
+ * 스트리밍은 그것이 {@code CompletionException} 에 싸여 온다.
  *
- * <p><b>왜 메시지만으로는 안 되는가.</b> 블로킹 경로(RestClient)의 오류는 Spring AI 의 오류 처리기가 본문을 메시지에
- * 싣는다({@code "HTTP 400 - {...}"}). 스트리밍 경로 — {@code OpenAiApi.chatCompletionStream()} 의 WebClient — 에는 그
- * 처리기가 없다(Spring AI 1.1.8 의 {@code OpenAiApi} 생성자는 {@code defaultStatusHandler} 를 RestClient 에만 건다 —
- * 2026-10-02 바이트코드 확인). 그래서 {@link WebClientResponseException} 의 메시지는
- * {@code "400 Bad Request from POST …/chat/completions"} 뿐이고, 서버가 쓴 문장은 응답 본문에만 있다. llama.cpp 는
- * 스트리밍 요청의 컨텍스트 초과도 SSE 가 아니라 일반 HTTP 400 본문({@code "request (40016 tokens) exceeds the available
- * context size …"})으로 돌려주므로(같은 날 실측), 메시지만 보던 동안 채팅 답변 스트리밍의 축소 재시도는 실제 서버에서
- * 한 번도 발동하지 않았다.
+ * <p><b>왜 메시지만으로는 안 되는가.</b> SDK 가 메시지에 싣는 것은 본문 전체가 아니라 {@code message} 나 {@code error} 값뿐일 수
+ * 있어(예: {@code {"error":"terminated"}} → {@code 500: "terminated"}) 파싱된 본문을 함께 읽는다. llama.cpp 는 스트리밍 요청의
+ * 컨텍스트 초과도 SSE 가 아니라 일반 HTTP 400 본문({@code "request (40016 tokens) exceeds the available context size …"})으로
+ * 돌려준다(2026-10-02 실측).
+ *
+ * <p>{@link WebClientResponseException}·{@link RestClientResponseException} 갈래는 응답 본문을 가진 다른 HTTP 오류를 위한 것이다.
+ * WebClient 는 OpenAI 경로가 더는 만들지 않는 잔재이고, {@code RestClientResponseException} 은 {@code LlmPing}·Chroma 의
+ * 날것 HTTP 가 쓴다.
  */
 public final class LlmErrorText {
 
