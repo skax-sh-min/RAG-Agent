@@ -611,12 +611,13 @@ public class AdminService {
         if (isSqliteVec()) {
             // Metadata/text only — the stored vector (vec_embeddings) is intentionally preserved
             // (same caveat as the Chroma path: editing text does not re-embed).
+            String oldText = newText == null ? null : storedTextSqliteVec(chunkId);   // image_paths 를 마커 변화에 맞추려면 옛 본문이 필요하다
             if (newText != null) {
                 jdbc.update("UPDATE vec_document_chunks SET content = ? WHERE spring_doc_id = ?",
                         newText, chunkId);
             }
             jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
-                    toJson(mergeEditableMeta(storedMetaSqliteVec(chunkId), clientMeta)), chunkId);
+                    toJson(mergeEditableMeta(storedMetaSqliteVec(chunkId), clientMeta, oldText, newText)), chunkId);
             if (newText != null && questionReuseService != null) {
                 questionReuseService.invalidateChunk(chunkId);
             }
@@ -650,7 +651,9 @@ public class AdminService {
         List<Map<String, String>> storedMetas = existing == null ? null : existing.metadata();
         Map<String, String> storedMeta = (storedMetas != null && !storedMetas.isEmpty()
                 && storedMetas.get(0) != null) ? storedMetas.get(0) : Map.of();
-        Map<String, Object> metaObj = new HashMap<>(mergeEditableMeta(storedMeta, clientMeta));
+        String oldText = (existing != null && existing.documents() != null && !existing.documents().isEmpty())
+                ? existing.documents().get(0) : null;
+        Map<String, Object> metaObj = new HashMap<>(mergeEditableMeta(storedMeta, clientMeta, oldText, newText));
 
         try {
             chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
@@ -828,6 +831,42 @@ public class AdminService {
      */
     static Map<String, String> mergeEditableMeta(Map<String, String> storedMeta,
                                                  Map<String, String> clientMeta) {
+        return mergeEditableMeta(storedMeta, clientMeta, null, null);
+    }
+
+    /**
+     * 위와 같되, 본문이 바뀌었으면({@code newText != null}) {@link MetaKey#IMAGE_PATHS} 도 마커의 변화에 맞춘다.
+     *
+     * <p><b>왜 필요한가.</b> {@code image_paths} 는 인덱싱 때 정해져 저장되고, 검색이 그것을 읽어 지연 Vision 대상과 답변 썸네일을
+     * 정한다({@code RetrievalService.imagePathsMeta}). 편집 화면에서 그림을 넣고 빼도 이 값이 그대로면 지운 그림이 답변에 계속 붙고
+     * 새 그림은 붙지 않는다.
+     *
+     * <p><b>본문 전체에서 다시 만들지 않는다.</b> 옛 값 − (옛 본문에는 있었는데 새 본문에서 사라진 마커) + (새 본문의 마커)다.
+     * 스캔 PDF처럼 본문에 마커가 없이 {@code image_paths} 만 가진 청크가 있어서, 본문의 마커만으로 다시 만들면 본문 한 글자를
+     * 고쳤을 뿐인데 그 그림들이 조용히 떨어져 나간다. {@code oldText} 를 모르면({@code null}) 사라진 마커는 없는 것으로 본다.
+     */
+    static Map<String, String> mergeEditableMeta(Map<String, String> storedMeta, Map<String, String> clientMeta,
+                                                 String oldText, String newText) {
+        Map<String, String> merged = mergeEditableMetaBase(storedMeta, clientMeta);
+        if (newText != null) {
+            java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
+            String stored = merged.get(MetaKey.IMAGE_PATHS);
+            if (stored != null && !stored.isBlank()) {
+                for (String p : stored.split(",")) if (!p.isBlank()) paths.add(p.strip());
+            }
+            if (oldText != null) {
+                List<String> now = ChunkImageEditor.paths(newText);
+                for (String p : ChunkImageEditor.paths(oldText)) if (!now.contains(p)) paths.remove(p);
+            }
+            paths.addAll(ChunkImageEditor.paths(newText));
+            if (paths.isEmpty()) merged.remove(MetaKey.IMAGE_PATHS);
+            else merged.put(MetaKey.IMAGE_PATHS, String.join(",", paths));
+        }
+        return merged;
+    }
+
+    private static Map<String, String> mergeEditableMetaBase(Map<String, String> storedMeta,
+                                                             Map<String, String> clientMeta) {
         Map<String, String> merged = new LinkedHashMap<>(storedMeta == null ? Map.of() : storedMeta);
         boolean curated = "curated_qa".equals(merged.get(MetaKey.DOC_TYPE));
         if (clientMeta != null && !curated) {
@@ -838,6 +877,18 @@ public class AdminService {
         }
         merged.put(MetaKey.EDITED_AT, Instant.now().toString());
         return merged;
+    }
+
+    /** sqlite-vec 백엔드에 저장된 이 청크의 본문. 없거나 읽지 못하면 {@code null}. */
+    private String storedTextSqliteVec(String chunkId) {
+        try {
+            List<String> rows = jdbc.query("SELECT content FROM vec_document_chunks WHERE spring_doc_id = ?",
+                    (rs, n) -> rs.getString(1), chunkId);
+            return (rows == null || rows.isEmpty()) ? null : rows.get(0);
+        } catch (Exception e) {
+            log.warn("updateChunk: 기존 본문 조회 실패 id={} — image_paths 는 새 본문의 마커만 더한다: {}", chunkId, e.getMessage());
+            return null;
+        }
     }
 
     /** sqlite-vec 백엔드에 저장된 이 청크의 메타데이터. 없거나 읽지 못하면 빈 맵. */

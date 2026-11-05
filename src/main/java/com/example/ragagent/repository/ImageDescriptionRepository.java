@@ -29,14 +29,14 @@ public class ImageDescriptionRepository {
         return result;
     }
 
-    public void save(String path, String description, String imageType, String provider) {
+    public void save(String path, String description, String provider) {
+        // image_type 컬럼은 예전 유형 분류의 흔적이라 더 쓰지 않는다(스키마는 Flyway 라 그대로 두고 NULL 로 남는다).
         jdbc.update("""
-                INSERT INTO image_descriptions (image_path, description, image_type, provider)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO image_descriptions (image_path, description, provider)
+                VALUES (?, ?, ?)
                 ON CONFLICT(image_path) DO UPDATE SET
                     description = excluded.description,
-                    image_type  = excluded.image_type,
                     provider    = excluded.provider
-                """, path, description, imageType, provider);
+                """, path, description, provider);
     }
 }

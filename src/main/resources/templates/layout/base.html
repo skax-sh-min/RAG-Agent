@@ -136,16 +136,7 @@
                 <span th:text="#{nav.llm.label}">LLM</span>: <span id="llm-concurrency-value">0/0</span>
             </span>
 
-            <!-- Language switcher -->
-            <div class="d-flex align-items-center gap-1 small">
-                <a th:href="@{''(lang=ko)}"
-                   th:classappend="${#locale.language == 'ko'} ? ' fw-bold text-white' : ' text-secondary'"
-                   class="text-decoration-none">KO</a>
-                <span class="text-secondary">|</span>
-                <a th:href="@{''(lang=en)}"
-                   th:classappend="${#locale.language != 'ko'} ? ' fw-bold text-white' : ' text-secondary'"
-                   class="text-decoration-none">EN</a>
-            </div>
+            <!-- 언어 전환(KO | EN)은 상단 메뉴가 아니라 /settings 의 "화면 표시" 카드에 있다. -->
 
             <!-- Theme toggle -->
             <button id="theme-toggle" class="btn btn-sm btn-link text-light border-0 p-1"

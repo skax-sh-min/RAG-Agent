@@ -15,6 +15,8 @@
 
 ### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.16.2·6.19.1·6.20 제외)
 
+> **2026-11-04 추가 완료**: **§6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집** — 채팅 질문 한도를 2,000 → **10,000자**(`app.chat.max-question-chars`)로 올리되 모델 창에 들어가는 길이를 넘으면 서버가 거절한다(`QuestionLimit`) · 500자 초과 질문은 검색에 앞 300+뒤 200자와 낱말 20개를(LLM 없이), 2,000자 초과는 LLM 이 만든 검색문·키워드를 쓴다(`LongQuestionQuery` · `QuestionCondenser.prepare()` — 답변에는 늘 질문 전문) · 답변·검증 프롬프트에서만 이미지 경로·`[페이지: N]` 를 줄인다(`normalizeForPrompt`, 임베딩·해시는 그대로) · 그림 설명 프롬프트를 `형식: 한두 문장` 한 줄로 단일화 · `/admin` 청크 편집에서 그림 추가·교체·삭제·설명 생성(`ChunkImageEditor`). 화면: `/settings` "화면 표시" 카드를 좌(언어·글자 크기)/우(미리보기)로 나누고 KO/EN 전환을 헤더에서 옮겼다 · `/admin` 의 버전 목록을 문서 레지스트리 옆으로 · 청크 목록의 수정일시·레지스트리 표시 이름 · 컨텍스트 창을 모를 때 `-` 대신 `미탐지 (입력 제한 없음)`. **열린 항목**: 요약 입력(`buildSummaryInput`)의 과거 질문 캡 · Direct 의 축소 재시도(§6.30 연관 작업 중 남은 둘) · 긴 질문 검색 품질의 측정(골든셋 없음) · 이미 인덱싱된 문서의 옛 그림 설명은 재인덱싱해야 바뀐다.
+>
 > **2026-10-27 추가 완료**: **§6.31 이력 제외 체크박스**(RAG 답변) — `응답옵션` 왼쪽 체크박스(구분선으로 갈랐다)를 켜면 그 메시지의 답변 프롬프트에서 `[이전 대화]` 를 빼고(후속 질문이면 다시 쓴 질문 한 줄) 최종 컷에 `이력 상한 ÷ chunk-size`(기본 +4)를 더한다. 검증 쪽은 교환이 없어 발췌 글자 상한과, 창을 알면 실제 문서 크기로 잰 발췌 예산 안에서만 더한다. Direct·`meta` 는 무시하고, 턴에 저장(Flyway V11)하며 재사용이 복사한다. 질문 버블에 `이력 제외` 표시. 꺼진 상태의 답변 프롬프트는 기능 이전과 바이트 단위로 같다(`AnswerPromptGoldenTest`). **측정**([PROMPT_LADDER_EVALUATION.md §8](PROMPT_LADDER_EVALUATION.md), 긴 독립 질문 13사례): keyHit 은 16K·32K 모두 같고(사례까지), 근거 있음 +2·+1, 재시도·LLM 호출은 줄었다. 32K 에서는 +4 가 13건 모두 실렸고, 16K 에서는 첫 시도의 부스트가 0(검증 예산)이라 이력만 빠진다. 64K 는 서버가 32K 라 재지 못했다(32K 에서 이미 부스트가 최대로 실렸다).
 >
 > **2026-10-26 추가 완료**: **§6.30 프롬프트 축소 사다리**(RAG 답변) — 넘치면 과거 질문 자르기 → 직전 1턴만 → 문서를 top-k 의 50% 까지 → 직전 Direct 답변을 `## 요약` 으로 → 이력 전부(후속 질문이면 다시 쓴 질문 한 줄) → 문서 1개 순으로 줄이고, 멈춘 뒤 남는 자리는 되돌려 채운다(`PromptLadder` — 사전 예산·축소 재시도·`/settings` 미리보기가 같은 계획을 부른다). 검증 실패 재시도는 답변 프롬프트에 실린 문서로 판단한다(교체·조기 종료 · 이력을 더 줄이지 않음 · 새 문서는 나중에 뺀다). **측정**([PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md), 창 16K·12K 선언 × 43사례): 긴 독립 질문은 첫 시도의 문서가 1.0~1.2개 늘고 최종 근거 있음이 두 창 모두 +1, 재시도·LLM 호출은 줄었다. 후속 질문 ①②③ 은 같거나 한 건 차이다. 측정 중 재시도 규칙 D 의 결함을 찾아 고쳤다 — 검증이 쓴 문서를 보고하지 않으면 직전 문서부터 빼서, 바닥 아래에서 상위·하위 문서를 오갔다(12K 긴 질문 LLM 호출 +33%, 조기 종료 0회). E 는 넣지 않고, 50%·500자는 상수로 둔다.
@@ -72,6 +74,7 @@
 | 4 | 운영 준비 잔여 — ~~SQLite 백업 자동화~~, Caddy 인증서 만료 모니터링 | **SQLite 백업은 2026-10-13 완료** — 앱 안의 정기 백업(`DatabaseBackupService`, 매일 03:30 · 최근 7개 · `/admin` "DB 백업" 카드에서 수동 실행). Litestream/cron 대신 앱 안에 둔 이유: 폐쇄망 단일 운영자 배포에 바이너리·스케줄러를 하나 더 들이지 않고, 별도 연결의 `VACUUM INTO` 라 WAL 에서 쓰기를 막지 않으며(54 MB 1초), 사본마다 `quick_check` 로 검증된다. 담지 않는 것: 문서 파일 · Chroma 벡터(OPERATOR_MANUAL §6.3.2). Caddy 인증서 모니터링은 미착수 |
 | ~~5~~ | ~~**§6.30 프롬프트 축소 사다리** — 바닥값이 있는 단계형(RAG 답변)~~ | ✅ 2026-10-26 완료 (사다리 + 재시도 A~D — D 의 "모름" 기본값은 측정으로 바꿨다 · E 넣지 않음 · 50%·500자 상수 유지, [PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md)). 연관 작업 — 질문 한도 5,000자의 전제 넷(상수 분리·질문 임베딩 상한·이력 속 과거 질문·Direct 축소 재시도)은 미착수 |
 | ~~6~~ | ~~**§6.31 이력 제외 체크박스** — 이전 대화 대신 문서를 더(RAG 답변)~~ | ✅ 2026-10-27 완료 (켜면 이력을 빼고 문서 +`이력 상한 ÷ chunk-size` — 검증 쪽 상한 안에서 · Direct/meta 무시 · V11 저장·재사용 복사 · 버블 표시. 긴 독립 질문 keyHit 16K·32K 같음, [PROMPT_LADDER_EVALUATION.md §8](PROMPT_LADDER_EVALUATION.md)). 64K 측정은 서버 창(32K) 때문에 못 했다 |
+| ~~6~~ | ~~**§6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집**~~ | ✅ 2026-11-04 완료 (질문 한도 10,000자 + 창 기준 거절 · 500/2,000자 2단계 검색 질의 · 프롬프트 전용 이미지 마커 축약 · 그림 설명 `형식: 한두 문장` · 청크 편집의 그림 추가/교체/삭제). 열린 항목은 §6.32 끝 |
 | 7 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. **§6.26 이후 전제가 바뀌었다** — 검증 발췌 상한이 이제 창에서 파생되므로(`evalExcerptTokenBudget`), 부스트를 올리기 전에 확인할 것은 `MAX_EVAL_EXCERPT_CHARS` 상수가 아니라 **대상 프로바이더의 실제 창**이다 |
 | 8 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 9 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
@@ -284,7 +287,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료
 
-`AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않아 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던 문제(사용자 실사용 중 보고)를 발견·수정 — 블로킹 호출은 `executeWithTracking()`으로, 스트리밍은 `LlmRouter.recordApproxUsage()`로, 프레임워크가 내부에서 자체 `ChatClient`를 구성해 가로챌 수 없는 `MultiQueryExpander`는 신규 `TrackingChatModel` 데코레이터로 해결(2026-10-08 이후에는 호출마다 라우터를 지나는 `RoutedChatModel` 로 대체되어 그 데코레이터와 `ConcurrencyLimitingChatModel` 은 삭제 — §6.12 ⑥).
+`AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`(2026-11-04 제거)/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않아 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던 문제(사용자 실사용 중 보고)를 발견·수정 — 블로킹 호출은 `executeWithTracking()`으로, 스트리밍은 `LlmRouter.recordApproxUsage()`로, 프레임워크가 내부에서 자체 `ChatClient`를 구성해 가로챌 수 없는 `MultiQueryExpander`는 신규 `TrackingChatModel` 데코레이터로 해결(2026-10-08 이후에는 호출마다 라우터를 지나는 `RoutedChatModel` 로 대체되어 그 데코레이터와 `ConcurrencyLimitingChatModel` 은 삭제 — §6.12 ⑥).
 
 ---
 
@@ -475,7 +478,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 ### 6.29 호출 지점별 생각(추론) 수준 제어 ✅ 완료 2026-10-07 (1~6단계) — 설계 2026-10-02
 
-**목표**: LLM 호출 지점(사이트) 22곳마다 모델의 생각(reasoning)을 **끔/낮게/중간/높게** 중 하나로 정하고 `/settings`(관리자 전용)에서 핫 편집한다 — 채팅 답변(RAG S/N/C · Direct S/N · 메타), 응답 검증, 분류·독립화·확장·리랭크, 답변 뒤 보강, 인덱싱(키워드+맥락 · MD 교정 · TXT→MD · 이미지), 관리자 도구 전부.
+**목표**: LLM 호출 지점(사이트) 21곳마다(처음 22곳 — `IMAGE_TYPE` 은 2026-11-04 에 제거) 모델의 생각(reasoning)을 **끔/낮게/중간/높게** 중 하나로 정하고 `/settings`(관리자 전용)에서 핫 편집한다 — 채팅 답변(RAG S/N/C · Direct S/N · 메타), 응답 검증, 분류·독립화·확장·리랭크, 답변 뒤 보강, 인덱싱(키워드+맥락 · MD 교정 · TXT→MD · 이미지), 관리자 도구 전부.
 
 **결과** — 6단계 실측(llama.cpp b11433 + gemma-4-E2B, 같은 입력을 끔/낮게로 번갈아 부름): 생각이 이득을 준 곳은 **응답 검증**(근거 없는 답을 잡는 비율 6% → 44%)과 **응용(C) 답변의 코드**뿐이었고, 나머지는 같은 품질에 짧은 호출이 10~40배, 채팅 답변은 첫 글자가 11~34초 느렸다. 측정은 그 셋(`EVAL`·`EVAL_CREATIVE`·`ANSWER_RAG_C`)만 낮게를 권했지만 **출하값은 속도를 택해 22곳 전부 끔**이다(운영 결정 2026-10-07 — `application.properties`·`ThinkingSite.shippedDefault`, `ThinkingSiteTest` 가 고정). 사이트별 수치·하네스·재현 방법은 [THINKING_EVALUATION.md](THINKING_EVALUATION.md).
 
@@ -486,7 +489,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 #### 설계 (요약 — 번호와 (가)~(자) 라벨은 소스 주석이 가리키는 자리다)
 
 - **① 세 축을 분리한다** — 호출부는 **사이트만** 표시하고(`ThinkingSite`, 코드 고정), 수준은 설정에서 읽고(`ThinkingLevel` 넷뿐 — "서버 기본값" 수준은 앱이 모르는 값이라 두지 않는다. 생각 제어를 받을 수 없는 서버는 프로바이더의 성질 `NONE` 으로 옮겼다), 그 수준을 어떤 필드로 바꿀지는 **프로바이더가 정해진 뒤** 데코레이터가 정한다(`ThinkingDialect` = `app.llm.providers[n].thinking-dialect`, 재시작 필요 — 받을 프로바이더를 라우터가 나중에 정하므로 `MaxTokensCappingChatModel` 과 같은 이유).
-- **② 호출 지점과 출하값** — 22곳, 출하값은 위 결과대로 전부 끔. 측정하지 못한 `SUMMARY`·이미지 셋도 끔이다(열린 항목 (f)). 서버를 생각 끔으로 띄운 배포에서도 낮게인 사이트는 요청의 `enable_thinking=true` 가 서버 기본값을 덮어 생각한다(검증이 한 번에 2~14초 → 45~60초).
+- **② 호출 지점과 출하값** — 21곳(처음 22곳 — `IMAGE_TYPE` 제거), 출하값은 위 결과대로 전부 끔. 측정하지 못한 `SUMMARY`·이미지 둘도 끔이다(열린 항목 (f)). 서버를 생각 끔으로 띄운 배포에서도 낮게인 사이트는 요청의 `enable_thinking=true` 가 서버 기본값을 덮어 생각한다(검증이 한 번에 2~14초 → 45~60초).
 - **③ 수준 → 필드 변환** — `AUTO`(지정하지 않으면: LOCAL 이면 `TEMPLATE_KWARGS`, 아니면 `NONE`) · `NONE`(싣지 않음 — 서버가 정한다, 생각 여유도 더하지 않는다) · `TEMPLATE_KWARGS`(`enable_thinking` — 세 단계가 같은 값으로 접힘) · `TEMPLATE_KWARGS_EFFORT`(gpt-oss — 끔이 `low` 로 접힘) · `OPENAI_EFFORT`(최상위 `reasoning_effort`, 끔은 `none`). 접힘 여부는 `dialect.effective(level)` 하나로 화면과 실제 전송이 함께 계산한다.
 - **④ 출력 예약 — 이 기능에서 가장 위험한 부분.** 생각 토큰도 `max_tokens` 를 먹으므로 상한이 작은 호출은 생각을 켜는 순간 빈 응답이 나고, 반대로 상한을 넉넉히 올리면 `max_tokens` 가 예약이라 입력(검색 문서·이력·검증 발췌)이 먼저 잘린다. 그래서 `예약 = base + clamp(C − base, 0, h)`, `C = min(프로바이더 max-tokens, 창 × 25%)`(창을 모르면 프로바이더 max-tokens), `h` = 낮게 1,024 · 중간 2,048 · 높게 4,096(켬으로 나갈 때만) — **더하기만 하고 기본 예약은 깎지 않는다**. `ThinkingBudget.compute()` 하나를 요청(`ThinkingControlChatModel` 이 받는 프로바이더가 정해진 뒤 더한다)·입력 예산을 미리 재는 일곱 자리·미리보기가 함께 부르고, 재작성 사이트(`MD_CORRECT`·`TXT_TO_MD`)는 여유를 깎지 않고 조각을 줄인다(`PromptBudget.rewriteInputChars`). 상수(낮게 512 → 1,024, `expectedOutputTokens`)는 6단계 실측으로 정했다.
 - **⑤ 스트리밍** — 채팅 답변(`stream=true`)은 `ChatModel` 체인을 통째로 우회하므로 `AnswerStreamer` 하나가 체인이 하던 일을 같은 함수로 한다: 수준 싣기(`ThinkingControl.applyTo`) · 생각 델타는 화면에 내보내지 않고 **활동으로만**(유휴 워치독 + "모델이 생각하는 중... (N초)") · 첫 청크 전의 거부만 한 번 재시도 · 관측 · 실제로 나간 본문의 curl 로그. `provider.openAiApi()` 를 다른 곳에서 부르면 빌드가 막는다.
@@ -588,7 +591,9 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 **완료 기준**: 긴 질문에서 근거가 늘고(예 1), ① 이 같거나 나아지며, ②·③ 이 **지금보다 나빠지지 않는다**(칸 4 의 존재 이유 — 나빠지면 칸 4 를 칸 3 앞으로 옮기거나 요약 대신 앞 N자를 키운다). 재시도 성공률도 지금보다 나빠지지 않는다. 사다리 순수 함수와 위 네 예의 골든 테스트(예 4 가 지금과 같은지 — 되돌려 채우기), 사전 예산·재시도가 같은 칸을 지나는지의 테스트, 재시도 테스트(안 보낸 문서는 밀리지 않는다 · 보낸 집합이 같으면 멈춘다 · 재시도가 이력을 더 줄이지 않는다 · 새 문서가 나중에 빠진다), 미리보기 정합 테스트가 있다.
 
-#### 연관 작업 — 질문 한도 5,000자 (같은 분석에서 나왔다, 별도 착수 가능)
+#### 연관 작업 — 질문 한도 5,000자 (같은 분석에서 나왔다) — 일부 완료 2026-11-04 (§6.32)
+
+> **진행 상황**: 한도는 5,000자가 아니라 **10,000자**로 올랐다(§6.32). 아래 다섯 중 ① 상수 분리(채팅 전용 `MAX_CHAT_QUESTION_LEN`, 제목·요약 검사는 2,000자 그대로 + 창 기준 한도 `QuestionLimit`)와 ② 질문 임베딩 상한(500자 초과는 앞 300+뒤 200자만 벡터 검색문으로)은 **해결**됐다. ③ 이력 속 과거 질문(요약 입력 `buildSummaryInput()` 의 질문 캡)과 ④ Direct 의 축소 재시도는 **아직 열려 있다** — 한도가 10,000자가 됐으니 ③ 의 위험(긴 질문 하나가 요약 2,000자를 다 차지)은 더 커졌다. ⑤ 예산 영향은 아래 그대로다.
 
 이 사다리가 해결하는 압박의 가장 큰 원인이 긴 질문이다. 한도를 올리려면 한 줄(`PromptInjectionGuard.MAX_QUESTION_LEN`)로 끝나지 않는다:
 
@@ -643,6 +648,26 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 `chat.html`(체크박스 · Direct 비활성화 · 숨은 필드 · 버블 표시) · `chat-stream.js`/`base.html`/`fragments/message-assistant.html`(버블 표시) · 메시지 번들 한/영 · `ChatForm`/`ChatRequest`(필드 + Direct 가드) · `AgentState`(컴포넌트 하나 — `AgentState.of()` 위치 생성자도) · `AgentService`/`StreamingAgentService`(켜면 답변용 이력을 넘기지 않음) · `RetrievalService`(부스트 + 검증 쪽 상한) · `AnswerService`(다시 쓴 질문 줄 · 안내 문구) · Flyway `V11` + `TurnPersistence`·`MemoryRepository`·`QuestionReuseRepository`(복사) · 문서: CLAUDE.md(`AnswerService`·`RetrievalService` 항목), DATABASE.md(컬럼), UI.md, OPERATOR_MANUAL(채팅 사용법).
 
 **완료 기준**: 꺼진 상태에서 프롬프트가 지금과 바이트 단위로 같다(회귀 테스트). 부스트 식·검증 쪽 상한·Direct/`meta` 무시·재사용 복사·버블 렌더의 테스트가 있다. 측정은 §6.30 의 하네스(8k·16k 선언)에 64k 를 더해 긴 독립 질문의 keyHit 이 같거나 나아지는지 본다.
+
+### 6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집 ✅ 완료 2026-11-04
+
+세 가지가 한 날 연달아 들어갔다. 공통점은 **"저장된 원문"과 "검색·LLM 에 쓰이는 형태"를 갈라 두는 것**이다 — 질문(전문 ↔ 검색 질의), 청크 본문(저장 ↔ 프롬프트용 `normalizeForPrompt`), 그림(마커 ↔ 설명).
+
+**① 질문 한도와 긴 질문의 검색** — 한도 2,000 → **10,000자**(`app.chat.max-question-chars`, 500~100,000). 사다리(§6.30)는 현재 질문을 줄이지 못하는 고정비라 창이 작으면 한도 안의 질문도 예산을 넘는다 → `QuestionLimit` 이 **창 기준 상한**(입력 예산 − 고정 2,000토큰 − 문서 한 개)을 함께 걸어 대화를 만들기 전에 "이 모델에서는 약 N자까지"로 거절한다(창을 모르거나 500자 이하면 안 건다). 검색 질의는 길이로 갈린다: **500자 초과** — 벡터 검색문은 앞 300+뒤 200자, BM25 는 질문 전체에서 뽑은 낱말 20개(지시 구간의 식별자 우선), LLM 호출 없음 · **2,000자 초과** — `QuestionCondenser.distill()` 이 `검색문:`/`키워드:` 두 줄을 한 번에 만들어(8,000자로 줄여 보낸다) 벡터 검색문을 바꾸고 키워드는 결정적 추출과 합집합(30개). 한 턴의 질의 전처리 LLM 호출은 여전히 최대 하나다(확장·독립화와 같은 게이트를 쓴다). **검색에만** 쓰고 답변 프롬프트의 `[현재 질문]` 은 전문이다. `AgentState.searchKeywords` 가 BM25 질의를, `searchQuestion` 이 벡터·리랭커·분류기 질의를 나르며 `wasCondensed()` 는 긴 질문 경로에서 거짓이다(이력과 무관한 요약을 "이전 대화에 비추어 다시 쓴 질문"이라 부르면 거짓). 임계값·개수(500/2,000/300+200/20/12/30)는 코드 상수.
+
+**② 프롬프트 전용 축약** — `MarkdownNoiseNormalizer.normalizeForPrompt()` 가 답변·검증 프롬프트 세 자리(`buildEvalExcerpts` · `SizedDoc.measured`/`promptText`)에서만 `[이미지: 경로]` → `[이미지]`(뒤따르는 `[이미지 설명: …]` 은 유지)와 `[페이지: N]` 단독 줄을 뺀다. 임베딩·FTS 입력(`SearchTextBuilder`)과 `chunk_fts_key.content_hash` 는 `normalize()` 그대로여야 한다 — 바꾸면 전체 재인덱싱이 필요하고 재사용 스냅샷이 전부 "수정됨"이 된다.
+
+**③ 그림** — 설명 프롬프트를 `VisionDescriptionService.CAPTION_PROMPT` 하나(`형식: 한두 문장`, 고정 형식 어휘, 일반 서술 금지)로 단일화하고 출력은 `cleanCaption()` 을 지난다(첫 줄·300자·`[ ]`→`( )`·`|`→`/`). 이유: 옛 프롬프트는 소형 모델이 어느 이미지에나 맞는 문장을 쓰게 했다(코퍼스 설명 10개 중 8개). **청크 편집의 그림 관리**: 그림의 자리는 본문 속 `[이미지: …]` 마커(+ 바로 뒤 `[이미지 설명: …]`)라 추가·교체·삭제는 **텍스트 변환**이다 — 규칙은 서버의 순수 클래스 `ChunkImageEditor`(JS 테스트 하네스가 없다)에, 경로 검사·Vision·업로드는 `ChunkImageService`, 엔드포인트는 `AdminChunkImageController`(`/admin/chunk-images*`)에 있고 **서버가 저장하지 않는다**(저장은 청크 「저장」 하나). 저장 시 `AdminService.updateChunk()` 가 `image_paths` 를 마커 변화에 맞춘다. 올린 파일은 `images/chunks/`(`images/submissions/` 는 `sweepOrphans` 가 청크 본문 마커를 참조로 보지 않아 24시간 뒤 지운다).
+
+**④ 화면 정리** — `/settings` 화면 표시 카드의 좌우 2단과 KO/EN 이전, `/admin` 의 버전 목록 ↔ 문서 레지스트리 배치와 청크 목록 칸(수정일시 `max(edited_at, collected_at)` · 파일명은 레지스트리 표시 이름), 컨텍스트 창 미탐지 문구. 컨텍스트 칸에 숫자를 지어 보이지 않는 이유: 앱에는 모를 때 쓰는 기본 창이 없다 — 모르면 창 기준 보정이 꺼진다(OPERATOR_MANUAL 의 프로바이더 표 `컨텍스트` 열 설명).
+
+**열린 항목**
+- **이력 속 긴 질문**: `buildSummaryInput()` 이 과거 질문을 원문으로 이어 붙여 완성본의 앞 2,000자만 남기므로 10,000자 질문 하나가 요약을 다 차지한다(§6.30 연관 작업 ③). 답변에 거는 `UNSUMMARIZED_ANSWER_CAP`(300자) 같은 캡을 질문에도 건다.
+- Direct 경로의 축소 재시도 없음(연관 작업 ④).
+- **긴 질문 검색 품질은 측정하지 않았다** — 골든셋이 없다. 500/2,000자 경계·낱말 20개·앞 300+뒤 200자는 설계 가정이다. 측정하려면 SEARCH_EVALUATION 하네스에 긴 질문 세트를 더한다.
+- **이미지 유형 분류기는 제거했다**(2026-11-04) — 다섯 유형이 같은 `CAPTION_PROMPT` 를 가리켜 분류가 설명을 바꾸지 못하는데 지연 Vision 경로가 이미지당 호출을 한 번 더 내서, 기본을 `false` 로 내린 뒤 같은 날 `ImageTypeClassifier`·`classify-type`·`ThinkingSite.IMAGE_TYPE`(사이트 22 → 21곳)·`PROMPTS` 맵을 코드째 걷어냈다. `image_descriptions.image_type` 컬럼은 스키마에 남지만 더 쓰지 않는다([IMAGE_PROCESS.md §13](IMAGE_PROCESS.md)).
+- 새 설명 프롬프트의 **실제 출력 품질**과 이미 인덱싱된 문서의 옛 설명은 재인덱싱(↺)·「설명 생성」을 해야 바뀐다(`image_descriptions` 캐시의 옛 행도).
+- 청크 편집에서 마커를 지워도 `images/chunks/` 의 파일은 남는다(다른 청크가 같은 그림을 쓸 수 있고 저장 전에는 되돌릴 수 있다) — 고아 정리는 없다.
 
 ---
 

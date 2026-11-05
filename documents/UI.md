@@ -166,12 +166,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록 + 문서 레지스트리 |
+| GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록(왼쪽)·문서 레지스트리(오른쪽) 한 줄 + 청크 패널(전체 폭) |
 | GET | `/admin/chunks` | `fragments/admin-chunks :: table` | 컬렉션(또는 버전)·docId별 청크 페이지네이션 |
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) — 메타데이터는 `excerpt_keywords`·`chunk_context` 두 키만 저장본 위에 병합(`AdminService.mergeEditableMeta()`), 큐레이션 청크는 그 둘도 거부 |
 | POST | `/admin/chunks/{chunkId}/reindex` | `200` / `404` | **이 청크만 재인덱싱** — body `{"regenerateKeywords": true\|false}`. id 보존 upsert + FTS 재색인; 큐레이션 청크는 서버가 `doc_type`으로 갈라 `CuratedQaService.reembedRow()`(행 단위)로 보낸다(OPERATOR_MANUAL §7.2-bis) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
+| POST | `/admin/chunk-images` (multipart `file`) · `/admin/chunk-images/markers` · `/admin/chunk-images/edit` | JSON `{"path","url"}` · `[{"index","path","url","exists","unconvertible","described","description"}]` · `{"text","markers","warning"}` | 청크 편집 패널의 **「이미지」 패널**(그림 추가·교체·삭제·설명 생성, `AdminChunkImageController` → `ChunkImageService`/`ChunkImageEditor`). 업로드는 `images/chunks/{해시}.ext` 에 저장하고 경로만 돌려준다; `markers`·`edit`(`action` = `insert`/`replace`/`remove`/`describe`)은 **본문 텍스트를 받아 바뀐 본문을 돌려줄 뿐 저장하지 않는다** — 저장은 청크의 「저장」 하나(규칙을 JS 가 아니라 서버에 둔 이유: JS 테스트 하네스가 없다). 전부 `/admin/**` 라 `ROLE_ADMIN` 전용 |
 | POST | `/admin/registry/reconcile-chunks` | JSON `{"checked","fixed"}` | 문서 레지스트리의 청크 수를 벡터 스토어 실측으로 다시 세어 맞춘다(문서 레지스트리 카드의 **청크 수 재계산** 버튼, 완료 후 `location.reload()`) |
 | POST | `/admin/documents/{docId}/reindex[?force=true]` | 202 `{"taskId":"..."}` / 409 `{"status":"preflight_warnings","docId","editedChunks","problems":[{line,kind,message}]}` | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다). 진행률은 업로드와 **같은** `GET /ui/documents/progress/{taskId}` SSE를 그대로 쓴다(위 §3.2 재접속 처리도 동일 적용) — `admin.html`의 `subscribeReindexProgress()`는 연결 오류 시 즉시 포기하지 않고 최대 5회까지 재시도하며, `unknown` 종결 이벤트를 받으면 "새로고침하여 확인" 경고로 표시한다 |
 | GET | `/admin/curated` | `fragments/admin-curated :: panel` | §10.10 — 큐레이션 Q&A 패널 지연 로딩 프래그먼트. `offset`(기본 0)·`limit`(기본 20, 20/50/100) 쿼리 파라미터로 페이지네이션. `/admin` 페이지 자체는 이 데이터를 조회하지 않고, 카드를 처음 펼칠 때만(`<details>` `toggle` 이벤트) HTMX로 호출되며, 이후 페이지 이동·페이지당 건수 변경은 `loadCurated()`(페이지 레벨 JS, plain fetch)가 같은 엔드포인트를 다시 호출함 |
@@ -226,13 +227,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **`pending-count`가 `/api/v1/**`이 아닌 이유**: 관리 전용 인증 모드(§6.17)에서 `/api/v1/**`은 CSRF 예외 + 게스트 개방이라 거기 두면 검토 대기 건수가 누구에게나 노출된다. `/admin/**` 아래 두면 `ROLE_ADMIN` 게이트를 그대로 상속한다.
 >
-> **청크 목록 컬럼**(`fragments/admin-chunks :: table`): ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·챕터·키워드·작업. **챕터** 열은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)를 보여주며, "0"(프롤로그·PPTX·스캔 PDF — 실제 챕터 없음)이면 빈 칸으로 표시된다 — [§4 출처 Hover 미리보기](#출처-hover-미리보기)의 인용 라벨 로직과 동일한 컨벤션.
+> **청크 목록 컬럼**(`fragments/admin-chunks :: table`): ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·챕터·키워드·**수정일시**(`xl` = 1200px 이상에서만, 칸이 좁으면 날짜/시각 두 줄)·작업. **파일명**은 청크 메타데이터가 아니라 **문서 레지스트리의 표시 이름**이다(`AdminController.chunks()` 가 `docLabels` — doc_id → `DocumentInfo.displayLabel()` — 를 내려주고, 레지스트리에 없는 큐레이션 청크만 메타데이터 `filename` 으로 되돌린다). **수정일시**는 `edited_at`(관리자 편집)과 `collected_at`(인덱싱·청크 재인덱싱) 중 더 최신 값이다(`ChunkRow.lastModifiedAt()`). **챕터** 열은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)를 보여주며, "0"(프롤로그·PPTX·스캔 PDF — 실제 챕터 없음)이면 빈 칸으로 표시된다 — [§4 출처 Hover 미리보기](#출처-hover-미리보기)의 인용 라벨 로직과 동일한 컨벤션.
 >
 > **청크 목록 페이지네이션·정렬**: 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.chunks()`의 `limit` 기본값), 필터 폼의 드롭다운 변경 시 `offset=0`으로 다시 조회한다. 정렬은 `doc_id` → `MetaKey.CHUNK_INDEX`(인덱싱 시 부여되는 0-based 문서 내 위치) 순 — 두 백엔드 모두 문서 원본 순서 그대로 표시된다(청크 id 순서 아님). sqlite-vec는 `ORDER BY doc_id, json_extract(metadata,'$.chunk_index'), spring_doc_id`로 DB에서 정렬하고, Chroma는 `get()`에 서버 측 정렬이 없어 매치 전체(최대 `AdminService.CHUNK_FETCH_CAP`=10,000건)를 가져와 애플리케이션에서 정렬 후 페이지네이션한다.
 >
 > **문서 레지스트리 페이지네이션은 이 카드만 클라이언트 측이다**: 페이지당 5/10/20/50건(기본 10, 선택은 `localStorage['adminRegistryPageSize']`에 저장) + 이전/다음. 다른 패널(청크·큐레이션·대화 목록·제안)은 `offset`/`limit`을 서버에 보내 프래그먼트를 갈아끼우지만 레지스트리는 두 가지가 다르다: ① 목록이 이미 `DocRegistry`의 인메모리 맵 전체이고 `admin.html`에 통째로 렌더돼 있어 서버로 다시 다녀와도 줄일 질의가 없다(다른 패널은 DB를 페이지 단위로 읽는다), ② 이 카드에는 청크 삭제 후 청크 수 제자리 갱신(`doc-chunks-<docId>`)·재인덱싱 SSE 진행 표시·`setRegistryBusy()`가 얽혀 있어 프래그먼트로 빼면 그 배선을 전부 다시 해야 한다. 그래서 `applyRegistryPage()`가 `<tr>`을 보이고 숨기기만 한다 — 모든 행이 DOM에 남으므로 그 배선은 그대로 동작하고, 뒤집어 말하면 **이 페이징은 화면을 줄일 뿐 초기 응답 크기를 줄이지 않는다**(레지스트리가 아주 커지면 그때 서버 측으로 옮길 일이다). 두 가지 함정: `setRegistryBusy(false)`의 버튼 일괄 해제가 페이지 경계에서 비활성이어야 할 이전/다음까지 되살리므로 해제 직후 `applyRegistryPage()`를 다시 부르고, 페이지 크기를 저장하는 이유는 청크 수 재계산·재인덱싱이 끝나면 `location.reload()`가 돌기 때문이다(`offset`은 저장하지 않는다 — 목록이 인덱싱 시각 내림차순이라 새 문서 하나로 순서가 밀린다).
 >
-> **청크 필터/페이지네이션 JS는 `admin.html`(페이지 레벨)에 있다, `fragments/admin-chunks.html`이 아니라**: 예전엔 프래그먼트 자체의 `<script>`에 `applyDocFilter`/`applyLimitFilter`/`loadChunks`를 정의했는데, `loadChunks()`가 다음 페이지 응답을 `#chunk-panel.innerHTML = html`로 삽입한다 — 브라우저는 `innerHTML` 대입으로 들어온 `<script>`를 실행하지 않으므로, 문서 레지스트리의 **청크 보기**(`loadChunksByDoc()`, 이것도 plain `innerHTML`)로 패널에 먼저 진입하면 이 함수들이 아예 정의되지 않아 다음 버튼·페이지당 건수 변경이 조용히 무반응이었다(왼쪽 컬렉션 버튼의 `hx-swap`은 스크립트를 실행하므로 그 경로로 먼저 들어오면 우연히 동작했다 — 진입 경로에 따라 동작 여부가 갈리는 버그). 지금은 세 함수 모두 상시 로드되는 `admin.html` 스크립트에 있어 진입 경로와 무관하게 항상 정의돼 있고, 현재 컬렉션 값은 Thymeleaf 인라인 JS 대신 청크 카드 루트의 `data-collection` 속성에서 읽는다(`currentChunkCollection()`) — DOM 속성은 삽입 방식과 무관하게 항상 반영되기 때문. 큐레이션 Q&A 패널의 `loadCurated()`/`applyCuratedLimitFilter()`도 같은 이유로 처음부터 `admin.html`에 둔다.
+> **청크 필터/페이지네이션 JS는 `admin.html`(페이지 레벨)에 있다, `fragments/admin-chunks.html`이 아니라**: 예전엔 프래그먼트 자체의 `<script>`에 `applyDocFilter`/`applyLimitFilter`/`loadChunks`를 정의했는데, `loadChunks()`가 다음 페이지 응답을 `#chunk-panel.innerHTML = html`로 삽입한다 — 브라우저는 `innerHTML` 대입으로 들어온 `<script>`를 실행하지 않으므로, 문서 레지스트리의 **청크 보기**(`loadChunksByDoc()`, 이것도 plain `innerHTML`)로 패널에 먼저 진입하면 이 함수들이 아예 정의되지 않아 다음 버튼·페이지당 건수 변경이 조용히 무반응이었다(컬렉션(버전) 목록 버튼의 `hx-swap`은 스크립트를 실행하므로 그 경로로 먼저 들어오면 우연히 동작했다 — 진입 경로에 따라 동작 여부가 갈리는 버그). 지금은 세 함수 모두 상시 로드되는 `admin.html` 스크립트에 있어 진입 경로와 무관하게 항상 정의돼 있고, 현재 컬렉션 값은 Thymeleaf 인라인 JS 대신 청크 카드 루트의 `data-collection` 속성에서 읽는다(`currentChunkCollection()`) — DOM 속성은 삽입 방식과 무관하게 항상 반영되기 때문. 큐레이션 Q&A 패널의 `loadCurated()`/`applyCuratedLimitFilter()`도 같은 이유로 처음부터 `admin.html`에 둔다.
 >
 > **재인덱싱 사전 점검**(`AdminController.reindexFromMd()`, `force=false`일 때): 작업을 시작하기 전에 읽기 전용으로 (a) 저장된 MD의 코드 펜스 결함(`RagService.checkReindexFenceHealth()` → `MarkdownCorrectionService.findFenceProblems()`, 줄 번호·종류·설명)과 (b) `/admin`에서 손으로 편집한 청크 수(`MetaKey.EDITED_AT`, `AdminService.countEditedChunks()`)를 확인하고, 하나라도 있으면 409 로 돌려준다 — `admin.html`의 `reindexFromMd()`는 1차 요청을 `force` 없이 보내고, 409면 `formatReindexWarnings()`(펜스 문제는 최대 10건 나열)로 `confirm()` 한 번을 띄운 뒤 [확인]이면 `force=true`로 재요청한다(`postReindex(docId, force)`). 두 경고를 한 대화상자에 합치는 이유는 연달아 두 번 물으면 확인을 습관적으로 누르게 되기 때문. 서버 동작은 [OPERATOR_MANUAL.md §7.2](OPERATOR_MANUAL.md#72-md-재인덱싱-흐름) 참고.
 >
@@ -511,6 +512,10 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 > **`C`는 답변 재사용 후보에서도 빠진다**(`allowsReuse() = false`). "다시 만들어 줘"에 저장된 코드를 그대로
 > 돌려주면 요청한 바로 그 일을 하지 않는 셈이 되기 때문이다 — 근거 청크가 그대로여도 마찬가지다.
 > 판정은 `QuestionReuseRepository`의 WHERE 술어가 enum에서 만들어 추천 조회와 재사용 조회가 함께 쓴다.
+
+### 질문 글자 수 카운터 (긴 질문)
+
+입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 2,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
@@ -853,7 +858,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 
 ### 9.4 채팅 글자 크기 (최소·작게·보통·크게)
 
-`/settings` 맨 위 **화면 표시** 카드에서 고른다. 고르는 즉시 적용되고 **이 브라우저의 `localStorage.chatFontSize` 에만** 저장된다(서버 설정이 아니다 — 누구나 바꿀 수 있고, 기기마다 따로다). 카드에는 같은 클래스로 그린 미리보기 말풍선이 있어 설정 화면에서도 차이가 보인다.
+`/settings` 맨 위 **화면 표시** 카드에서 고른다. 카드는 좌우 2단(`row` › `col-md-5` 설정 / `col-md-7` 미리보기, `< md`(768px) 에서는 쌓임)이고 왼쪽에 **언어(KO/EN)** 와 글자 크기가 있다 — 언어 링크(`?lang=`)는 예전에 `layout/base.html` 헤더에 있었고, 쿠키(`lang`, `CookieLocaleResolver`)에 남아 역시 브라우저별이다. 고르는 즉시 적용되고 **이 브라우저의 `localStorage.chatFontSize` 에만** 저장된다(서버 설정이 아니다 — 누구나 바꿀 수 있고, 기기마다 따로다). 카드에는 같은 클래스로 그린 미리보기 말풍선이 있어 설정 화면에서도 차이가 보인다.
 
 | 단계 | 기준 | 메타 단계 (0.75em) | 미세 단계 (0.625em) | 출처 미리보기 팝오버 본문 (데스크톱) |
 |---|---|---|---|---|

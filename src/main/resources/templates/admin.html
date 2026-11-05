@@ -76,94 +76,8 @@
         </div>
     </div>
 
-    <!-- ── Document Registry ────────────────────────────────────────────── -->
-    <div class="card mb-4" id="doc-registry-card">
-        <div class="card-header d-flex align-items-center py-2">
-            <i class="bi bi-archive me-2"></i>
-            <span class="fw-semibold small">문서 레지스트리</span>
-            <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
-            <!-- 청크 수는 인덱싱 시점에 기록된 값이라, 삭제가 이 행을 갱신하지 않던 시절의 문서는
-                 실제보다 큰 수를 계속 보여준다. 이 버튼이 벡터 스토어와 대조해 한 번에 맞춘다. -->
-            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-2"
-                    style="font-size:0.72rem;" id="reconcile-chunks-btn"
-                    onclick="reconcileChunkCounts()"
-                    title="저장된 청크 수를 벡터 스토어의 실제 청크와 대조해 맞춥니다.">
-                <i class="bi bi-calculator me-1"></i>청크 수 재계산
-            </button>
-            <span id="registry-status" class="ms-auto small text-muted text-truncate" style="max-width:60%;"></span>
-        </div>
-        <div class="card-body p-0">
-            <div th:if="${#lists.isEmpty(documents)}"
-                 class="text-muted small p-3 text-center">인덱싱된 문서가 없습니다.</div>
-
-            <!-- 페이지 크기 + 이동. 다른 패널(큐레이션·대화 목록 등)과 생김새는 같지만 서버로
-                 offset/limit 을 보내지 않는다 — 아래 initRegistryPaging() 주석 참고. 표가 통째로
-                 서버 렌더라 초기 선택값도 여기 selected 가 아니라 그 스크립트가 정한다(저장된
-                 선택을 복원하므로). -->
-            <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
-                 th:unless="${#lists.isEmpty(documents)}">
-                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                        id="registry-prev" onclick="moveRegistryPage(-1)">‹ 이전</button>
-                <span id="registry-range">&nbsp;</span>
-                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                        id="registry-next" onclick="moveRegistryPage(1)">다음 ›</button>
-                <select class="form-select form-select-sm ms-auto" id="registry-page-size"
-                        style="max-width:100px;" onchange="applyRegistryPageSize(this)">
-                    <option value="5">5개씩</option>
-                    <option value="10">10개씩</option>
-                    <option value="20">20개씩</option>
-                    <option value="50">50개씩</option>
-                </select>
-            </div>
-
-            <div class="table-responsive" th:unless="${#lists.isEmpty(documents)}">
-                <table class="table table-sm table-hover mb-0 small">
-                    <thead class="table-light">
-                    <tr>
-                        <th>파일명</th>
-                        <th>버전</th>
-                        <th class="text-center">청크</th>
-                        <th>Doc ID</th>
-                        <th>인덱싱 일시</th>
-                        <th class="text-center">작업</th>
-                    </tr>
-                    </thead>
-                    <tbody id="registry-tbody">
-                    <tr th:each="doc : ${documents}">
-                        <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
-                        <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
-                        <!-- id — 청크 하나를 지웠을 때 이 숫자만 제자리에서 갱신한다(deleteChunkInline).
-                             페이지를 다시 그리면 보고 있던 청크 목록이 닫혀 버린다. -->
-                        <td class="text-center" style="min-width:45px;"
-                            th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
-                        <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
-                        <td class="text-muted"><time th:replace="~{fragments/time :: utc(${doc.indexedAt()}, 'minute')}"></time></td>
-                        <td class="text-center">
-                            <button type="button"
-                                    class="btn btn-sm btn-outline-primary py-0 px-2"
-                                    style="font-size:0.75rem;"
-                                    th:attr="data-doc-id=${doc.docId()}, data-version=${doc.version()}"
-                                    onclick="loadChunksByDoc(this)">
-                                청크 보기
-                            </button>
-                            <button type="button"
-                                    class="btn btn-sm btn-outline-warning py-0 px-2 ms-1 reindex-btn"
-                                    style="font-size:0.75rem;"
-                                    th:attr="data-doc-id=${doc.docId()}, data-filename=${doc.filename()}"
-                                    onclick="reindexFromMd(this)"
-                                    title="저장된 MD 파일로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외)">
-                                <i class="bi bi-arrow-clockwise"></i>
-                            </button>
-                        </td>
-                    </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <!-- ── 컬렉션(chroma) / 버전(sqlite-vec) 청크 브라우저 ──────────────────── -->
-    <div class="row g-4">
+    <!-- ── 버전(sqlite-vec) / 컬렉션(chroma) 목록 · 문서 레지스트리 — 좌우 배치 ────────── -->
+    <div class="row g-4 mb-4">
 
         <!-- ── Left: Collections / Versions ────────────────────────────── -->
         <div class="col-md-3 col-lg-2">
@@ -206,8 +120,103 @@
             </div>
         </div>
 
-        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
-        <div class="col-md-9 col-lg-10 position-relative">
+        <!-- ── Right: Document Registry ─────────────────────────────────── -->
+        <div class="col-md-9 col-lg-10">
+        <div class="card" id="doc-registry-card">
+            <div class="card-header d-flex align-items-center py-2">
+                <i class="bi bi-archive me-2"></i>
+                <span class="fw-semibold small">문서 레지스트리</span>
+                <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
+                <!-- 청크 수는 인덱싱 시점에 기록된 값이라, 삭제가 이 행을 갱신하지 않던 시절의 문서는
+                     실제보다 큰 수를 계속 보여준다. 이 버튼이 벡터 스토어와 대조해 한 번에 맞춘다. -->
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-2"
+                        style="font-size:0.72rem;" id="reconcile-chunks-btn"
+                        onclick="reconcileChunkCounts()"
+                        title="저장된 청크 수를 벡터 스토어의 실제 청크와 대조해 맞춥니다.">
+                    <i class="bi bi-calculator me-1"></i>청크 수 재계산
+                </button>
+                <span id="registry-status" class="ms-auto small text-muted text-truncate" style="max-width:60%;"></span>
+            </div>
+            <div class="card-body p-0">
+                <div th:if="${#lists.isEmpty(documents)}"
+                     class="text-muted small p-3 text-center">인덱싱된 문서가 없습니다.</div>
+
+                <!-- 페이지 크기 + 이동. 다른 패널(큐레이션·대화 목록 등)과 생김새는 같지만 서버로
+                     offset/limit 을 보내지 않는다 — 아래 initRegistryPaging() 주석 참고. 표가 통째로
+                     서버 렌더라 초기 선택값도 여기 selected 가 아니라 그 스크립트가 정한다(저장된
+                     선택을 복원하므로). -->
+                <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
+                     th:unless="${#lists.isEmpty(documents)}">
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                            id="registry-prev" onclick="moveRegistryPage(-1)">‹ 이전</button>
+                    <span id="registry-range">&nbsp;</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                            id="registry-next" onclick="moveRegistryPage(1)">다음 ›</button>
+                    <select class="form-select form-select-sm ms-auto" id="registry-page-size"
+                            style="max-width:100px;" onchange="applyRegistryPageSize(this)">
+                        <option value="5">5개씩</option>
+                        <option value="10">10개씩</option>
+                        <option value="20">20개씩</option>
+                        <option value="50">50개씩</option>
+                    </select>
+                </div>
+
+                <div class="table-responsive" th:unless="${#lists.isEmpty(documents)}">
+                    <table class="table table-sm table-hover mb-0 small">
+                        <thead class="table-light">
+                        <tr>
+                            <th>파일명</th>
+                            <th>버전</th>
+                            <th class="text-center">청크</th>
+                            <th>Doc ID</th>
+                            <th>인덱싱 일시</th>
+                            <th class="text-center">작업</th>
+                        </tr>
+                        </thead>
+                        <tbody id="registry-tbody">
+                        <tr th:each="doc : ${documents}">
+                            <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
+                            <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
+                            <!-- id — 청크 하나를 지웠을 때 이 숫자만 제자리에서 갱신한다(deleteChunkInline).
+                                 페이지를 다시 그리면 보고 있던 청크 목록이 닫혀 버린다. -->
+                            <td class="text-center" style="min-width:45px;"
+                                th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
+                            <!-- Doc ID: 버전 목록과 한 줄에 놓이면서 레지스트리 폭이 줄었다 — 길면 말줄임으로 접고(전체 값은 title),
+                                 상한은 예전 자연 폭(약 14rem)의 80%(11rem). 짧은 ID 는 그대로 짧다. -->
+                            <td class="text-muted" style="font-size:0.7rem; min-width:5rem;">
+                                <!-- 상한은 td 가 아니라 안쪽 div 에 건다 — 표 자동 레이아웃에서는 td 의 max-width 가 무시된다 -->
+                                <div class="text-truncate doc-id-cell" style="max-width:11rem;"
+                                     th:title="${doc.docId()}" th:text="${doc.docId()}"></div>
+                            </td>
+                            <td class="text-muted"><time th:replace="~{fragments/time :: utc(${doc.indexedAt()}, 'minute')}"></time></td>
+                            <td class="text-center">
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary py-0 px-2"
+                                        style="font-size:0.75rem;"
+                                        th:attr="data-doc-id=${doc.docId()}, data-version=${doc.version()}"
+                                        onclick="loadChunksByDoc(this)">
+                                    청크 보기
+                                </button>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-warning py-0 px-2 ms-1 reindex-btn"
+                                        style="font-size:0.75rem;"
+                                        th:attr="data-doc-id=${doc.docId()}, data-filename=${doc.filename()}"
+                                        onclick="reindexFromMd(this)"
+                                        title="저장된 MD 파일로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외)">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        </div>
+    </div><!-- /row -->
+
+    <!-- ── 청크 패널 — 위 목록·레지스트리에서 고른 항목의 청크를 전체 폭으로 보여준다 ───────── -->
+        <div class="position-relative">
 
             <!-- Loading spinner -->
             <div id="chunk-spinner"
@@ -221,13 +230,13 @@
             <div id="chunk-panel">
                 <div class="card">
                     <div class="card-body text-center text-muted py-5">
-                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
-                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
+                        <i class="bi bi-arrow-up-circle fs-2 mb-2 d-block"></i>
+                        <div class="small">위 목록에서 버전(컬렉션)을 선택하거나 문서 레지스트리에서 '청크 보기'를 누르면 청크를 조회할 수 있습니다.</div>
                     </div>
                 </div>
             </div>
         </div>
-    </div><!-- /row -->
+
 
     <!-- ── §10.14 청크 오류 신고 — 사용자 신고 처리 (펼칠 때만 조회) ────────────── -->
     <!-- 지식 제안보다 위: 둘 다 대기열이지만 이쪽은 **이미 검색에 쓰이고 있는** 청크가 틀렸다는
@@ -650,6 +659,16 @@ function loadChunks(collection, docId, offset, limit) {
         .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
 }
 
+// 청크 패널은 버전 목록·문서 레지스트리 아래(전체 폭)에 있어, 레지스트리가 길면 결과가 화면 밖에 그려진다 —
+// 버전 클릭(HTMX)·'청크 보기' 로 처음 채워질 때 패널 위쪽으로 스크롤한다. 페이지 이동/건수 변경(loadChunks)은 이미 보고 있는 중이라 제외.
+function scrollChunkPanelIntoView() {
+    const panel = document.getElementById('chunk-panel');
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+document.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail && e.detail.target && e.detail.target.id === 'chunk-panel') scrollChunkPanelIntoView();
+});
+
 // Load chunks filtered by docId from the registry table
 function loadChunksByDoc(btn) {
     const docId   = btn.getAttribute('data-doc-id');
@@ -665,6 +684,7 @@ function loadChunksByDoc(btn) {
             document.getElementById('chunk-panel').innerHTML = html;
             document.getElementById('chunk-spinner').style.display = 'none';
             htmx.process(document.getElementById('chunk-panel'));
+            scrollChunkPanelIntoView();
             // 오프캔버스가 열린 채로 목록을 다시 그릴 수 있다(페이지 이동/컬렉션 전환) —
             // 이전/다음 버튼은 렌더된 행 기준이므로 여기서 다시 계산한다.
             updateChunkNavState();
@@ -872,6 +892,26 @@ function openChunkEdit(chunkId, collection) {
                     ${isWide ? '' : previewTogglePane('chunk-text', 230)}
                     <div class="form-text text-warning small">※ 저장해도 벡터 임베딩은 갱신되지 않음 (원본 벡터 유지)</div>
                 </div>
+                <!-- 그림 추가·교체·삭제. 그림의 자리는 본문 속 [이미지: …] 마커라서 이 패널은 텍스트를 서버로 보내 바뀐 텍스트를
+                     받아 위 텍스트 칸에 넣을 뿐이다(규칙은 서버 ChunkImageEditor). 저장은 아래 「저장」 하나. -->
+                <div id="edit-images-panel" class="border rounded p-2">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="small fw-semibold"><i class="bi bi-images me-1"></i>이미지</span>
+                        <span id="edit-images-count" class="badge bg-secondary">0</span>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 ms-auto" id="edit-image-add-btn"
+                                title="텍스트 칸의 커서 위치에 그림을 넣습니다">
+                            <i class="bi bi-plus-lg me-1"></i>추가
+                        </button>
+                        <input type="file" id="edit-image-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                    </div>
+                    <div class="form-check form-switch mb-1">
+                        <input class="form-check-input" type="checkbox" id="edit-image-describe" checked>
+                        <label class="form-check-label small" for="edit-image-describe">추가·교체할 때 설명 자동 생성
+                            <span class="text-muted">(Vision 호출, 수 초)</span></label>
+                    </div>
+                    <div id="edit-images-list" class="d-flex flex-column gap-1"></div>
+                    <div class="form-text small">그림을 바꾼 뒤 「저장」 → 「이 청크만 재인덱싱」을 눌러야 검색에 반영됩니다. 설명은 본문의 일부로 함께 임베딩됩니다.</div>
+                </div>
                 <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>
@@ -909,6 +949,7 @@ function openChunkEdit(chunkId, collection) {
                 wirePreviewToggle('chunk-text', 'edit-text');
             }
             initTooltipsIn(body);
+            wireChunkImagePanel();
             // 스냅샷은 필드가 그려진 뒤에 떠야 한다(이동 시 변경 감지의 기준값).
             // metadata 는 저장 시 그대로 되돌려 보낼 원본이다(saveChunkEdit 참고) — 키워드·요약은
             // 전용 필드가 진짜 값이라 여기서 빼 두고, 저장할 때 그 필드 값으로 다시 채운다.
@@ -940,6 +981,153 @@ function initTooltipsIn(container) {
         if (existing) existing.dispose();
         new bootstrap.Tooltip(el, { delay: { show: 100, hide: 0 } });
     });
+}
+
+// ── 청크 편집의 그림 추가·교체·삭제 ─────────────────────────────────────────
+// 그림은 본문 속 [이미지: images/…] 마커로 존재하므로, 이 패널의 모든 동작은 "텍스트를 서버로 보내 바뀐 텍스트를 받아 텍스트 칸에
+// 넣는" 것이다. 마커·설명이 어디서 시작해 끝나는지, 지울 때 빈 줄이 남지 않게 하는 규칙은 전부 서버(ChunkImageEditor)에 있다 —
+// 이 프로젝트에는 JS 테스트 하네스가 없어서 여기에 규칙을 두면 검증할 길이 없다.
+let chunkImageReplaceIndex = null;   // 교체 중인 마커 순번. null 이면 "추가"
+let chunkImageBusy = false;
+let chunkImageRefreshTimer = null;
+
+function chunkImageHeaders() {
+    return Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders());
+}
+
+function wireChunkImagePanel() {
+    const textEl = document.getElementById('edit-text');
+    const addBtn = document.getElementById('edit-image-add-btn');
+    const input  = document.getElementById('edit-image-input');
+    const list   = document.getElementById('edit-images-list');
+    if (!textEl || !addBtn || !input || !list) return;
+    chunkImageReplaceIndex = null;
+    chunkImageBusy = false;
+
+    addBtn.addEventListener('click', () => { chunkImageReplaceIndex = null; input.click(); });
+    input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        input.value = '';   // 같은 파일을 연달아 골라도 change 가 다시 발생하게
+        if (file) uploadChunkImage(file);
+    });
+    list.addEventListener('click', ev => {
+        const btn = ev.target.closest('button[data-act]');
+        if (!btn || chunkImageBusy) return;
+        const index = Number(btn.dataset.index);
+        if (btn.dataset.act === 'replace') { chunkImageReplaceIndex = index; input.click(); }
+        else if (btn.dataset.act === 'remove') {
+            if (confirm('이 이미지(와 딸린 설명)를 본문에서 지울까요? 저장하기 전에는 이 패널을 닫아 되돌릴 수 있습니다.')) {
+                editChunkImages({ action: 'remove', index });
+            }
+        } else if (btn.dataset.act === 'describe') {
+            editChunkImages({ action: 'describe', index }, '설명을 만드는 중…');
+        }
+    });
+    // 텍스트를 손으로 고쳐도 목록이 따라오게 — 디바운스해서 서버 호출을 줄인다.
+    textEl.addEventListener('input', () => {
+        clearTimeout(chunkImageRefreshTimer);
+        chunkImageRefreshTimer = setTimeout(refreshChunkImages, 500);
+    });
+    refreshChunkImages();
+}
+
+function setChunkImageBusy(busy, label) {
+    chunkImageBusy = busy;
+    const panel = document.getElementById('edit-images-panel');
+    if (!panel) return;
+    panel.querySelectorAll('button').forEach(b => { b.disabled = busy; });
+    const addBtn = document.getElementById('edit-image-add-btn');
+    if (addBtn) addBtn.innerHTML = busy
+        ? '<span class="spinner-border spinner-border-sm me-1"></span>' + escHtml(label || '처리 중…')
+        : '<i class="bi bi-plus-lg me-1"></i>추가';
+}
+
+async function chunkImageJson(r) {
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+    if (!r.ok) throw new Error(d.message || d.detail || '요청에 실패했습니다.');
+    return d;
+}
+
+function refreshChunkImages() {
+    const textEl = document.getElementById('edit-text');
+    if (!textEl) return;
+    fetch('/admin/chunk-images/markers', {
+        method: 'POST', headers: chunkImageHeaders(), body: JSON.stringify({ text: textEl.value })
+    }).then(chunkImageJson).then(renderChunkImages).catch(() => { /* 목록은 보조 표시 — 실패해도 편집은 계속된다 */ });
+}
+
+function renderChunkImages(markers) {
+    const list = document.getElementById('edit-images-list');
+    const count = document.getElementById('edit-images-count');
+    if (!list) return;
+    count.textContent = markers.length;
+    if (!markers.length) {
+        list.innerHTML = '<div class="text-muted small">이 청크에는 그림이 없습니다.</div>';
+        return;
+    }
+    list.innerHTML = markers.map(m => {
+        const thumb = m.exists
+            ? `<img src="${escHtml(m.url)}" alt="" style="width:48px;height:48px;object-fit:cover;" class="rounded border flex-shrink-0">`
+            : `<span class="d-inline-flex align-items-center justify-content-center rounded border bg-light text-muted flex-shrink-0"
+                     style="width:48px;height:48px;" title="${m.unconvertible ? '변환할 수 없는 이미지' : '파일을 찾을 수 없음'}"><i class="bi bi-file-earmark-image"></i></span>`;
+        const desc = m.described
+            ? `<div class="small text-muted" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"
+                    title="${escHtml(m.description)}">${escHtml(m.description)}</div>`
+            : '<div class="small text-warning">설명 없음</div>';
+        const canDescribe = m.exists;
+        return `<div class="d-flex gap-2 align-items-start border-top pt-1">
+            ${thumb}
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="small font-monospace text-truncate" title="${escHtml(m.path)}">#${m.index + 1} ${escHtml(m.path)}</div>
+                ${desc}
+            </div>
+            <div class="btn-group btn-group-sm flex-shrink-0">
+                <button type="button" class="btn btn-outline-secondary py-0 px-1" data-act="replace" data-index="${m.index}" title="다른 그림으로 교체"><i class="bi bi-arrow-left-right"></i></button>
+                <button type="button" class="btn btn-outline-secondary py-0 px-1" data-act="describe" data-index="${m.index}" ${canDescribe ? '' : 'disabled'} title="${m.described ? '설명 다시 생성' : '설명 생성'}"><i class="bi bi-magic"></i></button>
+                <button type="button" class="btn btn-outline-danger py-0 px-1" data-act="remove" data-index="${m.index}" title="삭제"><i class="bi bi-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function uploadChunkImage(file) {
+    const replacing = chunkImageReplaceIndex;
+    const describe = document.getElementById('edit-image-describe').checked;
+    const textEl = document.getElementById('edit-text');
+    setChunkImageBusy(true, '올리는 중…');
+    const fd = new FormData();
+    fd.append('file', file);
+    fetch('/admin/chunk-images', { method: 'POST', headers: getCsrfHeaders(), body: fd })
+        .then(chunkImageJson)
+        .then(d => {
+            const offset = textEl.selectionStart != null ? textEl.selectionStart : textEl.value.length;
+            setChunkImageBusy(false);
+            return editChunkImages(replacing == null
+                ? { action: 'insert', path: d.path, offset, describe }
+                : { action: 'replace', index: replacing, path: d.path, describe },
+                describe ? '설명을 만드는 중…' : '반영 중…');
+        })
+        .catch(e => { setChunkImageBusy(false); showToast(e.message || '이미지 업로드에 실패했습니다.', 'danger'); });
+}
+
+// 서버에 편집을 시키고, 돌아온 본문을 텍스트 칸에 넣는다. 저장은 하지 않는다.
+function editChunkImages(req, busyLabel) {
+    const textEl = document.getElementById('edit-text');
+    setChunkImageBusy(true, busyLabel);
+    return fetch('/admin/chunk-images/edit', {
+        method: 'POST', headers: chunkImageHeaders(),
+        body: JSON.stringify(Object.assign({ text: textEl.value }, req))
+    })
+        .then(chunkImageJson)
+        .then(d => {
+            textEl.value = d.text;
+            textEl.dispatchEvent(new Event('input'));   // 미리보기·목록 갱신
+            renderChunkImages(d.markers);
+            if (d.warning) showToast(d.warning, 'warning');
+        })
+        .catch(e => showToast(e.message || '이미지 편집에 실패했습니다.', 'danger'))
+        .finally(() => setChunkImageBusy(false));
 }
 
 function saveChunkEdit(chunkId, collection) {

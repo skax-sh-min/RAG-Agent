@@ -443,7 +443,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 if (localOnly && !cfg.isLocal()) continue;
                 rows.add(new ProviderRow(cfg.name(), cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
                         cfg.priority(), cfg.model(), cfg.baseUrl(), false, false, null, false,
-                        cfg.declaredContextSize() == null ? "-"
+                        cfg.declaredContextSize() == null ? CONTEXT_UNKNOWN_LABEL
                                 : "%,d (%s)".formatted(cfg.declaredContextSize(), "수동 입력"),
                         null, ProviderConnection.notConfigured(), providerCatalog.editOf(cfg.name())));
             }
@@ -606,8 +606,10 @@ public class SettingsService implements AppProperties.OverrideSource {
      * 서버에게 물어본 숫자인지가 신뢰도를 가른다. 탐지값은 기동 시점의 관측이라 모델을 다른 크기로
      * 다시 로드하면 낡고, 그때 운영자가 {@code context-size} 로 못 박으면 이 칸이 (설정됨)으로 바뀐다.
      *
-     * <p>모르면 {@code "-"} 다. 이것도 정보다 — 컨텍스트 초과가 나는데 이 칸이 {@code "-"} 라면
-     * 앱이 창 크기를 모르는 상태이므로 어떤 보정도 돌지 않았다는 뜻이다.
+     * <p>모르면 {@link #CONTEXT_UNKNOWN_LABEL} 이다. 이것도 정보다 — 컨텍스트 초과가 나는데 이 칸이 미탐지라면
+     * 앱이 창 크기를 모르는 상태이므로 어떤 보정도 돌지 않았다는 뜻이다. <b>숫자를 지어 보이지 않는다</b>: 앱 내부에
+     * "모를 때 쓰는 기본 창"은 없다(추측한 숫자로 입력 예산을 짜면 멀쩡한 프롬프트를 자르거나 초과를 못 막는다) —
+     * 모르면 창 기준의 사전 축소·출력 예약 보정이 꺼진 채 설정된 {@code max-tokens} 그대로 나간다.
      */
     private String contextWindowLabel(String providerName) {
         return contextWindows.find(providerName)
@@ -616,8 +618,11 @@ public class SettingsService implements AppProperties.OverrideSource {
                     case MANUAL -> "수동 입력";
                     case PROBED -> "탐지됨";
                 }))
-                .orElse("-");
+                .orElse(CONTEXT_UNKNOWN_LABEL);
     }
+
+    /** 컨텍스트 창을 모를 때 프로바이더 표 칸에 적는 문구 — 값이 아니라 "창 기준 보정이 꺼져 있다"는 사실이다. */
+    static final String CONTEXT_UNKNOWN_LABEL = "미탐지 (입력 제한 없음)";
 
     /** {@code app.llm.default-routing-mode} pinned to {@code LOCAL_ONLY} for this whole deployment. */
     private boolean isLocalOnlyDeployment() {

@@ -130,7 +130,16 @@ public class AdminController {
         model.addAttribute("docId",      docId);
         model.addAttribute("offset",     offset);
         model.addAttribute("limit",      limit);
-        model.addAttribute("documents",  ragService.listDocuments(ctx.userId()));
+        var documents = ragService.listDocuments(ctx.userId());
+        model.addAttribute("documents",  documents);
+        // 청크 목록의 '파일명' 칸은 문서 레지스트리의 표시 이름(displayLabel)을 보여준다 — 청크 메타데이터의 filename 은
+        // 인덱싱 때의 원본 파일명이라, 레지스트리에서 이름을 바꾼 문서는 두 화면이 달라 보였다. 레지스트리에 없는 청크
+        // (큐레이션 등)는 템플릿이 메타데이터 filename 으로 되돌린다.
+        Map<String, String> docLabels = new HashMap<>();
+        for (var d : documents) {
+            if (d.docId() != null) docLabels.put(d.docId(), d.displayLabel());
+        }
+        model.addAttribute("docLabels", docLabels);
         return "fragments/admin-chunks :: table";
     }
 

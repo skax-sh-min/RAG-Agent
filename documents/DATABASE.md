@@ -215,7 +215,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 |---|---|---|---|
 | `image_path` | TEXT | PK | `images/{imageId}/{파일}` 상대 경로 |
 | `description` | TEXT | NOT NULL | 설명 텍스트 |
-| `image_type` | TEXT | | `diagram` / `screenshot` / `photo` / `chart` / `other` |
+| `image_type` | TEXT | | 예전 이미지 유형 분류(`diagram` / `screenshot` / `photo` / `chart` / `other`)의 흔적 — **2026-11-04 분류기를 제거해 더 쓰지 않는다**(새 행은 NULL, 컬럼은 스키마에 남음) |
 | `provider` | TEXT | | 설명을 만든 프로바이더 (모니터링용) |
 | `created_at` | TEXT | NOT NULL, `datetime('now')` | |
 | `user_id` | TEXT | NOT NULL, `'anonymous'` | 읽는 코드 없음 (초기 설계의 잔재) |
@@ -585,7 +585,7 @@ ORDER BY knn.distance
 | `heading` | 문자열 | 청크가 속한 섹션 제목 | — | `chunk_context`의 구조적 맥락 재료 |
 | `heading_page` | 정수 | DOCX 헤딩이 시작하는 페이지 | — | |
 | `section` | 정수 | 로더가 매긴 섹션 순번 | — | `MetaKey`에 없는 키입니다 — 청크 편집은 저장본 위에 병합하므로 보존됩니다 |
-| `image_paths` | 문자열 (CSV) | 청크 본문에 남은 이미지 마커의 경로 | 본문 이미지 마커의 경로 | 답변 말풍선 썸네일 |
+| `image_paths` | 문자열 (CSV) | 청크 본문에 남은 이미지 마커의 경로 — 관리자가 본문을 고치면 **사라진 마커의 경로만 빼고 새 마커를 더해** 맞춘다(`AdminService.mergeEditableMeta`; 마커 없이 이 값만 가진 스캔 PDF 청크는 그대로) | 본문 이미지 마커의 경로 | 답변 말풍선 썸네일 |
 | `tags` | 문자열 (CSV) | 문서 태그 | 제안 태그 | 태그 필터(`filterByTags`). 태그가 없으면 키 자체가 없습니다 |
 | `excerpt_keywords` | 문자열 | LLM이 추출한 키워드 | `curated_qa.keywords` | FTS `keywords` 컬럼. `/admin`에서 편집 가능 |
 | `chunk_context` | 문자열 | 맥락 헤더 — `{파일명} > {heading}` + LLM이 쓴 1~2문장 | `curated_qa.summary` | 임베딩·FTS 입력 앞에 붙습니다. **영속 저장**되며 `/admin`에서 편집 가능 |
@@ -603,7 +603,7 @@ ORDER BY knn.distance
 2. **검색**(`RetrievalService`) — 벡터 축(원문 질의 + MultiQuery 변형, 버전 파티션·컬렉션), 키워드 축(`chunk_fts`, 같은 버전), 큐레이션 축(버전 `curated`의 벡터 + BM25)을 RRF로 합친 뒤 → 태그 필터 → (리랭크) → topK.
 3. **턴 저장**(`TurnPersistence`) — 출처마다 `turn_source_ref` 한 행(청크 id, `chunk_fts_key.content_hash`, 응답 참여도, 위치 스냅샷)을 남기고, 턴에 `retrieval_metrics`·`verification`을 기록합니다.
 4. **대화를 다시 열 때** — `turn_source_ref` → `chunk_fts_key` → `chunk_fts`(rowid) + `vec_document_chunks`로 지금의 위치·원문을 읽습니다. 청크가 없으면 위치 스냅샷을, 그것도 없으면 `doc_id`의 파일명 부분으로 라벨을 만듭니다.
-5. **청크 편집**(`/admin`) — 저장은 본문과 `excerpt_keywords`·`chunk_context`만 저장본 위에 병합하고 `edited_at`을 찍습니다. 벡터는 그대로이고, 청크 재인덱싱(↺)을 눌러야 **같은 청크 id로** 다시 임베딩되고 FTS도 다시 색인됩니다. 청크를 수정·삭제하는 경로는 모두 `QuestionReuseService`에 알려, 그 청크를 출처로 가진 `turn_source_ref`가 `modified`·`deleted`가 됩니다.
+5. **청크 편집**(`/admin`) — 저장은 본문과 `excerpt_keywords`·`chunk_context`만 저장본 위에 병합하고(본문이 바뀌면 `image_paths` 도 마커의 변화에 맞춘다) `edited_at`을 찍습니다. 벡터는 그대로이고, 청크 재인덱싱(↺)을 눌러야 **같은 청크 id로** 다시 임베딩되고 FTS도 다시 색인됩니다. 청크를 수정·삭제하는 경로는 모두 `QuestionReuseService`에 알려, 그 청크를 출처로 가진 `turn_source_ref`가 `modified`·`deleted`가 됩니다.
 6. **태그 변경**(`RagService.updateDocumentTags`) — `doc_registry.tags` · 벡터 메타데이터 `tags` · `chunk_fts.doc_tags` 세 곳을 함께 고칩니다(재임베딩 없음).
 7. **문서 재인덱싱·삭제** — `doc_registry.spring_doc_ids`로 옛 벡터·FTS 행을 지웁니다. 재인덱싱은 **새 청크 id**로 다시 만들므로, 옛 청크를 출처로 가진 턴은 `deleted`가 됩니다.
 

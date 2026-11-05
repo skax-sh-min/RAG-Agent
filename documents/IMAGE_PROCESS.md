@@ -1,6 +1,6 @@
 # IMAGE_PROCESS — 이미지 처리 전략
 
-> **구현 현황**: 전체 파이프라인 구현 완료. ImageExtractorService·PdfImageExtractor·PptxImageExtractor·DocxToMarkdownConverter(DOCX 이미지)·OcrService·EmfToPngConverter·LibreOfficeConverter·LazyVisionService·ImageTypeClassifier·ImageDescriptionRepository·VisionDescriptionService 모두 구현됨.
+> **구현 현황**: 전체 파이프라인 구현 완료. ImageExtractorService·PdfImageExtractor·PptxImageExtractor·DocxToMarkdownConverter(DOCX 이미지)·OcrService·EmfToPngConverter·LibreOfficeConverter·LazyVisionService·ImageDescriptionRepository·VisionDescriptionService 모두 구현됨.
 
 문서 포맷별 이미지 처리 방식과 검색 결과 연동 전략을 아키텍트 및 개발자 관점에서 정의합니다.
 
@@ -94,10 +94,9 @@
 | `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 + 그리기 도구 도형 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임 처리 | 항상 활성 |
 | `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
 | `DocxAnnotationShapeMerger` | DOCX 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나의 합성 PNG로 병합 (§4.3) | `merge-annotated-shapes=true` |
-| `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 유형별 프롬프트 내장 | 항상 활성 |
+| `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 단일 `CAPTION_PROMPT`(`형식: 한두 문장`, §5) | 항상 활성 |
 | `LazyVisionService` | 검색 시점 Vision 설명 생성 + SQLite 캐시 | `enabled=true` |
 | `ImageDescriptionRepository` | `image_descriptions` 테이블 CRUD | 항상 활성 |
-| `ImageTypeClassifier` | 이미지 유형 분류 → 전용 프롬프트 선택 | `enabled=true` |
 | `OcrService` | Tesseract 호출 → 이미지 내 텍스트 추출 (L3) | `ocr-enabled=true` |
 | `EmfToPngConverter` | Batik `WMFTranscoder` → SVG → `PNGTranscoder` 파이프라인 | `docx-emf-convert=true` |
 | `LibreOfficeConverter` | `soffice --headless` 기반 WMF→PNG 변환 (20s 타임아웃) | `docx-wmf-convert=true` |
@@ -347,18 +346,18 @@ MD 문서의 그림을 검색에 반영하고 싶다면 이미지를 지식 제�
 
 현재 구현:
 - `describe(byte[] imageBytes, String mimeType): String` — 기본 프롬프트("other" 유형) 사용
-- `describe(byte[] imageBytes, String mimeType, String prompt): String` — `ImageTypeClassifier`가 선택한 유형별 전용 프롬프트 사용
+- `describe(byte[] imageBytes, String mimeType, String prompt): String` — 프롬프트를 직접 넘기는 오버로드(`describe(bytes, mime)` 는 `CAPTION_PROMPT` 를 쓴다)
 - `@ConditionalOnProperty` 없음 — 항상 빈으로 등록; Vision 프로바이더 미등록 시 fallback 문자열 반환
 - `LlmProviderExhaustedException` catch → `"[이미지 설명 불가: Vision 프로바이더 미등록]"` 반환
 
-내장 유형별 프롬프트 (`PROMPTS` 맵):
-| image_type | 프롬프트 핵심 |
-|-----------|-------------|
-| `diagram` | 구성 요소·관계·흐름 방향 |
-| `screenshot` | UI 요소 위치·화면 텍스트, 코드면 언어·핵심 로직 |
-| `chart` | 축·범례·관찰 트렌드 |
-| `photo` | 피사체·상황 1문장 |
-| `other` | 일반 설명 3문장 이내 |
+**설명 프롬프트 (`CAPTION_PROMPT`) — 형식 + 한두 문장, 한 줄.** 인덱싱(`MarkdownCorrectionService`)·지연 Vision·지식 제안 승인이 모두 같은 프롬프트를 쓴다. 형식은 모델이 설명 앞머리에 직접 고르므로 유형마다 문구를 달리할 이유가 없다 — 그래서 유형 분류기와 유형별 `PROMPTS` 맵은 제거했다(§13).
+
+출력은 `형식: 설명` 한 줄이다. 예: `순서도: 로그인 요청 → 인증 서버 검증 → 세션 생성 → 메인 화면 이동` · `IDE 화면: UserService.java 12행에서 NullPointerException 으로 디버거가 멈춘 상태`.
+- **형식** 고정 어휘: 표, 다이어그램, 순서도, 구조도, 차트/그래프, IDE 화면, 터미널 화면, 웹/앱 화면, 소스코드, 로그, 문서 캡처, 풍경사진, 인물사진, 사진, 아이콘/로고, 기타 — 검색할 때 "표", "로그", "IDE 화면" 같은 단서가 된다.
+- **설명** 한두 문장·100자 안팎. 이미지에서 실제로 읽히는 것(제목, 클래스·메서드·파일명, 메뉴·버튼 이름, 오류 문구, 수치, 단계·구성 요소 이름과 순서)만. 소스코드·로그·표는 핵심 식별자·열 이름 몇 개만. **금지**: "이 이미지는 ~을 보여줍니다" 서두, "소프트웨어 개발 환경"·"다양한" 같은 일반적 표현, 색·배치 묘사, 추측. 장식 이미지는 `아이콘/로고: 장식용`.
+- **왜 바꿨나**: 예전 프롬프트("2~3문장으로 간단히", 유형별 최대 3~4문장)는 소형 모델이 "이 이미지는 소프트웨어 개발 환경에서 …를 보여줍니다" 같은 **어느 이미지에나 맞는 문장**을 쓰게 했다 — 실제 코퍼스의 설명 10개 중 8개가 그랬고, 그 문장이 청크의 임베딩·BM25 입력과 답변 프롬프트에 그대로 들어가 검색을 흐리고 토큰만 먹었다.
+- **응답 정리** (`VisionDescriptionService.cleanCaption`): 첫 줄만, 따옴표·글머리·"이 이미지는" 서두 제거, 공백 접기, `[ ]`→`( )`, `|`→`/`(설명은 `[이미지 설명: …]` 안에, 때로는 표 셀 안에 들어가므로 이 문자가 구조를 깬다), 300자 상한.
+- **이미 인덱싱된 문서에는 적용되지 않는다** — 청크 본문에 박힌 옛 설명은 재인덱싱(↺)하거나 청크 편집의 「설명 생성」으로 다시 만들어야 바뀐다. `image_descriptions` 캐시(지연 Vision)의 옛 행도 마찬가지다.
 
 **라우팅 동작**:
 - `LlmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST)` → `local-vision(VISION)` → `local(LIGHT_BOTH)` → `NORMAL(BOTH)` 순 fallback
@@ -602,7 +601,7 @@ private void deleteImagesQuietly(Path dir) {
 `application.properties` — 모든 값이 환경변수로 주입 가능하므로 `.env`만 고쳐도 된다(재기동 필요):
 
 ```properties
-# Vision 파이프라인 활성화 (LazyVisionService, ImageTypeClassifier)
+# Vision 파이프라인 활성화 (LazyVisionService)
 app.image-description.enabled=${IMAGE_DESCRIPTION_ENABLED:true}
 
 # PDF OCR 활성화 (OcrService)
@@ -611,8 +610,6 @@ app.image-description.ocr-enabled=${IMAGE_OCR_ENABLED:true}
 # Tesseract tessdata 경로 — 미설정 시 TESSDATA_PREFIX 환경변수 또는 시스템 기본 경로 사용
 app.image-description.tessdata-path=${IMAGE_OCR_TESSDATA_PATH:}
 
-# 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가
-app.image-description.classify-type=${IMAGE_CLASSIFY_TYPE:true}
 
 # DOCX EMF→PNG 변환 (Batik — 추가 설치 불필요)
 app.image-description.docx-emf-convert=${DOCX_EMF_CONVERT:true}
@@ -644,7 +641,6 @@ public record AppProperties(
         boolean ocrEnabled,
         String tessdataPath,
         int minImageBytes,           // 바인딩만 유지 — 읽는 코드 없음 (9.1 참고)
-        boolean classifyType,        // 13절
         boolean docxEmfConvert,      // 14절
         boolean docxWmfConvert       // 14절
     ) {}
@@ -655,10 +651,9 @@ public record AppProperties(
 
 | 옵션 | 환경변수 | 기본값 | 설명 |
 |------|----------|--------|------|
-| `enabled` | `IMAGE_DESCRIPTION_ENABLED` | `true` | `true`이면 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음. `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**(핫 수정 불가) |
+| `enabled` | `IMAGE_DESCRIPTION_ENABLED` | `true` | `true`이면 `LazyVisionService` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음. `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**(핫 수정 불가) |
 | `ocr-enabled` | `IMAGE_OCR_ENABLED` | `true` | `true`이면 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함. 역시 빈 게이트라 재기동 필요 |
 | `tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | _(빈 값)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작. 폐쇄망에서 언어 데이터를 임의 경로에 둔 경우 여기서 지정 |
-| `classify-type` | `IMAGE_CLASSIFY_TYPE` | `true` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가. 비용 절감 시 `false`로 설정 |
 | `docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
 | `docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
 | ~~`mode`~~ | _(없음)_ | `strip` | **현재 코드에서 읽지 않음.** `ImageDescriptionProperties`에 바인딩만 되어 있고 소비처가 없다 — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스(5절)와 `LazyVisionService`의 질의 시점 캐시(12절)로 옮겨갔다. 값을 바꿔도 동작이 달라지지 않으므로 환경변수도 두지 않았다 |
@@ -680,7 +675,6 @@ app.image-description.ocr-enabled=false
 ```properties
 app.image-description.enabled=true
 app.image-description.min-image-bytes=1000
-app.image-description.classify-type=false
 ```
 > Vision 프로바이더(`VISION` 또는 `BOTH` type) 가 `app.llm.providers`에 등록되어 있어야 함.
 > 업로드 시점에 즉시 임베딩에 포함하려면(동기 L2) 업로드 화면 체크박스를 사용하세요 — 별도 프로퍼티는 없습니다.
@@ -714,7 +708,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 | 이미지 서빙 엔드포인트 | `DocumentController GET /api/v1/images/{docId}/{filename}` (값은 imageId, §3.3) | ✅ |
 | `image_descriptions` 캐시 | `ImageDescriptionRepository`, SQLite `image_descriptions` 테이블 | ✅ |
 | LazyVisionService + RetrievalService 통합 | `LazyVisionService`, `RetrievalService.augmentWithDescriptions()` | ✅ |
-| ImageTypeClassifier + 유형별 프롬프트 | `ImageTypeClassifier`, `VisionDescriptionService.PROMPTS` | ✅ |
+| ImageTypeClassifier + 유형별 프롬프트 | (제거됨 — §13) | ➖ |
 | PPTX 이미지 추출 (Lazy Vision 연동) | `PptxImageExtractor` | ✅ |
 | DOCX Vision 설명 (Lazy) + EMF 변환 | `DocxToMarkdownConverter`, `EmfToPngConverter` | ✅ |
 | PDF 스캔 OCR (L3) | `OcrService`, `DocumentLoaderService.ocrWithPdfRenderer()` | ✅ |
@@ -748,7 +742,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 |------|---------------------|-----------------|
 | 트리거 | 업로드 화면 "이미지 설명 추가" 체크박스(`addImageDescriptions`) | `app.image-description.enabled=true` (프로퍼티) |
 | 적용 대상 | DOCX·TXT·MD·PPTX·PDF(스캔 아님) — 본문에 `[이미지: ...]` 마커가 있는 모든 포맷 (위 §5 참고) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
-| 구현 | `MarkdownCorrectionService.describeImage()` — `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음, `LlmRouter.executeWithTracking(IMAGE_PREFIX)` 경유(사용량 집계됨) | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
+| 구현 | `MarkdownCorrectionService.describeImage()` — `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음, `LlmRouter.executeWithTracking(IMAGE_PREFIX)` 경유(사용량 집계됨) | `VisionDescriptionService` |
 | 인덱싱 시 LLM 호출 | 체크 시 distinct 이미지당 1회 (문서 내 병렬, `Semaphore(INDEXING_MAX_LLM)`) | 0회 |
 | 결과 반영 위치 | 마크다운 텍스트에 직접 삽입 → 청크 텍스트의 일부로 **임베딩됨** | 검색 시 프롬프트에만 동적 합성 → **임베딩되지 않음** (12.6절) |
 | 첫 검색 응답 시간 | 영향 없음(이미 인덱싱 시 처리됨) | 검색 결과에 신규 이미지 N개 시 +N×Vision 지연 (캐시 후 0) |
@@ -784,7 +778,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 CREATE TABLE image_descriptions (                 -- V1__baseline.sql
     image_path  TEXT PRIMARY KEY,    -- "images/{imageId}/{filename}" 상대 경로 (§3.3)
     description TEXT NOT NULL,
-    image_type  TEXT,                -- 13절: diagram | screenshot | photo | chart | other
+    image_type  TEXT,                -- 13절: 예전 유형 분류의 흔적 — 더 쓰지 않는다(NULL)
     provider    TEXT,                -- 사용된 LLM provider 이름 (모니터링용)
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     user_id     TEXT NOT NULL DEFAULT 'anonymous'   -- 읽는 코드 없음(Phase 1 잔재)
@@ -885,75 +879,14 @@ if (!imagePaths.isEmpty() && lazyVision != null) {
 
 ---
 
-## 13. 이미지 유형 분류기
+## 13. 이미지 유형 분류기 — 제거됨 (2026-11-04)
 
-> **구현 완료** — `ImageTypeClassifier` (`enabled=true` 조건), `VisionDescriptionService.PROMPTS` 맵.
-
-### 13.1 동기
-
-이미지를 모두 동일 프롬프트로 설명하면 다이어그램·사진·코드 스크린샷 등 유형별 특성이 사라집니다.
-유형을 먼저 가볍게 분류하고 유형별 전용 프롬프트로 Vision을 호출하면 설명 품질이 향상됩니다.
-
-### 13.2 분류 카테고리
-
-| image_type | 설명 | 전용 프롬프트 핵심 |
-|-----------|------|------------------|
-| `diagram` | 박스·화살표가 있는 구조도/플로우/시퀀스 | 구성 요소·관계·방향 |
-| `screenshot` | UI 캡처, 코드 캡처 | UI 요소 위치, 표시된 텍스트 우선 |
-| `chart` | 차트·그래프 (막대·선·파이) | 축·범례·트렌드 |
-| `photo` | 일반 사진 | 피사체 중심, 1문장 요약 |
-| `other` | 분류 불가 | 일반 설명 |
-
-### 13.3 분류 흐름 (Lazy Vision과 결합)
-
-```
-LazyVisionService.describeIfNeeded(imagePath) — 캐시 미스 시:
-  1. ImageTypeClassifier.classify(imagePath)          → LIGHT_TEXT는 안 됨 (이미지 필요)
-                                                       → 실제로는 LIGHT_BOTH(gemma4)로 빠르게
-  2. promptByType.get(type) 선택
-  3. VisionDescriptionService.describe(bytes, mime, prompt)
-  4. 결과 + type 함께 캐시
-```
-
-### 13.4 ImageTypeClassifier
-
-```java
-@Service
-@ConditionalOnProperty(name = "app.image-description.enabled", havingValue = "true")
-public class ImageTypeClassifier {
-    // LlmRouter.route(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST) 사용
-    // (VISION 전용 모델이 아닌 범용 멀티모달 모델로 분류 — 빠르고 저비용)
-    public String classify(byte[] imageBytes, String mimeType): String
-    // 응답값: "diagram" | "screenshot" | "chart" | "photo" | "other"
-    // LLM 응답이 VALID_TYPES 외 단어면 "other" fallback
-    // 예외 발생 시 "other" 반환 (운영 안정성)
-}
-```
-
-> **주의**: 설계 문서(13.4)에서는 `TaskType.VISION`으로 명시했으나 실제 구현은 `TaskType.LIGHT_BOTH`를 사용함. 분류 작업은 정밀 Vision 모델보다 저비용 멀티모달 모델로도 충분.
-
-### 13.5 유형별 프롬프트
-
-```java
-private static final Map<String, String> PROMPTS = Map.of(
-    "diagram",    "이 다이어그램의 구성 요소와 관계, 흐름의 방향을 한국어로 3문장 이내 설명.",
-    "screenshot", "이 스크린샷에 표시된 UI 요소와 화면 텍스트를 한국어로 정리. 코드면 언어와 핵심 로직 요약.",
-    "chart",      "이 차트의 축·범례·관찰되는 트렌드를 한국어 3문장 이내 요약.",
-    "photo",      "이 사진의 피사체와 상황을 한국어로 1문장 요약.",
-    "other",      "이 이미지를 한국어로 간결히 3문장 이내 설명."
-);
-```
-
-### 13.6 장단점 및 고려사항
-
-| 항목 | 내용 |
-|------|------|
-| 장점 | 설명 품질 ↑ (다이어그램은 구조 중심, 차트는 트렌드 중심), 후속 검색 필터에 `image_type` 활용 가능 |
-| 단점 | Vision 호출이 이미지당 2회로 증가 — 분류 1회 + 설명 1회 |
-| 완화책 | 분류는 작은 비전 모델(gemma4)로 고정, 실제 설명만 큰 모델로 라우팅하도록 `route(TaskType)` 분리 검토 |
-| 캐시 | 12.3 `image_descriptions.image_type` 컬럼에 함께 저장 → 재호출 시 분류 비용 0 |
-| 분류 실패 | LLM 응답이 카테고리 외 단어면 `other`로 fallback — 운영 안정성 확보 |
-| 활용 | Web UI에서 이미지 갤러리에 유형 뱃지 표시 가능 (선택) |
+> **`ImageTypeClassifier` · `app.image-description.classify-type`(`IMAGE_CLASSIFY_TYPE`) · `ThinkingSite.IMAGE_TYPE`(`app.llm.thinking.image-type`)를 걷어냈다.** 설계 당시의 동기는 "유형별 전용 프롬프트로 설명 품질을 높인다"였지만, 설명 프롬프트를 모델이 앞머리에 형식을 직접 고르는 `CAPTION_PROMPT` 하나(§5)로 합친 뒤로 분류 결과가 설명을 바꾸지 못했고, 켜 두면 이미지당 Vision 호출만 2회로 늘었다(기본값을 `false` 로 내렸다가 같은 날 코드째 제거).
+>
+> - `VisionDescriptionService.PROMPTS` 맵도 없다 — 호출부는 `describe(bytes, mime)` 만 부른다.
+> - `image_descriptions.image_type` 컬럼은 **스키마(Flyway)에 남아 있지만 더 쓰지 않는다**(새 행은 NULL).
+> - `TaskType.LIGHT_BOTH` 는 프로바이더 type 으로 그대로 유효하다 — 이 요청을 내던 호출부가 없어졌을 뿐이다.
+> - 되살리려면 분류 결과가 **설명을 실제로 바꾸는** 용도(유형별 프롬프트, 갤러리 뱃지, 검색 필터)부터 정할 것.
 
 ---
 
@@ -1008,7 +941,7 @@ private void persistPicture(XWPFPictureData pic, Path imagesDir, int idx) throws
         } catch (Exception e) {
             log.warn("WMF conversion failed, keeping original (will be skipped by Vision): {}",
                      e.getMessage());
-            // 원본 보존 — 다운스트림에서 ImageTypeClassifier가 'other'로 분류
+            // 원본 보존 — 다운스트림(Vision)에서는 건너뛴다
         }
     }
 

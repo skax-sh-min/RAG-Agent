@@ -303,6 +303,12 @@ class SettingsControllerRenderTest {
                 "id=\"chat-font-xs\"", "id=\"chat-font-sm\"", "id=\"chat-font-md\"", "id=\"chat-font-lg\"",
                 "id=\"chat-font-preview\" class=\"chat-font-scope\"",
                 "document.getElementById('display-settings')");
+        // 좌우 2단: 설정(언어 + 글자 크기)이 왼쪽, 미리보기가 오른쪽. 언어 전환은 헤더가 아니라 이 카드에 있다.
+        assertThat(html).contains("id=\"display-lang-ko\"", "id=\"display-lang-en\"", "?lang=en", "?lang=ko");
+        assertThat(html.indexOf("id=\"display-lang-ko\"")).isLessThan(html.indexOf("id=\"chat-font-preview\""));
+        assertThat(html.indexOf("id=\"chat-font-xs\"")).isLessThan(html.indexOf("id=\"chat-font-preview\""));
+        assertThat(html).contains("col-md-5", "col-md-7");
+        assertThat(html).doesNotContain("text-decoration-none\">KO</a>");
         // 관리자 안내("관리자만 값을 변경할 수 있습니다")는 서버 설정에만 해당한다 — 화면 표시 카드보다 앞에 오면
         // 누구나 바꿀 수 있는 글자 크기까지 막힌 것처럼 읽힌다.
         assertThat(html).contains("alert alert-secondary");

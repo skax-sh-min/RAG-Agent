@@ -1221,15 +1221,14 @@ public class MarkdownCorrectionService {
                     seqLabel != null ? " (" + seqLabel + ")" : "", imagePath, mimeType, bytes.length);
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
             UserMessage userMessage = UserMessage.builder()
-                    .text("이 이미지를 한국어 2~3문장으로 간단히 설명하세요. "
-                            + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
+                    .text(VisionDescriptionService.CAPTION_PROMPT)   // 형식 + 한두 문장 한 줄 — 일반적인 서술 금지
                     .media(media).build();
             // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
             int cap = visionReservation(props.llmSafe().maxTokens());
             String response = llmRouter.executeWithTracking(ThinkingSite.MD_CORRECT_VISION.taskType(),
                     ThinkingSite.MD_CORRECT_VISION.fixedRoutingMode(), BackgroundUsage.IMAGE_PREFIX,
                     model -> model.call(new Prompt(userMessage, indexingOptions(ThinkingSite.MD_CORRECT_VISION, cap))));
-            return response == null ? "" : response.trim();
+            return VisionDescriptionService.cleanCaption(response);
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)
         } catch (WebClientResponseException e) {

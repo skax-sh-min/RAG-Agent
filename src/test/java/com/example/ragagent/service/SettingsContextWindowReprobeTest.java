@@ -86,9 +86,23 @@ class SettingsContextWindowReprobeTest {
         ProviderContextWindows windows = new ProviderContextWindows();   // 기록 없음 = "모름"
         SettingsService svc = service(windows, provider("local", base, null, null));
 
-        svc.reprobeContextWindows();
+        SettingsService.ReprobeResult result = svc.reprobeContextWindows();
 
         assertThat(windows.tokensOrZero("local")).isEqualTo(8_192);
+        assertThat(result.rows().get(0).before()).isEqualTo(SettingsService.CONTEXT_UNKNOWN_LABEL);
+    }
+
+    @Test
+    @DisplayName("창을 모르면 표 칸은 '-' 가 아니라 '미탐지 (입력 제한 없음)' 이고, 알면 값과 출처를 적는다 — 숫자를 지어 보이지 않는다")
+    void providerTableLabelsAnUnknownWindowInsteadOfInventingANumber() {
+        ProviderContextWindows windows = new ProviderContextWindows();
+        SettingsService svc = service(windows, provider("local", "http://127.0.0.1:1/v1", null, null));
+
+        assertThat(svc.providerRows()).singleElement()
+                .satisfies(r -> assertThat(r.contextWindow()).isEqualTo("미탐지 (입력 제한 없음)").doesNotContainPattern("\\d"));
+
+        windows.record("local", 8_192, ProviderContextWindows.Source.PROBED);
+        assertThat(svc.providerRows().get(0).contextWindow()).isEqualTo("8,192 (탐지됨)");
     }
 
     @Test

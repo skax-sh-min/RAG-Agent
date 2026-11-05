@@ -37,7 +37,6 @@ class LazyVisionServiceTest {
 
     private VisionDescriptionService visionService;
     private ImageDescriptionRepository descRepo;
-    private ImageTypeClassifier imageTypeClassifier;
     private AppProperties props;
     private LazyVisionService service;
 
@@ -45,17 +44,16 @@ class LazyVisionServiceTest {
     void setUp() {
         visionService = mock(VisionDescriptionService.class);
         descRepo = mock(ImageDescriptionRepository.class);
-        imageTypeClassifier = mock(ImageTypeClassifier.class);
         props = mock(AppProperties.class);
 
         when(props.dataDir()).thenReturn(dataDir.toString());
         when(props.imageDescriptionSafe())
                 .thenReturn(new AppProperties.ImageDescriptionProperties(
-                        "strip", false, false, null, 1_000, false, false, false)); // classifyType=false
+                        "strip", false, false, null, 1_000, false, false));
         when(props.indexingSafe())
                 .thenReturn(new AppProperties.IndexingConfig(2, 3, 180, 2));
 
-        service = new LazyVisionService(visionService, descRepo, imageTypeClassifier, props);
+        service = new LazyVisionService(visionService, descRepo, props);
     }
 
     /** Creates a real (tiny, content-irrelevant) file under dataDir at the given relative path. */
@@ -119,8 +117,8 @@ class LazyVisionServiceTest {
         Set<Integer> doneValues = events.stream().skip(1).map(e -> e[0]).collect(java.util.stream.Collectors.toSet());
         assertThat(doneValues).containsExactlyInAnyOrder(1, 2);
 
-        verify(descRepo).save(miss1, "새 설명", null, null);
-        verify(descRepo).save(miss2, "새 설명", null, null);
+        verify(descRepo).save(miss1, "새 설명", null);
+        verify(descRepo).save(miss2, "새 설명", null);
     }
 
     @Test
@@ -189,8 +187,8 @@ class LazyVisionServiceTest {
         assertThat(elapsedMs).isLessThan(1000);      // 2초 대기 없이 즉시 반환됨
 
         // 백그라운드에서는 계속 진행되어 결국 캐시에 저장된다 (이번 턴의 반환값에는 없어도)
-        verify(descRepo, timeout(5000)).save(miss1, "느린 설명", null, null);
-        verify(descRepo, timeout(5000)).save(miss2, "느린 설명", null, null);
+        verify(descRepo, timeout(5000)).save(miss1, "느린 설명", null);
+        verify(descRepo, timeout(5000)).save(miss2, "느린 설명", null);
     }
 
     @Test

@@ -101,7 +101,7 @@ public class ThinkingPreviewService {
             case MD_CORRECT -> Shape.REWRITE_MD;
             case TXT_TO_MD -> Shape.REWRITE_TXT;
             case KEYWORD_CONTEXT -> Shape.BATCH;
-            case IMAGE_DESCRIBE, IMAGE_TYPE, MD_CORRECT_VISION -> Shape.IMAGE;
+            case IMAGE_DESCRIBE, MD_CORRECT_VISION -> Shape.IMAGE;
             case CLASSIFY, CONDENSE, QUERY_EXPANSION, POST_ANSWER, TITLE, SUMMARY, CURATED_SUGGEST -> Shape.SHORT;
         };
     }
@@ -317,7 +317,6 @@ public class ThinkingPreviewService {
                     case TITLE -> ThreadMetaService.baseReservation(c.maxTokens);
                     case SUMMARY -> ConversationSummarizerService.baseReservation(c.maxTokens, c.summaryChars);
                     case IMAGE_DESCRIBE -> VisionDescriptionService.baseReservation(c.maxTokens);
-                    case IMAGE_TYPE -> ImageTypeClassifier.baseReservation(c.maxTokens);
                     // 출력 상한을 싣지 않는 호출 — 프로바이더 기본값이 예약된다. 남은 것은 질의 확장 하나다: 프레임워크
                     // (MultiQueryExpander)가 프롬프트를 스스로 만들어 호출부가 옵션을 실을 자리가 없다.
                     default -> 0;
