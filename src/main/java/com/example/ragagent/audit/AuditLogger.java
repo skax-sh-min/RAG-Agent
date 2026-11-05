@@ -3,7 +3,7 @@ package com.example.ragagent.audit;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

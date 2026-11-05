@@ -153,8 +153,8 @@ public class TokenEstimateCalibration {
         }
 
         @Override
-        public ChatOptions getDefaultOptions() {
-            return delegate.getDefaultOptions();
+        public ChatOptions getOptions() {
+            return delegate.getOptions();
         }
 
         private String promptText(Prompt prompt) {

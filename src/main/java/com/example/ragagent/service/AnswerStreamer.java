@@ -11,7 +11,12 @@ import com.example.ragagent.llm.ThinkingObservations;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.llm.ThinkingWire;
 import org.slf4j.Logger;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -23,8 +28,9 @@ import java.util.function.Function;
  * 채팅 답변을 토큰 단위로 받아 오는 <b>유일한</b> 자리 (PLAN §6.29 3단계) — {@code AnswerService}(RAG 답변 ·
  * PROGRESSIVE 2차)와 {@code DirectAnswerService}(Direct · meta 답변)가 {@code provider.stream()=true} 일 때 여기로 온다.
  *
- * <p><b>왜 체인 밖에 있는가.</b> 두 경로는 {@code OpenAiChatModel.internalStream()} 의 버퍼링을 피하려고
- * {@code OpenAiApi.chatCompletionStream()} 을 직접 부르므로 {@code ChatModel} 데코레이터 체인(생각 수준을 싣는
+ * <p><b>왜 체인 밖에 있는가.</b> 두 경로는 데코레이터가 씌워지지 않은 원본 모델({@link LlmProvider#rawModel()})의
+ * {@code stream()} 을 직접 부르므로(Spring AI 1.x 에서는 {@code OpenAiChatModel} 의 버퍼링을 피하려고
+ * {@code OpenAiApi.chatCompletionStream()} 이었다) {@code ChatModel} 데코레이터 체인(생각 수준을 싣는
  * {@code ThinkingControlChatModel}, curl 로그)을 통째로 지나지 않는다. 채팅 답변의 주 경로가 여기라, 체인이 하던 일
  * 중 이 경로에 필요한 것을 <b>같은 함수로</b> 한다:
  * <ol>
@@ -91,15 +97,18 @@ public class AnswerStreamer {
      */
     void stream(LlmProvider provider, ThinkingSite site, String systemPrompt, String userPrompt, double temperature,
                 Consumer<String> tokenSink, Runnable onThinking, Trace trace) {
-        OpenAiApi.ChatCompletionRequest base = new OpenAiApi.ChatCompletionRequest(List.of(
-                new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
-                new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)),
-                provider.model(), temperature, true);
+        // 요청 본문은 예전과 같다: 모델 + 온도 + 메시지 둘, max_tokens 는 싣지 않는다(원본 모델의 기본 옵션에도 없다).
+        OpenAiChatOptions base = OpenAiChatOptions.builder()
+                .model(provider.model())
+                .temperature(temperature)
+                .build();
+        List<org.springframework.ai.chat.messages.Message> messages =
+                List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt));
         ThinkingLevel level = levels.apply(site);
         ThinkingWire wire = dialects.wireFor(provider.name(), level);
         Tally first = new Tally();
         try {
-            attempt(provider, site, level, wire, base, first, tokenSink, onThinking, trace, true);
+            attempt(provider, site, level, wire, base, messages, first, tokenSink, onThinking, trace, true);
         } catch (RuntimeException e) {
             String field = retryableRejection(e, wire, first, true);
             if (field == null) throw e;
@@ -107,22 +116,23 @@ public class AnswerStreamer {
                 trace.log().warn("[THINKING] provider=[{}] 가 {} 를 거부했다 — 이 프로세스 동안은 싣지 않는다"
                         + "(이 서버에서는 생각 수준을 정하지 못한다): {}", provider.name(), field, e.getMessage());
             }
-            attempt(provider, site, level, dialects.wireFor(provider.name(), level), base, new Tally(),
+            attempt(provider, site, level, dialects.wireFor(provider.name(), level), base, messages, new Tally(),
                     tokenSink, onThinking, trace, false);
         }
     }
 
     private void attempt(LlmProvider provider, ThinkingSite site, ThinkingLevel level, ThinkingWire wire,
-                         OpenAiApi.ChatCompletionRequest base, Tally tally, Consumer<String> tokenSink,
+                         OpenAiChatOptions base, List<org.springframework.ai.chat.messages.Message> messages, Tally tally, Consumer<String> tokenSink,
                          Runnable onThinking, Trace trace, boolean mayRetry) {
-        OpenAiApi.ChatCompletionRequest request = ThinkingControl.applyTo(base, wire);
+        OpenAiChatOptions options = ThinkingControl.applyTo(base, wire);
+        Prompt request = new Prompt(messages, options);
         Logger log = trace.log();
         log.debug("[THINKING] site={} level={} provider={} sent={}",
                 site.id(), level.value(), provider.name(), wire.describe());
         logRequest(provider, request, log);
         long started = System.nanoTime();
         CancellableTokenStream.consume(
-                provider.openAiApi().chatCompletionStream(request)
+                provider.rawModel().stream(request)
                         // 서버가 청크를 하나라도 보냈다 = 요청을 받아들였다. 소비자보다 앞(업스트림)에서 세야 오류 신호와
                         // 같은 순서로 보인다 — 아직 소비되지 않은 청크가 있어도 거부가 아니다.
                         .doOnNext(chunk -> tally.received = true)
@@ -152,11 +162,11 @@ public class AnswerStreamer {
      * 실제로 나간 본문(생각 필드 포함)을 호출부 로거로 찍는다 — 이 경로는 {@code LoggingChatModel} 을 지나지 않는다.
      * DEBUG 는 엔드포인트+본문, TRACE 는 curl 전체({@link LlmCurlLogger}).
      */
-    private static void logRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request, Logger log) {
+    private static void logRequest(LlmProvider provider, Prompt request, Logger log) {
         if (!log.isDebugEnabled()) return;
         try {
             String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
-            String json = LlmCurlLogger.toCurlBodyJson(request);
+            String json = LlmCurlLogger.toCurlBodyJson(provider.model(), true, request.getInstructions(), request.getOptions());
             LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
         } catch (Exception e) {
             log.debug("[LLM curl] serialization error: {}", e.getMessage());
@@ -170,26 +180,31 @@ public class AnswerStreamer {
         int contentDeltas;
         int reasoningDeltas;
         String finish;
-        OpenAiApi.Usage usage;
+        String lastReasoning = "";
+        ThinkingObservations.ReportedUsage usage;
 
         /**
          * 청크 하나를 가른다 — 생각 델타는 세고 알리기만, 답 델타는 호출부로. 한 델타에 둘이 함께 오면(생각이 끝나는
          * 자리에서 그러는 서버가 있다) 생각을 먼저 처리한다.
          */
-        void accept(OpenAiApi.ChatCompletionChunk chunk, Consumer<String> tokenSink, Runnable onThinking) {
+        void accept(ChatResponse chunk, Consumer<String> tokenSink, Runnable onThinking) {
             if (chunk == null) return;
-            if (chunk.usage() != null) usage = chunk.usage();
-            if (chunk.choices() == null || chunk.choices().isEmpty()) return;
-            OpenAiApi.ChatCompletionChunk.ChunkChoice choice = chunk.choices().get(0);
-            if (choice.finishReason() != null) finish = choice.finishReason().name();
-            OpenAiApi.ChatCompletionMessage delta = choice.delta();
-            if (delta == null) return;
-            String reasoning = delta.reasoningContent();
-            if (reasoning != null && !reasoning.isEmpty()) {
+            ThinkingObservations.ReportedUsage reported = ThinkingObservations.nativeUsageOf(chunk);
+            if (reported != null) usage = reported;
+            Generation generation = chunk.getResult();
+            if (generation == null) return;
+            String reason = ThinkingObservations.finishReasonOf(generation);
+            if (reason != null && !reason.isBlank()) finish = reason;
+            // Spring AI 2.0 은 생각 본문을 청크마다 델타로 주지 않고 지금까지 쌓인 전체로 준다(2026-11-05 실측: "think1",
+            // "think1think2", 그리고 답 청크에도 같은 값이 계속 붙는다). 그래서 길이가 늘었을 때만 생각 델타로 센다 —
+            // 그렇지 않으면 답을 흘리는 동안에도 "생각 중"이 계속 켜진다.
+            String reasoning = ThinkingObservations.reasoningOf(generation);
+            if (reasoning != null && reasoning.length() > lastReasoning.length()) {
+                lastReasoning = reasoning;
                 reasoningDeltas++;
                 onThinking.run();
             }
-            String content = delta.content();
+            String content = ThinkingObservations.textOf(generation);
             if (content != null && !content.isEmpty()) {
                 contentDeltas++;
                 tokenSink.accept(content);

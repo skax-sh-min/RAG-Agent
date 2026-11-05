@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       그 호출은 생각 수준 설정이 아무 효과가 없는 채로 나간다. 오류도 로그도 없다.</li>
  *   <li><b>{@code TaskType} 리터럴 라우팅</b> — {@code /settings} 미리보기(5단계)는 "이 사이트를 누가 받는가"를
  *       {@code ThinkingSite} 의 라우팅으로 계산한다. 호출부가 리터럴로 라우팅하면 화면과 실제가 조용히 갈라진다.</li>
- *   <li><b>체인을 우회하는 직행 호출</b> — 프로바이더의 날것 {@code OpenAiApi} 로 부르면 데코레이터 체인(생각 수준을
+ *   <li><b>체인을 우회하는 직행 호출</b> — 프로바이더의 날것 {@code OpenAiChatModel}(데코레이터 없음) 로 부르면 데코레이터 체인(생각 수준을
  *       싣는 {@code ThinkingControlChatModel})을 통째로 지나지 않는다. 그 길은 채팅 답변 스트리밍 하나뿐이고, 같은 규칙을
  *       {@code AnswerStreamer} 가 따로 싣는다 — 다른 곳에서 열면 그 호출은 생각 수준이 아무 효과가 없다.</li>
  * </ul>
@@ -64,6 +64,9 @@ class ThinkingSiteConventionTest {
     void everyOptionsBuilderIsMarked() {
         List<String> violations = new ArrayList<>();
         forEachSource((file, text) -> {
+            // 채팅 답변 스트리밍은 표시를 거치지 않는다 — 체인을 우회하므로 AnswerStreamer 가 사이트의 수준을 요청에 직접 싣는다
+            // (ThinkingControl.applyTo). 표시 키는 걷어낼 체인이 없는 경로에 쓰면 서버로 샌다.
+            if (file.endsWith(STREAMER)) return;
             long builders = OPTIONS_BUILDER.matcher(text).results().count();
             long marked = MARKED_BUILDER.matcher(text).results().count();
             if (builders != marked) {
@@ -75,19 +78,19 @@ class ThinkingSiteConventionTest {
                 .isEmpty();
     }
 
-    /** 프로바이더의 날것 {@code OpenAiApi} 를 꺼내는 자리 — 스트리밍이든 블로킹이든 체인을 우회한다. */
-    private static final Pattern RAW_API = Pattern.compile("\\.openAiApi\\(\\)");
+    /** 프로바이더의 날것 {@code OpenAiChatModel}(데코레이터 없음) 를 꺼내는 자리 — 스트리밍이든 블로킹이든 체인을 우회한다. */
+    private static final Pattern RAW_API = Pattern.compile("\\.rawModel\\(\\)");
     private static final String STREAMER = "service/AnswerStreamer.java";
 
     @Test
-    @DisplayName("체인을 우회하는 OpenAiApi 직행 호출은 AnswerStreamer 한 곳에서만 연다 — 다른 곳은 생각 수준이 먹지 않는다")
+    @DisplayName("체인을 우회하는 원본 모델(rawModel) 직행 호출은 AnswerStreamer 한 곳에서만 연다 — 다른 곳은 생각 수준이 먹지 않는다")
     void rawApiCallsGoThroughTheStreamer() {
         List<String> violations = new ArrayList<>();
         forEachSource((file, text) -> {
             if (file.endsWith(STREAMER)) return;
             String code = withoutComments(text);
             Matcher m = RAW_API.matcher(code);
-            while (m.find()) violations.add(file + ":" + lineOf(code, m.start()) + " — provider.openAiApi()");
+            while (m.find()) violations.add(file + ":" + lineOf(code, m.start()) + " — provider.rawModel()");
         });
         assertThat(violations)
                 .as("채팅 답변 스트리밍은 AnswerStreamer.stream() 을 쓴다(생각 수준·생각 델타·거부 재시도·관측이 거기 있다)")
@@ -169,8 +172,8 @@ class ThinkingSiteConventionTest {
         assertThat(LITERAL_ROUTING.matcher("executeWithTracking(\n                    TaskType.VISION,").find()).isTrue();
         assertThat(LITERAL_ROUTING.matcher("executeGated(site.taskType(), site.fixedRoutingMode(),").find()).isFalse();
         assertThat(MARKED_BUILDER.matcher("ThinkingControl.mark(OpenAiChatOptions.builder()\n .temperature(t), site)").find()).isTrue();
-        assertThat(RAW_API.matcher(withoutComments("provider.openAiApi().chatCompletionStream(request)")).find()).isTrue();
-        assertThat(RAW_API.matcher(withoutComments("// provider.openAiApi() 를 직접 부르지 않는다\n/** {@code x.openAiApi()} */"))
+        assertThat(RAW_API.matcher(withoutComments("provider.rawModel().chatCompletionStream(request)")).find()).isTrue();
+        assertThat(RAW_API.matcher(withoutComments("// provider.rawModel() 를 직접 부르지 않는다\n/** {@code x.rawModel()} */"))
                 .find()).as("주석 속 언급은 위반이 아니다").isFalse();
         assertThat(Files.exists(SRC.resolve("com/example/ragagent/" + STREAMER)))
                 .as("예외로 둔 파일이 실제로 있다 — 옮겨지면 이 검사가 아무것도 막지 않게 된다").isTrue();

@@ -12,11 +12,9 @@ import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.retry.support.RetryTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -99,33 +97,20 @@ public class EmbeddingBeanConfig {
      *  reproduction of every embedding call, mirroring {@code LlmConfig}'s {@link
      *  com.example.ragagent.llm.LoggingChatModel} for chat calls. */
     private EmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
-        // OpenAiApi.builder() appends /v1 internally — strip it to avoid /v1/v1/embeddings.
-        String apiBase = rawUrl.endsWith("/v1/") ? rawUrl.substring(0, rawUrl.length() - 4)
-                       : rawUrl.endsWith("/v1")  ? rawUrl.substring(0, rawUrl.length() - 3)
-                       : rawUrl;
         String effectiveApiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
-        OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(apiBase)
-                .apiKey(effectiveApiKey)
-                .restClientBuilder(HttpClientTimeouts.restClientBuilder(
-                        cfg.connectTimeoutSeconds(),
-                        cfg.readTimeoutSeconds()))
-                .build();
-        // maxAttempts=2 (i.e. one retry): Spring AI's DEFAULT_RETRY_TEMPLATE attempts up to 10
+        // maxRetries=1 (i.e. one retry): Spring AI 1.x's DEFAULT_RETRY_TEMPLATE attempted up to 10
         // times with exponential backoff, causing the UI to show "벡터 DB 저장 중..." for several
-        // minutes on connection failures (e.g. LM Studio not running).
-        RetryTemplate shortRetry = RetryTemplate.builder()
-                .maxAttempts(2)
-                .exponentialBackoff(500, 2.0, 5_000)
-                .build();
-        OpenAiEmbeddingModel raw = new OpenAiEmbeddingModel(
-                api,
-                MetadataMode.EMBED,
-                OpenAiEmbeddingOptions.builder()
+        // minutes on connection failures (e.g. LM Studio not running). The SDK's own retry has a
+        // short exponential backoff, so one retry keeps the old behaviour.
+        com.openai.core.ClientOptions clientOptions = OpenAiClients.clientOptions(
+                rawUrl, effectiveApiKey, cfg.connectTimeoutSeconds(), cfg.readTimeoutSeconds(), 1);
+        OpenAiEmbeddingModel raw = OpenAiEmbeddingModel.builder()
+                .openAiClient(OpenAiClients.syncClient(clientOptions))
+                .metadataMode(MetadataMode.EMBED)
+                .options(OpenAiEmbeddingOptions.builder()
                         .model(model)
-                        .build(),
-                shortRetry
-        );
+                        .build())
+                .build();
         return new LoggingEmbeddingModel(raw, TrackingEmbeddingModel.PROVIDER_NAME,
                 rawUrl, effectiveApiKey, model);
     }

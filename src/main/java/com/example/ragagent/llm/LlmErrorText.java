@@ -1,5 +1,6 @@
 package com.example.ragagent.llm;
 
+import com.openai.errors.OpenAIServiceException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
@@ -12,6 +13,10 @@ import java.util.Set;
  *
  * <p>오류를 서버 문구로 가르는 판정(컨텍스트 초과 {@link LlmRouter#isContextOverflow}, 생각 필드 거부
  * {@link ThinkingControl#rejectedField})이 읽는 단일 출처다.
+ *
+ * <p><b>Spring AI 2.0 이후</b> 채팅·임베딩 호출의 오류는 OpenAI SDK 의 {@link OpenAIServiceException}(상태 코드·헤더·파싱된
+ * 본문을 가진다)이고, 스트리밍은 그것이 {@code CompletionException} 에 싸여 온다. 아래 서술은 1.x 의 WebClient/RestClient
+ * 경로를 설명하며, 그 예외들도 계속 알아본다(이 앱의 날것 HTTP 호출이 쓴다).
  *
  * <p><b>왜 메시지만으로는 안 되는가.</b> 블로킹 경로(RestClient)의 오류는 Spring AI 의 오류 처리기가 본문을 메시지에
  * 싣는다({@code "HTTP 400 - {...}"}). 스트리밍 경로 — {@code OpenAiApi.chatCompletionStream()} 의 WebClient — 에는 그
@@ -32,7 +37,11 @@ public final class LlmErrorText {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cur = t; cur != null && seen.add(cur); cur = cur.getCause()) {
             append(sb, cur.getMessage());
-            if (cur instanceof WebClientResponseException w) {
+            if (cur instanceof OpenAIServiceException o) {
+                // Spring AI 2.0 의 SDK 예외는 메시지에 본문(또는 본문의 error 값)이 실려 오지만 서버 구현에 따라 다르다 —
+                // 파싱된 본문도 함께 본다.
+                append(sb, String.valueOf(o.body()));
+            } else if (cur instanceof WebClientResponseException w) {
                 append(sb, w.getResponseBodyAsString());
             } else if (cur instanceof RestClientResponseException r) {
                 append(sb, r.getResponseBodyAsString());

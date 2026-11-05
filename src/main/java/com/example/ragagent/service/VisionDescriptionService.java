@@ -14,7 +14,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import com.openai.errors.OpenAIServiceException;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -142,10 +142,6 @@ public class VisionDescriptionService {
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());
             return "[이미지 설명 불가: Vision 프로바이더 미등록]";
-        } catch (WebClientResponseException e) {
-            log.error("Vision description failed: HTTP {} body={}",
-                    e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
-            return "[이미지 설명 생성 오류]";
         } catch (Exception e) {
             if (isVisionInputUnsupported(e)) {
                 if (UNSUPPORTED_VISION_LOGGED.compareAndSet(false, true)) {
@@ -154,7 +150,11 @@ public class VisionDescriptionService {
                 }
                 return "[이미지 설명 불가: Vision 미지원 모델]";
             }
-            log.error("Vision description failed", e);
+            if (e instanceof OpenAIServiceException o) {
+                log.error("Vision description failed: HTTP {} body={}", o.statusCode(), compactBody(String.valueOf(o.body())));
+            } else {
+                log.error("Vision description failed", e);
+            }
             return "[이미지 설명 생성 오류]";
         }
     }

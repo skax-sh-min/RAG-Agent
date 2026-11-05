@@ -20,7 +20,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import com.openai.errors.OpenAIServiceException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -1231,9 +1231,9 @@ public class MarkdownCorrectionService {
             return VisionDescriptionService.cleanCaption(response);
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)
-        } catch (WebClientResponseException e) {
+        } catch (OpenAIServiceException e) {
             log.warn("[MD_CORRECT] 이미지 설명 생성 실패 {}: HTTP {} body={}",
-                    imagePath, e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
+                    imagePath, e.statusCode(), compactBody(String.valueOf(e.body())));
             return "";
         } catch (Exception e) {
             log.debug("[MD_CORRECT] 이미지 설명 생성 실패 {}: {}", imagePath, e.getMessage());

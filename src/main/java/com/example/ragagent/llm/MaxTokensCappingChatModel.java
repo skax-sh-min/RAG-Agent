@@ -33,7 +33,7 @@ import reactor.core.publisher.Flux;
  * 예전처럼 최종 폴백으로 남고, "상한 없음"을 의도한 호출이 조용히 잘리지 않는다.
  *
  * <p>스트리밍 답변은 애초에 여기를 지나가지 않는다 — 그 경로는 {@code OpenAiChatModel} 의 버퍼링을
- * 피하려고 {@code OpenAiApi.chatCompletionStream()} 를 직접 쓴다. 상한이 블로킹 호출에만 걸린다는
+ * 피하려고 원본 모델의 {@code stream()} 을 직접 쓴다. 상한이 블로킹 호출에만 걸린다는
  * 기존 설계와 그대로 맞아떨어진다.
  */
 public class MaxTokensCappingChatModel implements ChatModel {
@@ -68,8 +68,8 @@ public class MaxTokensCappingChatModel implements ChatModel {
     }
 
     @Override
-    public ChatOptions getDefaultOptions() {
-        return delegate.getDefaultOptions();
+    public ChatOptions getOptions() {
+        return delegate.getOptions();
     }
 
     private Prompt capped(Prompt prompt) {
@@ -87,9 +87,9 @@ public class MaxTokensCappingChatModel implements ChatModel {
                     providerName, prompt.getOptions().getClass().getSimpleName(), ceilingNow);
             return prompt;
         }
-        // copy() 로 옵션만 갈아 끼운다 — 원본 Prompt 를 건드리면 호출부가 재사용할 때 값이 새어 나간다.
-        OpenAiChatOptions lowered = openAi.copy();
-        lowered.setMaxTokens(ceilingNow);
+        // 옵션 사본만 갈아 끼운다 — 원본 Prompt 를 건드리면 호출부가 재사용할 때 값이 새어 나간다(옵션은 불변이라
+        // mutate() 가 모든 값을 이어받은 빌더를 준다).
+        OpenAiChatOptions lowered = openAi.mutate().maxTokens(ceilingNow).build();
         log.debug("[MAX_TOKENS] provider=[{}] {} → {} (프로바이더별 상한)", providerName, requested, ceilingNow);
         return new Prompt(prompt.getInstructions(), lowered);
     }

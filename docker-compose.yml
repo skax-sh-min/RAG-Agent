@@ -17,7 +17,7 @@ services:
   chroma:
     # 태그 고정(:latest 금지) — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어
     # :latest 는 어느 날 조용히 앱을 깨뜨릴 수 있다.
-    # 이 앱은 Spring AI 1.1.8의 ChromaApi 를 쓰고, 그 구현은 /api/v2/tenants/{t}/databases/{d}/...
+    # 이 앱은 Spring AI 2.0.2의 ChromaApi 를 쓰고, 그 구현은 /api/v2/tenants/{t}/databases/{d}/...
     # 경로만 호출한다(tenant/database 개념은 v1에 없음). 따라서 **v1 전용 서버(0.5.x 이하)로는
     # 동작하지 않으며**, v2를 서빙하는 1.x 계열을 써야 한다.
     image: chromadb/chroma:1.0.21

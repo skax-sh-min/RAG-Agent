@@ -25,7 +25,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 
 import java.io.IOException;
@@ -51,9 +51,9 @@ import static org.mockito.Mockito.when;
 
 /**
  * "{@code LOCAL_LLM_URL} 서버는 응답이 없고 {@code LOCAL_LLM_URL_2} 는 멀쩡하다" — 채팅 화면의 답변 스트리밍이 <b>진짜 라우터와 진짜
- * WebClient</b>를 지날 때의 모양. 내장 {@link HttpServer} 가 살아 있는 서버를, 닫힌 포트가 죽은 서버를 흉내 낸다.
+ * SDK 클라이언트</b>를 지날 때의 모양. 내장 {@link HttpServer} 가 살아 있는 서버를, 닫힌 포트가 죽은 서버를 흉내 낸다.
  *
- * <p>목 라우터로는 알 수 없는 것을 고정한다: WebClient 가 연결 거부·HTTP 503·응답 도중 끊김에서 <b>실제로</b> 올리는 예외가
+ * <p>목 라우터로는 알 수 없는 것을 고정한다: SDK 클라이언트가 연결 거부·HTTP 503·응답 도중 끊김에서 <b>실제로</b> 올리는 예외가
  * {@code LlmRouter.failOver} 의 판정에 맞는 모양인가, 그리고 첫 토큰이 나간 뒤에는 정말로 다시 열지 않는가.
  */
 class StreamingFailoverWireTest {
@@ -117,8 +117,10 @@ class StreamingFailoverWireTest {
     }
 
     private static LlmProvider provider(String name, String baseUrl) {
-        OpenAiApi api = OpenAiApi.builder().baseUrl(baseUrl).apiKey("no-key").build();
-        return new LlmProvider(name, TaskType.TEXT, ProviderRole.LOCAL, 1, "no-key", baseUrl + "/v1", "m", true, null, api);
+        // baseUrl 에는 /v1 이 없다 — OpenAiClients.sdkBaseUrl 이 경로 없는 주소에 /v1 을 붙이는 규칙도 함께 확인된다.
+        var client = com.example.ragagent.config.OpenAiClients.clientOptions(baseUrl, "no-key", 5, 30, 0);
+        var raw = com.example.ragagent.config.OpenAiClients.chatModel(client, OpenAiChatOptions.builder().model("m").build());
+        return new LlmProvider(name, TaskType.TEXT, ProviderRole.LOCAL, 1, "no-key", baseUrl + "/v1", "m", true, null, raw);
     }
 
     /** {@code local}(먼저 등록 — 한가하면 먼저 고른다)과 {@code local-2}. */
@@ -228,7 +230,7 @@ class StreamingFailoverWireTest {
     // ── HTTP 503 (모델 로딩 중) ───────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("local 이 503 + Retry-After 를 주면 그 시간만큼 막고 local-2 로 넘어간다 — WebClient 의 실제 예외로 확인")
+    @DisplayName("local 이 503 + Retry-After 를 주면 그 시간만큼 막고 local-2 로 넘어간다 — SDK 의 실제 예외로 확인")
     void anOverloadedServerIsBlockedForTheTimeItAsksFor() throws IOException {
         String loading = start(exchange -> {
             byte[] body = "{\"error\":{\"message\":\"Loading model\"}}".getBytes(StandardCharsets.UTF_8);

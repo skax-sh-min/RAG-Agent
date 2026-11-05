@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import com.openai.errors.OpenAIServiceException;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -237,7 +238,7 @@ public class LlmRouter {
      * 프로바이더를 차단하고 {@code true} 를 돌려준다. 호출부는 {@link #routeProvider} 를 다시 불러(차단된 쪽은 건너뛴다)
      * 다음 프로바이더로 스트림을 다시 연다 — 그 순회는 {@link StreamFailover} 가 한다.
      *
-     * <p><b>왜 필요한가.</b> 스트리밍은 {@code OpenAiApi.chatCompletionStream()} 을 직접 불러 {@link #executeWithTracking} 의
+     * <p><b>왜 필요한가.</b> 스트리밍은 {@code LlmProvider.rawModel().stream()} 을 직접 불러 {@link #executeWithTracking} 의
      * try/catch 를 통째로 우회한다. 그래서 {@code routeProvider} 가 고른 프로바이더가 죽어 있어도 다른 곳으로 넘어가지 못했고,
      * 실패를 차단기에 알리지도 않아 매 요청이 같은 죽은 서버를 먼저 불렀다(같은 priority 의 둘이 한가하면 먼저 등록된 쪽이
      * 이긴다). 같은 로컬 서버 두 대를 두는 이유가 한 대가 죽었을 때를 위한 것인데 채팅 화면은 그 보호를 못 받았다.
@@ -384,7 +385,7 @@ public class LlmRouter {
         //  같은 판정 함수를 쓰므로 아래 우려 — 중단을 실패로 세는 오탐 — 는 failOver 의 앞 세 줄이 막는다.)
         // 성공만 보고하는 비대칭은 그대로이고, 의도한 것이다.
         // 스트리밍 경로(AnswerService / DirectAnswerService → AnswerStreamer)는
-        // OpenAiApi.chatCompletionStream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
+        // rawModel().stream() 을 직접 불러 ChatModel 과 executeWithTracking() 의
         // try/catch 를 통째로 우회하므로, 실패를 브레이커에 넣으려면 분류를 그쪽에 다시 구현해야
         // 한다. 그러지 않기로 했다:
         //
@@ -798,12 +799,19 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
-                if (connectTimedOut) {
-                    log.warn("[CONNECT-TIMEOUT] provider={} accepted no connection within app.llm.connect-timeout-seconds "
-                            + "— the server is down or unreachable; blocking it and trying the next provider",
-                            provider.name());
+                int status = httpStatusOf(e);
+                if (status == 429 || status == 402 || status == 503) {
+                    // Spring AI 2.0 의 SDK 는 상태 코드와 헤더를 가진 예외를 그대로 올린다 — 스트리밍의 failOver 와 같은
+                    // 오버로드 규칙(Retry-After 존중, 넘길 상대가 없으면 짧게만 차단)을 블로킹에도 적용한다.
+                    blockForOverload(provider, taskType, roleOrder, tried, retryAfterOf(e));
+                } else {
+                    if (connectTimedOut) {
+                        log.warn("[CONNECT-TIMEOUT] provider={} accepted no connection within app.llm.connect-timeout-seconds "
+                                + "— the server is down or unreachable; blocking it and trying the next provider",
+                                provider.name());
+                    }
+                    blockForFailure(provider, taskType, roleOrder, tried);
                 }
-                blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
@@ -925,16 +933,32 @@ public class LlmRouter {
                     || cur instanceof java.net.NoRouteToHostException
                     || cur instanceof java.net.PortUnreachableException
                     || cur instanceof WebClientRequestException
-                    || cur.getClass().getName().endsWith("PrematureCloseException")) {
+                    || cur.getClass().getName().endsWith("PrematureCloseException")
+                    || isPrematureClose(cur)) {
                 return true;
             }
         }
         return isConnectTimeout(t);
     }
 
+    /**
+     * OkHttp(Spring AI 2.0 의 SDK 가 쓰는 HTTP 클라이언트)가 응답이 시작되기 전에 연결이 끊겼을 때 던지는 모양 — Reactor Netty 의
+     * {@code PrematureCloseException} 에 해당한다. 서버가 요청을 받다가 죽었거나 keep-alive 연결이 이미 닫혀 있던 경우다.
+     * 첫 토큰이 나간 뒤의 끊김은 스트리밍 쪽 {@link #failOver} 가 따로 걸러 건드리지 않는다.
+     */
+    private static boolean isPrematureClose(Throwable cur) {
+        if (!(cur instanceof java.io.IOException)) return false;
+        String msg = cur.getMessage();
+        if (msg == null) return false;
+        String lowered = msg.toLowerCase(Locale.ROOT);
+        return lowered.contains("unexpected end of stream") || lowered.contains("connection reset")
+                || lowered.contains("stream was reset") || lowered.contains("connection closed");
+    }
+
     /** 원인 사슬에서 처음 만나는 HTTP 오류 응답의 상태 코드 — RestClient·WebClient 둘 다. 없으면 0. */
     private static int httpStatusOf(Throwable t) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (cur instanceof OpenAIServiceException o) return o.statusCode();
             if (cur instanceof WebClientResponseException w) return w.getStatusCode().value();
             if (cur instanceof RestClientResponseException r) return r.getStatusCode().value();
         }
@@ -945,7 +969,9 @@ public class LlmRouter {
     private static String retryAfterOf(Throwable t) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             String value = null;
-            if (cur instanceof WebClientResponseException w) {
+            if (cur instanceof OpenAIServiceException o) {
+                value = o.headers().values("Retry-After").stream().findFirst().orElse(null);
+            } else if (cur instanceof WebClientResponseException w) {
                 value = w.getHeaders().getFirst("Retry-After");
             } else if (cur instanceof RestClientResponseException r && r.getResponseHeaders() != null) {
                 value = r.getResponseHeaders().getFirst("Retry-After");
@@ -965,7 +991,7 @@ public class LlmRouter {
      * 짧은 질문은 같은 프로바이더에서 그대로 처리돼야 한다.
      *
      * <p><b>공개인 이유</b>: 채팅 스트리밍 경로({@code AnswerService} → {@code AnswerStreamer})는 이 라우터를
-     * 거치지 않고 {@link org.springframework.ai.openai.api.OpenAiApi} 를 직접 호출하므로, 거기서
+     * 거치지 않고 {@code LlmProvider.rawModel()} 을 직접 호출하므로, 거기서
      * 올라오는 예외는 {@code LlmContextOverflowException} 으로 바뀌지 않은 <b>날것</b>이다. 축소
      * 재시도(§6.26-9)가 그 경로에서도 초과를 알아보려면 같은 판정이 필요한데, 마커 목록을 복사하면
      * 서버 문구가 추가될 때 한쪽만 고쳐진다.
@@ -1043,7 +1069,9 @@ public class LlmRouter {
     /** 소문자 부분 일치. 서버가 진행 중인 요청을 끊었을 때의 응답 본문 조각. */
     private static final List<String> REQUEST_TERMINATED_MARKERS = List.of(
             "\"error\":\"terminated\"",
-            "\"error\": \"terminated\""
+            "\"error\": \"terminated\"",
+            // Spring AI 2.0 의 SDK 는 {"error":"terminated"} 의 error 값만 꺼내 메시지를 "400: \"terminated\"" 로 만든다.
+            ": \"terminated\""
     );
 
     /** package-private — {@code isContextOverflow}/{@code isRequestTerminatedByServer} 와 같은 이유로

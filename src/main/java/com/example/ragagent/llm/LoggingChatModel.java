@@ -1,15 +1,11 @@
 package com.example.ragagent.llm;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 
 /**
@@ -19,7 +15,6 @@ import reactor.core.publisher.Flux;
 public class LoggingChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingChatModel.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ChatModel delegate;
     private final String providerName;
@@ -48,34 +43,16 @@ public class LoggingChatModel implements ChatModel {
         return delegate.stream(prompt);
     }
 
+    /** 기본 옵션은 안쪽 모델의 것이다 — ChatClient 가 이 값을 이어받는다(Spring AI 2.0 의 ChatModel 은 getOptions() 를 쓴다). */
+    @Override
+    public ChatOptions getOptions() {
+        return delegate.getOptions();
+    }
+
     private void logCurl(Prompt prompt, boolean streaming) {
         if (!log.isDebugEnabled()) return;
         try {
-            ObjectNode body = MAPPER.createObjectNode();
-            body.put("model", modelName);
-            body.put("stream", streaming);
-
-            ArrayNode messages = body.putArray("messages");
-            for (Message msg : prompt.getInstructions()) {
-                ObjectNode m = messages.addObject();
-                m.put("role", msg.getMessageType().getValue());
-                m.put("content", msg.getText() != null ? msg.getText() : "");
-            }
-
-            if (prompt.getOptions() instanceof OpenAiChatOptions opts) {
-                if (opts.getTemperature() != null) body.put("temperature", opts.getTemperature());
-                if (opts.getMaxTokens()     != null) body.put("max_tokens",  opts.getMaxTokens());
-                // 생각 수준(§6.29)이 표준 필드로 나가는 dialect(openai-effort)의 값 — 빠뜨리면 아래 extraBody 와 같은
-                // 이유로 재현한 요청만 다른 수준으로 돈다.
-                if (opts.getReasoningEffort() != null) body.put("reasoning_effort", opts.getReasoningEffort());
-                // 표준 밖 필드(chat_template_kwargs 등)도 본문 최상위에 그대로 나간다 — 빠뜨리면 이 curl 로
-                // 재현한 요청만 생각을 켠 채 돌아 실제 호출과 다른 결과가 나온다.
-                if (opts.getExtraBody() != null) {
-                    opts.getExtraBody().forEach((key, value) -> body.set(key, MAPPER.valueToTree(value)));
-                }
-            }
-
-            String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);
+            String json = LlmCurlLogger.toCurlBodyJson(modelName, streaming, prompt.getInstructions(), prompt.getOptions());
             // TRACE: full replayable curl command (headers, auth, heredoc). DEBUG: just the
             // endpoint + body — the curl wrapper text adds little signal but roughly doubles the
             // line length, which was making DEBUG logs unwieldy for large RAG prompts.

@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LlmFailureClassificationTest {
 
     private static Throwable wrapped(String message) {
-        // 실제로는 NonTransientAiException 안에 감싸여 오므로 원인 사슬을 타야 한다.
+        // 실제로는 예외 안에 감싸여 오므로 원인 사슬을 타야 한다.
         return new RuntimeException("call failed", new IllegalStateException(message));
     }
 

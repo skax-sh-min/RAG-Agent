@@ -3,7 +3,7 @@ package com.example.ragagent.ingestion;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.ChromaConfig;
 import com.example.ragagent.service.VectorStoreRegistry;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -36,7 +36,7 @@ class VectorStoreProviderConfigTest {
         private final ApplicationContextRunner runner = new ApplicationContextRunner()
                 .withBean("vectorJdbcTemplate", JdbcTemplate.class, () -> mock(JdbcTemplate.class))
                 .withBean(EmbeddingModel.class, () -> mock(EmbeddingModel.class))
-                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withBean(tools.jackson.databind.json.JsonMapper.class, tools.jackson.databind.json.JsonMapper::new)
                 .withBean(VectorStoreRegistry.class, () -> mock(VectorStoreRegistry.class))
                 .withBean(ChromaApi.class, () -> mock(ChromaApi.class))
                 .withBean(AppProperties.class, VectorStoreProviderConfigTest::providerProps)
@@ -80,7 +80,7 @@ class VectorStoreProviderConfigTest {
         }
 
         private final ApplicationContextRunner runner = new ApplicationContextRunner()
-                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withBean(tools.jackson.databind.json.JsonMapper.class, tools.jackson.databind.json.JsonMapper::new)
                 .withBean(AppProperties.class, ChromaBeanGuard::chromaProps)
                 .withUserConfiguration(ChromaConfig.class);
 

@@ -47,7 +47,7 @@ class ThinkingSiteChatModelTest {
     @Test
     @DisplayName("OpenAiChatOptions 프롬프트 — 사본에 표시를 더하고 다른 값·extraBody 항목은 남긴다. 원본은 그대로")
     void marksACopyOfOpenAiOptions() {
-        ChatModel delegate = mock(ChatModel.class);
+        ChatModel delegate = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(delegate.call(any(Prompt.class))).thenReturn(response("x"));
         Map<String, Object> body = new HashMap<>();
         body.put("top_k", 40);
@@ -66,14 +66,14 @@ class ThinkingSiteChatModelTest {
     @Test
     @DisplayName("옵션이 없거나 일반 ChatOptions 여도 표시한다 — 일반 옵션의 값은 옮겨 담는다")
     void marksMissingOrGenericOptions() {
-        ChatModel delegate = mock(ChatModel.class);
+        ChatModel delegate = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(delegate.call(any(Prompt.class))).thenReturn(response("x"));
         ThinkingSiteChatModel model = new ThinkingSiteChatModel(delegate, ThinkingSite.QUERY_EXPANSION);
 
         model.call(new Prompt(List.of(new UserMessage("q"))));
         assertThat(ThinkingControl.siteOf(sentTo(delegate))).isEqualTo(ThinkingSite.QUERY_EXPANSION);
 
-        ChatModel delegate2 = mock(ChatModel.class);
+        ChatModel delegate2 = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(delegate2.call(any(Prompt.class))).thenReturn(response("x"));
         new ThinkingSiteChatModel(delegate2, ThinkingSite.QUERY_EXPANSION)
                 .call(new Prompt(List.of(new UserMessage("q")), ChatOptions.builder().temperature(0.3).build()));
@@ -85,7 +85,7 @@ class ThinkingSiteChatModelTest {
     @Test
     @DisplayName("이미 표시된 프롬프트는 그대로 — 호출부가 정한 사이트가 이긴다")
     void callerMarkWins() {
-        ChatModel delegate = mock(ChatModel.class);
+        ChatModel delegate = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(delegate.call(any(Prompt.class))).thenReturn(response("x"));
         Prompt prompt = new Prompt(List.of(new UserMessage("q")),
                 ThinkingControl.mark(OpenAiChatOptions.builder(), ThinkingSite.CLASSIFY).build());
@@ -98,7 +98,7 @@ class ThinkingSiteChatModelTest {
     @Test
     @DisplayName("실제 MultiQueryExpander 를 거쳐도 모델이 받는 프롬프트에 표시가 있다(이 앱의 체인처럼 일반 기본 옵션일 때)")
     void multiQueryExpanderPromptsAreMarked() {
-        ChatModel delegate = mock(ChatModel.class);
+        ChatModel delegate = com.example.ragagent.LlmTestSupport.chatModelMock();
         // 이 앱의 프로바이더 체인은 일반 ChatOptions 를 기본 옵션으로 돌려준다(LoggingChatModel) — 그 모양 그대로.
         when(delegate.getDefaultOptions()).thenReturn(ChatOptions.builder().build());
         when(delegate.call(any(Prompt.class))).thenReturn(response("변형 질문 1\n변형 질문 2"));
@@ -116,12 +116,11 @@ class ThinkingSiteChatModelTest {
     @Test
     @DisplayName("ChatClient 의 .options(표시된 옵션) 은 stream() 까지 표시를 나른다 — stream=false 프로바이더의 답변 경로")
     void chatClientCarriesTheMarkIntoStream() {
-        ChatModel delegate = mock(ChatModel.class);
+        ChatModel delegate = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(delegate.stream(any(Prompt.class))).thenReturn(Flux.just(response("답")));
 
         ChatClient.builder(delegate).build().prompt()
-                .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(0.1), ThinkingSite.ANSWER_DIRECT_N)
-                        .build())
+                .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(0.1), ThinkingSite.ANSWER_DIRECT_N))
                 .system("시스템").user("질문")
                 .stream().content().blockLast();
 

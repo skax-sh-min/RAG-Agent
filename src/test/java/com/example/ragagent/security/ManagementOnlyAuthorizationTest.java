@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
@@ -117,8 +117,9 @@ class ManagementOnlyAuthorizationTest {
          */
         @Bean
         AuthenticationManager authenticationManager(SqliteUserDetailsService uds, PasswordEncoder pe) {
-            DaoAuthenticationProvider provider = new DaoAuthenticationProvider(pe);
-            provider.setUserDetailsService(uds);
+            // Spring Security 7 — 생성자는 UserDetailsService 를 받고 인코더는 세터로 준다.
+            DaoAuthenticationProvider provider = new DaoAuthenticationProvider(uds);
+            provider.setPasswordEncoder(pe);
             return new ProviderManager(provider);
         }
     }

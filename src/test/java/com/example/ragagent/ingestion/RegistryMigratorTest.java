@@ -2,7 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

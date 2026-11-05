@@ -1,6 +1,6 @@
 package com.example.ragagent.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -20,7 +20,7 @@ public class ChromaConfig {
     private int chromaPort;
 
     @Bean
-    ChromaApi chromaApi(AppProperties props, ObjectMapper objectMapper) {
+    ChromaApi chromaApi(AppProperties props, JsonMapper jsonMapper) {
         String baseUrl = String.format("%s:%s", chromaHost, chromaPort);
         AppProperties.ChromaHttpConfig timeoutCfg = props.chromaSafe();
         RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(
@@ -29,7 +29,7 @@ public class ChromaConfig {
         return ChromaApi.builder()
                 .baseUrl(baseUrl)
                 .restClientBuilder(builder)
-                .objectMapper(objectMapper)
+                .jsonMapper(jsonMapper)
                 .build();
     }
 }

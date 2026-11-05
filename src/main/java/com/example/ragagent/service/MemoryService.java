@@ -11,7 +11,7 @@ import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.repository.MemoryRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -318,8 +318,12 @@ public class MemoryService {
 
     /** 관대한 파서 — 위 javadoc 의 이유로 알 수 없는 필드를 무시한다. */
     private ObjectMapper lenientMapper() {
-        return objectMapper.copy()
-                .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        // Jackson 3 의 매퍼는 불변이라 copy() 가 없다 — rebuild() 가 같은 설정의 빌더를 준다.
+        return objectMapper.rebuild()
+                .configure(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+                // 과거에 저장된 스냅샷에 없는 기본형 필드는 기본값으로 읽는다(Jackson 2 의 동작).
+                .configure(tools.jackson.databind.DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false)
+                .build();
     }
 
     public List<MemoryRepository.MetricsRow> findRecentRetrievalMetrics(

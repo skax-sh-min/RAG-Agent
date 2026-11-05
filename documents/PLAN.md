@@ -1,6 +1,6 @@
 # RAG-Agent 온라인 확장 개발 계획
 
-> Java 개발자 관점 · Spring Boot 3.5 + Spring AI 1.1 + Java 21 · 작성일 2026-05-11  
+> Java 개발자 관점 · Spring Boot 4.1 + Spring AI 2.0 + Java 21 · 작성일 2026-05-11  
 > **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. 살아 있는 동작 명세는 코드와 [CLAUDE.md](../CLAUDE.md), 결정 근거·실패 기록은 [PITFALLS.md](PITFALLS.md), 생각 수준 실측 결과는 [THINKING_EVALUATION.md](THINKING_EVALUATION.md).
 
 ---
@@ -968,7 +968,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 |------|------|------|
 | Chroma 태그 고정 | `:latest` → `1.0.21`, 헬스체크 v2 경로 | ✅ 완료 |
 | Chroma 1.1.x 검증 | Docker Hub에 `1.1.0` 계열 존재. `ChromaApi`가 쓰는 v2 엔드포인트 스키마가 그대로인지 실기동 확인 후 태그 상향 | 🔜 |
-| Spring AI 2.0 업그레이드 | `spring-ai.version` 1.1.8 → 2.0.x. 로컬 m2에 `spring-ai-chroma-store:2.0.0`이 이미 받아져 있어 API 차이 비교는 즉시 가능 | 🔜 |
+| Spring AI 2.0 업그레이드 | `spring-ai.version` 1.1.8 → 2.0.2, Spring Boot 3.5.15 → 4.1.2. OpenAI 모듈이 SDK 기반이라 LLM 계층을 다시 썼다 — 결정 근거·실측은 [PITFALLS](PITFALLS.md#spring-boot-4--spring-ai-20-마이그레이션-2026-11-05). 전체 테스트 통과 + sqlite-vec/로컬 LLM 실기동 확인. **Chroma 백엔드 실기동은 미확인** | ✅ 완료 (2026-11-05, Chroma 실기동 제외) |
 
 ### Spring AI 2.0 업그레이드 시 점검 포인트
 
@@ -976,7 +976,7 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 
 1. **`spring.autoconfigure.exclude` 클래스명 7종** — Chroma 1종 + OpenAI 모델 6종의 FQCN이 2.0에서 바뀌면 exclude가 조용히 무효가 되고, `LOCAL_LLM_KEY`가 빈 로컬 구성에서 `OpenAI API key must be set`로 기동이 깨진다(현재도 이 실패 클래스를 막으려고 넣은 설정).
 2. **`ChromaApi`/`ChromaVectorStore` 빌더 시그니처** — `ChromaConfig`·`VectorStoreRegistry`·`ChromaVectorStoreProvider`가 직접 호출한다. 특히 `upsertEmbeddings()`(§10.1 embed≠store 분리를 위해 `VectorStore.add()`를 우회하는 지점)와 `QueryRequest.Include` 필드 선택.
-3. **`OpenAiApi.builder()` / `OpenAiChatOptions`** — `LlmConfig`가 프로바이더마다 직접 조립. `ChatCompletionRequest` 직접 조립(`DirectAnswerService`의 스트리밍 우회 경로)도 동일.
+3. **`OpenAiApi.builder()` / `OpenAiChatOptions`** — (2.0 에서 `OpenAiApi` 가 사라져 `OpenAiClients` + SDK 모델로 대체됨, 스트리밍 우회 경로는 `LlmProvider.rawModel()`.)
 4. **`MultiQueryExpander` / `spring-ai-rag`** — 프롬프트 템플릿 주입 방식(`promptTemplate`, `numberOfQueries`, `includeOriginal`) 변경 여부.
 5. **`EmbeddingModel` 데코레이터 체인** — `Tracking`/`Caching`/`LoadBalancing` 3중 래핑이 인터페이스 변경에 직접 노출된다.
 6. **`TokenCountBatchingStrategy`** — Chroma 경로의 서브배치 분할에 사용.

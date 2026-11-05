@@ -15,8 +15,8 @@ import com.example.ragagent.llm.ThinkingLevel;
 import com.example.ragagent.llm.ThinkingObservations;
 import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.ResponseMode;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -24,9 +24,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -46,13 +45,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 채팅 답변 스트리밍이 <b>실제 Spring AI {@code OpenAiApi}(WebClient)</b>를 지날 때의 모양 — 내장 {@link HttpServer} 가
+ * 채팅 답변 스트리밍이 <b>실제 Spring AI {@code OpenAiChatModel}(OpenAI SDK)</b>를 지날 때의 모양 — 내장 {@link HttpServer} 가
  * llama.cpp 처럼 SSE 로 생각 델타와 답 델타를 흘리거나 HTTP 오류를 돌려준다. 목으로는 알 수 없는 것을 고정한다:
  * <ul>
- *   <li>생각 필드가 실제 본문 <b>최상위</b>로 나가고 표시 키가 없는가 — {@code extraBody} 의 {@code @JsonAnyGetter}</li>
- *   <li>서버의 {@code reasoning_content} 델타가 Spring AI 의 청크 병합을 지나 여기까지 닿는가</li>
- *   <li>WebClient 오류의 메시지에는 본문이 없다 — 그래도 거부·컨텍스트 초과를 알아보는가(2026-10-02 이전에는 둘 다 못
- *       알아봤다: 축소 재시도가 스트리밍 경로에서 한 번도 발동하지 않았다)</li>
+ *   <li>생각 필드가 실제 본문 <b>최상위</b>로 나가고 표시 키가 없는가 — SDK 의 {@code putAdditionalBodyProperty}</li>
+ *   <li>서버의 {@code reasoning_content} 델타가 Spring AI 의 응답 변환을 지나 여기까지 닿는가(지금까지 쌓인 전체로 온다)</li>
+ *   <li>SDK 오류가 거부·컨텍스트 초과로 알아봐지는가(2026-10-02 이전에는 둘 다 못 알아봤다: 축소 재시도가 스트리밍
+ *       경로에서 한 번도 발동하지 않았다 — SDK 예외는 상태 코드와 본문을 가진다)</li>
  * </ul>
  * 청크 JSON 은 2026-10-02 llama.cpp(b10236) + gemma-4-E2B 의 실제 응답 모양을 줄인 것이다.
  */
@@ -126,10 +125,11 @@ class AnswerStreamerWireTest {
         }
     }
 
-    /** {@code LlmConfig} 와 같은 모양 — base-url 의 {@code /v1} 을 떼고 넘긴다(OpenAiApi 가 붙인다). */
+    /** {@code LlmConfig} 와 같은 모양 — 같은 클라이언트 옵션 규칙, 기본 옵션에 maxTokens 가 없는 스트리밍 직행 모델. */
     private static LlmProvider localProvider(String baseUrl) {
-        OpenAiApi api = OpenAiApi.builder().baseUrl(baseUrl.replaceAll("/v1$", "")).apiKey("no-key").build();
-        return new LlmProvider("local", TaskType.TEXT, ProviderRole.LOCAL, 1, "no-key", baseUrl, "m", true, null, api);
+        var client = com.example.ragagent.config.OpenAiClients.clientOptions(baseUrl, "no-key", 5, 30, 0);
+        var raw = com.example.ragagent.config.OpenAiClients.chatModel(client, OpenAiChatOptions.builder().model("m").build());
+        return new LlmProvider("local", TaskType.TEXT, ProviderRole.LOCAL, 1, "no-key", baseUrl, "m", true, null, raw);
     }
 
     private static ProviderThinkingDialects localDialect() {
@@ -169,8 +169,8 @@ class AnswerStreamerWireTest {
     }
 
     @Test
-    @DisplayName("필드를 거부하는 서버 — WebClient 오류 본문에서 거부를 알아보고, 빼고 다시 보내 성공한다")
-    void aServerRejectingTheSwitchOverWebClient() throws IOException {
+    @DisplayName("필드를 거부하는 서버 — SDK 오류에서 거부를 알아보고, 빼고 다시 보내 성공한다")
+    void aServerRejectingTheSwitch() throws IOException {
         LlmProvider provider = localProvider(startServer((ex, body, i) -> {
             if (body.has(KWARGS)) {
                 json(ex, 400, "{\"error\":{\"message\":\"Unrecognized request argument supplied: chat_template_kwargs\","
@@ -192,23 +192,29 @@ class AnswerStreamerWireTest {
 
     @Test
     @DisplayName("컨텍스트 초과 — 스트리밍에서도 SSE 가 아니라 HTTP 400 으로 온다. 올라온 예외를 초과로 알아본다")
-    void contextOverflowOverWebClientIsRecognized() throws IOException {
+    void contextOverflowIsRecognized() throws IOException {
         LlmProvider provider = localProvider(startServer((ex, body, i) -> json(ex, 400, OVERFLOW_BODY)));
 
         assertThatThrownBy(() -> new AnswerStreamer(localDialect(), new ThinkingObservations(), site -> ThinkingLevel.LOW)
                 .stream(provider, ThinkingSite.ANSWER_RAG_N, "s", "u", 0.0, t -> { }, () -> { }, TRACE))
-                .isInstanceOf(WebClientResponseException.class)
                 .satisfies(e -> {
-                    assertThat(e.getMessage()).as("전제 — 메시지에는 서버의 문장이 없다").doesNotContain("context");
+                    assertThat(causes(e)).as("SDK 가 상태 코드와 본문을 가진 예외를 올린다")
+                            .anyMatch(c -> c instanceof com.openai.errors.BadRequestException);
                     assertThat(LlmRouter.isContextOverflow(e)).isTrue();
                 });
         assertThat(requests).as("거부가 아니므로 다시 보내지 않는다").hasSize(1);
     }
 
+    private static List<Throwable> causes(Throwable t) {
+        List<Throwable> out = new ArrayList<>();
+        for (Throwable cur = t; cur != null && !out.contains(cur); cur = cur.getCause()) out.add(cur);
+        return out;
+    }
+
     // ── AnswerService 의 축소 재시도(§6.26-9)가 이 경로에서 실제로 발동하는가 ─────────────────
 
     @Test
-    @DisplayName("채팅 답변 스트리밍의 축소 재시도 — 실제 WebClient 초과 오류에서 문서를 덜어 다시 보낸다")
+    @DisplayName("채팅 답변 스트리밍의 축소 재시도 — 실제 SDK 초과 오류에서 문서를 덜어 다시 보낸다")
     void answerServiceShrinksOnARealStreamingOverflow() throws IOException {
         LlmProvider provider = localProvider(startServer((ex, body, i) -> {
             if (i == 0) json(ex, 400, OVERFLOW_BODY);

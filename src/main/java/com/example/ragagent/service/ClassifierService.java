@@ -40,7 +40,7 @@ public class ClassifierService {
     private final MessageSource messageSource;
     private final AppProperties props;
     private final BeanOutputConverter<ClassifierOutput> converter =
-            new BeanOutputConverter<>(ClassifierOutput.class);
+            new BeanOutputConverter<>(ClassifierOutput.class, com.example.ragagent.llm.LenientJson.MAPPER);
 
     public ClassifierService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
         this.llmRouter = llmRouter;

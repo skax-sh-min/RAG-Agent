@@ -8,7 +8,7 @@ A self-hosted Q&A assistant that answers from your own documents. Upload manuals
 - **Local first** — any OpenAI-compatible server (LM Studio, llama.cpp) or cloud providers, with routing, failover and concurrency limits; a fully offline setup needs no Docker (SQLite + sqlite-vec).
 - **Knowledge that grows** — users report wrong passages and propose new knowledge; admins review them into the search corpus.
 
-Built on Spring Boot 3.5 + Spring AI and Java 21, with a Thymeleaf + HTMX web UI (Korean/English) and a REST API.
+Built on Spring Boot 4.1 + Spring AI 2.0 and Java 21, with a Thymeleaf + HTMX web UI (Korean/English) and a REST API.
 
 ## Getting Started
 
@@ -48,7 +48,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 > **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
-> **Chroma version — v2 API required.** Spring AI 1.1.8's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
+> **Chroma version — v2 API required.** Spring AI 2.0.2's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
 
 #### Development mode (run from source)
 
@@ -241,7 +241,7 @@ See [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-
 
 ```
 rag_java/
-├── pom.xml                            # Spring Boot 3.5.15 + Spring AI 1.1.8
+├── pom.xml                            # Spring Boot 4.1.2 + Spring AI 2.0.2
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
 ├── scripts/

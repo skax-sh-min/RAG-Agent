@@ -1,6 +1,6 @@
 package com.example.ragagent.llm;
 
-import com.example.ragagent.config.HttpClientTimeouts;
+import com.example.ragagent.config.OpenAiClients;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -9,8 +9,6 @@ import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
-import org.springframework.retry.support.RetryTemplate;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -23,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 임베딩 장애 전환을 <b>진짜 클라이언트</b>로 — {@code OpenAiEmbeddingModel}(+ 운영과 같은 재시도·타임아웃 설정)이 실제로 던지는
+ * 임베딩 장애 전환을 <b>진짜 클라이언트</b>로 — {@code OpenAiEmbeddingModel}(+ 운영과 같은 클라이언트·재시도·타임아웃 설정)이 실제로 던지는
  * 예외가 {@link LoadBalancingEmbeddingModel} 의 판정({@link LlmRouter#isConnectionFailure})에 걸리는가.
  * {@link LoadBalancingEmbeddingModelTest} 는 목이 던진 예외로 규칙을 고정하고, 이 클래스는 그 예외 모양이 실제와 같은지를 본다
  * (Spring AI 가 연결 실패를 다른 예외로 감싸기 시작하면 전환이 조용히 꺼진다 — {@code StreamingFailoverWireTest} 선례).
@@ -59,16 +57,14 @@ class LoadBalancingEmbeddingWireTest {
         return "http://127.0.0.1:" + s.getAddress().getPort();
     }
 
-    /** {@code EmbeddingBeanConfig.buildRawModel()} 과 같은 조립 — 재시도 2회와 명시적 타임아웃(백오프만 테스트 속도를 위해 짧게). */
+    /** {@code EmbeddingBeanConfig.buildRawModel()} 과 같은 조립 — 재시도 1회(= 예전 maxAttempts 2)와 명시적 타임아웃. */
     private static EmbeddingModel rawModel(String apiBase) {
-        OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(apiBase)
-                .apiKey("no-key")
-                .restClientBuilder(HttpClientTimeouts.restClientBuilder(2, 5))
+        var client = OpenAiClients.clientOptions(apiBase, "no-key", 2, 5, 1);
+        return OpenAiEmbeddingModel.builder()
+                .openAiClient(OpenAiClients.syncClient(client))
+                .metadataMode(MetadataMode.EMBED)
+                .options(OpenAiEmbeddingOptions.builder().model("m").build())
                 .build();
-        RetryTemplate shortRetry = RetryTemplate.builder().maxAttempts(2).exponentialBackoff(50, 2.0, 100).build();
-        return new OpenAiEmbeddingModel(api, MetadataMode.EMBED,
-                OpenAiEmbeddingOptions.builder().model("m").build(), shortRetry);
     }
 
     @Test

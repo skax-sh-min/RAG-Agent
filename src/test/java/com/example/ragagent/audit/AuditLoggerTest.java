@@ -9,7 +9,7 @@ import com.example.ragagent.LogbackTestSupport;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

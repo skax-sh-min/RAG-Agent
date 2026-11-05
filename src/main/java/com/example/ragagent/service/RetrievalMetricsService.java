@@ -4,8 +4,8 @@ import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.MemoryRepository;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -45,13 +45,16 @@ public class RetrievalMetricsService {
      * accumulated data this panel exists to look at. Derived from the injected mapper rather than
      * a fresh one so any app-wide serialization config still applies.
      */
-    private final com.fasterxml.jackson.databind.ObjectReader reader;
+    private final tools.jackson.databind.ObjectReader reader;
 
     public RetrievalMetricsService(MemoryService memoryService, ObjectMapper objectMapper) {
         this.memoryService = memoryService;
         this.reader = objectMapper
                 .reader()
-                .without(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .without(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                // Jackson 3 의 기본값은 FAIL_ON_NULL_FOR_PRIMITIVES=true 다 — 과거 기록에 없는 필드가 기본형 컴포넌트이면 행 통째로
+                // 못 읽는다. 예전(Jackson 2) 동작인 "없으면 기본값"으로 둔다.
+                .without(tools.jackson.databind.DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
                 .forType(SOURCE_LIST);
     }
 

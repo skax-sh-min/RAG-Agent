@@ -8,7 +8,7 @@
 - **로컬 우선** — OpenAI 호환 서버(LM Studio, llama.cpp)나 클라우드 프로바이더를 라우팅·장애 전환·동시성 제한과 함께 씁니다. 완전한 오프라인 구성은 Docker 없이 SQLite + sqlite-vec로 돌아갑니다.
 - **함께 키우는 지식** — 사용자가 잘못된 내용을 신고하고 새 지식을 제안하면 관리자가 검토해 검색 코퍼스에 반영합니다.
 
-Spring Boot 3.5 + Spring AI, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(한국어/영어)와 REST API를 제공합니다.
+Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(한국어/영어)와 REST API를 제공합니다.
 
 ## 실행 방법
 
@@ -48,7 +48,7 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 
 > **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
-> **Chroma 버전 — v2 API 필수.** Spring AI 1.1.8의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/…` 경로만 호출하는데 tenant/database 개념은 Chroma v1 API에 존재하지 않으므로, **v1 시절 서버(0.5.x 이하)와는 호환되지 않습니다**. 아래 명령과 `docker-compose.yml`은 `:latest` 대신 `chromadb/chroma:1.0.21`로 태그를 고정합니다 — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어 `:latest`는 어느 날 조용히 앱을 깨뜨릴 수 있습니다. 버전을 올릴 땐 의도적으로 이 태그를 바꾸세요.
+> **Chroma 버전 — v2 API 필수.** Spring AI 2.0.2의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/…` 경로만 호출하는데 tenant/database 개념은 Chroma v1 API에 존재하지 않으므로, **v1 시절 서버(0.5.x 이하)와는 호환되지 않습니다**. 아래 명령과 `docker-compose.yml`은 `:latest` 대신 `chromadb/chroma:1.0.21`로 태그를 고정합니다 — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어 `:latest`는 어느 날 조용히 앱을 깨뜨릴 수 있습니다. 버전을 올릴 땐 의도적으로 이 태그를 바꾸세요.
 
 #### 개발 모드 (소스 직접 실행)
 
@@ -240,7 +240,7 @@ EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 
 ```
 rag_java/
-├── pom.xml                            # Spring Boot 3.5.15 + Spring AI 1.1.8
+├── pom.xml                            # Spring Boot 4.1.2 + Spring AI 2.0.2
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
 ├── scripts/
