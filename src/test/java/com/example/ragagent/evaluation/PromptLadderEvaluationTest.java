@@ -13,8 +13,8 @@ import com.example.ragagent.service.ThreadMetaService;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -401,7 +401,7 @@ class PromptLadderEvaluationTest {
             Map<String, Object> data;
             try {
                 data = JSON.readValue(m.group(2), new TypeReference<Map<String, Object>>() {});
-            } catch (IOException e) {
+            } catch (tools.jackson.core.JacksonException e) {
                 return;
             }
             switch (name) {

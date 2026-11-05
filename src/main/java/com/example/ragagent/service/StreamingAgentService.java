@@ -19,8 +19,8 @@ import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 
 import java.util.Locale;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -498,7 +498,7 @@ public class StreamingAgentService {
         try {
             String json = objectMapper.writeValueAsString(data);
             emitter.send(SseEmitter.event().name(name).data(json));
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.warn("JSON serialization failed for SSE event '{}': {}", name, e.getMessage());
         } catch (IOException e) {
             throw new UncheckedIOException(e);

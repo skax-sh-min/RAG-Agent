@@ -4,7 +4,6 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -35,10 +34,9 @@ public class ThinkingObservations {
     public static final int CAPACITY = 50;
 
     /**
-     * 응답 메시지 메타데이터에서 생각 본문을 찾는 키. <b>Spring AI 1.1.8 은 블로킹 응답에서 서버의
-     * {@code reasoning_content} 를 버린다</b>(2026-10-02 확인 — 메타데이터에 이 키가 없다). 그래서 블로킹에서는 아래
-     * {@link #MIN_EXCESS_TOKENS} 의 출력 토큰 초과로 판정한다. 키를 남겨 두는 이유는 이것이 실리는 경우(다른 버전·경로)에는
-     * 더 강한 근거이기 때문이다.
+     * 응답 메시지 메타데이터에서 생각 본문을 찾는 키. Spring AI 1.1.8 은 블로킹 응답에서 서버의 {@code reasoning_content} 를 버렸지만(2026-10-02
+     * 확인) <b>2.0.2 는 이 키로 싣는다</b>(2026-11-05 확인) — 스트리밍에서는 델타가 아니라 <b>지금까지 쌓인 전체</b>다. 그래도 키가 없는
+     * 서버·경로를 위해 아래 {@link #MIN_EXCESS_TOKENS} 의 출력 토큰 초과 판정을 폴백으로 남긴다.
      */
     static final String REASONING_CONTENT_KEY = "reasoningContent";
 
@@ -188,7 +186,7 @@ public class ThinkingObservations {
      *   <li>생각 본문이 따로 왔다 — 생각 토큰은 (출력 토큰 − 답변 추정), 출력 토큰이 없으면 본문 추정. 앞쪽이 나은
      *       이유는 서버가 센 출력 토큰에 생각이 이미 들어 있기 때문이다 — 영어 생각 본문을 글자 4개당 1토큰으로 세면
      *       실측(227토큰 중 생각 ~225)의 2/3 쯤으로 모자란다.</li>
-     *   <li>둘 다 없다 — 이 앱의 블로킹 경로가 실제로 여기다(Spring AI 1.1.8 이 생각 본문을 버리고, llama.cpp 는
+     *   <li>둘 다 없다 — 1.x 의 블로킹 경로가 실제로 여기였다(Spring AI 1.1.8 이 생각 본문을 버리고, llama.cpp 는
      *       생각 토큰을 보고하지 않는다). 출력 토큰이 답변 추정을 크게 넘을 때만 그 초과분을 생각으로 센다
      *       ({@link #MIN_EXCESS_TOKENS}).</li>
      * </ol>
@@ -205,7 +203,7 @@ public class ThinkingObservations {
      *
      * @param usage 서버가 보고한 사용량. 없으면 {@code null}
      */
-    static Sample sampleOf(ThinkingWire.Sent sent, OpenAiApi.Usage usage, String content, String reasoning,
+    static Sample sampleOf(ThinkingWire.Sent sent, ReportedUsage usage, String content, String reasoning,
                            String finish, long latencyMs) {
         Integer output = usage == null ? null : usage.completionTokens();
         Integer reported = reportedThinking(usage);
@@ -251,7 +249,7 @@ public class ThinkingObservations {
      * @param usage  서버가 보고한 사용량. 없으면 {@code null}
      */
     public static Sample streamSampleOf(ThinkingWire.Sent sent, int contentDeltas, int reasoningDeltas,
-                                        String finish, OpenAiApi.Usage usage, long latencyMs) {
+                                        String finish, ReportedUsage usage, long latencyMs) {
         Integer reportedOutput = usage == null ? null : usage.completionTokens();
         Integer reported = reportedThinking(usage);
         Integer thinking = null;
@@ -275,29 +273,56 @@ public class ThinkingObservations {
         return "length".equalsIgnoreCase(finish);
     }
 
-    private static Integer reportedThinking(OpenAiApi.Usage usage) {
-        return usage == null || usage.completionTokenDetails() == null
-                ? null : usage.completionTokenDetails().reasoningTokens();
+    private static Integer reportedThinking(ReportedUsage usage) {
+        return usage == null ? null : usage.reasoningTokens();
     }
 
-    /** 응답 메타데이터의 서버 사용량. Spring AI 가 원본({@code OpenAiApi.Usage})을 실어 두지 않았으면 {@code null}. */
-    static OpenAiApi.Usage nativeUsageOf(ChatResponse response) {
+    /**
+     * 서버가 보고한 사용량 중 이 클래스가 쓰는 두 숫자. Spring AI 1.x 의 {@code OpenAiApi.Usage} 를 대신하는 이 앱의 작은
+     * 레코드다 — 2.0 의 원본({@code com.openai.models.completions.CompletionUsage})은 SDK 타입이라 표본·테스트가 그것에
+     * 묶이지 않게 한다.
+     *
+     * @param completionTokens 출력 토큰(생각 포함). 서버가 보고하지 않았으면 {@code null}
+     * @param reasoningTokens  그중 생각 토큰({@code completion_tokens_details.reasoning_tokens}). 없으면 {@code null}
+     */
+    public record ReportedUsage(Integer completionTokens, Integer reasoningTokens) {}
+
+    /**
+     * 응답 메타데이터의 서버 사용량. Spring AI 가 원본({@code CompletionUsage})을 실어 두지 않았으면 {@code null}.
+     * 서버가 {@code usage} 를 보내지 않아도 SDK 가 0 으로 채운 객체를 줄 수 있어, 출력 토큰이 0 이하면 "보고 없음"으로 본다.
+     */
+    public static ReportedUsage nativeUsageOf(ChatResponse response) {
         Usage usage = response == null || response.getMetadata() == null ? null : response.getMetadata().getUsage();
-        return usage != null && usage.getNativeUsage() instanceof OpenAiApi.Usage nativeUsage ? nativeUsage : null;
+        if (usage == null || !(usage.getNativeUsage() instanceof com.openai.models.completions.CompletionUsage nativeUsage)) {
+            return null;
+        }
+        return reportedOf(nativeUsage);
     }
 
-    static String textOf(Generation generation) {
+    /** SDK 의 사용량을 이 앱의 레코드로. 출력 토큰이 0 이하면 서버가 보고하지 않은 것({@code null})으로 본다. */
+    public static ReportedUsage reportedOf(com.openai.models.completions.CompletionUsage nativeUsage) {
+        if (nativeUsage == null) return null;
+        long completion = nativeUsage.completionTokens();
+        if (completion <= 0) return null;
+        Integer reasoning = nativeUsage.completionTokensDetails()
+                .flatMap(d -> d.reasoningTokens())
+                .map(Long::intValue)
+                .orElse(null);
+        return new ReportedUsage((int) completion, reasoning);
+    }
+
+    public static String textOf(Generation generation) {
         AssistantMessage message = generation == null ? null : generation.getOutput();
         return message == null ? null : message.getText();
     }
 
-    static String reasoningOf(Generation generation) {
+    public static String reasoningOf(Generation generation) {
         AssistantMessage message = generation == null ? null : generation.getOutput();
         return message != null && message.getMetadata() != null
                 && message.getMetadata().get(REASONING_CONTENT_KEY) instanceof String s ? s : null;
     }
 
-    static String finishReasonOf(Generation generation) {
+    public static String finishReasonOf(Generation generation) {
         return generation == null || generation.getMetadata() == null ? null : generation.getMetadata().getFinishReason();
     }
 }

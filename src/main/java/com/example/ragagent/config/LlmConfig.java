@@ -14,11 +14,10 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
+import com.openai.core.ClientOptions;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.retry.support.RetryTemplate;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -110,7 +109,7 @@ public class LlmConfig {
                             ? cfg.apiKey() : "no-key";
                     String resolvedUrl = cfg.baseUrl(); // non-blank, guaranteed by isEnabled() above (G2)
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
-                    // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
+                    // OpenAiClients.sdkBaseUrl() decides the SDK base (keeps a trailing /v1, adds one to a bare host).
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
                     String apiBase = cfg.apiBase();
                     // 여기서부터 cfg.model() 대신 이 값을 쓴다 — 컨텍스트 탐지·defaultOptions·curl 로그·
@@ -119,17 +118,13 @@ public class LlmConfig {
                     // 비교하므로, 한 자리라도 설정값이 남으면 그 경로만 "없는 모델"을 부른다.
                     // 검증을 껐거나 서버가 기동 때 닿지 않았으면 물어본 적이 없으니 설정값 그대로다.
                     String effectiveModel = verifiedModels.getOrDefault(cfg.name(), cfg.model());
-                    OpenAiApi api = OpenAiApi.builder()
-                            .baseUrl(apiBase)
-                            .apiKey(effectiveApiKey)
-                            .restClientBuilder(HttpClientTimeouts.restClientBuilder(
-                                    connectTimeoutSeconds,
-                                    readTimeoutSeconds))
-                            .build();
-                    // Disable Spring AI's DEFAULT_RETRY_TEMPLATE (maxAttempts=10, retries on
-                    // ResourceAccessException which includes SocketTimeoutException). Without this,
-                    // a single slow LLM call sends the same request up to 10 times.
-                    // LlmRouter.executeWithTracking() handles retries at the router level instead.
+                    // SDK 클라이언트는 프로바이더마다 하나 — 블로킹 체인용 모델과 스트리밍 직행용 모델이 같이 쓴다.
+                    // maxRetries=0: Spring AI 1.x 의 RetryTemplate(maxAttempts=10) 을 끄던 것과 같은 이유다 — SDK 의 자동
+                    // 재시도가 한 번의 느린 호출을 같은 요청으로 여러 번 보내지 않게 한다. 재시도는 라우터가 한다.
+                    ClientOptions clientOptions = OpenAiClients.clientOptions(
+                            resolvedUrl, effectiveApiKey, connectTimeoutSeconds, readTimeoutSeconds, 0);
+                    com.openai.client.OpenAIClient client = OpenAiClients.syncClient(clientOptions);
+                    com.openai.client.OpenAIClientAsync asyncClient = OpenAiClients.asyncClient(clientOptions);
                     // 컨텍스트 창: 운영자 선언이 최우선, 없으면 서버에 물어본다(LOCAL 만 — 클라우드
                     // 프로바이더는 이 엔드포인트가 없고, 컨텍스트가 넉넉해 문제가 되지도 않는다).
                     // 못 구하면 기록하지 않는다 = "모른다". 0 이나 추측값을 넣지 않는 것이 중요하다.
@@ -165,7 +160,8 @@ public class LlmConfig {
                     int effectiveMaxTokens = capMaxTokensToContext(
                             cfg.name(), requestedMaxTokens(cfg, llmCfg.maxTokens()), effectiveCtx);
                     ChatModel rawModel = OpenAiChatModel.builder()
-                            .openAiApi(api)
+                            .openAiClient(client)
+                            .openAiClientAsync(asyncClient)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
                             // app.llm.temperature / app.llm.max-tokens (LLM_TEMPERATURE / LLM_MAX_TOKENS).
                             // Both values here are only the startup-time fallback for framework-internal
@@ -175,12 +171,22 @@ public class LlmConfig {
                             // live effective temperature and maxTokens per call instead, and
                             // MaxTokensCappingChatModel recomputes the per-provider ceiling per call
                             // (§6.26 A6), so /settings changes apply without a restart for those.
-                            .defaultOptions(OpenAiChatOptions.builder()
+                            .options(OpenAiChatOptions.builder()
                                     .model(effectiveModel)
                                     .temperature(llmCfg.temperature())
                                     .maxTokens(effectiveMaxTokens)
                                     .build())
-                            .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
+                            .build();
+                    // 채팅 답변 스트리밍(AnswerStreamer)이 직접 쓰는 모델 — 같은 클라이언트, 기본 옵션에 maxTokens 가
+                    // 없다. 답변 스트림은 예전부터 max_tokens 를 싣지 않았고(출력 예약은 입력 예산에만 반영된다), 기본
+                    // 옵션이 있으면 SDK 모델이 그것을 요청에 합쳐 버린다.
+                    OpenAiChatModel streamModel = OpenAiChatModel.builder()
+                            .openAiClient(client)
+                            .openAiClientAsync(asyncClient)
+                            .options(OpenAiChatOptions.builder()
+                                    .model(effectiveModel)
+                                    .temperature(llmCfg.temperature())
+                                    .build())
                             .build();
                     // defaultOptions 만으로는 부족하다 — 블로킹 호출부가 매번 자기 maxTokens 를
                     // 실어 보내 그 기본값을 덮어쓴다. 이 데코레이터가 프로바이더 선택 '이후'에
@@ -214,7 +220,7 @@ public class LlmConfig {
                             effectiveModel,
                             providerStream,
                             model,
-                            api);
+                            streamModel);
                 })
                 .sorted(Comparator.comparingInt(LlmProvider::priority))
                 .toList();

@@ -1,7 +1,7 @@
 package com.example.ragagent.llm;
 
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.OpenAiChatModel;
 
 import static com.example.ragagent.llm.TaskType.*;
 
@@ -15,7 +15,12 @@ public record LlmProvider(
         String model,
         boolean stream,
         ChatModel chatModel,
-        OpenAiApi openAiApi
+        /**
+         * 데코레이터 체인(생각 제어·curl 로그·상한)을 <b>거치지 않는</b> 원본 모델. 채팅 답변 스트리밍({@code AnswerStreamer})이
+         * 체인이 하던 일을 직접 하면서 이 모델의 {@code stream()} 을 부른다. Spring AI 1.x 에서는 {@code OpenAiApi} 였다.
+         * 스트리밍을 쓰지 않는 구성(테스트 포함)에서는 {@code null}.
+         */
+        OpenAiChatModel rawModel
 ) {
     /**
      * Which task types this provider is eligible for.

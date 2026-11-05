@@ -24,7 +24,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.context.MessageSource;
 import reactor.core.publisher.Flux;
 
@@ -153,7 +153,7 @@ class DirectAnswerServiceTest {
 
         service.execute(newState(false));
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
         callCaptor.getValue().apply(chatModel);
@@ -176,7 +176,7 @@ class DirectAnswerServiceTest {
 
         service.execute(newState(false));
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
         callCaptor.getValue().apply(chatModel);
@@ -198,7 +198,7 @@ class DirectAnswerServiceTest {
 
         service.execute(newState(true).toBuilder().responseMode(ResponseMode.S).build());
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
         callCaptor.getValue().apply(chatModel);
@@ -209,7 +209,7 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("executeStreaming — stream=false 프로바이더는 ChatClient 경유, listener.onToken 으로 전달 + 근사 사용량 기록")
     void executeStreaming_nonStreamingProvider_deliversTokensViaListener() {
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍답변")));
         LlmProvider provider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
@@ -228,16 +228,14 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("executeStreaming — stream=true 프로바이더는 OpenAiApi 네이티브 스트림을 직접 사용(청크별 onToken) + 근사 사용량 기록")
+    @DisplayName("executeStreaming — stream=true 프로바이더는 원본 OpenAiChatModel 스트림을 직접 사용(청크별 onToken) + 근사 사용량 기록")
     void executeStreaming_streamingProvider_usesNativeOpenAiStream() {
-        OpenAiApi openAiApi = mock(OpenAiApi.class);
-        var delta1 = new OpenAiApi.ChatCompletionMessage("안", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
-        var delta2 = new OpenAiApi.ChatCompletionMessage("녕", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
-        var choice1 = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta1, null);
-        var choice2 = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta2, null);
-        var chunk1 = new OpenAiApi.ChatCompletionChunk("id", List.of(choice1), null, "model", null, null, null, null);
-        var chunk2 = new OpenAiApi.ChatCompletionChunk("id", List.of(choice2), null, "model", null, null, null, null);
-        when(openAiApi.chatCompletionStream(any())).thenReturn(Flux.just(chunk1, chunk2));
+        OpenAiChatModel openAiApi = mock(OpenAiChatModel.class);
+        var delta1 = com.example.ragagent.LlmTestSupport.answer("안");
+        var delta2 = com.example.ragagent.LlmTestSupport.answer("녕");
+        var chunk1 = delta1;
+        var chunk2 = delta2;
+        when(openAiApi.stream(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(Flux.just(chunk1, chunk2));
 
         LlmProvider provider = new LlmProvider(
                 "openai", TaskType.TEXT, ProviderRole.NORMAL, 1, "key", null, "gpt-4o", true, null, openAiApi);
@@ -256,7 +254,7 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("executeStreaming — stream=true 네이티브 OpenAiApi 우회 경로도 DEBUG 로그(엔드포인트+body)를 남긴다")
+    @DisplayName("executeStreaming — stream=true 원본 모델 직행 경로도 DEBUG 로그(엔드포인트+body)를 남긴다")
     void executeStreaming_streamingProvider_logsRequestAtDebugLevel() {
         Logger logbackLogger = com.example.ragagent.LogbackTestSupport.logger(DirectAnswerService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -265,11 +263,10 @@ class DirectAnswerServiceTest {
         Level previousLevel = logbackLogger.getLevel();
         logbackLogger.setLevel(Level.DEBUG);
         try {
-            OpenAiApi openAiApi = mock(OpenAiApi.class);
-            var delta = new OpenAiApi.ChatCompletionMessage("답변", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
-            var choice = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta, null);
-            var chunk = new OpenAiApi.ChatCompletionChunk("id", List.of(choice), null, "model", null, null, null, null);
-            when(openAiApi.chatCompletionStream(any())).thenReturn(Flux.just(chunk));
+            OpenAiChatModel openAiApi = mock(OpenAiChatModel.class);
+            var delta = com.example.ragagent.LlmTestSupport.answer("답변");
+        var chunk = delta;
+        when(openAiApi.stream(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(Flux.just(chunk));
 
             LlmProvider provider = new LlmProvider("openai", TaskType.TEXT, ProviderRole.NORMAL, 1,
                     "sk-test-key-123456", "http://localhost:1234/v1", "gpt-4o", true, null, openAiApi);

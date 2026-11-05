@@ -85,7 +85,7 @@ class ThinkingPreviewParityTest {
 
     /** 받은 프롬프트를 모으고 {@code answer} 로 답하는 서버 흉내. */
     private static ChatModel server(List<Prompt> seen, String answer) {
-        ChatModel model = mock(ChatModel.class);
+        ChatModel model = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(model.call(any(Prompt.class))).thenAnswer(inv -> {
             seen.add(inv.getArgument(0));
             return reply(answer);
@@ -212,7 +212,7 @@ class ThinkingPreviewParityTest {
 
     /** 스트리밍 답변이 지나는 {@code stream=false} 프로바이더 — 그 경로는 체인을 지나고 프롬프트를 그대로 볼 수 있다. */
     private ChatModel streamingProvider(ThinkingPreviewHarness h, List<Prompt> streamed, String answer) {
-        ChatModel model = mock(ChatModel.class);
+        ChatModel model = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(model.stream(any(Prompt.class))).thenAnswer(inv -> {
             streamed.add(inv.getArgument(0));
             return Flux.just(reply(answer));

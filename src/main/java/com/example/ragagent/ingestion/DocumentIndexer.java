@@ -914,6 +914,7 @@ public class DocumentIndexer {
         Throwable cur = t;
         while (cur != null) {
             if (cur instanceof org.springframework.web.client.ResourceAccessException
+                    || cur instanceof com.openai.errors.OpenAIIoException
                     || cur instanceof java.net.ConnectException) {
                 return true;
             }

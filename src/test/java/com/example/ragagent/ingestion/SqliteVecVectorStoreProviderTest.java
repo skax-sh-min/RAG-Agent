@@ -3,7 +3,7 @@ package com.example.ragagent.ingestion;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.VectorStoreException;
 import com.example.ragagent.model.MetaKey;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

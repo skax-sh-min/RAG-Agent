@@ -11,7 +11,7 @@ import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ClassifierService;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.MemoryService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -124,7 +124,7 @@ class AnswerSnapshotTest {
     private static GoldenCase load(Path p) {
         try {
             return MAPPER.readValue(p.toFile(), GoldenCase.class);
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             throw new RuntimeException("Failed to load golden case: " + p, e);
         }
     }

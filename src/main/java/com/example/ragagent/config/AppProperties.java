@@ -244,7 +244,7 @@ public record AppProperties(
         }
 
         /**
-         * {@code OpenAiApi.builder()} 와 {@code ContextWindowProbe} 에 넘길 루트 URL — 선언된
+         * {@code ContextWindowProbe} 와 G3 검증({@code /v1/models})에 넘길 루트 URL — 선언된
          * base-url 에서 뒤쪽 {@code /v1} 을 걷어낸 것이다(빌더가 내부에서 다시 붙이므로 두면
          * {@code /v1/v1} 이 된다). {@code baseUrl()} 자체는 {@code LlmProvider.baseUrl()} 과 curl
          * 로그가 그대로 쓰므로 건드리지 않는다.

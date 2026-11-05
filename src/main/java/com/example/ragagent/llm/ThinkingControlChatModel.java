@@ -8,7 +8,6 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
@@ -120,7 +119,7 @@ public class ThinkingControlChatModel implements ChatModel {
 
     /**
      * 이 체인을 지나는 스트림은 {@code stream=false} 프로바이더의 채팅 답변뿐이다(그 경로는 {@code ChatClient.stream()}
-     * 으로 받아 한 덩어리로 모은다). {@code stream=true} 의 채팅 답변은 체인을 통째로 우회하는 {@code OpenAiApi} 직행이라
+     * 으로 받아 한 덩어리로 모은다). {@code stream=true} 의 채팅 답변은 체인을 통째로 우회하는 원본 모델 직행이라
      * {@code AnswerStreamer} 가 같은 규칙을 따로 싣는다.
      *
      * <p>블로킹({@link #call})과 같은 두 가지 — 거부 재시도와 관측 — 를 구독 위에서 한다. 재시도는 <b>응답이 하나도 오기
@@ -166,18 +165,22 @@ public class ThinkingControlChatModel implements ChatModel {
         final StringBuilder content = new StringBuilder();
         final StringBuilder reasoning = new StringBuilder();
         String finish;
-        OpenAiApi.Usage usage;
+        ThinkingObservations.ReportedUsage usage;
 
         void accept(ChatResponse response) {
             received = true;
             Generation generation = response == null ? null : response.getResult();
             String text = ThinkingObservations.textOf(generation);
             if (text != null) content.append(text);
+            // 생각 본문은 청크마다 델타가 아니라 지금까지 쌓인 전체로 온다(Spring AI 2.0) — 이어 붙이면 중복으로 부푼다.
             String thought = ThinkingObservations.reasoningOf(generation);
-            if (thought != null) reasoning.append(thought);
+            if (thought != null && thought.length() >= reasoning.length()) {
+                reasoning.setLength(0);
+                reasoning.append(thought);
+            }
             String reason = ThinkingObservations.finishReasonOf(generation);
             if (reason != null && !reason.isBlank()) finish = reason;
-            OpenAiApi.Usage reported = ThinkingObservations.nativeUsageOf(response);
+            ThinkingObservations.ReportedUsage reported = ThinkingObservations.nativeUsageOf(response);
             if (reported != null) usage = reported;
         }
 
@@ -188,8 +191,8 @@ public class ThinkingControlChatModel implements ChatModel {
     }
 
     @Override
-    public ChatOptions getDefaultOptions() {
-        return delegate.getDefaultOptions();
+    public ChatOptions getOptions() {
+        return delegate.getOptions();
     }
 
     /**
@@ -208,21 +211,18 @@ public class ThinkingControlChatModel implements ChatModel {
     /** {@link #apply(Prompt, ThinkingWire)} 에 생각 여유를 더한 출력 예약까지 실은 사본. */
     static Prompt apply(Prompt prompt, ThinkingWire wire, ThinkingBudget.Reservation reservation) {
         Prompt applied = apply(prompt, wire);
-        if (reservation.granted() > 0) ((OpenAiChatOptions) applied.getOptions()).setMaxTokens(reservation.tokens());
-        return applied;
+        if (reservation.granted() <= 0) return applied;
+        OpenAiChatOptions withBudget = ((OpenAiChatOptions) applied.getOptions()).mutate()
+                .maxTokens(reservation.tokens()).build();
+        return new Prompt(applied.getInstructions(), withBudget);
     }
 
     /**
      * 표시를 걷어내고 {@code wire} 를 실은 사본 — 원본 {@code Prompt} 는 건드리지 않는다(호출부가 재사용할 수 있다).
-     * 다른 {@code extraBody} 항목은 그대로 둔다.
+     * 다른 {@code extraBody} 항목은 그대로 둔다. 변환은 {@link ThinkingControl#applyTo} 하나다.
      */
     static Prompt apply(Prompt prompt, ThinkingWire wire) {
-        OpenAiChatOptions copy = ((OpenAiChatOptions) prompt.getOptions()).copy();
-        Map<String, Object> body = copy.getExtraBody() == null ? new HashMap<>() : new HashMap<>(copy.getExtraBody());
-        body.remove(ThinkingControl.SITE_MARKER);
-        body.putAll(wire.extraBody());
-        copy.setExtraBody(body.isEmpty() ? null : body);
-        if (wire.reasoningEffort() != null) copy.setReasoningEffort(wire.reasoningEffort());
-        return new Prompt(prompt.getInstructions(), copy);
+        OpenAiChatOptions applied = ThinkingControl.applyTo((OpenAiChatOptions) prompt.getOptions(), wire);
+        return new Prompt(prompt.getInstructions(), applied);
     }
 }

@@ -1,16 +1,20 @@
 package com.example.ragagent.llm;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
+
+import java.util.List;
 
 /**
  * Shared TRACE(full curl)/DEBUG(endpoint+body) request-logging format — the same split
  * {@link LoggingChatModel}/{@link LoggingEmbeddingModel} use for every {@code ChatModel}-routed
- * call. This one is for call sites that talk to {@link org.springframework.ai.openai.api.OpenAiApi}
- * directly instead, bypassing {@code ChatModel} (and therefore {@code LoggingChatModel}) entirely
+ * call. This one is for call sites that talk to the raw {@code OpenAiChatModel}
+ * directly instead, bypassing the decorator chain (and therefore {@code LoggingChatModel}) entirely
  * — namely the chat answers' raw streaming path ({@code AnswerStreamer}, shared by
  * {@code AnswerService}/{@code DirectAnswerService}), which exists specifically to avoid
  * {@code OpenAiChatModel}'s internal stream buffering. Without this, those
@@ -35,32 +39,37 @@ public final class LlmCurlLogger {
     }
 
     /**
-     * Rebuilds the body JSON in the same shape/field order {@link LoggingChatModel} uses
-     * (model, stream, messages[role, content], temperature, max_tokens) instead of serializing the
-     * real {@link OpenAiApi.ChatCompletionRequest} record as-is — the record's declared field order
-     * (messages first, ~25 fields before stream/temperature) produced a visibly different-looking
-     * log line even though the content was identical, which was confusing side-by-side with the
-     * ChatModel-routed calls' logs.
+     * 요청 본문 JSON — {@link LoggingChatModel} 과 채팅 답변 스트리밍({@code AnswerStreamer})이 <b>같은 모양</b>으로 찍는다:
+     * model, stream, messages[role, content], temperature, max_tokens, reasoning_effort, 그리고 {@code extraBody} 항목은
+     * 본문 최상위에 그대로. Spring AI 1.x 에서는 {@code OpenAiApi.ChatCompletionRequest} 를 이 모양으로 다시 짰는데, 2.0 은
+     * SDK 가 요청을 만들어 그 레코드가 없다 — 대신 호출부가 넘긴 옵션에서 같은 필드를 읽는다.
+     *
+     * @param model 요청에 실리는 모델 id
      */
-    public static String toCurlBodyJson(OpenAiApi.ChatCompletionRequest request) throws Exception {
+    public static String toCurlBodyJson(String model, boolean streaming, List<Message> instructions,
+                                        ChatOptions options) {
         ObjectNode body = MAPPER.createObjectNode();
-        body.put("model", request.model());
-        body.put("stream", Boolean.TRUE.equals(request.stream()));
+        body.put("model", model);
+        body.put("stream", streaming);
 
         ArrayNode messages = body.putArray("messages");
-        for (OpenAiApi.ChatCompletionMessage msg : request.messages()) {
+        for (Message msg : instructions) {
             ObjectNode m = messages.addObject();
-            m.put("role", msg.role().name().toLowerCase());
-            m.put("content", msg.content() != null ? msg.content() : "");
+            m.put("role", msg.getMessageType().getValue());
+            m.put("content", msg.getText() != null ? msg.getText() : "");
         }
 
-        if (request.temperature() != null) body.put("temperature", request.temperature());
-        if (request.maxTokens()   != null) body.put("max_tokens",  request.maxTokens());
-        // 생각 수준(§6.29) — LoggingChatModel 과 같은 규칙. 채팅 답변 스트리밍(AnswerStreamer)이 요청에 직접 싣는 필드라,
-        // 빠뜨리면 이 curl 로 재현한 요청만 다른 생각 수준으로 돌아 실제 호출과 다른 결과가 나온다.
-        if (request.reasoningEffort() != null) body.put("reasoning_effort", request.reasoningEffort());
-        if (request.extraBody() != null) {
-            request.extraBody().forEach((key, value) -> body.set(key, MAPPER.valueToTree(value)));
+        if (options != null) {
+            if (options.getTemperature() != null) body.put("temperature", options.getTemperature());
+            if (options.getMaxTokens() != null) body.put("max_tokens", options.getMaxTokens());
+        }
+        if (options instanceof OpenAiChatOptions openAi) {
+            // 생각 수준(§6.29)이 표준 필드로 나가는 dialect(openai-effort)의 값 — 빠뜨리면 이 curl 로 재현한 요청만 다른
+            // 생각 수준으로 돌아 실제 호출과 다른 결과가 나온다. extraBody(chat_template_kwargs 등)도 같은 이유다.
+            if (openAi.getReasoningEffort() != null) body.put("reasoning_effort", openAi.getReasoningEffort());
+            if (openAi.getExtraBody() != null) {
+                openAi.getExtraBody().forEach((key, value) -> body.set(key, MAPPER.valueToTree(value)));
+            }
         }
 
         return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);

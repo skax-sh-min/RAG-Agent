@@ -2,7 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.MemoryRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

@@ -13,8 +13,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
-import org.springframework.ai.retry.NonTransientAiException;
 import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
@@ -200,7 +198,7 @@ class ThinkingControlChatModelTest {
         when(delegate.call(any(Prompt.class))).thenAnswer(inv -> {
             Prompt p = inv.getArgument(0);
             if (optionsOf(p).getExtraBody() != null && optionsOf(p).getExtraBody().containsKey(KWARGS)) {
-                throw new NonTransientAiException(
+                throw new RuntimeException(
                         "HTTP 400 - {\"error\":\"Unrecognized key(s) in object: 'chat_template_kwargs'\"}");
             }
             return ok();
@@ -239,7 +237,7 @@ class ThinkingControlChatModelTest {
     void unrelatedFailuresPropagate() {
         ChatModel delegate = mock(ChatModel.class);
         when(delegate.call(any(Prompt.class)))
-                .thenThrow(new NonTransientAiException("HTTP 400 - the request exceeds the available context size"))
+                .thenThrow(new RuntimeException("HTTP 400 - the request exceeds the available context size"))
                 .thenReturn(ok());
         ProviderThinkingDialects dialects = dialects("local", ThinkingDialect.AUTO, true);
         ThinkingControlChatModel model = model(delegate, "local", dialects, s -> ThinkingLevel.OFF);
@@ -260,7 +258,7 @@ class ThinkingControlChatModelTest {
         ChatResponse response = new ChatResponse(
                 List.of(new Generation(message, ChatGenerationMetadata.builder().finishReason("stop").build())),
                 ChatResponseMetadata.builder()
-                        .usage(new DefaultUsage(31, 227, 258, new OpenAiApi.Usage(227, 31, 258))).build());
+                        .usage(new DefaultUsage(31, 227, 258, nativeUsage(227, 31, 258))).build());
         when(delegate.call(any(Prompt.class))).thenReturn(response);
         ThinkingObservations observations = new ThinkingObservations();
 
@@ -375,7 +373,7 @@ class ThinkingControlChatModelTest {
         when(delegate.call(any(Prompt.class))).thenAnswer(inv -> {
             Prompt p = inv.getArgument(0);
             if (optionsOf(p).getExtraBody() != null && optionsOf(p).getExtraBody().containsKey(KWARGS)) {
-                throw new NonTransientAiException("HTTP 400 - Unrecognized request argument: chat_template_kwargs");
+                throw new RuntimeException("HTTP 400 - Unrecognized request argument: chat_template_kwargs");
             }
             return ok();
         });
@@ -411,7 +409,7 @@ class ThinkingControlChatModelTest {
     void streamRetriesARejectionBeforeAnyResponse() {
         ChatModel delegate = mock(ChatModel.class);
         when(delegate.stream(any(Prompt.class))).thenAnswer(inv -> carriesSwitch(inv.getArgument(0))
-                ? Flux.error(new NonTransientAiException("HTTP 400 - Unrecognized request argument: chat_template_kwargs"))
+                ? Flux.error(new RuntimeException("HTTP 400 - Unrecognized request argument: chat_template_kwargs"))
                 : Flux.just(ok()));
         ProviderThinkingDialects dialects = dialects("local", ThinkingDialect.AUTO, true);
 
@@ -431,7 +429,7 @@ class ThinkingControlChatModelTest {
     void streamDoesNotRetryAfterAResponseWentOut() {
         ChatModel delegate = mock(ChatModel.class);
         when(delegate.stream(any(Prompt.class))).thenReturn(Flux.concat(Flux.just(ok()),
-                Flux.error(new NonTransientAiException("HTTP 400 - chat_template_kwargs"))));
+                Flux.error(new RuntimeException("HTTP 400 - chat_template_kwargs"))));
         ProviderThinkingDialects dialects = dialects("local", ThinkingDialect.AUTO, true);
 
         assertThatThrownBy(() -> model(delegate, "local", dialects, s -> ThinkingLevel.LOW)
@@ -450,7 +448,7 @@ class ThinkingControlChatModelTest {
         ChatResponse last = new ChatResponse(
                 List.of(new Generation(new AssistantMessage("1"), ChatGenerationMetadata.builder().finishReason("LENGTH").build())),
                 ChatResponseMetadata.builder()
-                        .usage(new DefaultUsage(31, 227, 258, new OpenAiApi.Usage(227, 31, 258))).build());
+                        .usage(new DefaultUsage(31, 227, 258, nativeUsage(227, 31, 258))).build());
         when(delegate.stream(any(Prompt.class)))
                 .thenReturn(Flux.just(first, last))
                 .thenReturn(Flux.error(new IllegalStateException("connection reset")));
@@ -469,5 +467,11 @@ class ThinkingControlChatModelTest {
                     assertThat(s.thinkingObserved()).as("답 '391' 에 출력 227 — 블로킹과 같은 초과 규칙").isTrue();
                     assertThat(s.truncated()).isTrue();
                 });
+    }
+
+    /** 서버가 보고한 사용량의 원본 — Spring AI 2.0 은 SDK 의 {@code CompletionUsage} 를 네이티브로 단다. */
+    private static com.openai.models.completions.CompletionUsage nativeUsage(long completion, long prompt, long total) {
+        return com.openai.models.completions.CompletionUsage.builder()
+                .completionTokens(completion).promptTokens(prompt).totalTokens(total).build();
     }
 }

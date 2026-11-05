@@ -11,7 +11,7 @@ import java.util.function.Function;
 /**
  * 채팅 답변 스트리밍의 <b>프로바이더 선택 + 장애 전환</b> — {@code AnswerService}·{@code DirectAnswerService} 가 같이 쓴다.
  *
- * <p><b>왜 라우터 밖에 있는가.</b> 스트리밍은 {@code OpenAiApi.chatCompletionStream()} 을 직접 불러 블로킹 호출이 지나는
+ * <p><b>왜 라우터 밖에 있는가.</b> 스트리밍은 {@code LlmProvider.rawModel().stream()} 을 직접 불러 블로킹 호출이 지나는
  * {@link LlmRouter#executeGated} 의 순회(프로바이더 선택 → 실패 시 차단 → 다음 프로바이더)를 통째로 우회한다. 그래서 이 순회를
  * 스트리밍에 맞게 따로 해야 하는데, 갈래마다 다르게 쓰면 전환 규칙이 둘로 갈라진다 — 한 곳에 둔다. 순회는 여기, "무엇이 서버
  * 장애인가"의 판정과 차단은 {@link LlmRouter#failOver} 다(블로킹 경로와 같은 분류·같은 차단 규칙).

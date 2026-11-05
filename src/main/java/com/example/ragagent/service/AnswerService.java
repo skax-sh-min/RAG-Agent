@@ -173,9 +173,9 @@ public class AnswerService {
             Pattern.compile("(\"usedDocs\"\\s*:\\s*)\\[[^\\[\\]]*\\]");
 
     private final BeanOutputConverter<EvalOutput> evalConverter =
-            new BeanOutputConverter<>(EvalOutput.class);
+            new BeanOutputConverter<>(EvalOutput.class, com.example.ragagent.llm.LenientJson.MAPPER);
     private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
-            new BeanOutputConverter<>(CreativeEvalOutput.class);
+            new BeanOutputConverter<>(CreativeEvalOutput.class, com.example.ragagent.llm.LenientJson.MAPPER);
 
     /** 채팅 답변 스트리밍({@code stream=true})의 단일 경로 — 생각 수준·생각 델타·거부 재시도·관측(§6.29 3단계). */
     private final AnswerStreamer answerStreamer;
@@ -340,8 +340,8 @@ public class AnswerService {
 
     /** 검증 응답 스키마 — 두 검증 경로가 각자 실어 보내는 그 문자열이다(미리보기가 크기를 잰다). */
     static String evalSchema(boolean creative) {
-        return creative ? new BeanOutputConverter<>(CreativeEvalOutput.class).getFormat()
-                        : new BeanOutputConverter<>(EvalOutput.class).getFormat();
+        return creative ? new BeanOutputConverter<>(CreativeEvalOutput.class, com.example.ragagent.llm.LenientJson.MAPPER).getFormat()
+                        : new BeanOutputConverter<>(EvalOutput.class, com.example.ragagent.llm.LenientJson.MAPPER).getFormat();
     }
 
     /**
@@ -676,7 +676,7 @@ public class AnswerService {
 
     /**
      * 블로킹 경로는 라우터가 {@link LlmContextOverflowException} 으로 바꿔 던지고, 스트리밍 경로는
-     * {@code OpenAiApi} 를 직접 호출해 <b>날것</b>이 올라온다 — 둘 다 알아봐야 한다. 날것은 WebClient 오류라 서버의
+     * {@code rawModel} 을 직접 호출해 <b>날것</b>(SDK 의 {@code OpenAIServiceException}, 스트리밍에서는 {@code CompletionException} 에 싸인)이 올라온다 — 둘 다 알아봐야 한다. 날것은 메시지가 서버 문장을 다 싣지 않을 수 있어 서버의
      * 문장이 메시지가 아니라 응답 본문에만 있다 — {@code LlmRouter.isContextOverflow} 가 그 본문까지 읽는다
      * ({@code LlmErrorText}).
      */
@@ -797,8 +797,8 @@ public class AnswerService {
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
             StringBuilder buf = new StringBuilder();
             ChatClient.ChatClientRequestSpec spec = ChatClient.builder(provider.chatModel()).build().prompt();
-            ChatOptions options = answerOptions(state);
-            if (options != null) spec = spec.options(options);
+            // ChatClient 2.0 은 옵션이 아니라 옵션 빌더를 받는다 — mutate() 가 모든 값을 이어받은 빌더를 준다.
+            spec = spec.options(answerOptions(state).mutate());
             spec
                     .system(systemPrompt)
                     // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다
@@ -1328,7 +1328,7 @@ public class AnswerService {
      * safety valve, and what actually shapes the answer is the mode's own system prompt — S names a
      * 1,000-character ceiling there, N deliberately names no number at all (§6.24).
      */
-    private ChatOptions answerOptions(AgentState state) {
+    private OpenAiChatOptions answerOptions(AgentState state) {
         // §6.29 — 이 턴의 답변 사이트를 표시한다. 생각 수준(app.llm.thinking.answer-rag-<모드>)은 받는 프로바이더가
         // 정해진 뒤 ThinkingControlChatModel 이 싣는다. stream=false 프로바이더의 ChatClient 경로도 이 옵션을 그대로 쓴다.
         OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()

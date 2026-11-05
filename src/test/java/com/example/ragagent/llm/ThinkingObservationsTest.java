@@ -8,7 +8,7 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.openai.api.OpenAiApi;
+import com.openai.models.completions.CompletionUsage;
 
 import java.util.List;
 import java.util.Map;
@@ -17,14 +17,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ThinkingObservationsTest {
 
-    private static ChatResponse response(String content, String reasoning, String finish, OpenAiApi.Usage usage) {
+    private static ChatResponse response(String content, String reasoning, String finish, CompletionUsage usage) {
         AssistantMessage message = AssistantMessage.builder().content(content)
                 .properties(Map.of(ThinkingObservations.REASONING_CONTENT_KEY, reasoning == null ? "" : reasoning))
                 .build();
         Generation generation = new Generation(message, ChatGenerationMetadata.builder().finishReason(finish).build());
         ChatResponseMetadata.Builder meta = ChatResponseMetadata.builder();
         if (usage != null) {
-            meta.usage(new DefaultUsage(usage.promptTokens(), usage.completionTokens(), usage.totalTokens(), usage));
+            meta.usage(new DefaultUsage((int) usage.promptTokens(), (int) usage.completionTokens(), (int) usage.totalTokens(), usage));
         }
         return new ChatResponse(List.of(generation), meta.build());
     }
@@ -32,8 +32,7 @@ class ThinkingObservationsTest {
     @Test
     @DisplayName("서버가 reasoning_tokens 를 보고하면 그 값을 쓴다(추정 아님)")
     void reportedReasoningTokensWin() {
-        var usage = new OpenAiApi.Usage(500, 40, 540, null,
-                new OpenAiApi.Usage.CompletionTokenDetails(420, null, null, null));
+        var usage = usage(500, 40, 540, 420L);
 
         var s = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON, response("답", "", "stop", usage), 1200);
 
@@ -47,7 +46,7 @@ class ThinkingObservationsTest {
     @Test
     @DisplayName("보고가 없고 생각 본문이 따로 오면 — 출력 토큰 − 답변 추정으로 센다(llama.cpp 의 실제 모양)")
     void estimatesFromOutputTokensWhenReasoningContentArrives() {
-        var usage = new OpenAiApi.Usage(227, 31, 258);
+        var usage = usage(227, 31, 258, null);
 
         var s = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON,
                 response("답변 열 글자입니다", "Thinking Process: ...", "stop", usage), 7500);
@@ -71,7 +70,7 @@ class ThinkingObservationsTest {
     void excessOutputMeansThinking() {
         // 2026-10-02 실측 모양: 답 '391' 에 출력 227 토큰 — Spring AI 가 reasoning_content 를 버린 뒤의 응답
         var s = ThinkingObservations.sampleOf(ThinkingWire.Sent.OFF,
-                response("391", null, "STOP", new OpenAiApi.Usage(227, 31, 258)), 7500);
+                response("391", null, "STOP", usage(227, 31, 258, null)), 7500);
 
         assertThat(s.thinkingObserved()).as("끔으로 보냈는데 생각했다 — 스위치를 무시하는 서버의 모양").isTrue();
         assertThat(s.thinkingEstimated()).isTrue();
@@ -83,9 +82,9 @@ class ThinkingObservationsTest {
     void smallExcessIsNotThinking() {
         String hundred = "가".repeat(100);
         var small = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON,
-                response(hundred, null, "stop", new OpenAiApi.Usage(150, 10, 160)), 10);
+                response(hundred, null, "stop", usage(150, 10, 160, null)), 10);
         var underDouble = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON,
-                response("가".repeat(300), null, "stop", new OpenAiApi.Usage(550, 10, 560)), 10);
+                response("가".repeat(300), null, "stop", usage(550, 10, 560, null)), 10);
 
         assertThat(small.thinkingObserved()).as("초과 50").isFalse();
         assertThat(underDouble.thinkingObserved()).as("초과 250 이지만 답변 300 보다 작다").isFalse();
@@ -96,7 +95,7 @@ class ThinkingObservationsTest {
     @DisplayName("잘림은 finish_reason=length 로 — 대소문자는 가리지 않는다(Spring AI 는 LENGTH 로 준다)")
     void truncation() {
         var s = ThinkingObservations.sampleOf(ThinkingWire.Sent.OFF,
-                response("가".repeat(256), null, "LENGTH", new OpenAiApi.Usage(256, 10, 266)), 900);
+                response("가".repeat(256), null, "LENGTH", usage(256, 10, 266, null)), 900);
 
         assertThat(s.truncated()).isTrue();
         assertThat(s.thinkingObserved()).as("출력이 전부 답변으로 설명된다").isFalse();
@@ -133,10 +132,9 @@ class ThinkingObservationsTest {
     @Test
     @DisplayName("스트리밍 — 서버가 usage 를 함께 보냈으면 출력은 그 값(추정 아님), 보고된 생각 토큰이 델타 수보다 앞선다")
     void streamingPrefersReportedUsage() {
-        var usage = new OpenAiApi.Usage(240, 31, 271, null,
-                new OpenAiApi.Usage.CompletionTokenDetails(200, null, null, null));
+        var usage = usage(240, 31, 271, 200L);
 
-        var s = ThinkingObservations.streamSampleOf(ThinkingWire.Sent.ON, 30, 190, "LENGTH", usage, 5000);
+        var s = ThinkingObservations.streamSampleOf(ThinkingWire.Sent.ON, 30, 190, "LENGTH", ThinkingObservations.reportedOf(usage), 5000);
 
         assertThat(s.outputTokens()).isEqualTo(240);
         assertThat(s.outputEstimated()).isFalse();
@@ -149,7 +147,7 @@ class ThinkingObservationsTest {
     @DisplayName("블로킹 표본은 출력 추정 표시가 없다 — 보고가 없으면 출력은 null 이다")
     void blockingOutputIsNeverMarkedEstimated() {
         var reported = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON,
-                response("답", null, "stop", new OpenAiApi.Usage(10, 5, 15)), 10);
+                response("답", null, "stop", usage(10, 5, 15, null)), 10);
         var unreported = ThinkingObservations.sampleOf(ThinkingWire.Sent.ON, response("답", null, "stop", null), 10);
 
         assertThat(reported.outputEstimated()).isFalse();
@@ -174,5 +172,14 @@ class ThinkingObservationsTest {
         assertThat(o.samples(ThinkingSite.EVAL, "local", ThinkingLevel.HIGH)).hasSize(1);
         assertThat(o.samples(ThinkingSite.EVAL, "local", ThinkingLevel.OFF)).isEmpty();
         assertThat(o.snapshot()).hasSize(2);
+    }
+
+    /** 서버가 보고한 사용량의 원본(출력, 입력, 합계, 그중 생각 토큰) — Spring AI 2.0 은 SDK 의 {@code CompletionUsage} 를 단다. */
+    private static CompletionUsage usage(long completion, long prompt, long total, Long reasoning) {
+        CompletionUsage.Builder b = CompletionUsage.builder().completionTokens(completion).promptTokens(prompt).totalTokens(total);
+        if (reasoning != null) {
+            b.completionTokensDetails(CompletionUsage.CompletionTokensDetails.builder().reasoningTokens(reasoning).build());
+        }
+        return b.build();
     }
 }

@@ -223,7 +223,7 @@ public class DirectAnswerService {
 
     /**
      * Unified streaming handler for both provider.stream()=true/false.
-     * When stream=true, streams through {@link AnswerStreamer} — {@code OpenAiApi.chatCompletionStream()}
+     * When stream=true, streams through {@link AnswerStreamer} — {@code LlmProvider.rawModel().stream()}
      * directly, to bypass OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens
      * until LLM finishes. That also bypasses the ChatModel decorator chain, so the streamer applies the
      * site's thinking level itself (§6.29 3단계).
@@ -245,7 +245,7 @@ public class DirectAnswerService {
             ChatClient.builder(provider.chatModel()).build()
                     .prompt()
                     // stream=false 프로바이더 — 체인(ThinkingControlChatModel)을 지나므로 사이트 표시가 그대로 먹는다.
-                    .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site(state)).build())
+                    .options(ThinkingControl.mark(OpenAiChatOptions.builder().temperature(temperature), site(state)))
                     .system(systemPrompt)
                     .user(buildUserPrompt(state))
                     .stream()

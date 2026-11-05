@@ -1,7 +1,7 @@
 package com.example.ragagent.ingestion;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import com.example.ragagent.model.TagUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

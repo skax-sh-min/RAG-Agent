@@ -27,7 +27,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.context.MessageSource;
 import reactor.core.publisher.Flux;
 
@@ -120,7 +120,7 @@ class AnswerServiceTest {
             java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
                     org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
             org.springframework.ai.chat.model.ChatModel probe =
-                    mock(org.springframework.ai.chat.model.ChatModel.class);
+                    com.example.ragagent.LlmTestSupport.chatModelMock();
             when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
                 org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
                 seen.compareAndSet(null, prompt.getInstructions().stream()
@@ -231,7 +231,7 @@ class AnswerServiceTest {
             java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
                     org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
             org.springframework.ai.chat.model.ChatModel probe =
-                    mock(org.springframework.ai.chat.model.ChatModel.class);
+                    com.example.ragagent.LlmTestSupport.chatModelMock();
             when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
                 org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
                 prompts.add(prompt.getInstructions().stream()
@@ -269,7 +269,7 @@ class AnswerServiceTest {
             java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
                     org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
             org.springframework.ai.chat.model.ChatModel probe =
-                    mock(org.springframework.ai.chat.model.ChatModel.class);
+                    com.example.ragagent.LlmTestSupport.chatModelMock();
             when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
                 org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
                 prompts.add(prompt.getInstructions().stream()
@@ -309,7 +309,7 @@ class AnswerServiceTest {
         org.mockito.Mockito.doAnswer(inv -> {
             java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
                     org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
-            org.springframework.ai.chat.model.ChatModel probe = mock(org.springframework.ai.chat.model.ChatModel.class);
+            org.springframework.ai.chat.model.ChatModel probe = com.example.ragagent.LlmTestSupport.chatModelMock();
             when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
                 org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
                 prompts.add(prompt.getInstructions().stream()
@@ -377,7 +377,7 @@ class AnswerServiceTest {
         var premium = new com.example.ragagent.llm.LlmProvider(
                 "premium", com.example.ragagent.llm.TaskType.TEXT,
                 com.example.ragagent.llm.ProviderRole.PREMIUM, 1, "k", null, null, false,
-                mock(org.springframework.ai.chat.model.ChatModel.class), null);
+                com.example.ragagent.LlmTestSupport.chatModelMock(), null);
         when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST))).thenReturn(premium);
 
         var prompts = new java.util.ArrayList<String>();
@@ -385,7 +385,7 @@ class AnswerServiceTest {
             java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
                     org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
             org.springframework.ai.chat.model.ChatModel probe =
-                    mock(org.springframework.ai.chat.model.ChatModel.class);
+                    com.example.ragagent.LlmTestSupport.chatModelMock();
             when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
                 org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
                 prompts.add(prompt.getInstructions().stream()
@@ -698,7 +698,7 @@ class AnswerServiceTest {
 
         service.execute(newState(RoutingMode.COST_FIRST));
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -736,7 +736,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -796,7 +796,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -832,7 +832,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -859,7 +859,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -890,7 +890,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -914,7 +914,7 @@ class AnswerServiceTest {
 
         service.execute(newState(RoutingMode.COST_FIRST));
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -948,7 +948,7 @@ class AnswerServiceTest {
 
         service.execute(state);
 
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
         callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
@@ -1162,7 +1162,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("STREAMING COST_FIRST — 답변+sufficiency 2회 호출, llmCallCount=2 (executeBlocking과 동일하게 집계돼야 함), 스트리밍 답변은 근사 토큰이 누적됨")
     void streaming_costFirst_accumulatesLlmCallCount() {
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
         LlmProvider provider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
@@ -1189,7 +1189,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("STREAMING — 답변 스트리밍이 끝난 직후, sufficiency evaluate() 호출 전에 onVerifying()이 정확히 1회 호출된다")
     void streaming_callsOnVerifyingBeforeSufficiencyEvaluation() {
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
         LlmProvider provider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
@@ -1217,7 +1217,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("STREAMING S 모드 — onVerifying() 미발생 + 평가 LLM 호출도 스킵된다")
     void streaming_sMode_doesNotEmitOnVerifyingAndSkipsEvaluateLlmCall() {
-        ChatModel chatModel = mock(ChatModel.class);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
         LlmProvider provider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
@@ -1237,7 +1237,7 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("STREAMING — provider.stream()=true 인 네이티브 OpenAiApi 우회 경로(streamDirect)도 DEBUG 로그(엔드포인트+body)를 남긴다")
+    @DisplayName("STREAMING — provider.stream()=true 인 원본 모델 직행 경로(streamDirect)도 DEBUG 로그(엔드포인트+body)를 남긴다")
     void streaming_streamDirectPath_logsRequestAtDebugLevel() {
         Logger logbackLogger = com.example.ragagent.LogbackTestSupport.logger(AnswerService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -1246,14 +1246,13 @@ class AnswerServiceTest {
         Level previousLevel = logbackLogger.getLevel();
         logbackLogger.setLevel(Level.DEBUG);
         try {
-            OpenAiApi openAiApi = mock(OpenAiApi.class);
-            var delta = new OpenAiApi.ChatCompletionMessage("스트리밍 답변", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
-            var choice = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta, null);
-            var chunk = new OpenAiApi.ChatCompletionChunk("id", List.of(choice), null, "model", null, null, null, null);
-            when(openAiApi.chatCompletionStream(any())).thenReturn(Flux.just(chunk));
+            OpenAiChatModel openAiApi = mock(OpenAiChatModel.class);
+            var delta = com.example.ragagent.LlmTestSupport.answer("스트리밍 답변");
+        var chunk = delta;
+        when(openAiApi.stream(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(Flux.just(chunk));
 
             LlmProvider provider = new LlmProvider("local", TaskType.TEXT, ProviderRole.LOCAL, 0,
-                    "sk-test-key-123456", "http://localhost:1234/v1", "model", true, mock(ChatModel.class), openAiApi);
+                    "sk-test-key-123456", "http://localhost:1234/v1", "model", true, com.example.ragagent.LlmTestSupport.chatModelMock(), openAiApi);
             when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
             when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                     .thenReturn(new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));

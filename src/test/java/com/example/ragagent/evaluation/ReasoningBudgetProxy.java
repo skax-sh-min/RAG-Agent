@@ -1,8 +1,8 @@
 package com.example.ragagent.evaluation;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -86,7 +86,7 @@ final class ReasoningBudgetProxy implements AutoCloseable {
             if (!root.path("chat_template_kwargs").path("enable_thinking").asBoolean(false)) return body;
             object.put("reasoning_budget_tokens", budget);
             return JSON.writeValueAsBytes(object);
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             return body;
         }
     }

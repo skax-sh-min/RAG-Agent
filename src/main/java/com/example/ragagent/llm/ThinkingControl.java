@@ -2,9 +2,7 @@ package com.example.ragagent.llm;
 
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -16,7 +14,7 @@ import java.util.Map;
  * <p><b>표시는 {@code extraBody} 의 내부 키다.</b> {@code OpenAiChatOptions} 에서 호출부가 값을 실어 데코레이터까지
  * 나를 수 있는 자리가 거기뿐이다. 그 대신 이 키는 <b>서버로 절대 나가면 안 된다</b> — 체인 맨 바깥의
  * {@link ThinkingControlChatModel} 이 표시가 있는 요청이면 언제나 걷어낸다({@code ThinkingControlWireTest} 가
- * 실제 본문으로 고정). 그래서 체인을 거치지 않는 경로(채팅 답변 스트리밍의 {@code OpenAiApi} 직행)에는 이 표시를 쓰지
+ * 실제 본문으로 고정). 그래서 체인을 거치지 않는 경로(채팅 답변 스트리밍의 {@code rawModel} 직행)에는 이 표시를 쓰지
  * 않는다 — 그쪽은 표시 없이 프로바이더가 이미 정해진 채로 오므로, 변환 결과를 요청 객체에 바로 싣는다({@link #applyTo}).
  *
  * <p>호출부가 {@code chat_template_kwargs} 같은 필드를 {@code extraBody} 에 직접 넣으면 안 되는 이유도 여기서
@@ -51,13 +49,31 @@ public final class ThinkingControl {
     public static Prompt mark(Prompt prompt, ThinkingSite site) {
         if (siteOf(prompt) != null) return prompt;
         ChatOptions source = prompt.getOptions();
-        OpenAiChatOptions options = source instanceof OpenAiChatOptions openAi ? openAi.copy()
-                : source == null ? OpenAiChatOptions.builder().build()
-                : ModelOptionsUtils.copyToTarget(source, ChatOptions.class, OpenAiChatOptions.class);
-        Map<String, Object> body = options.getExtraBody() == null ? new HashMap<>() : new HashMap<>(options.getExtraBody());
+        OpenAiChatOptions.Builder builder = source instanceof OpenAiChatOptions openAi ? openAi.mutate()
+                : source == null ? OpenAiChatOptions.builder()
+                : fromGeneric(source);
+        Map<String, Object> existing = source instanceof OpenAiChatOptions openAi ? openAi.getExtraBody() : null;
+        Map<String, Object> body = existing == null ? new HashMap<>() : new HashMap<>(existing);
         body.put(SITE_MARKER, site.name());
-        options.setExtraBody(body);
+        OpenAiChatOptions options = builder.extraBody(body).build();
         return new Prompt(prompt.getInstructions(), options);
+    }
+
+    /**
+     * 일반 {@code ChatOptions} 의 공통 필드만 {@code OpenAiChatOptions} 로 옮긴다. Spring AI 1.x 는 이 변환을
+     * {@code ModelOptionsUtils.copyToTarget} 의 JSON 왕복으로 했는데, 2.0 의 옵션은 불변이라(세터 없음) 그 길이 막혔다.
+     * 이 앱이 일반 옵션으로 만나는 필드는 아래뿐이다(모델·온도·출력 상한·샘플링·정지열).
+     */
+    private static OpenAiChatOptions.Builder fromGeneric(ChatOptions source) {
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
+        if (source.getModel() != null) builder.model(source.getModel());
+        if (source.getTemperature() != null) builder.temperature(source.getTemperature());
+        if (source.getMaxTokens() != null) builder.maxTokens(source.getMaxTokens());
+        if (source.getTopP() != null) builder.topP(source.getTopP());
+        if (source.getFrequencyPenalty() != null) builder.frequencyPenalty(source.getFrequencyPenalty());
+        if (source.getPresencePenalty() != null) builder.presencePenalty(source.getPresencePenalty());
+        if (source.getStopSequences() != null) builder.stop(source.getStopSequences());
+        return builder;
     }
 
     /** 표시된 사이트. 표시가 없거나 알아볼 수 없으면 {@code null} — 그 요청은 아무것도 바꾸지 않고 통과한다. */
@@ -73,30 +89,21 @@ public final class ThinkingControl {
     }
 
     /**
-     * 체인을 지나지 않는 스트리밍 요청에 {@code wire} 를 실은 사본 — 블로킹의 {@link ThinkingControlChatModel#apply} 와
-     * 같은 규칙이다: {@code extraBody} 에 더하고(다른 항목은 둔다), 표준 필드는 {@code reasoningEffort} 로. 실을 것이
-     * 없으면 원본을 그대로 돌려준다.
+     * {@code wire} 를 실은 옵션 사본 — 표시({@link #SITE_MARKER})는 걷어내고, 다른 {@code extraBody} 항목은 둔다. 표준 필드는
+     * {@code reasoningEffort} 로 싣는다. 블로킹 체인({@link ThinkingControlChatModel})과 체인을 지나지 않는 채팅 답변
+     * 스트리밍({@code AnswerStreamer})이 <b>같은 이 함수</b>를 쓴다 — 두 경로의 변환이 갈라지지 않게. 원본은 건드리지 않는다
+     * (옵션이 불변이다).
      *
-     * <p><b>32개 컴포넌트를 손으로 복사하는 곳은 여기 하나다.</b> 이 레코드에는 wither 가 없다({@code streamOptions} 하나뿐).
-     * Spring AI 업그레이드로 컴포넌트가 늘면 정식 생성자 시그니처가 바뀌어 여기가 컴파일되지 않고, 같은 타입끼리 자리만
-     * 바뀌면 {@code ThinkingControlTest} 가 컴포넌트 수와 값 보존으로 잡는다 — 조용히 한 필드를 떨어뜨리는 복사가 되지 않게.
+     * <p>Spring AI 1.x 에서는 이 앱이 {@code ChatCompletionRequest} 의 32개 컴포넌트를 손으로 복사했다. 2.0 의 옵션은
+     * {@code mutate()} 로 모든 값을 이어받는 빌더를 주므로 그 복사가 사라졌다 — 필드가 늘어도 떨어뜨릴 일이 없다.
      */
-    public static OpenAiApi.ChatCompletionRequest applyTo(OpenAiApi.ChatCompletionRequest request, ThinkingWire wire) {
-        if (request == null || wire == null || wire.fields().isEmpty()) return request;
-        // 정식 생성자는 null 을 빈 HashMap 으로 바꿔 두므로 extraBody() 는 null 이 아니다 — 그래도 원본 맵은 건드리지 않는다.
-        Map<String, Object> body = request.extraBody() == null ? new HashMap<>() : new HashMap<>(request.extraBody());
+    public static OpenAiChatOptions applyTo(OpenAiChatOptions options, ThinkingWire wire) {
+        Map<String, Object> body = options.getExtraBody() == null ? new HashMap<>() : new HashMap<>(options.getExtraBody());
         body.remove(SITE_MARKER);
-        body.putAll(wire.extraBody());
-        String effort = wire.reasoningEffort() != null ? wire.reasoningEffort() : request.reasoningEffort();
-        return new OpenAiApi.ChatCompletionRequest(
-                request.messages(), request.model(), request.store(), request.metadata(),
-                request.frequencyPenalty(), request.logitBias(), request.logprobs(), request.topLogprobs(),
-                request.maxTokens(), request.maxCompletionTokens(), request.n(), request.outputModalities(),
-                request.audioParameters(), request.presencePenalty(), request.responseFormat(), request.seed(),
-                request.serviceTier(), request.stop(), request.stream(), request.streamOptions(),
-                request.temperature(), request.topP(), request.tools(), request.toolChoice(),
-                request.parallelToolCalls(), request.user(), effort, request.webSearchOptions(),
-                request.verbosity(), request.promptCacheKey(), request.safetyIdentifier(), body);
+        if (wire != null) body.putAll(wire.extraBody());
+        OpenAiChatOptions.Builder builder = options.mutate().extraBody(body.isEmpty() ? null : body);
+        if (wire != null && wire.reasoningEffort() != null) builder.reasoningEffort(wire.reasoningEffort());
+        return builder.build();
     }
 
     /**

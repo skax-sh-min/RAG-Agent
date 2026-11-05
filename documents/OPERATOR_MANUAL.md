@@ -63,7 +63,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 
 ## 1. 시스템 개요
 
-**기술 스택**: Spring Boot 3.5.15 + Spring AI 1.1.8, Java 21 Virtual Threads  
+**기술 스택**: Spring Boot 4.1.2 + Spring AI 2.0.2, Java 21 Virtual Threads  
 **벡터 DB**: ChromaDB(기본) 또는 sqlite-vec — `VECTORSTORE_TYPE`으로 선택 (§3.1 참조)  
 **대화 저장**: SQLite WAL  
 **프론트엔드**: Thymeleaf + HTMX (SSE 스트리밍)
@@ -91,7 +91,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 
 ```
 rag_java/
-├── pom.xml                     # Spring Boot 3.5.15 + Spring AI 1.1.8
+├── pom.xml                     # Spring Boot 4.1.2 + Spring AI 2.0.2
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
@@ -2944,7 +2944,7 @@ curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 40
 | Chroma 연결 실패 | Chroma 컨테이너 실행 확인 (`docker ps` 또는 `container ls`) |
 | 포트 충돌 | `lsof -i :8080`으로 점유 프로세스 확인 후 종료 |
 | JDK 버전 | `java -version` → 21 이상인지 확인 |
-| `OpenAI API key must be set` (`openAiApi`/`OpenAiAudioSpeechModel` 등 빈 생성 실패) | 앱은 채팅·임베딩·`OpenAiApi`를 전부 직접 만들고(`LlmConfig`/`EmbeddingBeanConfig`) Spring AI의 OpenAI 자동설정 빈은 **하나도 쓰지 않는다**. 자동설정을 켜두면 각 autoconfig가 기동 시 `openAiApi` 빈을 무조건 만들고 `spring.ai.openai.api-key`에 `Assert.hasText`를 걸어, `LOCAL_LLM_KEY`가 비어 있으면 죽는다(채팅·임베딩 자동설정도 마찬가지 — 모델 빈은 `@ConditionalOnMissingBean`으로 스킵되지만 `openAiApi` 빈은 아님). `application.properties`의 `spring.autoconfigure.exclude`에 **OpenAI 모델 자동설정 6종**(`OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration)이 모두 제외돼 있어야 한다. 이 줄이 지워졌는지 확인 |
+| `OpenAI API key must be set` (`openAiApi`/`OpenAiAudioSpeechModel` 등 빈 생성 실패) | 앱은 채팅·임베딩 모델과 SDK 클라이언트를 전부 직접 만들고(`LlmConfig`/`EmbeddingBeanConfig`) Spring AI의 OpenAI 자동설정 빈은 **하나도 쓰지 않는다**. 자동설정을 켜두면 각 autoconfig가 기동 시 `openAiApi` 빈을 무조건 만들고 `spring.ai.openai.api-key`에 `Assert.hasText`를 걸어, `LOCAL_LLM_KEY`가 비어 있으면 죽는다(채팅·임베딩 자동설정도 마찬가지 — 모델 빈은 `@ConditionalOnMissingBean`으로 스킵되지만 `openAiApi` 빈은 아님). `application.properties`의 `spring.autoconfigure.exclude`에 **OpenAI 모델 자동설정 6종**(`OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration)이 모두 제외돼 있어야 한다. 이 줄이 지워졌는지 확인 |
 
 ---
 

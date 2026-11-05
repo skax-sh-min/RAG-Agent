@@ -57,7 +57,7 @@ public class RoutedChatModel implements ChatModel {
     }
 
     @Override
-    public ChatOptions getDefaultOptions() {
+    public ChatOptions getOptions() {
         // 프로바이더마다 다르고 호출 때에야 정해진다 — 옵션은 고른 프로바이더의 체인이 기본값과 합친다.
         return ChatOptions.builder().build();
     }
