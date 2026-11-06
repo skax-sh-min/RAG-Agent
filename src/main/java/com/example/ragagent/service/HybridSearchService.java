@@ -88,18 +88,18 @@ public class HybridSearchService {
      * @param allowExpansion 질의 확장(LLM)을 돌려도 되는가 — 교차 인코더가 후보를 다시 줄 세우는 턴은 확장을 건너뛴다(턴의 전처리 LLM
      *                       호출을 늘리지 않고, 측정상 확장이 바꾸는 결과가 골든셋 26건 중 0~1건이라 값이 작다)
      */
-    record SearchRequest(String userId, String version, String question, String searchQuestion,
+    public record SearchRequest(String userId, String version, String question, String searchQuestion,
                          String keywordQuestion, List<String> selectedTags, Set<String> excludedDocIds,
                          Optional<String> reasonQuery, int candidateK, boolean allowExpansion) {}
 
     /** 융합 뒤 태그 필터와 제외를 거친 후보 풀(점수순)과 융합 진단({@link RetrievalService#docKey} 로 찾는다). */
-    record SearchResult(List<Document> candidates, Map<String, RrfMetrics> metrics) {}
+    public record SearchResult(List<Document> candidates, Map<String, RrfMetrics> metrics) {}
 
     /**
      * 세 축을 병렬로 돌려 융합하고 태그 필터·제외까지 건 후보 풀을 돌려준다. 예외는 호출자가 처리한다 —
      * {@code RetrievalService} 가 원문 단일 검색으로 물러난다({@link #fallbackSearch}).
      */
-    SearchResult search(SearchRequest req) {
+    public SearchResult search(SearchRequest req) {
         boolean hybridEnabled = props.searchHybridEnabledSafe();
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
@@ -382,7 +382,7 @@ public class HybridSearchService {
      * 지키고, 나머지 메타데이터는 저장본으로 채운다. 원문을 찾지 못한 청크(그사이 지워졌거나 백엔드가 읽기를 지원하지
      * 않는다)는 받은 그대로 둔다 — 고친 것은 아니지만, 그 때문에 검색을 실패시킬 일도 아니다.
      */
-    List<Document> withStoredText(List<Document> docs) {
+    public List<Document> withStoredText(List<Document> docs) {
         Map<String, List<String>> idsByVersion = new LinkedHashMap<>();
         for (Document d : docs) {
             if (d.getScore() != null || d.getId() == null) continue;

@@ -995,8 +995,8 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 ### Phase 1b. Tool 계층
 
 - **작업**
-  - `tool` 패키지(`ToolCatalog`, `ToolCaller`, `ToolGuard`, 읽기 Tool)를 만든다.
-  - `KeywordSearchRepository.findMentions()`, `DocumentExportService.reassembledText()`, `CatalogQueryService`, `UnifiedDiffFormatter` 를 추가한다.
+  - `tool` 패키지(`ToolCatalog`, `ToolCaller`, `ToolGuard`, 읽기 Tool)를 만든다. **완료(2026-11-06)** — `searchKnowledge`·`findRelatedDocuments`·`getChunkContext`·`getDocument`(ADMIN)·`queryCatalog`·`generateDiff` 여섯. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` 은 워크플로가 필요해 Phase 4 로 둔다.
+  - `KeywordSearchRepository.findMentions()`, `DocumentExportService.reassembledText()`, `CatalogQueryService`, `UnifiedDiffFormatter` 를 추가한다. **`findMentions` 만 미뤘다**(소비자인 `analyzeImpact` 가 Phase 4). 나머지 셋은 완료.
 - **난이도**: 중.
 - **위험**: Tool이 URL 권한을 우회한다.
 - **완료 기준**

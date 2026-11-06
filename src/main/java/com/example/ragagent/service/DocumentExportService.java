@@ -54,6 +54,25 @@ public class DocumentExportService {
         this.props = props;
     }
 
+    /**
+     * 문서의 청크를 이어 붙인 <b>읽을 수 있는 전문</b> — 내보내기와 같은 재조립(overlap 되돌리기)과 결정적 후처리까지만 하고
+     * 렌더({@code MD}/{@code TXT}/{@code DOCX})는 하지 않는다. Tool 계층의 {@code getDocument} 가 구간 단위로 읽는다(§3.3).
+     *
+     * @param version 문서가 있는 벡터 스토어 버전. 큐레이션 네임스페이스는 다른 컬렉션이라 여기서 닿지 않는다
+     * @throws IllegalArgumentException 색인된 청크가 없을 때
+     */
+    public String reassembledText(String docId, String version) {
+        List<AdminService.ChunkRow> rows = adminService.getAllChunks(collectionOf(version), docId);
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException("읽을 청크가 없습니다: " + docId);
+        }
+        String sourceName = rows.get(0).filename();
+        boolean pptx = sourceName != null && sourceName.toLowerCase(Locale.ROOT).endsWith(".pptx");
+        String rebuilt = ChunkReassembler.reassemble(rows.stream().map(AdminService.ChunkRow::fullText).toList(),
+                overlapFor(docId));
+        return correctionService.postProcess(rebuilt, pptx);
+    }
+
     /** Export options chosen in the document-list export dialog. */
     public record Options(boolean includeImageDescriptions, boolean addHeadingNumbersAndToc) {}
 

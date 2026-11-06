@@ -496,6 +496,20 @@ SQLite DB 의 정기 백업. 결정 셋:
 - **`AppProperties` 컴포넌트가 둘 더 늘었다**(48개: `searchRerankMinScore` · `searchMaxAttempts`, 둘 다 nullable). 정식 생성자를 직접 부르는 곳(주로 테스트)은 호환 생성자(46개 = 리랭커까지)를 쓰면 된다.
 - **하지 않은 것(1a 에서 미룸).** `ChunkReranker` 인터페이스 — 소비자가 `SearchLoopService` 하나뿐이고 점수를 주는 구현이 `CrossEncoderReranker` 뿐이라, `KnowledgeSearchTool`(1b)이 두 번째 소비자가 될 때 만든다. `SourceRef` 의 리랭크 점수와 `/admin` 검색 진단의 표시 — 로그(`[RETRIEVAL] 교차 인코더 리랭크 — 검색 N회 …`)에만 남는다. 검색 횟수·쓴 검색어를 `AgentState` 에 싣는 것도 하지 않았다(상태 레코드 컴포넌트 추가 비용 대비 진단 값이 작다).
 
+### Tool 계층 (1b) — `ToolCatalog` · `ToolGuard` · Tool 넷
+
+Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool 여섯. 채팅의 `TOOL` 노드(Phase 3)와 MCP 서버(Phase 2)는 아직 없고, 이 계층은 둘이 올라탈 **전송 중립 토대**다.
+
+- **막는 곳은 `ToolGuard` 다, 목록이 아니다.** `forCaller()` 가 권한 없는 Tool 을 스키마째 빼는 것은 모델이 못 쓰는 도구로 헛돌지 않게 하는 편의다. 이름을 지어내 `call()` 하거나 Tool 메서드를 직접 불러도 막혀야 하므로 모든 `@Tool` 메서드가 **첫 줄에서** `guard.require()` 를 지나고, `ToolCatalog.call()` 도 실행 전에 같은 판정을 한다. 모르는 이름과 권한 없는 이름은 **같은 `ToolDeniedException`** 이다(존재 여부를 구별해 알려주지 않는다). 감사 기록이 실패해도 판단은 바뀌지 않는다.
+- **접근 등급은 `ToolCatalog.ACCESS` 에 선언한다.** `@Tool` 에는 등급을 실을 자리가 없다. 선언 없는 Tool 은 **기동 실패**(`IllegalStateException`)라 새 Tool 이 조용히 공개될 수 없다 — 새 Tool 을 만들면 이 표와 `ToolBoundaryConventionTest.TOOLS` 에 같이 올린다(안 올리면 `everyToolClassIsCovered` 가 실패한다).
+- **호출자·버전은 모델이 만든 JSON 으로 바꿀 수 없다.** 호출자는 `ToolContext`(스키마에 안 나온다)로, 문서 버전은 `latest` 상수로 서버가 정한다. `ToolCatalogTest.schemasHideServerOwnedInputs` 가 스키마에 `version`·`userId` 가 없음을, `ToolBoundaryConventionTest` 가 모든 `@Tool` 인자가 `@ToolParam`/`ToolContext` 이고 `version`·`user`·`owner`·`collection`·`namespace` 이름이 없음을 고정한다.
+- **큐레이션 네임스페이스(`curated`)에는 이 계층이 직접 닿지 않는다.** 큐레이션 Q&A 는 `HybridSearchService` 의 한 축으로 `searchKnowledge` 결과에 섞여 나올 뿐이다. 함정은 `getChunkContext`: sqlite-vec 의 `AdminService.getChunk(collection, id)` 는 **컬렉션을 보지 않고 id 로만 찾는다**. 그래서 큐레이션 청크(`doc_type=curated_qa`)와 `version` 메타데이터가 `latest` 가 아닌 청크를 `readable()` 로 거절하고, 이웃 창 안에 섞인 큐레이션 청크도 뺀다. 거절 문구는 없는 청크와 같다(존재 여부를 흘리지 않는다).
+- **`queryCatalog` 는 조회 이름이 닫힌 집합이다**(`documents.list` · `documents.recent` · `tags.list` · `reports.open` · `usage.summary`). 이름 하나가 서비스·저장소 메서드 하나로 가고 자유 SQL 은 없다. 관리자 조회는 Tool 권한(PUBLIC) 뒤에 **조회 이름으로 한 번 더** 검사한다 — Tool 자체를 숨길 수 없기 때문이다. "모르는 이름" 오류의 안내 목록은 호출자가 쓸 수 있는 이름만 싣는다. `DocRegistry` 의 태그 일괄 조회(`tagsByDocIds`)는 `listDocuments` 를 통해서만 부르고 `documents.*` 는 50행에서 자른다.
+- **`ToolBoundaryConventionTest` 는 소스를 읽는다.** 주석을 걷은 `tool/**` 와 `CatalogQueryService` 에 `Curated*Service`/`*Repository`, `JdbcTemplate`/`DataSource`, 쓰기 메서드 이름(`indexDocument`·`deleteDocument`·`updateChunk`·`reindexChunk`…), 민감 테이블 이름(`app_secret`·`persistent_logins`·`settings_override`·`llm_provider_override`)이 나오면 실패한다. 금지어를 **설명하는 주석**은 막지 않는다. 이 계층에서 DB 를 직접 읽어야 할 일이 생기면 서비스 메서드를 먼저 만들 것.
+- **`HybridSearchService` 의 `search`·`withStoredText` 와 두 레코드를 `public` 으로 열었다**(다른 패키지의 Tool 이 부른다). 동작은 그대로다. `SearchResult.metrics` 의 타입 `RetrievalService.RrfMetrics` 는 여전히 패키지 전용이라 밖에서는 값을 못 읽는다.
+- **`DocumentExportService.reassembledText()`** — 내보내기와 같은 재조립(overlap 되돌리기)과 결정적 후처리까지만 하고 렌더는 하지 않는다. 문서 전체를 메모리에 올리므로 `getDocument` 는 ADMIN 전용이고 8,000자씩 구간으로만 돌려준다(오래 걸리는 조회를 Tool 로 내지 않는다는 DB 연결 1개 제약, 설계서 §2.2).
+- **하지 않은 것(1b 에서 미룸).** `KeywordSearchRepository.findMentions()` — 소비자(`analyzeImpact`)가 Phase 4 라 그때 만든다. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` — 워크플로(Phase 4)가 있어야 한다. `ToolCatalog.mcpExposedTools()` — Phase 2. `ChunkReranker` 인터페이스 — `KnowledgeSearchTool` 이 지금은 `CrossEncoderReranker` 를 직접 쓴다(두 번째 구현이 필요해질 때). 전송(채팅 `TOOL` 노드·MCP)에 연결하지 않았으므로 **이 Tool 들은 아직 어떤 요청에서도 불리지 않는다.**
+
 ### `service/HybridSearchService.java`
 
 `RetrievalService.execute()` 의 검색부(축 실행 → RRF → 태그 필터 → 직전 시도 제외)를 **동작을 바꾸지 않고** 떼어 낸 것이다(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §2.1) — `searchKnowledge` Tool 과 채팅 검색 루프가 같은 후보 풀을 쓰게 하려는 첫 단계다. 코드는 스크립트로 원문 그대로 옮겼다.
