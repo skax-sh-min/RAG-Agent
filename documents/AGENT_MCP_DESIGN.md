@@ -937,7 +937,7 @@ classDiagram
 
 | Phase | 내용 | 난이도 | 선행 |
 |---|---|---|---|
-| 0 | 선결 결함 수정(완료), 검색 기준선 | 하 | 없음 |
+| 0 | 선결 결함 수정, 검색 기준선 (둘 다 완료) | 하 | 없음 |
 | 1a | Retriever + Reranker + 재검색 루프 | 중 | 0 |
 | 1b | Tool 계층 | 중 | 1a |
 | 2 | MCP Server | 중 | 1b |
@@ -953,7 +953,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 
 - **작업**
   - `model` 누락을 와이어 테스트로 확정하고 고친다. `ThinkingControlWireTest` 에 `model` 단언을 더한다. **완료(2026-11-06).**
-  - 현재 검색 기준선을 잰다. 코드를 바꾸지 않은 기존 `SearchQualityEvaluationTest`(골든셋 26건 + 후속 질문 21건)를 스크래치 DB 복사본에 돌려 recall@10, nDCG@10, 검색 중앙값 지연을 `SEARCH_EVALUATION.md` 에 남긴다. Phase 1a가 `HybridSearchService` 를 추출하기 **직전**에 한 번 한다. 기존 기록(2026-10-13)은 Spring AI 2.0 업그레이드(2026-11-05) 전의 값이라 새로 잰다.
+  - 현재 검색 기준선을 잰다. 코드를 바꾸지 않은 기존 `SearchQualityEvaluationTest`(골든셋 26건 + 후속 질문 21건)를 스크래치 DB 복사본에 돌려 recall@10, nDCG@10, 검색 중앙값 지연을 `SEARCH_EVALUATION.md` 에 남긴다. Phase 1a가 `HybridSearchService` 를 추출하기 **직전**에 한 번 한다. 기존 기록(2026-10-13)은 Spring AI 2.0 업그레이드(2026-11-05) 전의 값이라 새로 잰다. **완료(2026-11-06, `SEARCH_EVALUATION.md` §7).**
 - **옮긴 항목** (결정 2026-11-06). 해당 단계가 오기 전에는 이 항목들이 막는 것이 없다.
 
 | 항목 | 옮긴 곳 | 이유 |
@@ -966,12 +966,12 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 - **위험**: 기준선을 건너뛰면 1a에서 분리한 뒤 "결과가 분리 전과 같다"를 판정할 근거가 없다.
 - **완료 기준**
   - 블로킹 요청 본문의 `model` 이 설정값임을 테스트가 고정한다. **완료(2026-11-06).**
-  - 검색 기준선이 `SEARCH_EVALUATION.md` 에 기록돼 있다(1a 시작 직전).
+  - 검색 기준선이 `SEARCH_EVALUATION.md` 에 기록돼 있다. **완료(2026-11-06, §7).**
 
 ### Phase 1a. Retriever + Reranker + 재검색 루프
 
 - **작업**
-  - **시작 직전**: Phase 0의 검색 기준선을 잰다.
+  - **시작 전**: Phase 0의 검색 기준선(`SEARCH_EVALUATION.md` §7)을 비교 기준으로 쓴다. 그 사이 문서·설정·DB가 바뀌었으면 분리 전 코드로 다시 잰다.
   - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다.
   - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다.
   - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`searchRerankCandidatesSafe()`, `searchRerankTopKSafe()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
@@ -1188,7 +1188,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 ### 지금 당장 해야 할 일
 
 1. `model` 누락을 확정하고 고친다. Agent와 무관하게 지금도 영향이 있다. **완료(2026-11-06).**
-2. Phase 1a 시작 직전에 현재 검색 기준선을 잰다(기존 하네스 그대로).
+2. 현재 검색 기준선은 측정했다(2026-11-06, `SEARCH_EVALUATION.md` §7). 1a 시작 전에 문서·설정·DB가 바뀌었으면 다시 잰다.
 3. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다.
 4. 1a 도중에 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 리랭크를 켜기 전에 여러 청크가 필요한 질문과 큐레이션을 본다.
 5. 읽기 Tool과 `ToolGuard` 를 만든다.
