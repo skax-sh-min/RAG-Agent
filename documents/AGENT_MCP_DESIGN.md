@@ -1020,7 +1020,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 ### Phase 3. Agent 도입
 
 - **작업**
-  - **사전 평가(구현 전, Phase 0에서 옮김).** `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다. `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교해 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록하고 아래 판단표로 방식을 정한다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다(부록 A.3). 그 실측이 어떤 서버에서 이뤄졌는지 기록이 LM Studio로 되어 있으므로 재측정 때 확인한다. 지연은 생각이 꺼지지 않는 서버에서는 부풀기 때문에 생각을 끌 수 있는 서버(llama-server)에서 잰다.
+  - **사전 평가(구현 전, Phase 0에서 옮김). 완료(2026-11-06) — 결과와 결정은 [AGENT_EVALUATION.md](AGENT_EVALUATION.md): 프롬프트 JSON 방식(E2B 하나만 쟀다 — e4b · 31b 는 미측정). 아래 "Tool 계획 호출"의 네이티브 `tools` 뼈대(§5.1)와 `AGENT_PLAN` 옵션은 이 결정에 맞게 `tools` 없이 프롬프트 JSON 으로 바꿔 구현한다.** `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다. `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교해 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록하고 아래 판단표로 방식을 정한다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다(부록 A.3). 그 실측이 어떤 서버에서 이뤄졌는지 기록이 LM Studio로 되어 있으므로 재측정 때 확인한다. 지연은 생각이 꺼지지 않는 서버에서는 부풀기 때문에 생각을 끌 수 있는 서버(llama-server)에서 잰다.
   - `ToolPlanService`, `ToolPlan`, `ToolDispatchService`, `TOOL` 노드, `AgentState` 컴포넌트(`toolPlan`, `caller`).
   - 두 진입점의 사전 단계에 Tool 계획 future 추가. 호출자는 요청 스레드에서 만든다.
   - `ThinkingSite.AGENT_PLAN`, `RoutedChatModel` 모드 생성자, `LlmRouter` 비차단 호출 경로와 미지원 기억.
