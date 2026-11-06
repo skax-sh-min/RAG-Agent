@@ -511,8 +511,8 @@ app.search-max-attempts=${SEARCH_MAX_ATTEMPTS:3}
 
 | 값 | 식 | 기본(`search-top-k`=10) |
 |---|---|---|
-| 리랭크 후보 수 (`searchRerankCandidatesSafe()`) | `search-top-k × 2` | 20 |
-| 리랭크 최종 컷 (`searchRerankTopKSafe()`) | `max(5, ⌈search-top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 | 5 |
+| 리랭크 후보 수 (`effectiveRerankCandidates()`) | `search-top-k × 2` | 20 |
+| 리랭크 최종 컷 (`effectiveRerankTopK()`) | `max(5, ⌈search-top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 | 5 |
 | 리랭커 없음·장애 | `search-top-k` 그대로 | 10 |
 
 | `search-top-k` | 1 | 2 | 4 | 10 | 11 | 20 | 50 (설정 상한) |
@@ -657,9 +657,9 @@ flowchart TD
 
 **구현 지점.** `RetrievalService:269-271` 의 분기와 `:185-187` 의 후보 계산이 바뀐다. `ChunkReranker.rerank(query, candidates, topK)` 는 문서와 점수를 함께 돌려준다. 지금 `RerankerService.rerank()` 는 `List<Document>` 만 돌려줘 점수를 전달하지 못한다. Spring AI에 리랭크 추상이 없으므로 `CrossEncoderReranker` 는 `/v1/rerank` 를 직접 호출한다. 동시 호출은 임베딩처럼 자체 세마포어로 제한한다.
 
-**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`searchRerankTopKSafe()`)이 곧 답변·검증의 문서 수이므로 `PromptLadder.floor()` 의 입력과 `/settings` 미리보기가 이 값을 봐야 한다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
+**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`effectiveRerankTopK()`)이 곧 답변·검증의 문서 수이므로 `PromptLadder.floor()` 의 입력과 `/settings` 미리보기가 이 값을 봐야 한다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
 
-**열린 항목.** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `searchRerankTopKSafe()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
+**열린 항목.** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `effectiveRerankTopK()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
 
 ### 5.3 Tool을 고르는 대표 사례
 
@@ -974,7 +974,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
   - **시작 전**: Phase 0의 검색 기준선(`SEARCH_EVALUATION.md` §7)을 비교 기준으로 쓴다. 그 사이 문서·설정·DB가 바뀌었으면 분리 전 코드로 다시 잰다.
   - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다. **완료(2026-11-06)** — 축 실행부터 제외까지, `withStoredText`, 질의 확장기를 `HybridSearchService` 로 옮겼다(`search()` · `fallbackSearch()`). 최종 컷 · LLM 리랭크 · 출처 · 이미지는 `RetrievalService` 에 남았고, 기존 이름을 부르는 테스트 때문에 정적 위임과 `RrfResult` · `RrfMetrics` 레코드도 거기 있다. 기존 `Retrieval*Test` 는 수정 없이 통과했고 결정적 기준선과 같다(`SEARCH_EVALUATION.md` §7.4).
   - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다.
-  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`searchRerankCandidatesSafe()`, `searchRerankTopKSafe()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
+  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`effectiveRerankCandidates()`, `effectiveRerankTopK()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
   - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다.
   - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다.
   - 운영 매뉴얼에 리랭크 서버 기동 방법을 넣는다.

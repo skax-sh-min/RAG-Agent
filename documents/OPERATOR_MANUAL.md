@@ -241,7 +241,10 @@ copy .env.example .env
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
-| `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
+| `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
+| `RERANK_BASE_URL` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -ub 2048 …`, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다. LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다 |
+| `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` (llama-server 는 무시한다) |
+| `RERANK_CONNECT_TIMEOUT_SECONDS` / `RERANK_TIMEOUT_SECONDS` / `RERANK_MAX_CONCURRENT` | `5` / `15` / `2` | 초 / 초 / 개 | 연결 타임아웃 / 한 호출의 읽기 타임아웃 / 동시에 나가는 호출 수 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이며, 기본값은 그 절반이다(근거는 [§7.8](#78-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)). `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |

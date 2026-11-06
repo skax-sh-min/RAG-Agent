@@ -199,7 +199,10 @@ container system stop
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가 (§10.7.2 — FTS 인덱스는 이 플래그와 무관하게 인덱싱 시점에 채워지므로 재인덱싱 불필요) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 — 플래그 하나로 두 축: 후보 풀 `round(topK × (1 + 0.5 × 재검색횟수))`(상한 `×3`) **및** 최종 컷 `topK + 재검색횟수`(검증 호출에 여유가 있을 때만 적용). 후보 풀만 키우면 같은 topK 자리를 놓고 경쟁하는 문서만 바뀌어, 컷 바로 뒤의 근거는 매 시도 계속 밖에 머문다. 재시도는 직전 컷에서 **근거로 쓰이지 않은 하위 청크를 최대 1/3 밀어내기도** 하므로, 후보 풀을 예전처럼 2배로 키울 필요가 없어졌다 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
-| `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
+| `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 후보 풀 크기 — `topK × N` |
+| `RERANK_BASE_URL` | _(비면 꺼짐)_ | URL | 교차 인코더 리랭커 서버(`llama-server --reranking`, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` (파생값, `/settings` 조회 전용). LLM 리랭킹을 대신한다 |
+| `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` |
+| `RERANK_TIMEOUT_SECONDS` | `15` | 초 | 재순위 한 번의 읽기 타임아웃 (`RERANK_CONNECT_TIMEOUT_SECONDS` 5, `RERANK_MAX_CONCURRENT` 2) |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그 선택 시 후보 풀 확대 — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이고, 기본값은 의도적으로 그 절반이다. BM25(`chunk_fts`, `tokenize='trigram'`)는 **같은 문자 체계 안에서만 동작하는 리터럴 매처**라 한글 질문은 영문으로 쓰인 청크와 trigram이 하나도 겹치지 않아 그 청크가 키워드 축 지원을 전혀 못 받는 반면, 흔한 토큰 하나가 겹친 무관 청크는 그 축에서 1~2위를 차지한다. 단일 언어 코퍼스이고 파일명·오류코드·API명 같은 정확 매칭이 의미 검색보다 중요하면 `1.0` 쪽으로 올릴 것. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |

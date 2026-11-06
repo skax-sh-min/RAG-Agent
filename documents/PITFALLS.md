@@ -458,6 +458,19 @@ SQLite DB 의 정기 백업. 결정 셋:
 
 질의 시점 이미지 설명: `image_descriptions` 캐시를 보고 미스만 Vision 에 보낸다. `describeIfNeeded(paths, onProgress, skipRequested)` 는 진행 중 future 를 맹목적으로 join 하지 않고 `skipRequested` 를 150ms 마다 본다. 건너뛰기는 **기다리기만** 멈추고 이미 제출된 작업은 취소하지 않는다(try-with-resources 를 일부러 안 썼다 — `close()` 가 기다린다) — 결과는 다음 턴을 위해 캐시에 남는다.
 
+### `service/CrossEncoderReranker.java`
+
+교차 인코더 리랭커 서버(`llama-server --reranking`)의 `POST /v1/rerank` 를 직접 부르는 클래스(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.3 · §5.2). `app.reranker.base-url` 이 없으면 빈이 없고 검색은 변하지 않는다.
+
+- **`LlmRouter` 밖이다.** Spring AI 에 리랭크 추상이 없고 LLM 호출이 아니라서 임베딩과 같은 위치다 — 게이트·차단·사용량 기록이 걸리지 않는다. 그래서 자체 세마포어(`max-concurrent`)와 건너뛰기 창이 있다.
+- **실패는 전부 `UnavailableException`, 건너뛰는 것은 연결 계열뿐이다.** 호출자가 할 일은 어느 실패든 같다(리랭크를 건너뛰고 RRF 순서로 자른다). 그 위에서 `LlmRouter.isConnectionFailure` 가 참인 실패만 30초 건너뛴다(죽은 서버가 질문마다 연결 타임아웃을 물리지 않게). 4xx·5xx·읽기 타임아웃은 건너뛰지 않는다 — 서버가 답했거나 느린 것이고, 입력이 크면 400 이 나는 **요청 모양 문제**라 멀쩡한 서버를 막는다(`LoadBalancingEmbeddingModel` 과 같은 판단).
+- **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 400 이 나고, 그것은 건너뛰기 없이 매번 실패한다.
+- **점수는 모델의 원점수다**(음수가 나온다, 실측 관련 +6.9 · 무관 −8.8~−10.6). 재검색 문턱(0.0)은 이 모델의 값이라 모델을 바꾸면 다시 잰다. 서버는 `results` 를 **입력 순서(index)**로 줄 수 있어(실제로 그랬다) 정렬은 우리 몫이고, 범위 밖 index·점수 없는 항목은 버린다.
+- **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URL` 을 안 주면 `${RERANK_BASE_URL:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
+- **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
+- **`AppProperties` 에 컴포넌트가 하나 늘었다**(46개, `reranker`). 기존 호환 생성자(44개)는 새 컴포넌트에 `null` 을 넘기고, 45개 형태를 새로 두었다. 테스트에서 정식 생성자를 직접 부르면 인자 수를 하나만 틀려도 컴파일 오류가 난다.
+- 실제 서버 점검은 `CrossEncoderRerankerLiveTest`(기본 건너뜀, `-Drerank-live.url=…`)가 한다 — 단위 테스트의 응답 모양은 서버 버전이 바뀌면 낡는다.
+
 ### `service/HybridSearchService.java`
 
 `RetrievalService.execute()` 의 검색부(축 실행 → RRF → 태그 필터 → 직전 시도 제외)를 **동작을 바꾸지 않고** 떼어 낸 것이다(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §2.1) — `searchKnowledge` Tool 과 채팅 검색 루프가 같은 후보 풀을 쓰게 하려는 첫 단계다. 코드는 스크립트로 원문 그대로 옮겼다.
