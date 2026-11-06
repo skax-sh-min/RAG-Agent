@@ -201,8 +201,11 @@ public class LlmConfig {
                     ChatModel model = new ThinkingControlChatModel(
                             new LoggingChatModel(
                                     tokenCalibration.wrap(
-                                            new MaxTokensCappingChatModel(rawModel, cfg.name(),
-                                                    () -> liveMaxTokens(cfg, props, contextWindows))),
+                                            new MaxTokensCappingChatModel(
+                                                    // 가장 안쪽 — 블로킹 호출부는 모델을 싣지 않고, 옵션을 주면 SDK 모델이 기본 옵션을
+                                                    // 병합하지 않아 라이브러리 기본값(gpt-5-mini)이 나간다(ModelPinningChatModel).
+                                                    new ModelPinningChatModel(rawModel, cfg.name(), effectiveModel),
+                                                    cfg.name(), () -> liveMaxTokens(cfg, props, contextWindows))),
                                     cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel),
                             cfg.name(), thinkingDialects,
                             site -> props.llmSafe().thinkingLevel(site),

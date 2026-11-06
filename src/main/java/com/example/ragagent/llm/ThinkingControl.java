@@ -64,7 +64,7 @@ public final class ThinkingControl {
      * {@code ModelOptionsUtils.copyToTarget} 의 JSON 왕복 변환을 쓸 수 없다.
      * 이 앱이 일반 옵션으로 만나는 필드는 아래뿐이다(모델·온도·출력 상한·샘플링·정지열).
      */
-    private static OpenAiChatOptions.Builder fromGeneric(ChatOptions source) {
+    static OpenAiChatOptions.Builder fromGeneric(ChatOptions source) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
         if (source.getModel() != null) builder.model(source.getModel());
         if (source.getTemperature() != null) builder.temperature(source.getTemperature());

@@ -205,6 +205,24 @@ class ThinkingControlWireTest {
     }
 
     @Test
+    @DisplayName("블로킹 호출의 요청 본문 model 은 설정값이다 — 호출부가 옵션에 model 을 싣지 않아도(분류·독립화·검증이 그렇다)")
+    void blockingCallsSendTheConfiguredModel() throws IOException {
+        LlmRouter router = router(provider("LOCAL", startServer(false), null), new CircuitBreaker(2));
+
+        // 표시한 호출(ThinkingControl.mark)과 표시 없는 호출, 상한이 걸리는 호출(maxTokens 가 프로바이더 상한을 넘는다) 셋 다
+        callAt(router, ThinkingSite.CONDENSE, 256);
+        router.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, "test:",
+                model -> model.call(new Prompt(List.of(new UserMessage("질문")),
+                        OpenAiChatOptions.builder().maxTokens(256).build())));
+        callAt(router, ThinkingSite.CONDENSE, 100_000);
+
+        assertThat(requests).hasSize(3);
+        assertThat(requests).extracting(body -> body.path("model").asText())
+                .as("설정의 모델(\"m\")이어야 한다 — 옵션 기본값 gpt-5-mini 가 나가면 모델 이름을 보는 서버에서 다른 모델 호출·404")
+                .containsExactly("m", "m", "m");
+    }
+
+    @Test
     @DisplayName("프로바이더별 max-tokens 상한이 옵션을 복사해 낮춰도 실은 값은 남는다")
     void providerMaxTokensCapKeepsTheSwitch() throws IOException {
         LlmRouter router = router(provider("LOCAL", startServer(false), 1000), new CircuitBreaker(2));

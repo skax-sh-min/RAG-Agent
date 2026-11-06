@@ -171,6 +171,16 @@ no-auth 모드의 방문자별 `userId`(`app.auth.guest-identity` = `shared`/`ip
 
 프로바이더별 `max-tokens` 상한을 호출자 옵션 위에 씌우는 데코레이터. **없으면 프로바이더별 설정이 채팅 경로에서 무효다** — 빈의 기본 옵션은 호출자가 옵션을 안 줬을 때만 쓰이는데 블로킹 호출부는 매번 자기 `maxTokens` 를 싣는다. 호출부가 프로바이더를 알게 하는 방법은 안 된다(받는 쪽은 `LlmRouter` 가 나중에 정한다). **내리기만 한다** — 더 작은 값(검증의 2,048)은 두고 없던 상한을 만들지 않으며 옵션의 사본을 쓴다. **상한은 `IntSupplier` 로 받아 호출마다 계산한다**: `app.llm.max-tokens` 가 핫 편집 대상이고 컨텍스트 창도 재탐지로 바뀌므로 생성자에서 값을 받으면 재기동 전까지 반영되지 않는다. 스트리밍 답변은 `rawModel` 직행이라 여기를 지나지 않는다.
 
+### `llm/ModelPinningChatModel.java`
+
+프로바이더의 모델 id 를 체인 **가장 안쪽**(원본 모델 바로 위)에서 요청에 싣는다. **없으면 블로킹 호출의 요청 본문 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나간다.**
+
+- **원인 둘의 합이다.** ① Spring AI 2.0 의 `OpenAiChatModel` 은 호출자가 옵션을 주면 기본 옵션을 병합하지 않는다 — 프로바이더 빈의 기본 옵션에 넣은 `model` 은 호출자가 옵션을 아예 안 줬을 때만 쓰인다. ② 모델을 지정하지 않고 빌더로 만든 `OpenAiChatOptions` 의 `model` 은 비어 있지 않고 라이브러리 기본값 `gpt-5-mini` 다. 이 앱의 블로킹 호출부(분류·독립화·검증·키워드 추출 …)는 온도와 `maxTokens` 만 싣는다.
+- **왜 눈에 안 띄었나.** 모델 이름을 무시하는 서버(llama-server)는 증상이 없고, curl 로그(`LoggingChatModel`)는 프로바이더의 모델 id 를 따로 받아 찍어 로그에는 맞는 값이 보였다. 이름으로 모델을 고르는 서버나 원격 프로바이더에서는 다른 모델이 불리거나 404 가 나고, 라우터는 그것을 프로바이더 실패로 보고 차단한다. `ThinkingControlWireTest.blockingCallsSendTheConfiguredModel` 이 실제 본문으로 처음 확인했다(고치기 전: 세 호출 모두 `gpt-5-mini`).
+- **왜 호출부가 아니라 체인인가.** 받을 프로바이더는 라우터가 나중에 정하므로 호출부는 모델 이름을 알 수 없다(`MaxTokensCappingChatModel` 과 같은 이유). 가장 안쪽에 두면 위쪽 데코레이터(생각 제어·상한)가 옵션을 어떻게 복사하든 마지막에 한 번 맞춘다. 호출자가 다른 모델을 실어도 덮어쓴다 — 블로킹 호출이 모델을 정하는 자리가 없다. 채팅 답변 스트리밍은 체인을 지나지 않고 `AnswerStreamer` 가 제 옵션에 `provider.model()` 을 싣는다.
+- 옵션이 없는 호출은 건드리지 않고(원본 모델의 기본 옵션이 쓰인다), 일반 `ChatOptions` 는 `ThinkingControl.fromGeneric` 으로 옮겨 모델을 싣는다. 모델 id 가 비어 있으면 아무것도 하지 않는다. 새 호출 경로가 체인을 우회해 `rawModel()` 을 직접 쓰면 이 보호를 받지 못한다(`ThinkingSiteConventionTest` 가 그 경로를 막는다).
+- 이 클래스의 Javadoc 에 `OpenAiChatOptions` 와 빌더 호출을 이어 쓰지 말 것 — `ThinkingSiteConventionTest.everyOptionsBuilderIsMarked` 가 주석까지 포함한 소스 텍스트에서 그 문자열을 센다.
+
 ### `llm/ThinkingControlChatModel.java`
 
 호출부가 표시한 사이트(`ThinkingControl.mark(builder, ThinkingSite.X)`)의 생각 수준(`app.llm.thinking.<id>` = off/low/medium/high)을, 받는 프로바이더가 알아듣는 필드로 바꿔 싣는 체인 **맨 바깥** 데코레이터(PLAN §6.29). 변환은 프로바이더별 dialect(`app.llm.providers[N].thinking-dialect`)가 정한다 — 기본 `auto` 는 LOCAL 이면 `chat_template_kwargs.enable_thinking`, 아니면 아무것도 싣지 않는다. 체인을 지나는 호출 전부가 표시하고(`ThinkingSiteConventionTest` 가 `OpenAiChatOptions.builder()` 마다 `mark(` 로 감쌌는지 본다), 체인을 우회하는 채팅 답변 스트리밍은 `AnswerStreamer` 가 같은 변환(`ThinkingControl.applyTo`)을 요청에 직접 싣는다([아래](#serviceanswerstreamerjava)). 필요성은 실측이 보였다: 켠 채로는 독립화가 상한 256 을 생각에 다 써 매번 6~8초 뒤 빈 응답, 질문 다듬기가 400~711 토큰·10~17초였고 끄자 각각 ~1초에 제대로 된 한 줄이 나왔다.
@@ -1031,6 +1041,7 @@ Spring Boot 3.5.15 → 4.1.2, Spring AI 1.1.8 → 2.0.2 (Spring Framework 7 · S
 - `OpenAiChatOptions` 에는 세터도 `copy()` 도 없다. 값을 바꾼 사본은 `mutate()`(모든 값을 이어받은 빌더) → `build()` 다. `ThinkingControl.applyTo(옵션, wire)` 가 블로킹 체인과 스트리밍 직행이 **같이 쓰는** 하나의 변환이다. `ChatClient.options()` 는 옵션이 아니라 **빌더**를 받는다(`.options(옵션.mutate())` 또는 `ThinkingControl.mark(builder, site)` 의 빌더 그대로).
 - 일반 `ChatOptions` → `OpenAiChatOptions` 변환(`ModelOptionsUtils.copyToTarget`)이 막혀 `ThinkingControl.fromGeneric` 이 공통 필드(모델·온도·출력 상한·top-p·페널티·stop)만 옮긴다.
 - **`ChatModel.getOptions()` 가 기본 옵션의 이름이다.** `getDefaultOptions()` 는 `getOptions()` 에 위임하는 기본 메서드이고 `getOptions()` 의 기본 구현은 *빈* `ChatOptions` 다. 데코레이터(`LoggingChatModel`·`MaxTokensCappingChatModel`·`ThinkingControlChatModel`·`ThinkingSiteChatModel`·`RoutedChatModel`·`TokenEstimateCalibration`)가 `getDefaultOptions()` 만 위임하면 `ChatClient.builder(model)` 이 빈 옵션을 이어받아 프로바이더 기본 옵션이 사라진다. `ChatClient.builder` 는 `getOptions().mutate()` 를 부르므로 테스트의 `mock(ChatModel.class)` 는 NPE 가 난다 — `LlmTestSupport.chatModelMock()`.
+- **호출자가 옵션을 주면 기본 옵션을 병합하지 않는다.** 모델을 안 실은 옵션의 `model` 은 라이브러리 기본값(`gpt-5-mini`)이라 블로킹 호출이 설정과 다른 모델 이름으로 나간다 — [`ModelPinningChatModel`](#llmmodelpinningchatmodeljava) 이 체인 가장 안쪽에서 맞춘다.
 
 ### 스트리밍·응답의 모양
 - **생각 본문(`reasoningContent`)은 델타가 아니라 지금까지 쌓인 전체**로 매 청크에 붙는다(답 청크에도 같은 값이 계속 붙는다 — 실측 `think1`, `think1think2`, …). 답 본문은 여전히 델타다. `AnswerStreamer` 는 **길이가 늘었을 때만** 생각 델타로 센다(안 그러면 답을 흘리는 동안에도 "생각 중"이 켜져 있고 유휴 워치독이 틀린 활동을 센다). `ThinkingControlChatModel.StreamedResponses` 도 이어 붙이지 않고 교체한다.
