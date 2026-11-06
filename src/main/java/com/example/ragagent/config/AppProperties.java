@@ -417,9 +417,21 @@ public record AppProperties(
             String model,                  // app.reranker.model / RERANK_MODEL — 요청 본문의 model, 기본 bge-reranker-v2-m3
             Integer connectTimeoutSeconds, // app.reranker.connect-timeout-seconds, 기본 5
             Integer timeoutSeconds,        // app.reranker.timeout-seconds — 읽기 타임아웃(= 한 호출의 상한), 기본 15
-            Integer maxConcurrent          // app.reranker.max-concurrent — 동시에 서버로 나가는 호출 수, 기본 2
+            Integer maxConcurrent,         // app.reranker.max-concurrent — 동시에 서버로 나가는 호출 수, 기본 2
+            String apiKey                  // app.reranker.api-key / RERANK_API_KEY — 선택. 있으면 Authorization: Bearer 로 싣는다(llama-server --api-key 등). 임베딩의 app.embedding.api-key 와 같은 역할
     ) {
         public static final String DEFAULT_MODEL = "bge-reranker-v2-m3";
+
+        /** 바인딩에 쓰는 정식 생성자 — 생성자가 둘이라 스프링이 고르지 못한다. */
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public RerankerConfig {
+        }
+
+        /** API 키를 모르는 호출부(테스트)를 위한 축약 — 키 없이 부른다. */
+        public RerankerConfig(String baseUrl, String model, Integer connectTimeoutSeconds, Integer timeoutSeconds,
+                              Integer maxConcurrent) {
+            this(baseUrl, model, connectTimeoutSeconds, timeoutSeconds, maxConcurrent, null);
+        }
     }
 
     public record ChromaHttpConfig(
@@ -989,7 +1001,8 @@ public record AppProperties(
                 ? reranker.timeoutSeconds() : 15;
         int concurrent = (reranker != null && reranker.maxConcurrent() != null && reranker.maxConcurrent() > 0)
                 ? reranker.maxConcurrent() : 2;
-        return new RerankerConfig(url, model, connect, timeout, concurrent);
+        String apiKey = (reranker == null || reranker.apiKey() == null) ? "" : reranker.apiKey().strip();
+        return new RerankerConfig(url, model, connect, timeout, concurrent, apiKey);
     }
 
     /** 리랭커 1위 점수가 이 값 미만이면 다시 찾는다(§6.33). 모델의 원점수라 음수도 유효하다 — 값이 없을 때만 0.0. Hot-editable. */

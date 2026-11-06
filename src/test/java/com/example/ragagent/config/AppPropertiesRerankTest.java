@@ -73,16 +73,18 @@ class AppPropertiesRerankTest {
         assertThat(unset.rerankerSafe().connectTimeoutSeconds()).isEqualTo(5);
         assertThat(unset.rerankerSafe().timeoutSeconds()).isEqualTo(15);
         assertThat(unset.rerankerSafe().maxConcurrent()).isEqualTo(2);
+        assertThat(unset.rerankerSafe().apiKey()).as("API 키는 선택 — 기본은 없음").isEmpty();
 
         assertThat(props(10, new AppProperties.RerankerConfig("   ", null, null, null, null)).rerankerEnabled())
                 .as("공백 주소는 꺼짐").isFalse();
-        AppProperties on = props(10, new AppProperties.RerankerConfig(" http://h:28095 ", " m ", 0, -1, 0));
+        AppProperties on = props(10, new AppProperties.RerankerConfig(" http://h:28095 ", " m ", 0, -1, 0, " k-1 "));
         assertThat(on.rerankerEnabled()).isTrue();
         assertThat(on.rerankerSafe().baseUrl()).isEqualTo("http://h:28095");
         assertThat(on.rerankerSafe().model()).isEqualTo("m");
         assertThat(on.rerankerSafe().connectTimeoutSeconds()).as("0 이하는 기본값").isEqualTo(5);
         assertThat(on.rerankerSafe().timeoutSeconds()).isEqualTo(15);
         assertThat(on.rerankerSafe().maxConcurrent()).isEqualTo(2);
+        assertThat(on.rerankerSafe().apiKey()).as("앞뒤 공백은 걷는다").isEqualTo("k-1");
     }
 
     private static AppProperties propsWith(Double minScore, Integer maxAttempts) {

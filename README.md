@@ -199,6 +199,7 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for the LLM reranker — `topK × N` |
 | `RERANK_BASE_URL` | _(empty = off)_ | URL | Cross-encoder reranker server (`llama-server --reranking`, e.g. `http://localhost:28095`). When set, `SEARCH_TOP_K × 2` candidates are reranked by score and the final cut is `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` (derived, read-only in /settings). Replaces the LLM reranker |
+| `RERANK_API_KEY` | _(empty)_ | secret | Optional. Sent as `Authorization: Bearer <key>` to the reranker (like `EMBED_API_KEY` for the embedding server); blank = no header |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | name | `model` field of the rerank request |
 | `RERANK_TIMEOUT_SECONDS` | `15` | seconds | Read timeout of one rerank call (`RERANK_CONNECT_TIMEOUT_SECONDS` 5, `RERANK_MAX_CONCURRENT` 2) |
 | `SEARCH_RERANK_MIN_SCORE` | `0.0` | -20 ~ 20 | Re-search threshold (hot; only with the cross-encoder on). If the best rerank score of a turn's first search is below it, the LLM writes one new query and the search runs again. The model's raw score, measured for `bge-reranker-v2-m3` |

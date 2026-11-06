@@ -201,6 +201,7 @@ container system stop
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 후보 풀 크기 — `topK × N` |
 | `RERANK_BASE_URL` | _(비면 꺼짐)_ | URL | 교차 인코더 리랭커 서버(`llama-server --reranking`, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` (파생값, `/settings` 조회 전용). LLM 리랭킹을 대신한다 |
+| `RERANK_API_KEY` | _(비어 있음)_ | 비밀 | 선택. 리랭커로 `Authorization: Bearer <키>` 를 보낸다(임베딩의 `EMBED_API_KEY` 와 같은 역할). 비면 헤더를 싣지 않는다 |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` |
 | `RERANK_TIMEOUT_SECONDS` | `15` | 초 | 재순위 한 번의 읽기 타임아웃 (`RERANK_CONNECT_TIMEOUT_SECONDS` 5, `RERANK_MAX_CONCURRENT` 2) |
 | `SEARCH_RERANK_MIN_SCORE` | `0.0` | -20 ~ 20 | 재검색 문턱(핫, 교차 인코더가 켜져 있을 때만). 한 턴의 첫 검색에서 리랭크 1위 점수가 이 값 미만이면 LLM 이 새 검색어를 만들어 다시 찾는다. 모델의 원점수이고 `bge-reranker-v2-m3` 으로 잰 값 |

@@ -85,9 +85,11 @@ public class CrossEncoderReranker {
     /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. */
     CrossEncoderReranker(AppProperties props, LongSupplier nanoClock) {
         AppProperties.RerankerConfig cfg = props.rerankerSafe();
-        this.client = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
-                .baseUrl(endpointBase(cfg.baseUrl()))
-                .build();
+        RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
+                .baseUrl(endpointBase(cfg.baseUrl()));
+        // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
+        if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
+        this.client = builder.build();
         this.model = cfg.model();
         this.timeoutSeconds = cfg.timeoutSeconds();
         this.permits = new Semaphore(cfg.maxConcurrent(), true);

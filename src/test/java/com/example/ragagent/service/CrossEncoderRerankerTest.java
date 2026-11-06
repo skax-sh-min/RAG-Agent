@@ -34,6 +34,7 @@ class CrossEncoderRerankerTest {
     private HttpServer server;
     private final List<JsonNode> requests = new CopyOnWriteArrayList<>();
     private final List<String> paths = new CopyOnWriteArrayList<>();
+    private final List<String> authHeaders = new CopyOnWriteArrayList<>();
 
     @AfterEach
     void stop() {
@@ -49,6 +50,7 @@ class CrossEncoderRerankerTest {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/", exchange -> {
             paths.add(exchange.getRequestURI().getPath());
+            authHeaders.add(String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
             requests.add(JSON.readTree(exchange.getRequestBody().readAllBytes()));
             byte[] out = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -63,6 +65,14 @@ class CrossEncoderRerankerTest {
 
     private static AppProperties props(String baseUrl) {
         var reranker = new AppProperties.RerankerConfig(baseUrl, "bge-reranker-v2-m3", 2, 5, 2);
+        return new AppProperties("./data", 2, 800, 100, 100, 10, 0.0, true, 0, false, true, false, 3,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, reranker);
+    }
+
+    private static AppProperties propsWithKey(String baseUrl, String apiKey) {
+        var reranker = new AppProperties.RerankerConfig(baseUrl, "bge-reranker-v2-m3", 2, 5, 2, apiKey);
         return new AppProperties("./data", 2, 800, 100, 100, 10, 0.0, true, 0, false, true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
@@ -94,6 +104,17 @@ class CrossEncoderRerankerTest {
 
         assertThat(out).extracting(r -> r.doc().getId()).containsExactly("b", "c");
         assertThat(out).extracting(Ranked::score).containsExactly(3.2, 0.4);
+    }
+
+    @Test
+    @DisplayName("API 키가 있으면 Authorization: Bearer 로 싣고, 없거나 공백이면 헤더를 싣지 않는다 — 임베딩의 api-key 와 같은 규칙")
+    void apiKeyIsSentAsBearerOnlyWhenConfigured() throws IOException {
+        String url = start(200, results("0", "1.0"));
+        new CrossEncoderReranker(propsWithKey(url, " secret-rerank-key ")).rerank("질문", List.of(doc("a", "문서")), 1);
+        new CrossEncoderReranker(propsWithKey(url, "   ")).rerank("질문", List.of(doc("a", "문서")), 1);
+        new CrossEncoderReranker(props(url)).rerank("질문", List.of(doc("a", "문서")), 1);
+
+        assertThat(authHeaders).containsExactly("Bearer secret-rerank-key", "null", "null");
     }
 
     @Test
