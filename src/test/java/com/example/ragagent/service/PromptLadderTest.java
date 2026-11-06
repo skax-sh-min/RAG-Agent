@@ -125,6 +125,37 @@ class PromptLadderTest {
         assertThat(r.highestRung()).isZero();
     }
 
+    @Nested
+    @DisplayName("리랭크로 문서가 5개일 때(바닥 = 문서 수) — '문서를 바닥까지' 칸은 순서에서 빠진다")
+    class RerankedFiveDocs {
+
+        // search-top-k 10 이면 바닥은 5 다. 교차 인코더가 최종 컷을 5로 줄이면 문서 5개 = 바닥이라 칸 3 이 아무것도 덜어 내지 않는다.
+        // 사다리는 아무것도 바꾸지 않는 조각을 순서에 넣지 않으므로(sequence), 이 칸은 조용히 건너뛰어지고 이력을 먼저 줄인다.
+        // 칸 순서는 측정으로 정한 값이라 바닥의 기준을 바꾸지 않고 이 동작을 받아들인다(2026-11-06) — 이 테스트가 그 가정을 고정한다.
+
+        private final String h = history(turn(8, 540), turn(8, 540), turn(8, 540), turn(8, 540));
+
+        @Test
+        @DisplayName("넘치는 몫이 작으면 문서 5개를 그대로 두고 이력만 줄인다")
+        void historyShrinksBeforeAnyDocument() {
+            PromptLadder.Result r = fit(input(5, DOC, SHORT_FIXED, h, null, null, null));
+
+            assertThat(r.keptDocs()).as("문서는 하나도 빠지지 않는다").containsExactly(0, 1, 2, 3, 4);
+            assertThat(HistoryPolicy.countTurns(r.history())).as("이력은 줄었다").isLessThan(4);
+            assertThat(r.highestRung()).as("칸 3(문서 바닥)은 쓰이지 않는다").isLessThan(3);
+        }
+
+        @Test
+        @DisplayName("이력을 다 뺀 뒤에야 문서가 아래부터 하나씩 빠진다")
+        void documentsFallOnlyAfterTheHistoryIsGone() {
+            PromptLadder.Result r = PromptLadder.plan(input(5, DOC, SHORT_FIXED, h, null, null, null), 5_500).at(0, 1);
+
+            assertThat(HistoryPolicy.countTurns(r.history())).as("이력은 전부 빠졌다").isZero();
+            assertThat(r.keptDocs()).as("1순위부터 순서대로 남는다").startsWith(0, 1).hasSizeLessThan(5);
+            assertThat(r.highestRung()).as("문서는 칸 6(하나까지)으로 빠진다").isEqualTo(6);
+        }
+    }
+
     @Test
     @DisplayName("칸 1 — 직전 질문을 뺀 과거 질문만 자른다(답변은 건드리지 않는다)")
     void rungOneCapsPastQuestionsOnly() {

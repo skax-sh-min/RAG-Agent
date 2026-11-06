@@ -85,10 +85,12 @@ public class HybridSearchService {
      * 없으면 원문). {@code candidateK} 는 축마다 가져오는 수이자 융합 뒤 풀 크기다.
      *
      * @param reasonQuery 재시도라면 평가가 남긴 "무엇이 부족했는지" 한 문장 — 벡터 축 하나로 더 들어간다
+     * @param allowExpansion 질의 확장(LLM)을 돌려도 되는가 — 교차 인코더가 후보를 다시 줄 세우는 턴은 확장을 건너뛴다(턴의 전처리 LLM
+     *                       호출을 늘리지 않고, 측정상 확장이 바꾸는 결과가 골든셋 26건 중 0~1건이라 값이 작다)
      */
     record SearchRequest(String userId, String version, String question, String searchQuestion,
                          String keywordQuestion, List<String> selectedTags, Set<String> excludedDocIds,
-                         Optional<String> reasonQuery, int candidateK) {}
+                         Optional<String> reasonQuery, int candidateK, boolean allowExpansion) {}
 
     /** 융합 뒤 태그 필터와 제외를 거친 후보 풀(점수순)과 융합 진단({@link RetrievalService#docKey} 로 찾는다). */
     record SearchResult(List<Document> candidates, Map<String, RrfMetrics> metrics) {}
@@ -132,7 +134,7 @@ public class HybridSearchService {
             // 재작성 결과로 재면 확장까지 함께 돌아 한 턴에 질의 전처리 LLM 호출이 둘이 된다.
             // 원문으로 재면 이 분기와 QuestionCondenser.gateOpen() 이 정확한 여집합이라 둘 중
             // 하나만 돈다(§10.12 — "이미 건너뛰던 호출 자리를 쓴다").
-            if (shouldExpand(req.question())) {
+            if (req.allowExpansion() && shouldExpand(req.question())) {
                 CompletableFuture<List<Document>> originalF = CompletableFuture.supplyAsync(
                         () -> ragService.search(req.userId(), req.searchQuestion(), req.version(), fetchK),
                         exec);

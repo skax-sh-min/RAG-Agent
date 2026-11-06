@@ -37,7 +37,7 @@ import java.util.function.LongSupplier;
  * <h3>실패는 모두 {@link UnavailableException}</h3>
  * 연결 실패·타임아웃·HTTP 오류·읽을 수 없는 응답 어느 것이든 호출자는 같은 일을 한다 — 리랭크를 건너뛰고 RRF 순서로 자른다.
  * 그 위에서 <b>연결 계열 실패만</b> {@value #BLOCK_SECONDS}초 건너뛴다(죽은 서버가 질문마다 연결 타임아웃을 물리지 않게).
- * 4xx·5xx·읽기 타임아웃은 건너뛰지 않는다 — 서버가 답했거나 느린 것이고, 입력이 크면 400 이 나는 요청 모양 문제라 멀쩡한 서버를
+ * 4xx·5xx·읽기 타임아웃은 건너뛰지 않는다 — 서버가 답했거나 느린 것이고, 입력이 크면 500 이 나는 요청 모양 문제라 멀쩡한 서버를
  * 막는다({@code LoadBalancingEmbeddingModel} 과 같은 판단).
  *
  * <h3>입력 크기</h3>

@@ -463,13 +463,20 @@ SQLite DB 의 정기 백업. 결정 셋:
 교차 인코더 리랭커 서버(`llama-server --reranking`)의 `POST /v1/rerank` 를 직접 부르는 클래스(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.3 · §5.2). `app.reranker.base-url` 이 없으면 빈이 없고 검색은 변하지 않는다.
 
 - **`LlmRouter` 밖이다.** Spring AI 에 리랭크 추상이 없고 LLM 호출이 아니라서 임베딩과 같은 위치다 — 게이트·차단·사용량 기록이 걸리지 않는다. 그래서 자체 세마포어(`max-concurrent`)와 건너뛰기 창이 있다.
-- **실패는 전부 `UnavailableException`, 건너뛰는 것은 연결 계열뿐이다.** 호출자가 할 일은 어느 실패든 같다(리랭크를 건너뛰고 RRF 순서로 자른다). 그 위에서 `LlmRouter.isConnectionFailure` 가 참인 실패만 30초 건너뛴다(죽은 서버가 질문마다 연결 타임아웃을 물리지 않게). 4xx·5xx·읽기 타임아웃은 건너뛰지 않는다 — 서버가 답했거나 느린 것이고, 입력이 크면 400 이 나는 **요청 모양 문제**라 멀쩡한 서버를 막는다(`LoadBalancingEmbeddingModel` 과 같은 판단).
-- **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 400 이 나고, 그것은 건너뛰기 없이 매번 실패한다.
+- **실패는 전부 `UnavailableException`, 건너뛰는 것은 연결 계열뿐이다.** 호출자가 할 일은 어느 실패든 같다(리랭크를 건너뛰고 RRF 순서로 자른다). 그 위에서 `LlmRouter.isConnectionFailure` 가 참인 실패만 30초 건너뛴다(죽은 서버가 질문마다 연결 타임아웃을 물리지 않게). 4xx·5xx·읽기 타임아웃은 건너뛰지 않는다 — 서버가 답했거나 느린 것이고, 입력이 크면 500 이 나는 **요청 모양 문제**라 멀쩡한 서버를 막는다(`LoadBalancingEmbeddingModel` 과 같은 판단).
+- **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 (질의+문서)가 그 크기를 넘는 호출마다 **500**(`input (N tokens) is too large … increase the physical batch size`)이 나고, 건너뛰기 없이 매번 실패해 RRF 순서로 물러난다 — 2026-11-06 `-ub 512` 로 떠 있던 서버에서 호출 대부분이 그랬다. 기동 명령은 반드시 `-b 2048 -ub 2048` 이다.
 - **점수는 모델의 원점수다**(음수가 나온다, 실측 관련 +6.9 · 무관 −8.8~−10.6). 재검색 문턱(0.0)은 이 모델의 값이라 모델을 바꾸면 다시 잰다. 서버는 `results` 를 **입력 순서(index)**로 줄 수 있어(실제로 그랬다) 정렬은 우리 몫이고, 범위 밖 index·점수 없는 항목은 버린다.
 - **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URL` 을 안 주면 `${RERANK_BASE_URL:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
 - **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
 - **`AppProperties` 에 컴포넌트가 하나 늘었다**(46개, `reranker`). 기존 호환 생성자(44개)는 새 컴포넌트에 `null` 을 넘기고, 45개 형태를 새로 두었다. 테스트에서 정식 생성자를 직접 부르면 인자 수를 하나만 틀려도 컴파일 오류가 난다.
 - 실제 서버 점검은 `CrossEncoderRerankerLiveTest`(기본 건너뜀, `-Drerank-live.url=…`)가 한다 — 단위 테스트의 응답 모양은 서버 버전이 바뀌면 낡는다.
+
+### 교차 인코더를 검색에 연결한 동작 (`RetrievalService`)
+
+- 리랭커가 있으면 후보 풀은 `max(재시도 확장, search-top-k × 2)`, 최종 컷의 기준은 `search-top-k` 가 아니라 파생 컷(5)이고 재시도 증가분·모드/이력 부스트는 그 위에 그대로 더한다. LLM 리랭커(`search-rerank-enabled`)와 질의 확장은 건너뛴다.
+- 키워드 축 전용 후보는 컷 **전에** 저장 원문으로 되돌린다(리랭커가 파생 텍스트를 읽지 않게). 되돌렸으면 컷 뒤 복원은 건너뛴다.
+- 리랭커 실패 시 컷을 `search-top-k` 기준으로 되돌려 후보 풀 앞쪽을 쓴다. 풀이 `search-top-k × 2` 라 11~20위의 RRF 기여가 더해져 리랭커가 없을 때와 **거의** 같다(완전히 같지는 않다).
+- **`PromptLadder.floor` 는 `search-top-k` 기준 그대로다**(결정 2026-11-06). 문서가 5개면 바닥이 문서 수와 같아 '문서를 바닥까지' 칸이 순서에서 빠지고(`sequence()` 는 아무것도 바꾸지 않는 칸을 넣지 않는다) 이력을 먼저 줄인 뒤 문서를 아래부터 뺀다. 칸 순서는 측정으로 정한 값이라 바꾸지 않았고 `PromptLadderTest` 가 이 동작을 고정한다.
 
 ### `service/HybridSearchService.java`
 

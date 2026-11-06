@@ -657,9 +657,11 @@ flowchart TD
 
 **구현 지점.** `RetrievalService:269-271` 의 분기와 `:185-187` 의 후보 계산이 바뀐다. `ChunkReranker.rerank(query, candidates, topK)` 는 문서와 점수를 함께 돌려준다. 지금 `RerankerService.rerank()` 는 `List<Document>` 만 돌려줘 점수를 전달하지 못한다. Spring AI에 리랭크 추상이 없으므로 `CrossEncoderReranker` 는 `/v1/rerank` 를 직접 호출한다. 동시 호출은 임베딩처럼 자체 세마포어로 제한한다.
 
-**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`effectiveRerankTopK()`)이 곧 답변·검증의 문서 수이므로 `PromptLadder.floor()` 의 입력과 `/settings` 미리보기가 이 값을 봐야 한다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
+**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`effectiveRerankTopK()`)이 곧 답변·검증의 문서 수이므로 `/settings` 미리보기가 이 값을 봐야 한다. `PromptLadder.floor()` 는 `search-top-k` 기준 그대로 둔다(2026-11-06 결정) — 문서가 5개면 바닥이 문서 수와 같아 '문서를 바닥까지' 칸이 순서에서 빠지고 이력을 먼저 줄인 뒤 문서를 줄인다. 칸 순서는 측정으로 정한 값이라 바꾸지 않았다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
 
-**열린 항목.** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `effectiveRerankTopK()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
+**결정(2026-11-06).** 재시도 증가분(+1)과 이력 제외·모드 부스트는 리랭크 최종 컷 위에 그대로 더한다(기존 동작 유지). 리랭커가 실패하면 컷을 `search-top-k` 기준으로 되돌려 후보 풀 앞쪽을 쓴다. **구현·측정 결과**는 `SEARCH_EVALUATION.md` §7.5.
+
+**(이전 열린 항목)** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `effectiveRerankTopK()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
 
 ### 5.3 Tool을 고르는 대표 사례
 
