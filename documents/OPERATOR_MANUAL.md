@@ -245,6 +245,8 @@ copy .env.example .env
 | `RERANK_BASE_URL` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -b 2048 -ub 2048 …` — **`-ub 2048` 필수**: 기본 512 면 (질의+문서) 한 쌍이 512토큰을 넘는 호출이 500 으로 실패한다, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다. LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다 |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` (llama-server 는 무시한다) |
 | `RERANK_CONNECT_TIMEOUT_SECONDS` / `RERANK_TIMEOUT_SECONDS` / `RERANK_MAX_CONCURRENT` | `5` / `15` / `2` | 초 / 초 / 개 | 연결 타임아웃 / 한 호출의 읽기 타임아웃 / 동시에 나가는 호출 수 |
+| `SEARCH_RERANK_MIN_SCORE` | `0.0` | -20 ~ 20 | **재검색 문턱**(핫, 교차 인코더가 켜져 있을 때만). 한 턴의 **첫** 검색에서 리랭크 1위 점수가 이 값 미만이면 LLM 이 새 검색어를 하나 만들어 다시 찾는다(검증 실패 재시도에서는 돌지 않는다). 점수는 모델의 원점수라 확률이 아니고 음수도 나오며, `bge-reranker-v2-m3` 으로 잰 값이라 모델을 바꾸면 다시 잰다. 재검색을 다 하고도 미만이면 답변 프롬프트의 `[경고]` 에 "관련도가 낮다"는 문장이 실린다 |
+| `SEARCH_MAX_ATTEMPTS` | `3` | 1 ~ 5 | 질문 하나가 돌릴 수 있는 **최대 검색 횟수**(첫 검색 포함, 핫). `1` = 다시 찾지 않는다. 검색이 하나 늘 때마다 LLM 한 번(새 검색어)과 리랭크 한 번이 더 들고, 점수가 낮은 턴에서만 돈다 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이며, 기본값은 그 절반이다(근거는 [§7.8](#78-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)). `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |

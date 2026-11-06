@@ -140,6 +140,11 @@ public class CrossEncoderReranker {
         }
     }
 
+    /** 연결 계열 실패 뒤 건너뛰기 창 안인가 — {@code /settings} 의 상태 배지가 읽는다. */
+    public boolean isSkipping() {
+        return nanoClock.getAsLong() < blockedUntilNanos;
+    }
+
     /** 요청 본문 — 문서는 입력 순서 그대로이고 응답의 {@code index} 가 이 순서를 가리킨다. */
     String requestBody(String query, List<Document> candidates) {
         List<String> docs = new ArrayList<>(candidates.size());

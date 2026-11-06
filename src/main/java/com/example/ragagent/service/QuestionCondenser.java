@@ -324,7 +324,7 @@ public class QuestionCondenser {
      * 사용자가 직접 쓴 질문이다 — 답변이 나빴다는 것이 그 질문에 있던 대명사의 지시 대상까지
      * 없애지는 않는다.
      */
-    private String buildMaterial(String userId, String threadId) {
+    String buildMaterial(String userId, String threadId) {
         List<MemoryRepository.Turn> turns;
         try {
             turns = memoryService.getRecentTurns(userId, threadId);

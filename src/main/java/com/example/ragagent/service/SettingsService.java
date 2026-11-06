@@ -92,7 +92,10 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled"),
             new Spec(SettingsKeys.SEARCH_CURATED_QA_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.curated-qa-enabled"),
             new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.1, 10.0, 0.1,  "settings.item.curated-qa-weight"),
-            new Spec(SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY, Kind.DOUBLE, 0.0, 1.0, 0.01, "settings.item.curated-qa-min-similarity")
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY, Kind.DOUBLE, 0.0, 1.0, 0.01, "settings.item.curated-qa-min-similarity"),
+            // §6.33 — 교차 인코더 리랭커가 있을 때만 의미가 있다. 문턱은 모델의 원점수라 음수도 유효하다(bge-reranker-v2-m3 는 대략 -10~+10).
+            new Spec(SettingsKeys.SEARCH_RERANK_MIN_SCORE,          Kind.DOUBLE, -20.0, 20.0, 0.1, "settings.item.rerank-min-score"),
+            new Spec(SettingsKeys.SEARCH_MAX_ATTEMPTS,              Kind.INT,    1, AppProperties.MAX_SEARCH_MAX_ATTEMPTS, 1, "settings.item.search-max-attempts")
     );
 
     // Insertion order = render order in the "인덱싱 튜닝" group. Apply on the next indexing / ↺ re-index
@@ -163,6 +166,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final ProviderConnectivity connectivity;
     /** 화면의 프로바이더 편집 — 행마다 출처·재기동 대기·기동 검증 실패를 붙인다. {@code null} = 편집 없는 구성(테스트). */
     private final ProviderCatalog providerCatalog;
+    /** 교차 인코더 리랭커(§6.33) — 상태 배지만 읽는다. 빈이 없으면 {@code null}. */
+    private CrossEncoderReranker crossEncoder;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
@@ -721,9 +726,40 @@ public class SettingsService implements AppProperties.OverrideSource {
     }
 
     private List<SettingItem> searchHotItems() {
-        List<SettingItem> items = new ArrayList<>(SEARCH_HOT_SPECS.size());
-        for (Spec s : SEARCH_HOT_SPECS) items.add(editableItem(s.key()));
+        List<SettingItem> items = new ArrayList<>(SEARCH_HOT_SPECS.size() + 2);
+        for (Spec s : SEARCH_HOT_SPECS) {
+            items.add(editableItem(s.key()));
+            // §6.33 — 후보 수·최종 컷은 설정이 아니라 search-top-k 의 파생값이다. 고치는 곳(top-k) 바로 아래에 조회 전용으로 보인다.
+            if (SettingsKeys.SEARCH_TOP_K.equals(s.key())) items.addAll(derivedRerankItems());
+        }
         return items;
+    }
+
+    /**
+     * 교차 인코더 리랭커가 동작할 때의 후보 수·최종 컷 — 검색({@code RetrievalService})이 쓰는 두 메서드의 값 그대로다
+     * ({@link AppProperties#effectiveRerankCandidates()} · {@link AppProperties#effectiveRerankTopK()}). 리랭커가 꺼져 있거나
+     * 잠시 건너뛰는 중이면 값은 그대로 보이되 "적용되지 않음" 배지가 붙는다.
+     */
+    private List<SettingItem> derivedRerankItems() {
+        String note = rerankerNote();
+        return List.of(
+                readOnly("settings.item.rerank-candidates", Integer.toString(props.effectiveRerankCandidates()), note,
+                        "settings.desc.rerank-candidates"),
+                readOnly("settings.item.rerank-top-k", Integer.toString(props.effectiveRerankTopK()), note,
+                        "settings.desc.rerank-top-k"));
+    }
+
+    /** 리랭커가 지금 검색에 쓰이지 않는 이유의 배지 키 — 쓰이고 있으면 {@code null}. */
+    private String rerankerNote() {
+        if (!props.rerankerEnabled()) return "settings.note.reranker-off";
+        if (crossEncoder != null && crossEncoder.isSkipping()) return "settings.note.reranker-down";
+        return null;
+    }
+
+    /** 리랭커 빈이 있을 때만 주입된다(없으면 {@code null}) — 생성자가 테스트용으로 여럿이라 세터로 받는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCrossEncoderReranker(CrossEncoderReranker crossEncoder) {
+        this.crossEncoder = crossEncoder;
     }
 
     /** Only rerank-enabled remains read-only here — it's an {@code @ConditionalOnProperty} bean that
@@ -927,6 +963,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.SEARCH_CURATED_QA_ENABLED       -> Boolean.toString(props.searchCuratedQaEnabledSafe());
             case SettingsKeys.SEARCH_CURATED_QA_WEIGHT        -> trimNum(props.searchCuratedQaWeightSafe());
             case SettingsKeys.SEARCH_CURATED_QA_MIN_SIMILARITY -> trimNum(props.searchCuratedQaMinSimilaritySafe());
+            case SettingsKeys.SEARCH_RERANK_MIN_SCORE         -> trimNum(props.searchRerankMinScoreSafe());
+            case SettingsKeys.SEARCH_MAX_ATTEMPTS             -> Integer.toString(props.searchMaxAttemptsSafe());
             case SettingsKeys.CHUNK_SIZE                      -> Integer.toString(props.chunkSizeSafe());
             case SettingsKeys.CHUNK_OVERLAP                   -> Integer.toString(props.chunkOverlapSafe());
             case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());

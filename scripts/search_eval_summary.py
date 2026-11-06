@@ -52,6 +52,16 @@ for label in labels:
           + (f"  | BM25 축 단독 recall@10 {mean([1.0 if r['bm25Rank'] > 0 else 0.0 for r in rows]):.3f}"
              if all('bm25Rank' in r for r in rows) else ''))
 
+# recall@3·5·10 와 검색 횟수 — 리랭크·재검색 켬/끔 비교용(Phase 1a 하네스에서 추가, 이전 실행에는 없다)
+if any(all('r5' in r for r in rows) for rows in gold.values() if rows):
+    print('\n  recall@3 · @5 · @10, 검색 횟수(평균 / 재검색한 턴)')
+    for label in labels:
+        rows = gold[label]
+        if rows and all('r5' in r for r in rows):
+            att = [r.get('attempts', 1) for r in rows]
+            print(f"  {label:<12} r3 {mean([r['r3'] for r in rows]):.3f}  r5 {mean([r['r5'] for r in rows]):.3f}"
+                  f"  r10 {mean([r['r10'] for r in rows]):.3f}  | 검색 {mean(att):.2f}회, 재검색 {sum(1 for a in att if a > 1)}/{len(rows)}턴")
+
 cases = []
 for label in labels:
     for r in gold[label]:
@@ -136,3 +146,31 @@ if follow:
                     hits = sum((v[alt] if v['raw']['length'] < gate else v['pipeline'])['recall'] for v in by_case.values())
                     cells.append(f'L={name} {alt[:4]} {hits / len(by_case):.3f}')
             print(f'  {label:<12} {kind:<12} ' + '  '.join(cells))
+
+
+# ── 여러 청크 질문 (nexcore-multi.json) ────────────────────────────────────────────────────────
+multi = {label: load(label, 'multi') for label in labels}
+multi = {k: v for k, v in multi.items() if v}
+if multi:
+    print('\n== 여러 청크 질문 — coverage@k = 덮은 묶음 비율, complete@k = 모든 묶음을 덮은 질문의 비율')
+    for label, rows in multi.items():
+        cells = []
+        for k in (3, 5, 10):
+            cov = mean([r[f'covered{k}'] / len(r['groups']) for r in rows])
+            done = mean([1.0 if r[f'complete{k}'] else 0.0 for r in rows])
+            cells.append(f'@{k} coverage {cov:.3f} complete {done:.3f}')
+        att = [r.get('attempts', 1) for r in rows]
+        print(f"  {label:<12} n={len(rows):>2}  " + '  '.join(cells) + f"  | 검색 {mean(att):.2f}회, 재검색 {sum(1 for a in att if a > 1)}턴")
+    ids = []
+    for rows in multi.values():
+        for r in rows:
+            if r['case'] not in ids:
+                ids.append(r['case'])
+    print('\n  질문별 덮은 묶음 수(@5 / @10, 전체 묶음 수)')
+    print('  ' + ' ' * 10 + ''.join(f'{label[:13]:>16}' for label in multi))
+    for cid in ids:
+        cells = []
+        for label, rows in multi.items():
+            r = next((x for x in rows if x['case'] == cid), None)
+            cells.append('' if r is None else f"{r['covered5']}/{r['covered10']} of {len(r['groups'])}")
+        print(f'  {cid:<10}' + ''.join(f'{c:>16}' for c in cells))

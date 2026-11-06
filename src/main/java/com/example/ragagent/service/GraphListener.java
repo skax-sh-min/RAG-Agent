@@ -42,6 +42,16 @@ public interface GraphListener {
      */
     default void onImageAnalysisProgress(int done, int total) {}
 
+    /**
+     * §6.33 재검색 루프 — 리랭커가 고른 1위의 점수가 문턱 미만이라 LLM 이 만든 새 검색어로 다시 찾기 직전에 불린다. 검색은 수 초 걸리는데
+     * 이 시간에는 다른 이벤트가 없어서, 스트리밍 클라이언트는 이것이 없으면 "관련 문서 검색 중..." 에 그대로 머문다. 유휴 워치독도
+     * 이것을 활동으로 센다.
+     *
+     * @param attempt 곧 시작할 검색의 번호(2부터 — 첫 검색은 알리지 않는다)
+     * @param max     한 턴의 검색 횟수 상한({@code app.search-max-attempts})
+     */
+    default void onSearchRetry(int attempt, int max) {}
+
     /** Fired when PROGRESSIVE mode triggers a PREMIUM provider upgrade. */
     default void onUpgrade(String provider) {}
 

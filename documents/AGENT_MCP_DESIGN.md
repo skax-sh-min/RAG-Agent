@@ -975,13 +975,13 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 - **작업**
   - **시작 전**: Phase 0의 검색 기준선(`SEARCH_EVALUATION.md` §7)을 비교 기준으로 쓴다. 그 사이 문서·설정·DB가 바뀌었으면 분리 전 코드로 다시 잰다.
   - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다. **완료(2026-11-06)** — 축 실행부터 제외까지, `withStoredText`, 질의 확장기를 `HybridSearchService` 로 옮겼다(`search()` · `fallbackSearch()`). 최종 컷 · LLM 리랭크 · 출처 · 이미지는 `RetrievalService` 에 남았고, 기존 이름을 부르는 테스트 때문에 정적 위임과 `RrfResult` · `RrfMetrics` 레코드도 거기 있다. 기존 `Retrieval*Test` 는 수정 없이 통과했고 결정적 기준선과 같다(`SEARCH_EVALUATION.md` §7.4).
-  - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다.
-  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`effectiveRerankCandidates()`, `effectiveRerankTopK()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
-  - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다.
-  - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다.
+  - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다. **완료(2026-11-06)** — `CrossEncoderReranker` · `SearchLoopService` · `SearchQueryRewriter`. **`ChunkReranker` 인터페이스는 1b 로 미뤘다**(소비자가 `SearchLoopService` 하나라 `KnowledgeSearchTool` 이 두 번째 소비자가 될 때 만든다). `RerankerService` 는 그대로다.
+  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`effectiveRerankCandidates()`, `effectiveRerankTopK()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다. **완료(2026-11-06)** — 핫 키 둘(`search-rerank-min-score` −20~20 · `search-max-attempts` 1~5), `search-top-k` 아래 조회 전용 두 항목, 꺼짐 · 연결 실패로 건너뛰는 중 배지.
+  - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다. **완료(2026-11-06) — 사이트는 만들지 않았다**: 새 검색어 호출은 `QuestionCondenser.distill()` 과 같이 `ThinkingSite.CONDENSE` 를 쓴다(생각 끔 · 출력 예약 256 · 고정 라우팅). 사이트가 늘면 생각 수준 카드 · 미리보기 · "21곳" 문서가 함께 바뀌는 비용 대비 얻는 것이 별도 손잡이 하나뿐이다. 프롬프트 번들은 더했다.
+  - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다. **일부 완료(2026-11-06)** — `GraphListener.onSearchRetry` → SSE `stage`(`search_retry`)만 했다. `SourceRef` 점수와 `/admin` 표시는 남았다(로그 `[RETRIEVAL] 교차 인코더 리랭크 — 검색 N회 …` 에만 있다).
   - 운영 매뉴얼에 리랭크 서버 기동 방법을 넣는다.
-  - `SearchQualityEvaluationTest` 를 넓힌다(Phase 0에서 옮김). recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다.
-  - 여러 청크가 필요한 질문을 골든셋에 더한다(Phase 0에서 옮김). 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭크를 기본값으로 켜기 전에 끝낸다.
+  - `SearchQualityEvaluationTest` 를 넓힌다(Phase 0에서 옮김). recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다. **완료(2026-11-06)** — `-Dsearch-eval.rerank-url` · `-Dsearch-eval.max-attempts`, 결과 `SEARCH_EVALUATION.md` §7.6.
+  - 여러 청크가 필요한 질문을 골든셋에 더한다(Phase 0에서 옮김). 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭크를 기본값으로 켜기 전에 끝낸다. **완료(2026-11-06)** — `search-eval/nexcore-multi.json` 12건(`-Dsearch-eval.multi=true`). 근거 재료의 재현율이고 답변 품질 판정은 하지 않았다.
 - **난이도**: 중. 코드량보다 검색 회귀가 어렵다.
 - **위험**: 분리가 검색 동작을 흔든다. `AnswerPromptGoldenTest` 는 문서를 미리 넣어 돌기 때문에 이 회귀를 잡지 못한다. 청크 5개가 비교형 질문에 모자랄 수 있다.
 - **완료 기준**

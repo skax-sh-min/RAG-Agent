@@ -85,6 +85,48 @@ class AppPropertiesRerankTest {
         assertThat(on.rerankerSafe().maxConcurrent()).isEqualTo(2);
     }
 
+    private static AppProperties propsWith(Double minScore, Integer maxAttempts) {
+        return new AppProperties("./data", 2, 800, 100, 100, 10, 0.0, true, 0, false, true, false, 3,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, minScore, maxAttempts);
+    }
+
+    @Test
+    @DisplayName("재검색 문턱 — 미설정이면 0.0, 음수도 그대로(모델 원점수), NaN·무한대는 기본값")
+    void rerankMinScoreDefaultsAndKeepsNegatives() {
+        assertThat(propsWith(null, null).searchRerankMinScoreSafe()).isEqualTo(0.0);
+        assertThat(propsWith(-1.5, null).searchRerankMinScoreSafe()).isEqualTo(-1.5);
+        assertThat(propsWith(2.0, null).searchRerankMinScoreSafe()).isEqualTo(2.0);
+        assertThat(propsWith(Double.NaN, null).searchRerankMinScoreSafe()).isEqualTo(0.0);
+        assertThat(propsWith(Double.POSITIVE_INFINITY, null).searchRerankMinScoreSafe()).isEqualTo(0.0);
+    }
+
+    @Test
+    @DisplayName("검색 횟수 상한 — 미설정·0 이하는 3, 상한 5 로 눌린다(설정이 커져도 LLM 호출이 곱해지지 않게)")
+    void maxAttemptsDefaultsAndClamps() {
+        assertThat(propsWith(null, null).searchMaxAttemptsSafe()).isEqualTo(3);
+        assertThat(propsWith(null, 0).searchMaxAttemptsSafe()).isEqualTo(3);
+        assertThat(propsWith(null, -2).searchMaxAttemptsSafe()).isEqualTo(3);
+        assertThat(propsWith(null, 1).searchMaxAttemptsSafe()).as("1 = 재검색 끔").isEqualTo(1);
+        assertThat(propsWith(null, 4).searchMaxAttemptsSafe()).isEqualTo(4);
+        assertThat(propsWith(null, 99).searchMaxAttemptsSafe()).isEqualTo(AppProperties.MAX_SEARCH_MAX_ATTEMPTS);
+    }
+
+    @Test
+    @DisplayName("두 값은 /settings 오버라이드를 따라 바로 바뀐다(핫)")
+    void searchLoopSettingsFollowTheHotOverride() {
+        AppProperties p = propsWith(null, null);
+        AppProperties.bindOverrides(new TestOverrides(Map.of(
+                SettingsKeys.SEARCH_RERANK_MIN_SCORE, "-2.5", SettingsKeys.SEARCH_MAX_ATTEMPTS, "2")));
+        try {
+            assertThat(p.searchRerankMinScoreSafe()).isEqualTo(-2.5);
+            assertThat(p.searchMaxAttemptsSafe()).isEqualTo(2);
+        } finally {
+            AppProperties.bindOverrides(null);
+        }
+    }
+
     /** 오버라이드 계층 대역 — 키 하나의 문자열 값만 돌려준다. */
     private record TestOverrides(Map<String, String> values) implements AppProperties.OverrideSource {
         @Override

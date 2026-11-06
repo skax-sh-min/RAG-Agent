@@ -35,6 +35,10 @@ public class RetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
+    /** 재검색을 다 하고도 리랭커 1위 점수가 문턱 미만일 때 답변 프롬프트의 [경고] 에 싣는 문장(OCR 경고와 같은 자리). */
+    static final String LOW_RELEVANCE_WARNING =
+            "⚠️ 검색된 문서와 질문의 관련도가 낮습니다. 문서에 답이 없을 수 있으니 문서에 없는 내용은 추측하지 마세요.";
+
     private final RagService ragService;
     /** 재시도 때 "청크를 더 실어도 되는가"를 묻기 위해서만 보관한다 — 답변을 받을 프로바이더를
      *  {@code AnswerService} 와 같은 방식으로 먼저 물어본다. */
@@ -52,20 +56,36 @@ public class RetrievalService {
     private final Optional<RerankerService> reranker;
     /** 교차 인코더 리랭커 — 있으면(= {@code app.reranker.base-url} 설정) LLM 리랭커를 대신한다. */
     private final Optional<CrossEncoderReranker> crossEncoder;
+    /** 교차 인코더가 있을 때의 검색 루프(검색 → 리랭크 → 점수가 낮으면 새 검색어로 재검색, §6.33). */
+    private final SearchLoopService loop;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     /** 재시도 컨텍스트 여유 판단의 검증 예약에 생각 여유를 더한다(§6.29 ④). */
     private final ThinkingBudget thinkingBudget;
 
     /**
-     * 스프링이 쓰는 생성자 — 하이브리드 검색은 빈으로 받는다(Tool 계층이 같은 빈을 쓴다).
+     * 재검색 없이(검색 루프에 새 검색어 생성기가 없는) 만드는 형태 — 테스트용. 교차 인코더가 있으면 첫 검색과 리랭크만 한다.
      */
-    @Autowired
     public RetrievalService(HybridSearchService hybrid, LlmRouter llmRouter, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt, Optional<CrossEncoderReranker> crossEncoderOpt,
                             ChatImageAnalysisSkipRegistry imageSkipRegistry,
                             ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
+        this(hybrid, new SearchLoopService(hybrid, crossEncoderOpt, null, props), llmRouter, ragService, props,
+                lazyVisionOpt, rerankerOpt, crossEncoderOpt, imageSkipRegistry, contextWindows, thinkingBudget);
+    }
+
+    /**
+     * 스프링이 쓰는 생성자 — 하이브리드 검색과 검색 루프는 빈으로 받는다(Tool 계층이 같은 빈을 쓴다).
+     */
+    @Autowired
+    public RetrievalService(HybridSearchService hybrid, SearchLoopService loop, LlmRouter llmRouter,
+                            RagService ragService,
+                            AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
+                            Optional<RerankerService> rerankerOpt, Optional<CrossEncoderReranker> crossEncoderOpt,
+                            ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                            ProviderContextWindows contextWindows, ThinkingBudget thinkingBudget) {
         this.hybrid = hybrid;
+        this.loop = loop;
         this.llmRouter = llmRouter;
         this.contextWindows = contextWindows;
         this.thinkingBudget = thinkingBudget;
@@ -164,6 +184,11 @@ public class RetrievalService {
         int effectiveTopK = baseTopK + historyBoost;
         List<Document> unique;
         boolean storedTextRestored = false;
+        // 검색 루프(§6.33)가 쓴 재료 — 루프가 돌지 않았으면 NaN/0.
+        double loopTopScore = Double.NaN;
+        int loopRewriteCalls = 0;
+        int loopInputTokens = 0;
+        int loopOutputTokens = 0;
         // Empty on the expansion-failure fallback path below, which skips fusion entirely — every
         // consumer must therefore tolerate a missing entry rather than assume one exists.
         Map<String, RrfMetrics> fusedMetrics = Map.of();
@@ -192,35 +217,42 @@ public class RetrievalService {
             }
 
             // 축 실행(벡터·키워드·큐레이션)·융합·태그 필터·제외는 HybridSearchService 가 한다(Phase 1a).
-            HybridSearchService.SearchResult found = hybrid.search(new HybridSearchService.SearchRequest(
+            HybridSearchService.SearchRequest searchRequest = new HybridSearchService.SearchRequest(
                     state.userId(), state.version(), state.question(), searchQuestion, keywordQuestion,
                     selectedTags, Set.copyOf(state.excludedDocIds()), reasonQuery(state), candidateK,
-                    /* 교차 인코더가 동작하면 질의 확장은 건너뛴다 */ crossEncoder.isEmpty()));
-            fusedMetrics = found.metrics();
-            List<Document> candidates = found.candidates();
+                    /* 교차 인코더가 동작하면 질의 확장은 건너뛴다 */ crossEncoder.isEmpty());
             if (crossEncoder.isPresent()) {
-                // 키워드 축으로만 찾힌 후보는 본문이 검색용 파생 텍스트다 — 리랭커가 그것을 읽지 않게 컷 '전에' 저장 원문으로 되돌린다
-                // (LLM 리랭커 경로는 컷 뒤에 되돌린다). 한 번 되돌렸으면 아래의 컷 뒤 복원은 건너뛴다.
-                candidates = hybrid.withStoredText(candidates);
+                // 검색 → 리랭크 → (1위 점수가 문턱 미만이면 새 검색어로 재검색). 재검색은 턴의 첫 RETRIEVAL 에서만 돈다 —
+                // 답변 검증 실패 재시도는 한 번만 검색해 최악의 호출 수가 곱해지지 않는다(§5.2). 후보는 리랭크 전에
+                // 저장 원문으로 되돌려져(키워드 축 히트의 파생 텍스트를 리랭커가 읽지 않게) 아래 컷 뒤 복원은 건너뛴다.
+                SearchLoopService.Result lr = loop.run(new SearchLoopService.Params(searchRequest, state.threadId(),
+                        state.locale(), state.question(), effectiveTopK, state.retrievalRetries() == 0, listener));
+                fusedMetrics = lr.metrics();
                 storedTextRestored = true;
-                try {
-                    List<CrossEncoderReranker.Ranked> ranked =
-                            crossEncoder.get().rerank(searchQuestion, candidates, effectiveTopK);
-                    unique = ranked.stream().map(CrossEncoderReranker.Ranked::doc).toList();
-                    if (log.isDebugEnabled()) {
-                        log.debug("[RETRIEVAL] 교차 인코더 리랭크 — 후보 {}개 → {}개, 1위 점수 {}",
-                                candidates.size(), ranked.size(), ranked.get(0).score());
-                    }
-                } catch (CrossEncoderReranker.UnavailableException ex) {
+                loopRewriteCalls = lr.rewriteCalls();
+                loopInputTokens = lr.inputTokens();
+                loopOutputTokens = lr.outputTokens();
+                if (lr.unavailable()) {
                     // 리랭커를 쓸 수 없다 — 리랭크를 건너뛰고 RRF 순서로 자른다. 컷은 리랭커가 없을 때의 기준(search-top-k)으로
-                    // 되돌린다: 후보 풀은 이미 search-top-k × 2 로 넉넉히 가져왔으니 앞쪽만 쓰면 된다.
-                    log.warn("[RETRIEVAL] 교차 인코더를 쓸 수 없어 RRF 순서로 물러난다: {}", ex.getMessage());
+                    // 되돌린다: 후보 풀은 이미 search-top-k × 2 로 넉넉히 가져왔으니 앞쪽만 쓰면 된다. 재검색은 하지 않는다.
+                    log.warn("[RETRIEVAL] 교차 인코더를 쓸 수 없어 RRF 순서로 물러난다");
                     baseTopK = defaultTopK + extraDocs + modeBoost;
                     historyBoost = historyBoostFor(state, baseTopK);
                     effectiveTopK = baseTopK + historyBoost;
-                    unique = candidates.subList(0, Math.min(effectiveTopK, candidates.size()));
+                    unique = lr.candidates().subList(0, Math.min(effectiveTopK, lr.candidates().size()));
+                } else {
+                    unique = lr.docs();
+                    loopTopScore = lr.topScore();
+                    if (lr.attempts() > 1 || log.isDebugEnabled()) {
+                        log.info("[RETRIEVAL] 교차 인코더 리랭크 — 검색 {}회 {} 문서 {}개, 1위 점수 {} (문턱 {}) thread={}",
+                                lr.attempts(), lr.queries(), unique.size(), loopTopScore,
+                                props.searchRerankMinScoreSafe(), state.threadId());
+                    }
                 }
             } else {
+                HybridSearchService.SearchResult found = hybrid.search(searchRequest);
+                fusedMetrics = found.metrics();
+                List<Document> candidates = found.candidates();
                 // Rerank by LLM relevance, then cut to effectiveTopK (= topK on the first attempt).
                 unique = (rerankEnabled && reranker.isPresent())
                         ? reranker.get().rerank(searchQuestion, candidates, effectiveTopK)
@@ -332,19 +364,29 @@ public class RetrievalService {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
 
+        // 재검색을 다 하고도 1위 점수가 문턱 미만이면 답변이 약한 근거 위에 선다 — 답변 프롬프트의 [경고] 로 모델에게 알린다.
+        // 첫 RETRIEVAL 에서만 낸다(검증 실패 재시도마다 같은 문장이 쌓이지 않게).
+        if (state.retrievalRetries() == 0 && !unique.isEmpty() && loopTopScore < props.searchRerankMinScoreSafe()) {
+            warnings.add(LOW_RELEVANCE_WARNING);
+        }
+
         // Streaming UI (chat-stream.js) renders source popovers and image thumbnails from these
         // explicit events; without emitting them, sourcePreviewEnabled=true still has nothing to show.
         listener.onSourcesReady(sources);
         listener.onImagesReady(imageRefs);
 
-        return state.toBuilder()
+        AgentState.Builder out = state.toBuilder()
                 .retrievedDocs(contextDocs)
                 .sources(sources)
                 .retrievalWarnings(warnings)
                 .imageRefs(imageRefs)
                 .needsRetry(false)
-                .historyBoost(appliedBoost)
-                .build();
+                .historyBoost(appliedBoost);
+        // 새 검색어를 쓴 LLM 호출도 이 턴의 호출 수·토큰에 잡는다(토큰은 한 번에 더하고 나머지 호출은 0 으로 센다).
+        for (int i = 0; i < loopRewriteCalls; i++) {
+            out.accumulateTokens(i == 0 ? loopInputTokens : 0, i == 0 ? loopOutputTokens : 0);
+        }
+        return out.build();
     }
 
     /**
