@@ -226,7 +226,9 @@ public class RetrievalService {
                 // 답변 검증 실패 재시도는 한 번만 검색해 최악의 호출 수가 곱해지지 않는다(§5.2). 후보는 리랭크 전에
                 // 저장 원문으로 되돌려져(키워드 축 히트의 파생 텍스트를 리랭커가 읽지 않게) 아래 컷 뒤 복원은 건너뛴다.
                 SearchLoopService.Result lr = loop.run(new SearchLoopService.Params(searchRequest, state.threadId(),
-                        state.locale(), state.question(), effectiveTopK, state.retrievalRetries() == 0, listener));
+                        state.locale(), state.question(), effectiveTopK, state.retrievalRetries() == 0, listener,
+                        // 첫 검색어가 독립화된 후속 질문이면 점수가 낮을 때 원문을 먼저 시험한다(SearchLoopService)
+                        state.wasCondensed() ? state.question() : null));
                 fusedMetrics = lr.metrics();
                 storedTextRestored = true;
                 loopRewriteCalls = lr.rewriteCalls();

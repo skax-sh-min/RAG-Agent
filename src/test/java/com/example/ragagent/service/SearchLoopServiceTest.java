@@ -145,6 +145,87 @@ class SearchLoopServiceTest {
         verify(crossEncoder).rerank(eq("다른 표현"), anyList(), eq(CUT));
     }
 
+    private SearchLoopService.Params condensedParams(String condensed, String raw) {
+        return new SearchLoopService.Params(request(condensed), "t1", Locale.KOREAN, raw, CUT, true, listener, raw);
+    }
+
+    @Test
+    @DisplayName("독립화한 검색어의 점수가 낮으면 LLM 호출 없이 원문을 먼저 시험한다 — 재작성이 앞 질문을 끌어온 실패를 되돌린다")
+    void triesTheRawQuestionBeforeAskingTheLlmWhenTheCondensedQueryScoresLow() {
+        scores(Map.of("XA 타입의 영향은 무엇인가요?", new double[]{-2.0, -3.0}, "XA 타입이면?", new double[]{4.0, 1.0}));
+
+        SearchLoopService.Result r = loop.run(condensedParams("XA 타입의 영향은 무엇인가요?", "XA 타입이면?"));
+
+        assertThat(r.attempts()).isEqualTo(2);
+        assertThat(r.queries()).containsExactly("XA 타입의 영향은 무엇인가요?", "XA 타입이면?");
+        assertThat(r.rewriteCalls()).as("원문 시험은 LLM 호출이 아니다").isZero();
+        assertThat(r.inputTokens()).isZero();
+        assertThat(r.topScore()).isEqualTo(4.0);
+        assertThat(r.docs().get(0).getText()).startsWith("XA 타입이면?");
+        verify(rewriter, never()).nextQuery(any(), any(), any(), any(), any(), any());
+        verify(listener).onSearchRetry(2, 3);
+        ArgumentCaptor<HybridSearchService.SearchRequest> cap = ArgumentCaptor.forClass(HybridSearchService.SearchRequest.class);
+        verify(hybrid, times(2)).search(cap.capture());
+        HybridSearchService.SearchRequest second = cap.getAllValues().get(1);
+        assertThat(second.question()).isEqualTo("XA 타입이면?");
+        assertThat(second.searchQuestion()).isEqualTo("XA 타입이면?");
+        assertThat(second.keywordQuestion()).isEqualTo("XA 타입이면?");
+        assertThat(second.allowExpansion()).isFalse();
+    }
+
+    @Test
+    @DisplayName("원문도 낮으면 그 다음 회차부터 평소처럼 LLM 의 새 검색어로 간다 — 원문 시험은 한 번뿐이고 총 횟수 상한을 지킨다")
+    void rawTrialIsOnceAndThenTheLlmRewriterTakesOver() {
+        scores(Map.of("독립화", new double[]{-1}, "원문", new double[]{-1}, "새 표현", new double[]{-1}, "또", new double[]{-1}));
+        nextQueries("새 표현", "또");
+
+        SearchLoopService.Result r = loop.run(condensedParams("독립화", "원문"));
+
+        assertThat(r.attempts()).isEqualTo(3);
+        assertThat(r.queries()).containsExactly("독립화", "원문", "새 표현");
+        assertThat(r.rewriteCalls()).isEqualTo(1);
+        verify(hybrid, times(3)).search(any());
+    }
+
+    @Test
+    @DisplayName("독립화한 검색어의 점수가 문턱 이상이면 원문을 시험하지 않는다")
+    void noRawTrialWhenTheCondensedQueryClearsTheThreshold() {
+        scores(Map.of("독립화", new double[]{2.0}));
+
+        SearchLoopService.Result r = loop.run(condensedParams("독립화", "원문"));
+
+        assertThat(r.attempts()).isEqualTo(1);
+        verify(hybrid, times(1)).search(any());
+    }
+
+    @Test
+    @DisplayName("원문이 첫 검색어와 같거나 비어 있으면 원문 시험을 건너뛰고 새 검색어로 간다")
+    void rawTrialSkippedWhenThereIsNothingNewToTry() {
+        scores(Map.of("같은", new double[]{-1}, "새", new double[]{5.0}));
+        nextQueries("새");
+
+        SearchLoopService.Result same = loop.run(condensedParams("같은", "같은"));
+        assertThat(same.queries()).containsExactly("같은", "새");
+        assertThat(same.rewriteCalls()).isEqualTo(1);
+
+        nextQueries("새");
+        SearchLoopService.Result blank = loop.run(condensedParams("같은", "  "));
+        assertThat(blank.queries()).containsExactly("같은", "새");
+    }
+
+    @Test
+    @DisplayName("상한이 1 이면 원문 시험도 하지 않는다 — 검증 실패 재시도(allowRewrite=false)에서 호출 수가 곱해지지 않는다")
+    void noRawTrialWhenRewritingIsNotAllowed() {
+        scores(Map.of("독립화", new double[]{-1}));
+
+        SearchLoopService.Params p = new SearchLoopService.Params(
+                request("독립화"), "t1", Locale.KOREAN, "원문", CUT, false, listener, "원문");
+        SearchLoopService.Result r = loop.run(p);
+
+        assertThat(r.attempts()).isEqualTo(1);
+        verify(hybrid, times(1)).search(any());
+    }
+
     @Test
     @DisplayName("회차를 합칠 때 같은 청크는 점수 최댓값으로 남고 점수순으로 잘린다 — 재검색이 빗나가도 첫 결과를 잃지 않는다")
     void mergesRoundsByMaxScoreAndSortsByScore() {

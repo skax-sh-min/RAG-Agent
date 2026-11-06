@@ -62,7 +62,13 @@ public class SearchLoopService {
      *                     최악의 호출 수가 곱해지지 않는다
      */
     public record Params(HybridSearchService.SearchRequest first, String threadId, Locale locale, String question,
-                         int cut, boolean allowRewrite, GraphListener listener) {}
+                         int cut, boolean allowRewrite, GraphListener listener, String rawFallback) {
+        /** 첫 검색어가 독립화된 것이 아닌 일반 호출 — 원문 되돌리기 없이 LLM 의 새 검색어만 쓴다. */
+        public Params(HybridSearchService.SearchRequest first, String threadId, Locale locale, String question,
+                      int cut, boolean allowRewrite, GraphListener listener) {
+            this(first, threadId, locale, question, cut, allowRewrite, listener, null);
+        }
+    }
 
     /**
      * @param docs        합쳐서 자른 최종 문서(점수순). 첫 회차에서 리랭커가 장애면 {@code null}
@@ -149,6 +155,18 @@ public class SearchLoopService {
 
             // 종료 — 문턱 이상이거나 횟수를 다 썼다. 점수를 못 얻은(NaN) 일은 없다: 리랭커는 항목이 하나도 없으면 장애로 던진다.
             if (!(roundTop < minScore) || attempts >= maxAttempts) break;
+
+            // 첫 검색어가 후속 질문의 독립화(재작성)였다면, 점수가 낮을 때 가장 먼저 의심할 것은 그 재작성이다 — 앞 질문을 끌어와
+            // 주제가 어긋났을 수 있다. 사용자가 실제로 친 원문을 LLM 호출 없이 먼저 한 번 시험한다. 원문이 이미 쓴 검색어이거나
+            // 비어 있으면 건너뛰고 평소의 새 검색어로 간다.
+            String raw = attempts == 1 && p.rawFallback() != null && !p.rawFallback().isBlank() ? p.rawFallback().strip() : null;
+            if (raw != null && !used.contains(raw)) {
+                used.add(raw);
+                p.listener().onSearchRetry(attempts + 1, maxAttempts);
+                req = new HybridSearchService.SearchRequest(req.userId(), req.version(), raw, raw, raw,
+                        req.selectedTags(), req.excludedDocIds(), Optional.empty(), req.candidateK(), false);
+                continue;
+            }
 
             Optional<SearchQueryRewriter.Next> next = rewriter.nextQuery(req.userId(), p.threadId(), p.question(),
                     used, ranked.stream().map(CrossEncoderReranker.Ranked::doc).toList(), p.locale());

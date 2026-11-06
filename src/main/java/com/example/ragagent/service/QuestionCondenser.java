@@ -161,6 +161,13 @@ public class QuestionCondenser {
                         threadId, question);
                 return Optional.empty();
             }
+            if (repeatsPreviousQuestion(rewritten, material)) {
+                // 주제를 바꾼 질문을 앞 질문으로 "되돌려" 쓴 실패다(측정에서 가장 흔한 오류 모드) — 이 검색어는 사용자가 지금 묻지 않은
+                // 것을 찾는다. 원문으로 검색하는 편이 언제나 낫다.
+                log.info("[CONDENSE] 재작성이 앞 질문과 같아 버린다 — 원문으로 검색한다 thread={} 원문=[{}] 재작성=[{}]",
+                        threadId, question, rewritten);
+                return Optional.empty();
+            }
             log.info("[CONDENSE] 짧은 후속 질문 독립화 thread={} 원문=[{}] 검색어=[{}]",
                     threadId, question, rewritten);
             return Optional.of(new Condensed(rewritten, result.inputTokens(), result.outputTokens()));
@@ -346,18 +353,47 @@ public class QuestionCondenser {
         return String.join("\n", lines);
     }
 
+    /** 프롬프트의 블록 표지({@code [PREVIOUS_QUESTIONS]} 등)를 모델이 출력 머리에 그대로 따라 쓰는 경우. */
+    private static final java.util.regex.Pattern LEADING_BLOCK_LABEL =
+            java.util.regex.Pattern.compile("^(?:\\[/?(?:PREVIOUS_QUESTIONS|USER_QUESTION)]\\s*)+");
+
+    /** 질문을 다시 쓴 것이 아니라 사용자에게 말을 거는 응답("…질문하셨습니다", "구체적으로 질문해 주시겠어요?") — 검색어가 될 수 없다. */
+    private static final java.util.regex.Pattern ADDRESSES_THE_USER = java.util.regex.Pattern.compile(
+            "질문하셨|질문하시|질문해 ?주|말씀해 ?주|말씀하시|알려 ?주세요|알려 ?주시|(?i:could you|please (?:clarify|specify)|you asked)");
+
+    /**
+     * 재작성이 재료의 이전 질문 중 하나와 (공백·문장부호·대소문자를 무시하고) 같은가. 원문과 같은 경우는 호출부가 먼저 걸러낸다 —
+     * 여기서 걸리는 것은 "원문이 아닌데 앞 질문 그대로"인 경우다.
+     */
+    static boolean repeatsPreviousQuestion(String rewritten, String material) {
+        if (rewritten == null || material == null || material.isBlank()) return false;
+        String target = comparable(rewritten);
+        if (target.isEmpty()) return false;
+        for (String line : material.split("\n")) {
+            String prev = line.startsWith("- ") ? line.substring(2) : line;
+            if (target.equals(comparable(prev))) return true;
+        }
+        return false;
+    }
+
+    private static String comparable(String s) {
+        return s.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
+    }
+
     /**
      * 한 줄만 남긴다. 모델이 머리말이나 따옴표를 붙이는 경우가 흔해서, 첫 번째 비어 있지 않은 줄을
      * 취한 뒤 감싼 따옴표를 벗긴다. 길이를 넘기면 <b>잘라 쓰지 않고 버린다</b>
-     * ({@link #MAX_CONDENSED_CHARS} 참고).
+     * ({@link #MAX_CONDENSED_CHARS} 참고). 프롬프트 블록 표지를 따라 쓴 머리는 벗기고, 질문이 아니라 사용자에게 말을 거는
+     * 응답은 버린다.
      */
     static String parse(String response) {
         if (response == null || response.isBlank()) return null;
         String line = response.lines()
-                .map(String::strip)
+                .map(s -> LEADING_BLOCK_LABEL.matcher(s.strip()).replaceFirst("").strip())
                 .filter(s -> !s.isEmpty())
                 .findFirst()
                 .orElse("");
+        if (ADDRESSES_THE_USER.matcher(line).find()) return null;
         // 감싼 따옴표만 벗긴다 — 안쪽 따옴표는 질문의 일부일 수 있다.
         if (line.length() >= 2
                 && ((line.startsWith("\"") && line.endsWith("\""))
