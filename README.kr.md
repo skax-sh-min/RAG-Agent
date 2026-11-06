@@ -204,6 +204,9 @@ container system stop
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` |
 | `RERANK_TIMEOUT_SECONDS` | `15` | 초 | 재순위 한 번의 읽기 타임아웃 (`RERANK_CONNECT_TIMEOUT_SECONDS` 5, `RERANK_MAX_CONCURRENT` 2) |
 | `SEARCH_RERANK_MIN_SCORE` | `0.0` | -20 ~ 20 | 재검색 문턱(핫, 교차 인코더가 켜져 있을 때만). 한 턴의 첫 검색에서 리랭크 1위 점수가 이 값 미만이면 LLM 이 새 검색어를 만들어 다시 찾는다. 모델의 원점수이고 `bge-reranker-v2-m3` 으로 잰 값 |
+| `MCP_SERVER_ENABLED` | `false` | true/false | 읽기 전용 Tool 을 MCP 서버(`/api/v1/mcp`, STATELESS streamable HTTP, API 키 필수)로 공개한다. 꺼져 있으면 엔드포인트 자체가 없다. 재기동 필요 |
+| `MCP_READ_API_KEY` / `MCP_ADMIN_API_KEY` | _(비어 있음)_ | 비밀, 16자 이상 | MCP 키(`Authorization: Bearer <키>` 또는 `X-API-Key`). 읽기 키는 관리자 Tool(`getDocument`, `reports.open`, `usage.summary`)을 뺀 전부를 부를 수 있다. 비운 키는 그 역할을 끄고, 둘 다 비면 모든 요청이 401 |
+| `RATE_LIMIT_MCP_PER_MINUTE` | `60` | 회 | MCP 엔드포인트의 IP 별 버킷(키 추측도 이 한도에 걸린다) |
 | `SEARCH_MAX_ATTEMPTS` | `3` | 1 ~ 5 | 질문 하나가 돌릴 수 있는 최대 검색 횟수(첫 검색 포함, 핫). `1` = 다시 찾지 않음 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그 선택 시 후보 풀 확대 — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이고, 기본값은 의도적으로 그 절반이다. BM25(`chunk_fts`, `tokenize='trigram'`)는 **같은 문자 체계 안에서만 동작하는 리터럴 매처**라 한글 질문은 영문으로 쓰인 청크와 trigram이 하나도 겹치지 않아 그 청크가 키워드 축 지원을 전혀 못 받는 반면, 흔한 토큰 하나가 겹친 무관 청크는 그 축에서 1~2위를 차지한다. 단일 언어 코퍼스이고 파일명·오류코드·API명 같은 정확 매칭이 의미 검색보다 중요하면 `1.0` 쪽으로 올릴 것. `SEARCH_HYBRID_ENABLED=false`면 무영향 |

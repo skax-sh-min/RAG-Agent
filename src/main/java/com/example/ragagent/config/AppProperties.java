@@ -433,8 +433,26 @@ public record AppProperties(
             int uploadPerMinute,
             int syncPerMinute,
             int imagePerMinute,
-            int defaultPerMinute
-    ) {}
+            int defaultPerMinute,
+            Integer mcpPerMinute        // MCP 엔드포인트(/api/v1/mcp) 전용 버킷. 미설정/0 이하면 60 — chat 한도를 우회하지 않게 default 버킷에 넣지 않는다
+    ) {
+        /** 바인딩에 쓰는 정식 생성자 — 생성자가 둘이라 스프링이 고르지 못한다. */
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public RateLimitConfig {
+        }
+
+        /** MCP 한도를 모르는 호출부(테스트)를 위한 축약 — 기본값이 적용된다. */
+        public RateLimitConfig(boolean enabled, int chatPerMinute, int uploadPerMinute, int syncPerMinute,
+                               int imagePerMinute, int defaultPerMinute) {
+            this(enabled, chatPerMinute, uploadPerMinute, syncPerMinute, imagePerMinute, defaultPerMinute, null);
+        }
+
+        public static final int DEFAULT_MCP_PER_MINUTE = 60;
+
+        public int mcpLimit() {
+            return (mcpPerMinute == null || mcpPerMinute <= 0) ? DEFAULT_MCP_PER_MINUTE : mcpPerMinute;
+        }
+    }
 
     public record AuditConfig(
             boolean enabled,

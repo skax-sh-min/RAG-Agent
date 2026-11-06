@@ -1006,9 +1006,9 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 ### Phase 2. MCP Server 구축
 
 - **작업**
-  - `spring-ai-starter-mcp-server-webmvc` 추가, §4.2 설정.
-  - 전용 `SecurityFilterChain`, `McpApiKeyFilter`, `NoAuthAutoLoginFilter` 통과 경로, `mcp` 레이트리밋 버킷, 감사 로그.
-  - 외부 클라이언트로 연결 확인. 공개 Tool은 읽기 위주로 시작한다.
+  - `spring-ai-starter-mcp-server-webmvc` 추가, §4.2 설정. **완료(2026-11-06)** — 기본 꺼짐(`MCP_SERVER_ENABLED`).
+  - 전용 `SecurityFilterChain`, `McpApiKeyFilter`, `NoAuthAutoLoginFilter` 통과 경로, `mcp` 레이트리밋 버킷, 감사 로그. **완료(2026-11-06)** — 감사는 인증 실패(`mcp.auth.denied`)와 `ToolGuard` 의 `tool.call`/`tool.denied`.
+  - 외부 클라이언트로 연결 확인. 공개 Tool은 읽기 위주로 시작한다. **일부(2026-11-06)** — 직접 만든 JSON-RPC 클라이언트로 `initialize`·`tools/list`·`tools/call` 를 확인했다. MCP Inspector / Claude Code 는 미확인.
 - **난이도**: 중.
 - **위험**: no-auth 모드에서 무인증 노출. 스타터 추가로 자동 구성이 늘어 기존 빈과 충돌.
 - **완료 기준**

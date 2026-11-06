@@ -81,6 +81,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     String policyFor(HttpServletRequest req) {
         String path = req.getRequestURI();
         boolean write = isWrite(req.getMethod());
+        // MCP 는 chat 도 default 도 아닌 전용 버킷이다 — 안 그러면 /api/v1/** 라서 default 로 떨어져 한도가 따로 없는 것과 같다.
+        if (path.equals("/api/v1/mcp") || path.startsWith("/api/v1/mcp/")) return "mcp";
         if (path.contains("/chat")) return "chat";
         if (write && path.contains("/documents/sync")) return "sync";
         if (write && isFileUpload(path)) return "upload";
@@ -118,6 +120,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
             case "upload" -> cfg.uploadPerMinute();
             case "sync"   -> cfg.syncPerMinute();
             case "image"  -> cfg.imagePerMinute();
+            case "mcp"    -> cfg.mcpLimit();
             default       -> cfg.defaultPerMinute();
         };
     }

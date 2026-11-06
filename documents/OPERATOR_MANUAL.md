@@ -246,6 +246,9 @@ copy .env.example .env
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` (llama-server 는 무시한다) |
 | `RERANK_CONNECT_TIMEOUT_SECONDS` / `RERANK_TIMEOUT_SECONDS` / `RERANK_MAX_CONCURRENT` | `5` / `15` / `2` | 초 / 초 / 개 | 연결 타임아웃 / 한 호출의 읽기 타임아웃 / 동시에 나가는 호출 수 |
 | `SEARCH_RERANK_MIN_SCORE` | `0.0` | -20 ~ 20 | **재검색 문턱**(핫, 교차 인코더가 켜져 있을 때만). 한 턴의 **첫** 검색에서 리랭크 1위 점수가 이 값 미만이면 LLM 이 새 검색어를 하나 만들어 다시 찾는다(검증 실패 재시도에서는 돌지 않는다). 점수는 모델의 원점수라 확률이 아니고 음수도 나오며, `bge-reranker-v2-m3` 으로 잰 값이라 모델을 바꾸면 다시 잰다. 재검색을 다 하고도 미만이면 답변 프롬프트의 `[경고]` 에 "관련도가 낮다"는 문장이 실린다 |
+| `MCP_SERVER_ENABLED` | `false` | true/false | **MCP 서버**(읽기 전용 Tool 공개, §MCP 서버) 켜기. 꺼져 있으면 엔드포인트·보안 체인·필터가 모두 없다. 재기동 필요 |
+| `MCP_READ_API_KEY` / `MCP_ADMIN_API_KEY` | _(비어 있음)_ | 비밀, 16자 이상 | MCP API 키. **읽기 키**는 `getDocument` · `queryCatalog` 의 `reports.open`/`usage.summary` 를 뺀 Tool, **관리자 키**는 전부. 서로 달라야 하고, 짧거나 같으면 기동이 실패한다. 비운 키는 그 역할을 끄며 둘 다 비면 모든 요청이 401 |
+| `RATE_LIMIT_MCP_PER_MINUTE` | `60` | 회 | MCP 엔드포인트 전용 IP 별 버킷. `/api/v1/**` 라서 두면 default(120)로 떨어지는 것을 막고, 키 추측 시도를 401 이전에 센다 |
 | `SEARCH_MAX_ATTEMPTS` | `3` | 1 ~ 5 | 질문 하나가 돌릴 수 있는 **최대 검색 횟수**(첫 검색 포함, 핫). `1` = 다시 찾지 않는다. 검색이 하나 늘 때마다 LLM 한 번(새 검색어)과 리랭크 한 번이 더 들고, 점수가 낮은 턴에서만 돈다 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이며, 기본값은 그 절반이다(근거는 [§7.8](#78-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)). `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
@@ -3739,3 +3742,24 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] (chroma) `data/chroma` 또는 `chroma_data` 볼륨 초기화 완료
 - [ ] 재기동 후 `/setup` 또는 로그인 경로 정상 확인
 - [ ] 문서 재업로드/동기화 후 태그 엄격 필터 동작 확인
+
+## MCP 서버
+
+외부 LLM 클라이언트(Claude Code, MCP Inspector 등)가 앱의 **읽기 전용 Tool 여섯**(`searchKnowledge` · `findRelatedDocuments` · `getChunkContext` · `queryCatalog` · `generateDiff` · `getDocument`)을 부를 수 있게 하는 기능이다. 쓰기 Tool 은 없다([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3).
+
+**켜기.** `MCP_SERVER_ENABLED=true` 와 키를 준다(키는 16자 이상, 읽기와 관리자가 달라야 한다). 재기동하면 `POST /api/v1/mcp`(STATELESS streamable HTTP)가 생긴다. 로그에 `[MCP] 서버가 켜져 있다 …` 가 한 줄 찍힌다. 키를 하나도 안 주면 켜져 있어도 모든 요청이 401 이다(`[MCP] … API 키가 없다` 경고).
+
+**인증.** `Authorization: Bearer <키>` 또는 `X-API-Key: <키>`. 어느 **보안 모드**(전체 인증 · management-only · 평문 no-auth)에서도, 그리고 `/setup` 으로 관리자를 만들기 전에도 같다 — 이 경로는 모드별 체인이 아니라 전용 체인이 받는다. 세션·쿠키·CSRF 토큰은 쓰지 않는다. 키가 없거나 틀리면 401(`WWW-Authenticate: Bearer`), IP 별 분당 `RATE_LIMIT_MCP_PER_MINUTE` 회를 넘으면 429 다.
+
+**권한.** 읽기 키로 `getDocument` 를 부르거나 `queryCatalog` 의 `reports.open`/`usage.summary` 를 부르면 `isError: true` 와 "권한이 없습니다" 가 돌아온다. **`tools/list` 는 호출자별로 거르지 못한다** — 읽기 키에게도 `getDocument` 가 목록에 보이고 호출할 때 거부된다.
+
+**확인.** 앱을 띄운 뒤(키는 본인 값으로):
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/mcp \
+  -H "Authorization: Bearer $MCP_READ_API_KEY" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+**주의.** 키는 평문 비밀이다 — `.env` 를 저장소에 올리지 말 것. 키를 바꾸려면 재기동한다(`/settings` 로는 바꿀 수 없다). 외부에 공개할 때는 HTTPS 로 종단하고(리버스 프록시) `RATE_LIMIT_MCP_PER_MINUTE` 를 환경에 맞춘다. 이 서버는 읽기 전용이지만 `searchKnowledge`·`getChunkContext` 는 **문서 본문**을 돌려주므로, 읽기 키를 가진 사람은 게스트가 채팅으로 볼 수 있는 범위와 같은 내용을 볼 수 있다고 생각하면 된다.

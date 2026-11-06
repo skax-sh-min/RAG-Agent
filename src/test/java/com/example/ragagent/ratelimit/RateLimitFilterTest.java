@@ -46,6 +46,46 @@ class RateLimitFilterTest {
     }
 
     @Test
+    @DisplayName("MCP 엔드포인트(/api/v1/mcp 와 하위 경로)는 전용 mcp 버킷이다 — chat 도 default 도 아니다")
+    void mcpHasItsOwnBucket() {
+        assertThat(filter.policyFor(reqFor("POST", "/api/v1/mcp"))).isEqualTo("mcp");
+        assertThat(filter.policyFor(reqFor("GET", "/api/v1/mcp"))).isEqualTo("mcp");
+        assertThat(filter.policyFor(reqFor("POST", "/api/v1/mcp/sub"))).isEqualTo("mcp");
+        // 이름만 비슷한 경로는 아니다
+        assertThat(filter.policyFor(reqFor("GET", "/api/v1/mcpx"))).isEqualTo("default");
+        assertThat(filter.policyFor(reqFor("GET", "/api/v1/documents"))).isEqualTo("default");
+    }
+
+    @Test
+    @DisplayName("mcp 한도는 mcpPerMinute — 미설정·0 이하면 60, chat 한도를 따라가지 않는다")
+    void mcpLimitIsIndependent() {
+        AppProperties.RateLimitConfig unset = cfg(true, 5, 10, 2, 300, 120);
+        assertThat(filter.limitFor(unset, "mcp")).isEqualTo(60);
+        assertThat(filter.limitFor(unset, "chat")).isEqualTo(5);
+        assertThat(filter.limitFor(new AppProperties.RateLimitConfig(true, 5, 10, 2, 300, 120, 0), "mcp")).isEqualTo(60);
+        assertThat(filter.limitFor(new AppProperties.RateLimitConfig(true, 5, 10, 2, 300, 120, -3), "mcp")).isEqualTo(60);
+        assertThat(filter.limitFor(new AppProperties.RateLimitConfig(true, 5, 10, 2, 300, 120, 7), "mcp")).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("mcp 버킷이 소진돼도 chat 버킷은 그대로다 — 같은 IP 의 키 추측이 채팅을 막지 않는다")
+    void mcpBucketDoesNotSpendTheChatBudget() throws Exception {
+        when(appProperties.rateLimitSafe()).thenReturn(new AppProperties.RateLimitConfig(true, 60, 10, 2, 300, 120, 2));
+        for (int i = 0; i < 2; i++) {
+            MockHttpServletResponse ok = new MockHttpServletResponse();
+            filter.doFilterInternal(reqFor("POST", "/api/v1/mcp"), ok, mock(FilterChain.class));
+            assertThat(ok.getStatus()).isEqualTo(200);
+        }
+        MockHttpServletResponse limited = new MockHttpServletResponse();
+        filter.doFilterInternal(reqFor("POST", "/api/v1/mcp"), limited, mock(FilterChain.class));
+        assertThat(limited.getStatus()).isEqualTo(429);
+
+        MockHttpServletResponse chat = new MockHttpServletResponse();
+        filter.doFilterInternal(chatRequest("127.0.0.1"), chat, mock(FilterChain.class));
+        assertThat(chat.getStatus()).isEqualTo(200);
+    }
+
+    @Test
     @DisplayName("policyFor — 경로별 정책 분류")
     void policyFor_routes_correctly() {
         assertThat(filter.policyFor(reqFor("/ui/chat"))).isEqualTo("chat");

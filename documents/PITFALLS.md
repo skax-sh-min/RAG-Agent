@@ -510,6 +510,21 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **`DocumentExportService.reassembledText()`** — 내보내기와 같은 재조립(overlap 되돌리기)과 결정적 후처리까지만 하고 렌더는 하지 않는다. 문서 전체를 메모리에 올리므로 `getDocument` 는 ADMIN 전용이고 8,000자씩 구간으로만 돌려준다(오래 걸리는 조회를 Tool 로 내지 않는다는 DB 연결 1개 제약, 설계서 §2.2).
 - **하지 않은 것(1b 에서 미룸).** `KeywordSearchRepository.findMentions()` — 소비자(`analyzeImpact`)가 Phase 4 라 그때 만든다. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` — 워크플로(Phase 4)가 있어야 한다. `ToolCatalog.mcpExposedTools()` — Phase 2. `ChunkReranker` 인터페이스 — `KnowledgeSearchTool` 이 지금은 `CrossEncoderReranker` 를 직접 쓴다(두 번째 구현이 필요해질 때). 전송(채팅 `TOOL` 노드·MCP)에 연결하지 않았으므로 **이 Tool 들은 아직 어떤 요청에서도 불리지 않는다.**
 
+### MCP 서버 (Phase 2)
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).
+
+- **전용 체인이 없으면 무인증으로 열린다.** `/api/v1/**` 는 모드별 체인이 정한다: 평문 no-auth 는 `anyRequest().permitAll()`, 세션 체인은 CSRF 토큰 + 로그인 리다이렉트. 그래서 `@Order(1)` + `securityMatcher("/api/v1/mcp", "/api/v1/mcp/**")` 의 체인이 먼저 이 경로를 가져간다. 네 모드 조합(전체 인증 · management-only · no-auth · **관리자 없는 no-auth**)에서 같은 계약을 `McpSecurityModesBase` 한 벌이 고정한다.
+- **`NoAuthAutoLoginFilter` 는 서블릿 필터로도 돈다.** 체인에 넣지 않아도 `@Component` 라 모든 요청 뒤에 실행되어, 관리자가 없으면 `/setup` 으로 302 하고 있으면 키로 만든 principal 을 게스트로 덮어쓴다. `isPassThrough` 에 `/api/v1/mcp` 를 넣었다 — `NoAuthNoAdminMcpSecurityTest` 가 같은 상태에서 일반 경로는 302 가 되고 MCP 는 안 된다는 **대조군**까지 본다(필터가 안 돌아서 통과한 것이 아님을 보이려고).
+- **`Filter` 빈은 부트가 모든 URL 에 등록한다.** `McpApiKeyFilter` 를 `@Bean` 으로 만들면 앱 전체가 401 이 된다 — 체인 빈 메서드 안에서 `new` 한다. (기존 `RateLimitFilter` 는 빈이라 전역으로도 등록되지만 `OncePerRequestFilter` 가 두 번째 실행을 막는다.)
+- **레이트리밋은 키 확인보다 앞이다.** 뒤에 두면 401 은 이미 응답된 뒤라 키 추측이 세어지지 않는다. 앞이면 인증 전이라 `clientKey` 가 IP 로 떨어져 IP 별 버킷이 된다. `mcp` 정책을 따로 둔 이유도 같다 — `/api/v1/**` 라서 두면 `default`(120)로 떨어진다. `RateLimitConfig` 에 일곱째 컴포넌트(`mcpPerMinute`)가 생겨 호환 생성자(6개)와 `@ConstructorBinding` 이 붙었다.
+- **호출자는 요청 스레드의 `SecurityContext` 에서만 정한다.** `mcpExposedTools` 의 콜백(`CallerBound`)이 `McpApiKeyFilter.callerFromContext()` 로 호출자를 만들고 MCP SDK 가 넘기는 `ToolContext` 는 버린다 — 클라이언트가 보낸 값으로 호출자를 정하지 않는다. MCP 서블릿 서버가 Tool 을 요청 스레드에서 실행한다는 가정(설계서 §2.4)은 **앱을 띄워 `initialize → tools/list → tools/call` 로 확인했다**(읽기 키로 `getDocument` 거부, 관리자 키로 `usage.summary` 통과). 인증이 없거나 MCP 역할이 아니면 게스트다(권한이 모자란 쪽으로 실패).
+- **`tools/list` 는 호출자별로 거르지 못한다.** 정적 등록이라 읽기 키에게도 `getDocument` 가 보이고 호출할 때 `isError` 로 거부된다. 거르려면 서버를 호출자별로 따로 구성해야 하는데 STATELESS 한 서버로는 안 된다 — 알려진 한계로 둔다.
+- **키 설정은 기동 때 검증한다**: 16자 미만, 읽기·관리자 키 동일은 `IllegalStateException`. 둘 다 비면 켜져 있어도 모든 요청이 401 이고 경고가 한 줄 남는다(조용히 열리지 않는다). 키는 `AppProperties` 가 아니라 별도 `@ConfigurationProperties(app.mcp)` 레코드다 — 그쪽은 정식 생성자가 40개를 넘고, 이 값들은 `/settings` 로 고치는 비밀이 아니다. 비교는 SHA-256 다이제스트의 `MessageDigest.isEqual`(상수 시간), 어느 역할인지가 응답 시간으로 새지 않게 둘 다 비교한다.
+- **Jackson.** 스타터의 `mcpServerJsonMapper` 는 `defaultCandidate=false` 라 앱의 `JsonMapper` 를 밀어내지 않는다. `McpServerWiringTest.appJsonMapperKeepsItsSettingsWhenMcpIsEnabled` 가 켠 상태에서도 주입되는 매퍼의 `FAIL_ON_NULL_FOR_PRIMITIVES` 가 꺼져 있음을 고정한다(Jackson 3 의 기본값은 켬).
+- **슬라이스 테스트의 함정.** 가짜 컨트롤러(`FakeMcpController`)는 **최상위 클래스**여야 한다 — 테스트 클래스의 중첩 클래스는 부트의 `TestTypeExcludeFilter` 가 스캔에서 빼서 키가 맞아도 404 가 된다. `@WebMvcTest` 가 올리는 `ThreadContextResolver` 와 `WebConfig.chatClient` 때문에 `ThreadContextResolver`·`ChatModel` 목이 필요하다(기존 보안 테스트와 같다).
+- **아직 안 한 것.** MCP Inspector / Claude Code 로의 연결 확인(위의 왕복은 직접 만든 JSON-RPC 클라이언트다). 읽기 키와 관리자 키 각각의 사용량·감사 집계 화면. `mcp.client`(외부 MCP 서버 호출)는 외부 서버가 생길 때.
+
 ### `service/HybridSearchService.java`
 
 `RetrievalService.execute()` 의 검색부(축 실행 → RRF → 태그 필터 → 직전 시도 제외)를 **동작을 바꾸지 않고** 떼어 낸 것이다(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §2.1) — `searchKnowledge` Tool 과 채팅 검색 루프가 같은 후보 풀을 쓰게 하려는 첫 단계다. 코드는 스크립트로 원문 그대로 옮겼다.
