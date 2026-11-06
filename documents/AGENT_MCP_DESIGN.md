@@ -271,7 +271,7 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 | LM Studio는 형식이 틀린 tool 호출을 `content` 로 돌려준다. `tool_choice=required` 는 llama.cpp 엔진에서만 된다 | LM Studio 문서 | `[TOOL_REQUEST]`, `<tool_call>` 이 본문에 보이면 실패로 처리한다. `required` 에 의존하지 않는다. 실측에서는 지연도 16.8초로 컸다 |
 | LM Studio는 `chat_template_kwargs.enable_thinking` 을 무시하고 `reasoning_effort: none` 은 받는다 | 실측(부록 A.2) | 고치지 않고 알려진 제약으로 둔다. `application.properties` 주석에 남겼다 |
 | LM Studio에는 `/v1/rerank` 가 없다 | 실측 | 리랭커는 별도 `llama-server --reranking` 으로 돌린다 |
-| llama.cpp는 `--jinja` 가 있어야 Tool Calling이 되고, 병렬 호출은 기본 꺼짐이다 | llama.cpp 문서 | 운영 매뉴얼과 Phase 0 사전 조건에 넣는다 |
+| llama.cpp는 `--jinja` 가 있어야 Tool Calling이 되고, 병렬 호출은 기본 꺼짐이다 | llama.cpp 문서 | 운영 매뉴얼과 Phase 3 사전 평가의 사전 조건에 넣는다 |
 
 **선결 결함: 블로킹 호출의 `model` 누락.**
 
@@ -298,7 +298,7 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 
 ### 3.1 원칙
 
-- **Q&A에서 LLM에게 보이는 Tool은 4개(관리자 5개)다.** Tool 스키마는 입력 토큰을 쓰고, 소형 모델은 선택지가 많을수록 틀릴 가능성이 커진다. 실제 수치는 Phase 0에서 잰다.
+- **Q&A에서 LLM에게 보이는 Tool은 4개(관리자 5개)다.** Tool 스키마는 입력 토큰을 쓰고, 소형 모델은 선택지가 많을수록 틀릴 가능성이 커진다. 실제 수치는 Phase 3 직전의 사전 평가에서 잰다.
 - **인자는 짧은 평문만 받는다.** `version`, `userId` 는 인자에 없다. 서버가 정한다.
 - **결과는 짧게 돌려준다.** 행 수와 발췌 길이에 상한을 둔다(발췌 300자, 50행).
 - **호출자에 따라 목록을 거른다.** `ToolCatalog.forCaller(caller)` 가 권한 없는 Tool은 스키마조차 주지 않는다. 모든 Tool 메서드는 첫 줄에서 `ToolGuard` 를 지난다.
@@ -933,55 +933,59 @@ classDiagram
 
 ## 7. 개발 로드맵
 
-요청서의 Phase 1~5 앞에 **Phase 0** 을 더했다. `model` 누락이 측정을 흔들 수 있고, 측정 하네스가 이후 단계의 기준이 되기 때문이다. Phase 1은 Retriever와 Reranker가 들어가면서 커져 둘로 나눴다. 1a는 MCP와 무관하게 채팅 품질을 올리는 단계라 가장 먼저 효과가 난다. 완료 기준의 숫자는 일회성 실측을 근거로 한 제안값이다.
+요청서의 Phase 1~5 앞에 **Phase 0** 을 더했다. `model` 누락이 측정을 흔들 수 있고, 1a가 검색 코드를 옮기기 전에 기준선이 있어야 하기 때문이다. 측정 하네스 확장, 여러 청크 질문 골든셋, Tool 평가는 처음에는 Phase 0에 있었으나 필요한 단계로 옮겼다(2026-11-06). Phase 1은 Retriever와 Reranker가 들어가면서 커져 둘로 나눴다. 1a는 MCP와 무관하게 채팅 품질을 올리는 단계라 가장 먼저 효과가 난다. 완료 기준의 숫자는 일회성 실측을 근거로 한 제안값이다.
 
 | Phase | 내용 | 난이도 | 선행 |
 |---|---|---|---|
-| 0 | 선결 결함 수정, 측정 하네스 | 하 | 없음 |
+| 0 | 선결 결함 수정(완료), 검색 기준선 | 하 | 없음 |
 | 1a | Retriever + Reranker + 재검색 루프 | 중 | 0 |
 | 1b | Tool 계층 | 중 | 1a |
 | 2 | MCP Server | 중 | 1b |
-| 3 | Agent 도입(Tool 선택 1회) | 중 | 1b |
+| 3 | Agent 도입(Tool 선택 1회). 시작 전에 Tool 사전 평가 | 중 | 1b |
 | 4 | 영향도 분석, 문서 유지보수 | 상 | 1b |
 | 5 | 운영 적용 | 중 | 2, 3, 4 |
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-### Phase 0. 선결 결함과 측정 하네스
+### Phase 0. 선결 결함과 검색 기준선
+
+2026-11-06에 범위를 줄였다. 이후 단계가 실제로 의존하는 것만 남기고 나머지는 필요한 단계로 옮겼다.
 
 - **작업**
   - `model` 누락을 와이어 테스트로 확정하고 고친다. `ThinkingControlWireTest` 에 `model` 단언을 더한다. **완료(2026-11-06).**
-  - `SearchQualityEvaluationTest` 를 넓힌다. recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다.
-  - 여러 청크가 필요한 질문을 골든셋에 더한다. 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다.
-  - `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다.
-  - `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교한다.
-- **위험**: LM Studio에서는 생각이 꺼지지 않아 지연이 부푼다. 지연 기준은 llama-server에서 잰다.
+  - 현재 검색 기준선을 잰다. 코드를 바꾸지 않은 기존 `SearchQualityEvaluationTest`(골든셋 26건 + 후속 질문 21건)를 스크래치 DB 복사본에 돌려 recall@10, nDCG@10, 검색 중앙값 지연을 `SEARCH_EVALUATION.md` 에 남긴다. Phase 1a가 `HybridSearchService` 를 추출하기 **직전**에 한 번 한다. 기존 기록(2026-10-13)은 Spring AI 2.0 업그레이드(2026-11-05) 전의 값이라 새로 잰다.
+- **옮긴 항목** (결정 2026-11-06). 해당 단계가 오기 전에는 이 항목들이 막는 것이 없다.
+
+| 항목 | 옮긴 곳 | 이유 |
+|---|---|---|
+| `SearchQualityEvaluationTest` 확장: recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연 | Phase 1a 도중 | 리랭크 코드가 있어야 켬·끔을 잴 수 있고, 1a 완료 판정에 쓴다 |
+| 여러 청크가 필요한 질문 골든셋 | Phase 1a 끝, 리랭크를 켜기 전 | 지금 골든셋은 첫 정답 청크 하나만 봐서 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭커가 꺼져 있는 동안은 영향이 없다 |
+| `agent-eval/tool-gold.json`, `ToolCallingEvaluationTest` | Phase 3 직전 | Phase 3의 Tool 선택 방식을 정하는 데만 쓴다 |
+| 모델 비교(`gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it`) | Phase 3 직전 | 같다 |
+
+- **위험**: 기준선을 건너뛰면 1a에서 분리한 뒤 "결과가 분리 전과 같다"를 판정할 근거가 없다.
 - **완료 기준**
   - 블로킹 요청 본문의 `model` 이 설정값임을 테스트가 고정한다. **완료(2026-11-06).**
-  - 모델별 Tool 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록한다.
-  - 아래 판단을 내린다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다.
-
-| 측정 결과 (제안 기준) | Phase 3 방식 |
-|---|---|
-| 선택 정확도 90% 이상, 잘못된 우회 5% 이하, 형식 실패 5% 이하 | 네이티브 Tool Calling |
-| 그 미만이지만 JSON 판정은 안정적 | `ClassifierService` 와 같은 프롬프트 JSON으로 Tool 선택. 나머지 설계는 같다 |
-| 둘 다 불안정 | 로컬은 규칙 라우팅, Tool 선택만 상위 모델에 맡기는 안 검토 |
+  - 검색 기준선이 `SEARCH_EVALUATION.md` 에 기록돼 있다(1a 시작 직전).
 
 ### Phase 1a. Retriever + Reranker + 재검색 루프
 
 - **작업**
+  - **시작 직전**: Phase 0의 검색 기준선을 잰다.
   - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다.
   - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다.
   - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`searchRerankCandidatesSafe()`, `searchRerankTopKSafe()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
   - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다.
   - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다.
   - 운영 매뉴얼에 리랭크 서버 기동 방법을 넣는다.
+  - `SearchQualityEvaluationTest` 를 넓힌다(Phase 0에서 옮김). recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다.
+  - 여러 청크가 필요한 질문을 골든셋에 더한다(Phase 0에서 옮김). 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭크를 기본값으로 켜기 전에 끝낸다.
 - **난이도**: 중. 코드량보다 검색 회귀가 어렵다.
 - **위험**: 분리가 검색 동작을 흔든다. `AnswerPromptGoldenTest` 는 문서를 미리 넣어 돌기 때문에 이 회귀를 잡지 못한다. 청크 5개가 비교형 질문에 모자랄 수 있다.
 - **완료 기준**
-  - 리랭커가 꺼져 있으면 `execute` 를 타는 `Retrieval*Test` 가 수정 없이 통과하고 `SearchQualityEvaluationTest` 결과가 분리 전과 같다.
+  - 리랭커가 꺼져 있으면 `execute` 를 타는 `Retrieval*Test` 가 수정 없이 통과하고 `SearchQualityEvaluationTest` 결과가 분리 전 기준선(Phase 0)과 같다.
   - 켰을 때 앱 하네스에서 골든셋 recall@5가 끔 상태의 recall@10 이상이고, 후속 질문 recall@5가 0.85 이상이다(독립화와 큐레이션 축 포함).
-  - 여러 청크 질문의 답변 품질이 청크 10개일 때보다 낮아지지 않는다.
+  - 리랭크를 기본값으로 켜기 전에, 여러 청크 질문의 답변 품질이 청크 10개일 때보다 낮아지지 않는다.
   - 리랭크 서버 중단 주입에서 답변이 나오고 동작이 현재와 같다.
   - 턴당 검색 호출이 설정 상한을 넘지 않음을 테스트가 고정한다.
   - `search-top-k` 별 후보 수·최종 컷(§4.3 표)과 "후보 수 ≥ 최종 컷"을 단위 테스트가 고정하고, `/settings` 의 조회 전용 두 항목이 검색이 쓰는 값과 같음을 고정한다.
@@ -1014,6 +1018,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 ### Phase 3. Agent 도입
 
 - **작업**
+  - **사전 평가(구현 전, Phase 0에서 옮김).** `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다. `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교해 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록하고 아래 판단표로 방식을 정한다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다(부록 A.3). 그 실측이 어떤 서버에서 이뤄졌는지 기록이 LM Studio로 되어 있으므로 재측정 때 확인한다. 지연은 생각이 꺼지지 않는 서버에서는 부풀기 때문에 생각을 끌 수 있는 서버(llama-server)에서 잰다.
   - `ToolPlanService`, `ToolPlan`, `ToolDispatchService`, `TOOL` 노드, `AgentState` 컴포넌트(`toolPlan`, `caller`).
   - 두 진입점의 사전 단계에 Tool 계획 future 추가. 호출자는 요청 스레드에서 만든다.
   - `ThinkingSite.AGENT_PLAN`, `RoutedChatModel` 모드 생성자, `LlmRouter` 비차단 호출 경로와 미지원 기억.
@@ -1025,9 +1030,17 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 - **완료 기준**
   - 에이전트 꺼짐에서 기존 동작이 같고 `AnswerPromptGoldenTest` 가 바이트 단위로 같다.
   - `searchKnowledge` 또는 호출 없음이면 답변 프롬프트가 꺼짐과 같다.
-  - `ToolCallingEvaluationTest` 가 Phase 0 기준을 넘는다.
+  - `ToolCallingEvaluationTest` 가 사전 평가 판단표의 기준을 넘는다.
   - 고의 실패 주입(형식 오류, 400, 500, 타임아웃, 소진)에서 모두 답변이 나오고 프로바이더가 차단되지 않는다.
   - 턴 지연 중앙값 증가가 합의한 범위 안이다(제안: 1초 이내).
+
+**사전 평가 판단표** (구현 전에 Tool 선택 방식을 정한다)
+
+| 측정 결과 (제안 기준) | Phase 3 방식 |
+|---|---|
+| 선택 정확도 90% 이상, 잘못된 우회 5% 이하, 형식 실패 5% 이하 | 네이티브 Tool Calling |
+| 그 미만이지만 JSON 판정은 안정적 | `ClassifierService` 와 같은 프롬프트 JSON으로 Tool 선택. 나머지 설계는 같다 |
+| 둘 다 불안정 | 로컬은 규칙 라우팅, Tool 선택만 상위 모델에 맡기는 안 검토 |
 
 ### 범위에서 뺀 것: LLM 자율 Tool 루프
 
@@ -1104,7 +1117,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 |---|---|---|
 | 로컬 모델이 재검색을 스스로 결정하지 못함 | 확인됨 | 코드 주도 재검색(D1a). LLM은 새 검색어만 만든다 |
 | 로컬 모델의 충분 여부 판단이 치우침 | 확인됨 | 판단을 맡기지 않고 리랭커 점수를 쓴다 |
-| Tool 선택 품질 | 중간 | 실측 0.90. 49건 표본이라 Phase 0 측정, 세 갈래 판단표 |
+| Tool 선택 품질 | 중간 | 실측 0.90. 49건 표본이라 Phase 3 직전 사전 평가, 세 갈래 판단표 |
 | LM Studio에서 생각이 꺼지지 않아 호출마다 약 13초 | 중간 | 고치지 않기로 한 알려진 제약(§2.4). llama-server에서는 꺼진다 |
 | 형식이 틀린 호출이 `content` 로 샘 | 낮음 | 실측 0건. 본문 패턴 검사, `RETRIEVAL` |
 | 서버가 `tools` 를 거부하면 프로바이더 차단 | 높음 | 비차단 경로, 미지원 기억 |
@@ -1116,7 +1129,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 | 리스크 | 심각도 | 대응 |
 |---|---|---|
 | 검색이 필요한데 Tool을 안 부름 | 낮음 | D3: 호출 없음은 `RETRIEVAL` 이라 손해가 없다 |
-| 문서 질문을 다른 Tool로 잘못 보냄 | 중간 | Phase 0 잘못된 우회율 기준. `sufficient=false` 면 문서 검색으로 내려간다 |
+| 문서 질문을 다른 Tool로 잘못 보냄 | 중간 | Phase 3 사전 평가의 잘못된 우회율 기준. `sufficient=false` 면 문서 검색으로 내려간다 |
 | 영향도·유지보수를 잘못 시작 | 중간 | 유지보수는 ADMIN만, 시작해도 코퍼스는 안 바뀐다. 영향도는 사용자별 동시 1건 |
 | 인자 환각 | 낮음 | `searchKnowledge` 인자는 쓰지 않고, 나머지는 서버가 검증한다 |
 | 문서 본문의 프롬프트 인젝션 | 중간 | Tool 계획 입력에 문서 본문이 없다. 워크플로 판정은 결과가 구조화되고 쓰기는 사람 승인 뒤다 |
@@ -1174,14 +1187,15 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 ### 지금 당장 해야 할 일
 
-1. `model` 누락을 확정하고 고친다. Agent와 무관하게 지금도 영향이 있다.
-2. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다.
-3. 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 특히 여러 청크가 필요한 질문과 큐레이션을 본다.
-4. 읽기 Tool과 `ToolGuard` 를 만든다.
+1. `model` 누락을 확정하고 고친다. Agent와 무관하게 지금도 영향이 있다. **완료(2026-11-06).**
+2. Phase 1a 시작 직전에 현재 검색 기준선을 잰다(기존 하네스 그대로).
+3. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다.
+4. 1a 도중에 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 리랭크를 켜기 전에 여러 청크가 필요한 질문과 큐레이션을 본다.
+5. 읽기 Tool과 `ToolGuard` 를 만든다.
 
 ### 나중에 해야 할 일
 
-1. Agent 켜기: Phase 0 판단에 따라 네이티브 또는 JSON 방식으로.
+1. Agent 켜기: Phase 3 직전의 Tool 사전 평가(Tool 골든셋, 모델 비교)로 네이티브 또는 JSON 방식을 정한 뒤.
 2. MCP Server 공개: 외부 클라이언트 수요가 확인된 뒤.
 3. 영향도 분석을 먼저, 유지보수를 그다음에. 영향도는 읽기뿐이라 위험이 낮고 전수 조회를 공유한다.
 4. 분류기를 Tool 선택으로 합치는 최적화: 측정 뒤.
@@ -1206,7 +1220,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 ## 부록 A. 실측 기록 (2026-11-05)
 
-앱 코드가 아니라 일회성 스크립트로 쟀다. 구현 뒤에는 Phase 0의 하네스로 다시 잰다.
+앱 코드가 아니라 일회성 스크립트로 쟀다. 구현 뒤에는 검색은 Phase 1a에서 넓힌 하네스로, Tool 선택은 Phase 3 직전의 사전 평가로 다시 잰다.
 
 **환경.** `gemma-4-E2B`(LM Studio, 컨텍스트 65,536), 임베딩 `bge-m3-Q4_K_M`(llama-server, CPU), 리랭커 `bge-reranker-v2-m3-Q8_0`(llama.cpp b11433, CPU), 벡터 sqlite-vec, `memory.db` 복사본 2,388청크, 골든셋 26건, 후속 질문 21건.
 

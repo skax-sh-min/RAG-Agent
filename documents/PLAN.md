@@ -66,7 +66,7 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 0 | **§6.33 0단계 — 선결 결함** (블로킹 호출의 `model` 누락) | 미착수. 코드 판독이라 요청 본문 확인부터 |
+| 0 | **§6.33 0단계 — 선결 결함** (블로킹 호출의 `model` 누락) | ✅ 2026-11-06 요청 본문으로 확인하고 `ModelPinningChatModel` 로 수정. 남은 것은 1a 직전의 검색 기준선 측정뿐 |
 | 1 | **§6.33 Agent·MCP 전환** — 검색 개선(Retriever + Reranker + 재검색) → Tool 계층 → MCP Server · Tool 선택 · 영향도·유지보수 | 2026-11-05 설계 완료, 구현 미착수. 일회성 측정에서 후속 질문 recall 0.67 → 0.90, LLM 에 넣는 청크 10개 → 5개. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
 | ~~1~~ | ~~**§10.11 좋아요 → 지식 제안 경유**~~ | ✅ 2026-09-02 완료 (5단계 + 정책 3건 전부) |
 | ~~1~~ | ~~**§10.12 짧은 후속 질문의 독립화**~~ | ✅ 2026-09-03 완료 (재작성 → 검색 축 셋 + 분류기, 진단 한 줄, 열린 항목 (b) 해소). 2026-10-13 측정: 원문보다 1~2건 낫고 주제 전환에서 손해 없음 — 대안(이어 붙이기 · 함께 검색 · 되풀이 가드) 대신 그대로 두기로 결정(열린 항목 (e) 닫음) |
@@ -694,11 +694,11 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 | 단계 | 내용 | 완료 기준 | 상태 |
 |---|---|---|---|
-| 0 | 선결 결함 · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔, 여러 청크 질문, Tool 골든셋) | 요청 본문의 `model` 을 테스트가 고정 · 모델별 Tool 측정을 `AGENT_EVALUATION.md` 에 기록 | 🟡 진행 — `model` 결함 확인·수정 완료(2026-11-06), 하네스 확장 미착수 |
-| 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🔵 미착수 |
+| 0 | 선결 결함 · 검색 기준선(1a 직전). 하네스 확장·여러 청크 골든셋은 1a로, Tool 골든셋·모델 비교는 3 직전으로 옮겼다(2026-11-06) | 요청 본문의 `model` 을 테스트가 고정 · 기준선을 `SEARCH_EVALUATION.md` 에 기록 | 🟡 진행 — `model` 결함 수정 완료, 기준선 측정은 1a 직전 |
+| 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔) · 리랭크를 켜기 전 여러 청크 질문 골든셋 | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🔵 미착수 |
 | 1b | Tool 계층(`ToolCatalog`, `ToolGuard`, 읽기 Tool) | 권한 거부 테스트 · `curated` 네임스페이스와 민감 테이블에 닿지 않음을 고정 | 🔵 미착수 |
 | 2 | MCP Server(전용 보안 체인 · API 키 · `mcp` 레이트리밋 버킷) | 세 보안 모드의 401·권한 거부를 고정 · 외부 클라이언트의 `tools/call` 동작 | 🔵 미착수 |
-| 3 | Tool 선택(`ToolPlanService`, `TOOL` 노드) | 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | 🔵 미착수 |
+| 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | 🔵 미착수 |
 | 4 | 영향도 워크플로, 그다음 유지보수 워크플로(`change_job`, `change_proposal`, `/admin` 대기열) | 승인 없이 코퍼스 불변 · 재인덱싱 뒤 MD 수정 유지 · 경합은 `stale` | 🔵 미착수 |
 | 5 | Tool 호출 추적 패널 · 매뉴얼 · 단계적 전환 | 2주 관측 · 설정 하나로 기존 경로 복귀 | 🔵 미착수 |
 
