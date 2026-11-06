@@ -48,9 +48,9 @@
         <appender-ref ref="AUDIT_FILE"/>
     </logger>
 
-    <root level="INFO">
+    <root level="WARN">
         <appender-ref ref="CONSOLE"/>
     </root>
 
-    <logger name="com.example.ragagent" level="DEBUG"/>
+    <logger name="com.example.ragagent" level="INFO"/>
 </configuration>
