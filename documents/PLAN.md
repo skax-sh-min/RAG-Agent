@@ -695,7 +695,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 | 단계 | 내용 | 완료 기준 | 상태 |
 |---|---|---|---|
 | 0 | 선결 결함 · 검색 기준선(1a 직전). 하네스 확장·여러 청크 골든셋은 1a로, Tool 골든셋·모델 비교는 3 직전으로 옮겼다(2026-11-06) | 요청 본문의 `model` 을 테스트가 고정 · 기준선을 `SEARCH_EVALUATION.md` 에 기록 | ✅ 완료 2026-11-06 — `model` 결함 수정, 검색 기준선 기록(`SEARCH_EVALUATION.md` §7) |
-| 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔) · 리랭크를 켜기 전 여러 청크 질문 골든셋 | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🔵 미착수 |
+| 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔) · 리랭크를 켜기 전 여러 청크 질문 골든셋 | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🟡 진행 — `HybridSearchService` 추출 완료(2026-11-06, 동작 불변 확인), 리랭커·재검색 미착수 |
 | 1b | Tool 계층(`ToolCatalog`, `ToolGuard`, 읽기 Tool) | 권한 거부 테스트 · `curated` 네임스페이스와 민감 테이블에 닿지 않음을 고정 | 🔵 미착수 |
 | 2 | MCP Server(전용 보안 체인 · API 키 · `mcp` 레이트리밋 버킷) | 세 보안 모드의 401·권한 거부를 고정 · 외부 클라이언트의 `tools/call` 동작 | 🔵 미착수 |
 | 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | 🔵 미착수 |

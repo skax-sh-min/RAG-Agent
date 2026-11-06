@@ -458,6 +458,15 @@ SQLite DB 의 정기 백업. 결정 셋:
 
 질의 시점 이미지 설명: `image_descriptions` 캐시를 보고 미스만 Vision 에 보낸다. `describeIfNeeded(paths, onProgress, skipRequested)` 는 진행 중 future 를 맹목적으로 join 하지 않고 `skipRequested` 를 150ms 마다 본다. 건너뛰기는 **기다리기만** 멈추고 이미 제출된 작업은 취소하지 않는다(try-with-resources 를 일부러 안 썼다 — `close()` 가 기다린다) — 결과는 다음 턴을 위해 캐시에 남는다.
 
+### `service/HybridSearchService.java`
+
+`RetrievalService.execute()` 의 검색부(축 실행 → RRF → 태그 필터 → 직전 시도 제외)를 **동작을 바꾸지 않고** 떼어 낸 것이다(Phase 1a, [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §2.1) — `searchKnowledge` Tool 과 채팅 검색 루프가 같은 후보 풀을 쓰게 하려는 첫 단계다. 코드는 스크립트로 원문 그대로 옮겼다.
+
+- **기존 테스트를 고치지 않으려고 남긴 것.** `RetrievalService` 의 생성자 시그니처(내부에서 `HybridSearchService` 를 직접 만든다 — 스프링용 생성자는 `HybridSearchService` 를 받고 `@Autowired` 가 붙어 있다), 정적 위임(`mergeRrf*`·`mergeRrfScored`·`docKey`·`gateCurated`·`matchedContentWords`), 인스턴스 위임(`shouldExpand`·`filterByTags`·`withStoredText`), 그리고 **`RrfResult`·`RrfMetrics` 레코드**. 레코드는 위임할 수 없어(테스트가 `RetrievalService.RrfResult` 로 부른다) 새 클래스가 거꾸로 `RetrievalService` 의 타입을 쓴다. 테스트를 고치는 단계가 오면 레코드를 옮긴다.
+- **융합 진단의 소실.** `search()` 가 융합 뒤 태그 필터·제외에서 예외를 던지면 `SearchResult` 가 돌아오지 않아 융합 진단(`RrfMetrics`)을 잃고 폴백 경로로 간다. 옛 코드는 융합 직후 진단을 변수에 담아 뒀다. 두 단계가 사실상 예외를 던지지 않는 순수 함수라 두었다.
+- **핫 설정은 호출마다 읽는다.** 하이브리드 켬·RRF k·가중치·큐레이션 켬/가중치는 `search()` 가 `props.xxxSafe()` 로 읽는다(옛 코드는 `execute()` 맨 앞에서 한 번 읽었다 — 한 턴 안에서 값이 바뀌는 경우는 없다고 본다). `candidateK` 는 `RetrievalService` 가 계산해 요청에 싣는다.
+- **회귀 판정.** 질의 확장을 켠 골든셋은 실행마다 흔들린다(arch-11 이 놓침·1위·8위). 추출 전후는 **확장을 끈 골든셋의 케이스별 순위와 후속 질문 raw·concat 순위**로 비교한다 — [SEARCH_EVALUATION §7.4](SEARCH_EVALUATION.md).
+
 ### `service/RetrievalService.java`
 
 배치 MultiQuery 검색 → RRF 융합.
