@@ -30,8 +30,9 @@
 | 재검색 주도 | 코드가 리랭커 점수로 판단, LLM은 새 검색어만 생성. 최대 3회 |
 | 적용 범위 | 새 응답 모드 없이 S/N/C 공통 검색 경로에 적용. `/settings` 로 끌 수 있고 C 모드는 그대로 둔다 |
 | 리랭커 | 교차 인코더(`bge-reranker-v2-m3`)를 `llama-server --reranking` 으로 운영 |
+| 리랭크 후보 수·최종 컷 | `search-top-k` 하나만 편집한다. 후보 수 = `search-top-k × 2`, 최종 컷 = `max(5, ⌈search-top-k ÷ 2⌉)` 로 파생하고 `/settings` 에서 조회 전용으로 보인다(§4.3, 2026-11-06) |
 
-**선결 결함 (Phase 0에서 먼저 처리).** 블로킹 LLM 호출의 요청 본문에 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나가는 것으로 보인다. 자세한 내용은 §2.4.
+**선결 결함 (Phase 0에서 먼저 처리).** 블로킹 LLM 호출의 요청 본문에 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나갔다. 2026-11-06 요청 본문으로 확인했고 `ModelPinningChatModel` 로 고쳤다. 자세한 내용은 §2.4.
 
 **알려진 제약.** llama-server와 달리 LM Studio에서는 앱의 "생각 끔"이 듣지 않는다. 고치지 않기로 했다(운영 결정). 이 문서의 LLM 호출 지연은 생각을 끈 값이므로 LM Studio에서는 더 걸린다(§2.4).
 
@@ -277,9 +278,10 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 - `OpenAiChatOptions.builder().temperature(..).maxTokens(..).build().getModel()` 은 `gpt-5-mini` 를 돌려준다(`jshell` 로 실행 확인).
 - `OpenAiChatModel.buildRequestPrompt` 는 프롬프트 옵션이 null일 때만 기본 옵션을 쓰고 병합하지 않는다(바이트코드 확인).
 - 앱에서 채팅 옵션에 `.model()` 을 싣는 자리는 `LlmConfig:175, :187`, `AnswerStreamer:102` 뿐이다. `ClassifierService:97` 같은 블로킹 호출부는 싣지 않는다.
-- 따라서 분류, 검증, 독립화 등 블로킹 호출은 `gpt-5-mini` 로 나가는 것으로 읽힌다. **요청 본문을 직접 본 것은 아니다.**
+- 따라서 분류, 검증, 독립화 등 블로킹 호출은 `gpt-5-mini` 로 나간다. **2026-11-06 요청 본문으로 확인했다**(`ThinkingControlWireTest.blockingCallsSendTheConfiguredModel`, 고치기 전 세 호출 모두 `gpt-5-mini`).
 - llama-server처럼 모델 이름을 무시하는 서버에서는 증상이 안 보일 수 있다. 원격 프로바이더는 다른 모델 호출이나 404에 이어 차단으로 갈 수 있다.
-- `ThinkingControlWireTest` 가 `model` 을 단언하지 않아 잡히지 않았다. Spring AI 2.0 업그레이드 커밋(`a8e1f78`) 이후의 회귀일 가능성이 있다.
+- `ThinkingControlWireTest` 가 `model` 을 단언하지 않아 잡히지 않았다. Spring AI 2.0 업그레이드 커밋(`a8e1f78`) 이후의 회귀일 가능성이 있다(1.x 동작은 확인하지 않았다).
+- **수정(2026-11-06).** 체인 가장 안쪽에 `ModelPinningChatModel` 을 두어 프로바이더의 모델을 모든 호출에 싣는다. 같은 와이어 테스트가 이제 설정값을 단언한다.
 
 **알려진 제약: LM Studio의 생각 끄기.**
 
@@ -493,17 +495,36 @@ llama-server -m bge-reranker-v2-m3-Q8_0.gguf -c 8192 -ngl 0 --host 127.0.0.1 --p
 app.reranker.base-url=${RERANK_BASE_URL:}
 app.reranker.model=${RERANK_MODEL:bge-reranker-v2-m3}
 app.reranker.timeout-seconds=${RERANK_TIMEOUT_SECONDS:15}
-app.search-rerank-candidates=${SEARCH_RERANK_CANDIDATES:20}
-app.search-rerank-top-k=${SEARCH_RERANK_TOP_K:5}
 app.search-rerank-min-score=${SEARCH_RERANK_MIN_SCORE:0.0}
 app.search-max-attempts=${SEARCH_MAX_ATTEMPTS:3}
 ```
 
 - `base-url` 이 비면 리랭커가 꺼지고 앱은 지금과 똑같이 동작한다.
-- `search-top-k`(기본 10)의 뜻은 바꾸지 않는다. 리랭커가 없거나 죽었을 때 쓰는 값으로 남겨, 장애 시 동작이 정확히 현재와 같아진다. 리랭커가 동작하면 `search-rerank-top-k` 가 최종 컷이다.
-- 뒤의 네 값은 핫 편집 대상이다(`SettingsKeys`, `SEARCH_HOT_SPECS`, `searchXxxSafe()` 셋 다).
+- `search-top-k`(기본 10)의 뜻은 바꾸지 않는다. 리랭커가 없거나 죽었을 때의 최종 컷으로 남겨, 장애 시 동작이 정확히 현재와 같아진다. 리랭커가 동작할 때의 후보 수와 최종 컷은 이 값에서 파생한다(아래).
+- `search-rerank-min-score`, `search-max-attempts` 는 핫 편집 대상이다(`SettingsKeys`, `SEARCH_HOT_SPECS`, `searchXxxSafe()` 셋 다).
 - `relevance_score` 는 모델의 원점수라 문턱 0.0은 이 모델 값이다. 모델을 바꾸면 다시 잰다.
 - 폐쇄망 배포에는 GGUF 파일(`Q8_0`)을 함께 옮긴다.
+
+#### 후보 수와 최종 컷은 `search-top-k` 에서 파생한다 (결정 2026-11-06)
+
+설정으로 고치는 값은 `search-top-k` 하나다. 리랭커가 동작할 때의 후보 수와 최종 컷은 별도 프로퍼티가 아니라 이 값에서 계산한다.
+
+| 값 | 식 | 기본(`search-top-k`=10) |
+|---|---|---|
+| 리랭크 후보 수 (`searchRerankCandidatesSafe()`) | `search-top-k × 2` | 20 |
+| 리랭크 최종 컷 (`searchRerankTopKSafe()`) | `max(5, ⌈search-top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 | 5 |
+| 리랭커 없음·장애 | `search-top-k` 그대로 | 10 |
+
+| `search-top-k` | 1 | 2 | 4 | 10 | 11 | 20 | 50 (설정 상한) |
+|---|---|---|---|---|---|---|---|
+| 후보 수 | 2 | 4 | 8 | 20 | 22 | 40 | 100 |
+| 최종 컷 | 2 | 4 | 5 | 5 | 6 | 10 | 25 |
+
+- 두 값은 `AppProperties` 의 파생 메서드다. 프로퍼티, 환경변수, `SettingsKeys`·`SEARCH_HOT_SPECS` 항목이 없다. `search-top-k` 를 핫 편집하면 다음 검색부터 함께 바뀐다(매 호출 다시 계산하고 필드에 캐시하지 않는다). 하나만 열어 두므로 후보 수가 최종 컷보다 작은 조합 같은 어긋난 설정이 만들어질 수 없다.
+- `/settings` 검색 튜닝 카드의 `search-top-k` 바로 아래에 **조회 전용 항목 둘**(후보 수, 최종 컷)을 둔다. `SettingsService.searchHotItems()` 가 `readOnly(...)` 로 만들고, 값은 위 두 메서드가 돌려주는 것이라 다음 검색이 쓰는 값과 같다(`effectiveValue()` 와 같은 원칙). 키가 없는 `editable=false` 항목은 `settings-item.html` 이 입력칸 없이 값만 그리므로 템플릿 변경은 필요 없고, 편집 카드 안에 놓았을 때 모양은 구현 때 화면으로 확인한다.
+- 라벨 `settings.item.rerank-candidates`, `settings.item.rerank-top-k` 와 풍선 설명 `settings.desc.*` 를 한/영 번들에 둔다. 설명에 식(`search-top-k × 2`, `max(5, search-top-k ÷ 2)`)을 보인다. 리랭커가 꺼져 있으면(`app.reranker.base-url` 이 비었거나 연결 실패) 항목 옆 배지로 "리랭커 꺼짐 — 적용되지 않음" 을 알린다. 값은 항상 보인다.
+- 기본값 10에서 20 / 5는 부록 A의 실측 구성과 같다. 다른 `search-top-k` 에서의 recall은 측정하지 않았다.
+- **위험.** 후보 수가 `search-top-k` 를 따라 커진다. 20개에 약 3초(CPU)를 선형으로 가정하면 상한(50)에서는 후보 100개에 약 15초다(미측정). 상한을 두지 않았다. 필요하면 측정한 뒤 후보 수 상한을 더한다.
 
 ---
 
@@ -611,8 +632,8 @@ flowchart TD
 
 | 항목 | 내용 |
 |---|---|
-| 후보 수 | `app.search-rerank-candidates=20`. 15개는 후속 질문이 0.67에 머물렀다. 요청 범위(12~20)의 위쪽이다 |
-| 최종 컷 | `app.search-rerank-top-k=5`. 후보의 1/4이다 |
+| 후보 수 | `search-top-k × 2`(기본 20, §4.3). 15개는 후속 질문이 0.67에 머물렀다. 요청 범위(12~20)의 위쪽이다 |
+| 최종 컷 | `max(5, ⌈search-top-k ÷ 2⌉)`(기본 5, §4.3), 후보 수를 넘지 않는다. 기본값에서는 후보의 1/4이다 |
 | 최대 횟수 | `app.search-max-attempts=3`. 첫 검색을 포함한다 |
 | 재검색 조건 | 리랭커 1위 점수가 `app.search-rerank-min-score`(0.0) 미만. 실측에서 답을 못 찾은 5건을 모두 잡았고 불필요한 재검색은 6건이었다 |
 | 새 검색어 | 입력은 질문, 앞 질문, 지금까지 쓴 검색어, 상위 3개 발췌(160자). 출력은 `{"nextQuery": "..."}`. 사이트는 `SEARCH_REWRITE`, 호출은 `QuestionCondenser.distill()` 과 같은 블로킹 경로, 대화의 라우팅 모드를 따른다 |
@@ -636,7 +657,9 @@ flowchart TD
 
 **구현 지점.** `RetrievalService:269-271` 의 분기와 `:185-187` 의 후보 계산이 바뀐다. `ChunkReranker.rerank(query, candidates, topK)` 는 문서와 점수를 함께 돌려준다. 지금 `RerankerService.rerank()` 는 `List<Document>` 만 돌려줘 점수를 전달하지 못한다. Spring AI에 리랭크 추상이 없으므로 `CrossEncoderReranker` 는 `/v1/rerank` 를 직접 호출한다. 동시 호출은 임베딩처럼 자체 세마포어로 제한한다.
 
-**청크 수를 줄일 때의 파급.** `search-rerank-top-k` 가 곧 답변·검증의 문서 수이므로 `PromptLadder.floor()` 의 입력과 `/settings` 미리보기가 이 값을 봐야 한다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
+**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`searchRerankTopKSafe()`)이 곧 답변·검증의 문서 수이므로 `PromptLadder.floor()` 의 입력과 `/settings` 미리보기가 이 값을 봐야 한다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
+
+**열린 항목.** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `searchRerankTopKSafe()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
 
 ### 5.3 Tool을 고르는 대표 사례
 
@@ -927,14 +950,14 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 ### Phase 0. 선결 결함과 측정 하네스
 
 - **작업**
-  - `model` 누락을 와이어 테스트로 확정하고 고친다. `ThinkingControlWireTest` 에 `model` 단언을 더한다.
+  - `model` 누락을 와이어 테스트로 확정하고 고친다. `ThinkingControlWireTest` 에 `model` 단언을 더한다. **완료(2026-11-06).**
   - `SearchQualityEvaluationTest` 를 넓힌다. recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다.
   - 여러 청크가 필요한 질문을 골든셋에 더한다. 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다.
   - `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다.
   - `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교한다.
 - **위험**: LM Studio에서는 생각이 꺼지지 않아 지연이 부푼다. 지연 기준은 llama-server에서 잰다.
 - **완료 기준**
-  - 블로킹 요청 본문의 `model` 이 설정값임을 테스트가 고정한다.
+  - 블로킹 요청 본문의 `model` 이 설정값임을 테스트가 고정한다. **완료(2026-11-06).**
   - 모델별 Tool 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록한다.
   - 아래 판단을 내린다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다.
 
@@ -949,7 +972,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
 - **작업**
   - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다.
   - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다.
-  - §4.3의 설정과 `/settings` 핫 키, 리랭커 상태 표시를 더한다.
+  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`searchRerankCandidatesSafe()`, `searchRerankTopKSafe()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다.
   - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다.
   - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다.
   - 운영 매뉴얼에 리랭크 서버 기동 방법을 넣는다.
@@ -961,6 +984,7 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
   - 여러 청크 질문의 답변 품질이 청크 10개일 때보다 낮아지지 않는다.
   - 리랭크 서버 중단 주입에서 답변이 나오고 동작이 현재와 같다.
   - 턴당 검색 호출이 설정 상한을 넘지 않음을 테스트가 고정한다.
+  - `search-top-k` 별 후보 수·최종 컷(§4.3 표)과 "후보 수 ≥ 최종 컷"을 단위 테스트가 고정하고, `/settings` 의 조회 전용 두 항목이 검색이 쓰는 값과 같음을 고정한다.
 
 ### Phase 1b. Tool 계층
 
