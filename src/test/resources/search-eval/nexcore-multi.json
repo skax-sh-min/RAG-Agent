@@ -1,0 +1,67 @@
+{
+  "version": "latest",
+  "topK": 10,
+  "note": "여러 청크 질문 세트 (AGENT_MCP_DESIGN §7 Phase 1a) — 골든셋 케이스(groupIds)를 둘 이상 묶은 비교·종합형 질문이다. 각 groupId 의 정답 문자열(nexcore-gold.json 의 mustContainAny)이 묶음 하나이고, 상위 k 안에 묶음마다 정답 청크가 하나씩 있어야 '완전'하다. 골든셋은 첫 정답 청크 하나만 봐서 최종 컷을 10 → 5 로 줄일 때의 위험을 못 재므로 이 세트로 잰다. 같은 문서 안의 이웃 절(multi-01~06)과 문서가 다른 것(multi-07~10) 그리고 묶음 셋(multi-11~12)을 섞었다. 답변 품질이 아니라 근거 재료의 재현율이다.",
+  "cases": [
+    {
+      "id": "multi-01",
+      "question": "배치 프로그램은 어떤 클래스를 상속받아 만들고, beforeExecute()에서 에러가 나면 execute()는 어떻게 되는지 같이 알려줘.",
+      "groupIds": ["batch-01", "batch-02"]
+    },
+    {
+      "id": "multi-02",
+      "question": "배치 프로그램 작성 방법과 IBatchContext로 처리일자를 가져오는 방법을 함께 설명해줘.",
+      "groupIds": ["batch-01", "batch-04"]
+    },
+    {
+      "id": "multi-03",
+      "question": "온라인과 배치의 트랜잭션 처리 차이와, 배치에서 SQL을 직접 실행할 때와 온라인 공유 FM을 호출할 때의 장단점을 비교해줘.",
+      "groupIds": ["batch-05", "batch-06"]
+    },
+    {
+      "id": "multi-04",
+      "question": "NOTX로 실행한 SQL은 본 거래가 롤백되면 어떻게 되고, 타 DB가 XA 타입이면 2-PC를 써도 되는지 알려줘.",
+      "groupIds": ["arch-04", "arch-12"]
+    },
+    {
+      "id": "multi-05",
+      "question": "로컬 환경의 로그 레벨 기본값과 업무 로그·프레임워크 로그가 파일에 저장되는 방식을 알려줘.",
+      "groupIds": ["arch-08", "arch-09"]
+    },
+    {
+      "id": "multi-06",
+      "question": "업무 예외는 어떤 클래스로 던지고, catch 안에서 새 예외를 만들 때는 무엇을 반드시 넣어야 해?",
+      "groupIds": ["arch-05", "arch-06"]
+    },
+    {
+      "id": "multi-07",
+      "question": "DU 클래스 이름은 어떻게 짓고, PU·FU·DU는 각각 어떤 역할이야?",
+      "groupIds": ["sample-06", "arch-03"]
+    },
+    {
+      "id": "multi-08",
+      "question": "NEXCORE 프레임워크의 세 가지 환경과 프레임워크가 쓰는 기술(Spring 의존성 여부)을 정리해줘.",
+      "groupIds": ["arch-01", "arch-02"]
+    },
+    {
+      "id": "multi-09",
+      "question": "컴포넌트 내 호출에서 DM 간 호출과 FM 간 호출은 각각 허용돼?",
+      "groupIds": ["sample-02", "sample-03"]
+    },
+    {
+      "id": "multi-10",
+      "question": "EIMS에서 배포받은 UIO를 직접 고칠 수 있는지, 그리고 배포 때 숫자 데이터가 어떤 타입으로 표현되는지 알려줘.",
+      "groupIds": ["sample-07", "sample-08"]
+    },
+    {
+      "id": "multi-11",
+      "question": "NEXCORE 프레임워크의 환경 구성, 사용 기술, 그리고 PU·FU·DU의 역할을 한꺼번에 설명해줘.",
+      "groupIds": ["arch-01", "arch-02", "arch-03"]
+    },
+    {
+      "id": "multi-12",
+      "question": "배치 프로그램의 beforeExecute 에러 시 동작, 처리일자 조회 방법, 온라인과 다른 트랜잭션 처리 방식을 모두 알려줘.",
+      "groupIds": ["batch-02", "batch-04", "batch-05"]
+    }
+  ]
+}

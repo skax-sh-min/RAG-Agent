@@ -134,8 +134,8 @@ public class ProviderConnectivity {
     }
 
     /**
-     * 앱이 실제로 요청을 보내는 주소와 키로 묻는다. 예전 {@code OpenAiApi} 는 base-url 에서 {@code /v1} 을 걷어낸 루트에 다시 {@code /v1}
-     * 을 붙여 요청하므로({@code ProviderConfig#apiBase}) 여기서도 같은 규칙으로 만든다 — 설정에 {@code /v1} 이 없는 주소가 상태
+     * 앱이 실제로 요청을 보내는 주소와 키로 묻는다. {@code ProviderConfig#apiBase} 는 base-url 에서 {@code /v1} 을 걷어낸 루트라
+     * 여기서 다시 {@code /v1} 을 붙여 모델 목록 주소를 만든다 — 설정에 {@code /v1} 이 없는 주소가 상태
      * 열에서만 404 로 "접속불가" 가 되는 일이 없게. 키는 {@code LlmConfig} 가 프로바이더를 만들 때 쓰는 값과 같다(LOCAL 은 비어 있으면
      * 자리표시자).
      */

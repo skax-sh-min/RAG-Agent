@@ -119,8 +119,8 @@ public class LlmConfig {
                     // 검증을 껐거나 서버가 기동 때 닿지 않았으면 물어본 적이 없으니 설정값 그대로다.
                     String effectiveModel = verifiedModels.getOrDefault(cfg.name(), cfg.model());
                     // SDK 클라이언트는 프로바이더마다 하나 — 블로킹 체인용 모델과 스트리밍 직행용 모델이 같이 쓴다.
-                    // maxRetries=0: Spring AI 1.x 의 RetryTemplate(maxAttempts=10) 을 끄던 것과 같은 이유다 — SDK 의 자동
-                    // 재시도가 한 번의 느린 호출을 같은 요청으로 여러 번 보내지 않게 한다. 재시도는 라우터가 한다.
+                    // maxRetries=0: SDK 의 자동 재시도(기본 2회)가 한 번의 느린 호출을 같은 요청으로 여러 번 보내지
+                    // 않게 한다. 재시도는 라우터가 한다.
                     ClientOptions clientOptions = OpenAiClients.clientOptions(
                             resolvedUrl, effectiveApiKey, connectTimeoutSeconds, readTimeoutSeconds, 0);
                     com.openai.client.OpenAIClient client = OpenAiClients.syncClient(clientOptions);
@@ -201,8 +201,11 @@ public class LlmConfig {
                     ChatModel model = new ThinkingControlChatModel(
                             new LoggingChatModel(
                                     tokenCalibration.wrap(
-                                            new MaxTokensCappingChatModel(rawModel, cfg.name(),
-                                                    () -> liveMaxTokens(cfg, props, contextWindows))),
+                                            new MaxTokensCappingChatModel(
+                                                    // 가장 안쪽 — 블로킹 호출부는 모델을 싣지 않고, 옵션을 주면 SDK 모델이 기본 옵션을
+                                                    // 병합하지 않아 라이브러리 기본값(gpt-5-mini)이 나간다(ModelPinningChatModel).
+                                                    new ModelPinningChatModel(rawModel, cfg.name(), effectiveModel),
+                                                    cfg.name(), () -> liveMaxTokens(cfg, props, contextWindows))),
                                     cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel),
                             cfg.name(), thinkingDialects,
                             site -> props.llmSafe().thinkingLevel(site),

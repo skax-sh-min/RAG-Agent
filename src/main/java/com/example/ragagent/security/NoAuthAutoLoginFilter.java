@@ -152,6 +152,10 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
     private boolean isPassThrough(String path) {
         return path.equals("/setup")
                 || path.equals("/error")
+                // MCP 는 API 키로 인증하는 전용 체인이 맡는다(McpSecurityConfig). 이 필터는 서블릿 필터로도 돌아서, 통과시키지 않으면
+                // 관리자가 없을 때 /setup 으로 302 를 보내거나 키로 만든 principal 을 게스트로 덮어쓴다.
+                || path.equals("/api/v1/mcp")
+                || path.startsWith("/api/v1/mcp/")
                 || path.equals("/api/v1/health")
                 || path.startsWith("/actuator/")
                 || path.startsWith("/webjars/")

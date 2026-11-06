@@ -602,8 +602,79 @@ class SettingsServiceTest {
                 .containsExactlyInAnyOrder("search_fixed", "storage", "cache");
         assertThat(view.groups()).filteredOn(g -> g.note() != null)
                 .allSatisfy(g -> assertThat(g.note()).isEqualTo("settings.note.restart"));
-        assertThat(view.groups().stream().flatMap(g -> g.items().stream()))
-                .as("항목 옆에는 더 이상 붙이지 않는다").allMatch(item -> item.note() == null);
+        // 재기동 필요는 그룹 제목으로 옮겼다. 항목 옆 배지는 리랭커 상태(§6.33)를 알리는 파생 항목 둘의 것뿐이다.
+        assertThat(view.groups().stream().flatMap(g -> g.items().stream())
+                .filter(item -> item.note() != null))
+                .as("항목 옆에는 리랭커 상태 배지 말고 붙이지 않는다")
+                .allSatisfy(item -> {
+                    assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
+                    assertThat(item.note()).startsWith("settings.note.reranker-");
+                });
+    }
+
+    @Test
+    @DisplayName("buildView — 리랭크 후보 수·최종 컷은 search-top-k 바로 아래 조회 전용으로, 검색이 쓰는 파생값과 같다 (§6.33)")
+    void buildView_derivedRerankItemsSitUnderTopKAndMatchWhatSearchUses() {
+        List<SettingsView.SettingItem> items = service.buildView().groups().stream()
+                .filter(g -> g.id().equals("search_hot")).findFirst().orElseThrow().items();
+        int topKIdx = -1;
+        for (int i = 0; i < items.size(); i++) if (SettingsKeys.SEARCH_TOP_K.equals(items.get(i).key())) topKIdx = i;
+        assertThat(topKIdx).isGreaterThanOrEqualTo(0);
+
+        SettingsView.SettingItem candidates = items.get(topKIdx + 1);
+        SettingsView.SettingItem cut = items.get(topKIdx + 2);
+        assertThat(candidates.label()).isEqualTo("settings.item.rerank-candidates");
+        assertThat(cut.label()).isEqualTo("settings.item.rerank-top-k");
+        assertThat(candidates.editable()).isFalse();
+        assertThat(cut.editable()).isFalse();
+        // 값은 검색이 쓰는 메서드의 값 그대로 — 본문을 따로 계산하지 않았음을 고정한다(top-k 7 → 14 / 5).
+        assertThat(candidates.value()).isEqualTo(Integer.toString(props.effectiveRerankCandidates())).isEqualTo("14");
+        assertThat(cut.value()).isEqualTo(Integer.toString(props.effectiveRerankTopK())).isEqualTo("5");
+        // 리랭커가 꺼져 있다(base() 는 주소가 없다) — 값은 보이되 적용되지 않음을 배지로 알린다.
+        assertThat(candidates.note()).isEqualTo("settings.note.reranker-off");
+        assertThat(cut.note()).isEqualTo("settings.note.reranker-off");
+    }
+
+    @Test
+    @DisplayName("buildView — 파생 항목은 search-top-k 를 바꾸면 따라 바뀌고, 리랭커가 동작 중이면 배지가 없다")
+    void buildView_derivedRerankItemsFollowTopKAndDropBadgeWhenRerankerRuns() {
+        AppProperties.RerankerConfig on = new AppProperties.RerankerConfig("http://h:28095", null, null, null, null);
+        AppProperties withReranker = new AppProperties(
+                "target/test-no-such-data-dir", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                null, null, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, on);
+        SettingsService s = new SettingsService(repo, withReranker, audit, circuitBreaker, toggle,
+                new ProviderContextWindows(), quotaService());
+        s.init();
+        s.update(SettingsKeys.SEARCH_TOP_K, "20");
+
+        List<SettingsView.SettingItem> derived = s.buildView().groups().stream()
+                .filter(g -> g.id().equals("search_hot")).flatMap(g -> g.items().stream())
+                .filter(i -> i.label().equals("settings.item.rerank-candidates")
+                        || i.label().equals("settings.item.rerank-top-k")).toList();
+        assertThat(derived).extracting(SettingsView.SettingItem::value).containsExactly("40", "10");
+        assertThat(derived).allMatch(i -> i.note() == null);
+    }
+
+    @Test
+    @DisplayName("update — 재검색 문턱은 음수도 받고(-20~20), 검색 횟수는 1~5 만 받는다 (§6.33)")
+    void update_searchLoopKeys() {
+        service.update(SettingsKeys.SEARCH_RERANK_MIN_SCORE, "-1.5");
+        assertThat(props.searchRerankMinScoreSafe()).isEqualTo(-1.5);
+        service.update(SettingsKeys.SEARCH_MAX_ATTEMPTS, "2");
+        assertThat(props.searchMaxAttemptsSafe()).isEqualTo(2);
+
+        assertThatThrownBy(() -> service.update(SettingsKeys.SEARCH_RERANK_MIN_SCORE, "25"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.update(SettingsKeys.SEARCH_MAX_ATTEMPTS, "0"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.update(SettingsKeys.SEARCH_MAX_ATTEMPTS, "6"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        service.reset(SettingsKeys.SEARCH_MAX_ATTEMPTS);
+        assertThat(props.searchMaxAttemptsSafe()).isEqualTo(3);
     }
 
     @Test

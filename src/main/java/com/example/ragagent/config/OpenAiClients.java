@@ -27,7 +27,7 @@ import java.time.Duration;
  * <ul>
  *   <li>{@code connect} — 연결 타임아웃</li>
  *   <li>{@code read}/{@code write} — 소켓 읽기·쓰기 타임아웃. 블로킹 호출은 응답 전체가 한 번의 읽기라 사실상 호출 전체의
- *       상한이고, 스트리밍은 청크 사이의 간격이다(예전 {@code RestClient}/{@code WebClient} 의 읽기 타임아웃과 같다)</li>
+ *       상한이고, 스트리밍은 청크 사이의 간격이다</li>
  *   <li>{@code request} — 0 = 호출 전체에는 상한을 두지 않는다. 두면 오래 걸리는 정상 스트리밍 답변이 끊긴다</li>
  * </ul>
  */
@@ -36,14 +36,13 @@ public final class OpenAiClients {
     private OpenAiClients() {}
 
     /**
-     * SDK 에 넘길 base URL. SDK 는 이 뒤에 {@code /chat/completions}, {@code /embeddings} 를 그대로 붙인다 — 예전
-     * {@code OpenAiApi} 는 {@code /v1/chat/completions} 를 붙였기에 설정의 base-url 에서 {@code /v1} 을 걷어 냈다
-     * ({@code ProviderConfig.apiBase()}). 같은 설정값이 같은 주소로 나가게 한다:
+     * SDK 에 넘길 base URL. SDK 는 이 뒤에 {@code /chat/completions}, {@code /embeddings} 를 그대로 붙인다. 설정의 base-url 을
+     * 이렇게 다듬는다({@code /v1} 을 걷어 낸 {@code ProviderConfig.apiBase()} 는 컨텍스트 탐지·G3 가 {@code /v1/models} 를
+     * 직접 붙이는 쪽의 기준이다):
      * <ul>
      *   <li>{@code …/v1} 로 끝난다 → 그대로 ({@code http://localhost:1234/v1})</li>
      *   <li>경로가 없다 → {@code /v1} 을 붙인다 ({@code https://api.openai.com})</li>
-     *   <li>다른 경로가 있다 → 그대로 ({@code …/v1beta/openai/} 같은 호환 엔드포인트 — 예전에는 여기에 {@code /v1} 이 한 번
-     *       더 붙어 닿지 못했다)</li>
+     *   <li>다른 경로가 있다 → 그대로 ({@code …/v1beta/openai/} 같은 호환 엔드포인트)</li>
      * </ul>
      */
     public static String sdkBaseUrl(String configured) {

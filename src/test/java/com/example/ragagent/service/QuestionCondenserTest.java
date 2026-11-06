@@ -210,7 +210,60 @@ class QuestionCondenserTest {
         assertThat(condenser.condense("u1", "t1", "그거 어디야?", Locale.KOREAN)).isEmpty();
     }
 
+    @Test
+    @DisplayName("재작성이 앞 질문과 같으면 버린다 — 주제를 바꾼 질문을 앞 질문으로 되돌려 쓴 실패(문장부호·공백 차이는 무시)")
+    void rewriteThatRepeatsAPreviousQuestionIsDiscarded() {
+        MemoryService memory = mock(MemoryService.class);
+        when(memory.getRecentTurns(anyString(), anyString()))
+                .thenReturn(List.of(turn(1, "IBatchContext 객체는 무엇을 전달하기 위한 것인가?", "답변", false)));
+
+        QuestionCondenser condenser = new QuestionCondenser(
+                routerReturning("IBatchContext 객체는 무엇을 전달하기 위한 것인가"), memory, bundle(), props());
+
+        assertThat(condenser.condense("u1", "t1", "메타 로더는?", Locale.KOREAN)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("앞 질문을 포함하더라도 새 내용이 더해진 재작성은 그대로 쓴다 — 같을 때만 버린다")
+    void rewriteThatExtendsAPreviousQuestionIsKept() {
+        MemoryService memory = mock(MemoryService.class);
+        when(memory.getRecentTurns(anyString(), anyString()))
+                .thenReturn(List.of(turn(1, "IBatchContext 는 무엇이야?", "답변", false)));
+
+        QuestionCondenser condenser = new QuestionCondenser(
+                routerReturning("IBatchContext 에서 처리일자를 어떻게 꺼내나요?"), memory, bundle(), props());
+
+        assertThat(condenser.condense("u1", "t1", "처리일자는 어떻게 꺼내?", Locale.KOREAN)).isPresent();
+    }
+
+    @Test
+    @DisplayName("repeatsPreviousQuestion — 재료가 없거나 재작성이 비어 있으면 거짓")
+    void repeatCheckIsFalseWithoutMaterial() {
+        assertThat(QuestionCondenser.repeatsPreviousQuestion("무엇이든", "")).isFalse();
+        assertThat(QuestionCondenser.repeatsPreviousQuestion(null, "- 질문")).isFalse();
+        assertThat(QuestionCondenser.repeatsPreviousQuestion("???", "- 질문")).isFalse();
+        assertThat(QuestionCondenser.repeatsPreviousQuestion("B 질문", "- A 질문\n- b  질문!")).isTrue();
+    }
+
     // ── 파싱 ──────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("프롬프트 블록 표지를 따라 쓴 머리는 벗기고, 표지만 있는 줄은 건너뛴다")
+    void parseStripsEchoedBlockLabels() {
+        assertThat(QuestionCondenser.parse("[PREVIOUS_QUESTIONS] 배치 프로그램 클래스는 무엇을 상속받나?"))
+                .isEqualTo("배치 프로그램 클래스는 무엇을 상속받나?");
+        assertThat(QuestionCondenser.parse("[PREVIOUS_QUESTIONS]\n배치 프로그램 클래스는?"))
+                .isEqualTo("배치 프로그램 클래스는?");
+        assertThat(QuestionCondenser.parse("[/PREVIOUS_QUESTIONS]")).isNull();
+    }
+
+    @Test
+    @DisplayName("질문이 아니라 사용자에게 말을 거는 응답은 버린다 — 검색어가 될 수 없다")
+    void parseDiscardsReplyAddressedToTheUser() {
+        assertThat(QuestionCondenser.parse("UIO 편집 가능 여부에 대해 질문하셨습니다.")).isNull();
+        assertThat(QuestionCondenser.parse("어떤 것에 대한 편집인지 구체적으로 질문해 주시겠어요?")).isNull();
+        assertThat(QuestionCondenser.parse("UIO 는 수동으로 편집할 수 있는가?")).isEqualTo("UIO 는 수동으로 편집할 수 있는가?");
+    }
 
     @Test
     @DisplayName("첫 줄만 취하고 감싼 따옴표는 벗긴다")

@@ -29,8 +29,7 @@ import java.util.function.Function;
  * PROGRESSIVE 2차)와 {@code DirectAnswerService}(Direct · meta 답변)가 {@code provider.stream()=true} 일 때 여기로 온다.
  *
  * <p><b>왜 체인 밖에 있는가.</b> 두 경로는 데코레이터가 씌워지지 않은 원본 모델({@link LlmProvider#rawModel()})의
- * {@code stream()} 을 직접 부르므로(Spring AI 1.x 에서는 {@code OpenAiChatModel} 의 버퍼링을 피하려고
- * {@code OpenAiApi.chatCompletionStream()} 이었다) {@code ChatModel} 데코레이터 체인(생각 수준을 싣는
+ * {@code stream()} 을 직접 부르므로 {@code ChatModel} 데코레이터 체인(생각 수준을 싣는
  * {@code ThinkingControlChatModel}, curl 로그)을 통째로 지나지 않는다. 채팅 답변의 주 경로가 여기라, 체인이 하던 일
  * 중 이 경로에 필요한 것을 <b>같은 함수로</b> 한다:
  * <ol>
@@ -38,7 +37,7 @@ import java.util.function.Function;
  *       바꿔({@link ProviderThinkingDialects#wireFor}) 요청에 싣는다({@link ThinkingControl#applyTo}). 블로킹과 같은
  *       변환, 같은 거부 기억이다.</li>
  *   <li><b>생각을 활동으로 센다</b> — 생각이 켜지면 llama.cpp 는 생각을 {@code reasoning_content} 델타로 흘리고 그동안
- *       {@code content} 는 비어 있다(2026-10-02 실측: 한 단어 답 앞에 생각 델타 111개). 예전처럼 {@code content} 만
+ *       {@code content} 는 비어 있다(2026-10-02 실측: 한 단어 답 앞에 생각 델타 111개). {@code content} 만
  *       읽으면 생각이 긴 답변은 그동안 아무 일도 없는 것처럼 보이고, 유휴 워치독({@code app.sse-idle-timeout-seconds})이
  *       정상 답변을 끊는다. 생각 본문은 화면에 내보내지 않는다 — 답변이 아니고, 검색 문서 원문이 섞여 있다.</li>
  *   <li><b>거부 재시도</b> — 서버가 실은 필드를 거부하면 기억하고 빼서 <b>한 번</b> 다시 보낸다. 서버에서 청크가 하나라도

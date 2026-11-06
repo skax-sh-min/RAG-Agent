@@ -8,6 +8,7 @@ import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.repository.DbTimestamp;
+import com.example.ragagent.service.GraphListener;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionCondenser;
 import com.example.ragagent.service.RagService;
@@ -70,6 +71,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code topic-switch}(짧지만 다른 주제 — 앞 질문을 섞으면 손해를 보는 쪽) 두 종류다. 이 절은 이력(대화 턴)과 설정을 <b>쓰므로</b>
  * {@code search-eval.data-dir} 가 없으면 돌지 않는다. 스레드 id 는 실행마다 새로 만든다 — 같은 DB 로 다시 돌려도 이력이 겹치지 않게.
  *
+ * <p><b>리랭크·재검색 켬/끔 (Phase 1a)</b> — 교차 인코더 리랭커는 구조적 설정이라 실행 단위로 고른다:
+ * {@code -Dsearch-eval.rerank-url=http://localhost:28095} 로 켜고, {@code -Dsearch-eval.rerank-url=off} (빈 값도 된다)로 {@code .env} 에 주소가 있어도
+ * 끈다(안 주면 {@code .env}/환경변수 그대로). 재검색은 {@code -Dsearch-eval.max-attempts=1} 로 끈다(기본 3). 케이스마다 recall@3·5·10 을
+ * 한꺼번에 {@code r3}/{@code r5}/{@code r10} 으로 남기고, 한 턴의 검색 횟수({@code attempts}, 재검색 안내 이벤트를 세어 1 + 재검색 수)와 새 검색어를
+ * 쓴 LLM 호출 수({@code rewrites})도 남긴다. 리랭커가 켜져 있으면 답변에 가는 문서가 5개라 {@code r10} 은 {@code r5} 와 같다.
+ *
+ * <p><b>여러 청크 질문 절</b>({@code -Dsearch-eval.multi=true}, {@code nexcore-multi.json}): 골든셋은 첫 정답 청크 하나만 봐서 컷을 10 → 5 로
+ * 줄일 때의 위험을 못 잰다. 이 절의 질문은 골든 케이스 둘 이상을 묶은 비교·종합형이라 <b>모든 묶음에서 정답 청크가 하나씩</b> 들어와야 완전하다 —
+ * k 별 덮은 묶음 수({@code covered3/5/10})와 완전 여부({@code complete3/5/10})를 {@code multi.jsonl} 에 남긴다. 답변 품질이 아니라 근거 재료의
+ * 재현율이라는 점에 주의(LLM 이 답변을 쓰고 판정하는 측정은 하지 않는다).
+ *
  * <p>정량 비교 예시: {@code -Dsearch-eval.multiquery=false} 로 질의 확장을 끄거나, {@code app.search-hybrid-enabled} 등을
  * 바꿔가며 재실행해 recall@k 변화를 비교한다. 케이스별 결과는 {@code <out>/<label>/gold.jsonl}·{@code followup.jsonl} 에 남는다
  * ({@code -Dsearch-eval.out}, 기본 {@code target/search-eval} · {@code -Dsearch-eval.label}, 기본 {@code run}).
@@ -90,6 +102,7 @@ class SearchQualityEvaluationTest {
 
     private static final String GOLD_RESOURCE = "search-eval/nexcore-gold.json";
     private static final String FOLLOWUP_RESOURCE = "search-eval/nexcore-followup.json";
+    private static final String MULTI_RESOURCE = "search-eval/nexcore-multi.json";
     private static final String USER = "search-eval";
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -104,6 +117,31 @@ class SearchQualityEvaluationTest {
         String multiquery = System.getProperty("search-eval.multiquery");
         if (multiquery != null && !multiquery.isBlank()) {
             registry.add("app.search-multiquery-enabled", () -> multiquery);
+        }
+        // 교차 인코더 리랭커 켬/끔 — 빈 값은 "끔"이다(.env 에 주소가 있어도). 프로퍼티를 아예 안 주면 .env 그대로.
+        String rerankUrl = System.getProperty("search-eval.rerank-url");
+        if (rerankUrl != null) {
+            // "off"/"none" 도 끔이다 — Maven 이 빈 -D 값을 시스템 프로퍼티로 넘기는지는 환경마다 달라 글자로도 끌 수 있게 한다.
+            String url = ("off".equalsIgnoreCase(rerankUrl.strip()) || "none".equalsIgnoreCase(rerankUrl.strip())) ? "" : rerankUrl;
+            registry.add("app.reranker.base-url", () -> url);
+        }
+        String maxAttempts = System.getProperty("search-eval.max-attempts");
+        if (maxAttempts != null && !maxAttempts.isBlank()) {
+            registry.add("app.search-max-attempts", () -> maxAttempts);
+        }
+    }
+
+    /** 재검색 안내 이벤트를 세는 리스너 — 한 턴의 검색 횟수 = 1 + 이 이벤트 수. */
+    private static final class SearchCounter implements GraphListener {
+        int retries;
+
+        @Override
+        public void onSearchRetry(int attempt, int max) {
+            retries++;
+        }
+
+        int attempts() {
+            return 1 + retries;
         }
     }
 
@@ -126,6 +164,10 @@ class SearchQualityEvaluationTest {
 
         List<Double> recalls = new ArrayList<>();
         List<Double> ndcgs = new ArrayList<>();
+        List<Double> r3s = new ArrayList<>();
+        List<Double> r5s = new ArrayList<>();
+        List<Double> r10s = new ArrayList<>();
+        List<Integer> attemptCounts = new ArrayList<>();
         List<String> misses = new ArrayList<>();
         List<String> notInCorpus = new ArrayList<>();
         StringBuilder table = new StringBuilder();
@@ -135,7 +177,9 @@ class SearchQualityEvaluationTest {
             if (!inCorpus) notInCorpus.add(gq.id());
             AgentState state = AgentState.of(gq.question(), goldSet.version(), "search-eval", "", RoutingMode.COST_FIRST);
             long t0 = System.nanoTime();
-            List<Document> results = retrievalService.execute(state).retrievedDocs();
+            SearchCounter counter = new SearchCounter();
+            AgentState executed = retrievalService.execute(state, counter);
+            List<Document> results = executed.retrievedDocs();
             long ms = (System.nanoTime() - t0) / 1_000_000;
 
             List<Boolean> relevance = results.stream()
@@ -146,6 +190,10 @@ class SearchQualityEvaluationTest {
             int rank = SearchQualityMetrics.firstRelevantRank(relevance, k);
             recalls.add(recall);
             ndcgs.add(ndcg);
+            r3s.add(SearchQualityMetrics.recallAtK(relevance, 3));
+            r5s.add(SearchQualityMetrics.recallAtK(relevance, 5));
+            r10s.add(SearchQualityMetrics.recallAtK(relevance, 10));
+            attemptCounts.add(counter.attempts());
             if (recall == 0.0) misses.add(gq.id());
 
             table.append("%-12s recall@%d=%.0f  nDCG@%d=%.3f  rank=%s%s  %s%n"
@@ -157,6 +205,12 @@ class SearchQualityEvaluationTest {
             row.put("recall", recall);
             row.put("ndcg", ndcg);
             row.put("rank", rank);
+            // recall@3·5·10 를 한꺼번에 — 컷을 줄일 때(10 → 5) 어느 k 에서 잃는지 본다. 리랭커가 켜져 있으면 문서가 5개라 r10 = r5.
+            row.put("r3", SearchQualityMetrics.recallAtK(relevance, 3));
+            row.put("r5", SearchQualityMetrics.recallAtK(relevance, 5));
+            row.put("r10", SearchQualityMetrics.recallAtK(relevance, 10));
+            row.put("attempts", counter.attempts());
+            row.put("rewrites", executed.llmCallCount());
             row.put("docs", results.size());
             row.put("inCorpus", inCorpus);
             row.put("ms", ms);
@@ -180,6 +234,11 @@ class SearchQualityEvaluationTest {
         System.out.print(table);
         System.out.printf("mean recall@%d = %.3f%n", k, meanRecall);
         System.out.printf("mean nDCG@%d   = %.3f%n", k, meanNdcg);
+        System.out.printf("recall@3 = %.3f  recall@5 = %.3f  recall@10 = %.3f  (리랭커 %s, 검색 횟수 상한 %d)%n",
+                mean(r3s), mean(r5s), mean(r10s), props.rerankerEnabled() ? "켬" : "끔", props.searchMaxAttemptsSafe());
+        System.out.printf("검색 횟수: 평균 %.2f, 재검색한 턴 %d/%d%n",
+                attemptCounts.stream().mapToInt(Integer::intValue).average().orElse(1.0),
+                attemptCounts.stream().filter(a -> a > 1).count(), attemptCounts.size());
         if (!misses.isEmpty()) {
             System.out.println("miss (0 hit): " + String.join(", ", misses));
         }
@@ -236,6 +295,7 @@ class SearchQualityEvaluationTest {
                     boolean expansion = false;
                     Optional<QuestionCondenser.Condensed> rewritten = Optional.empty();
                     Long ms = null;
+                    SearchCounter followCounter = null;   // fused 는 검색하지 않는다
                     List<Document> results;
                     if ("fused".equals(variant)) {
                         // fused = 원문 검색 결과와 이어 붙인 검색어의 결과를 RRF 로 합친 것(LLM 없음) — 이어 붙이기가 주제를 바꾼
@@ -268,7 +328,8 @@ class SearchQualityEvaluationTest {
                         AgentState state = AgentState.of(question, set.version(), thread, "", RoutingMode.COST_FIRST).toBuilder()
                                 .searchQuestion(rewritten.map(QuestionCondenser.Condensed::searchQuestion).orElse(null))
                                 .build();
-                        results = retrievalService.execute(state).retrievedDocs();
+                        followCounter = new SearchCounter();
+                        results = retrievalService.execute(state, followCounter).retrievedDocs();
                         ms = (System.nanoTime() - t0) / 1_000_000;
                     }
                     resultsByVariant.put(variant, results);
@@ -293,6 +354,9 @@ class SearchQualityEvaluationTest {
                     row.put("ndcg", SearchQualityMetrics.ndcgAtK(relevance, k));
                     row.put("rank", rank);
                     row.put("ms", ms);   // 독립화 호출 포함, fused 는 null(검색하지 않는다)
+                    row.put("r3", SearchQualityMetrics.recallAtK(relevance, 3));
+                    row.put("r5", SearchQualityMetrics.recallAtK(relevance, 5));
+                    row.put("attempts", followCounter == null ? null : followCounter.attempts());
                     row.put("top", topFiles(results, k));
                     emit("followup", row);
                 }
@@ -306,6 +370,75 @@ class SearchQualityEvaluationTest {
         System.out.print(table);
         recallByVariant.forEach((kindVariant, list) -> System.out.printf("mean recall@%d %-22s = %.3f (n=%d)%n", k, kindVariant,
                 list.stream().mapToDouble(Double::doubleValue).average().orElse(0.0), list.size()));
+    }
+
+    /** 여러 청크 질문 한 건 — {@code groupIds} 는 골든 케이스 id 이고, 각 케이스의 정답 문자열이 "묶음" 하나(그 묶음의 청크가 하나는 있어야 한다). */
+    record MultiCase(String id, String question, List<String> groupIds) {}
+
+    record MultiSet(String version, int topK, String note, List<MultiCase> cases) {}
+
+    private static final int[] MULTI_KS = {3, 5, 10};
+
+    @Test
+    void reportMultiChunk() throws IOException {
+        if (!Boolean.getBoolean("search-eval.multi")) return;
+        Map<String, GoldQuery> gold = loadGoldSet().cases().stream()
+                .collect(Collectors.toMap(GoldQuery::id, Function.identity()));
+        MultiSet set;
+        try (var in = new ClassPathResource(MULTI_RESOURCE).getInputStream()) {
+            set = JSON.readValue(in, MultiSet.class);
+        }
+        Map<Integer, List<Double>> coverage = new LinkedHashMap<>();
+        Map<Integer, List<Double>> complete = new LinkedHashMap<>();
+        List<Integer> attemptCounts = new ArrayList<>();
+        StringBuilder table = new StringBuilder();
+        for (MultiCase mc : set.cases()) {
+            List<GoldQuery> groups = mc.groupIds().stream().map(gold::get).toList();
+            SearchCounter counter = new SearchCounter();
+            long t0 = System.nanoTime();
+            AgentState executed = retrievalService.execute(
+                    AgentState.of(mc.question(), set.version(), "search-eval", "", RoutingMode.COST_FIRST), counter);
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            List<Document> results = executed.retrievedDocs();
+            attemptCounts.add(counter.attempts());
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("case", mc.id());
+            row.put("question", mc.question());
+            row.put("groups", mc.groupIds());
+            StringBuilder line = new StringBuilder("%-9s groups=%d".formatted(mc.id(), groups.size()));
+            for (int k : MULTI_KS) {
+                List<Document> top = results.subList(0, Math.min(k, results.size()));
+                long covered = groups.stream()
+                        .filter(g -> top.stream().anyMatch(d -> SearchQualityMetrics.containsAnyMarker(d.getText(), g.mustContainAny())))
+                        .count();
+                double cov = (double) covered / groups.size();
+                double done = covered == groups.size() ? 1.0 : 0.0;
+                coverage.computeIfAbsent(k, x -> new ArrayList<>()).add(cov);
+                complete.computeIfAbsent(k, x -> new ArrayList<>()).add(done);
+                row.put("covered" + k, covered);
+                row.put("complete" + k, done == 1.0);
+                line.append("  @%d=%d/%d".formatted(k, covered, groups.size()));
+            }
+            row.put("attempts", counter.attempts());
+            row.put("docs", results.size());
+            row.put("ms", ms);
+            row.put("top", topFiles(results, 10));
+            emit("multi", row);
+            table.append(line).append("  | ").append(mc.question()).append('\n');
+        }
+        System.out.println("=== 여러 청크 질문 (" + set.cases().size() + "건) — 값은 덮은 묶음 수/전체 묶음 수 ===");
+        System.out.printf("config: 리랭커 %s, 컷 %s, 검색 횟수 상한 %d%n", props.rerankerEnabled() ? "켬" : "끔",
+                props.rerankerEnabled() ? props.effectiveRerankTopK() : props.searchTopKSafe(), props.searchMaxAttemptsSafe());
+        System.out.print(table);
+        for (int k : MULTI_KS) {
+            System.out.printf("coverage@%d = %.3f  complete@%d = %.3f%n", k, mean(coverage.get(k)), k, mean(complete.get(k)));
+        }
+        System.out.printf("검색 횟수: 평균 %.2f%n", attemptCounts.stream().mapToInt(Integer::intValue).average().orElse(1.0));
+    }
+
+    private static double mean(List<Double> xs) {
+        return xs.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
     }
 
     /** 상위 k 개 결과의 문서 이름 — 놓친 케이스에서 무엇이 자리를 차지했는지 본다. */

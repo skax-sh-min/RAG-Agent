@@ -449,6 +449,15 @@ public class StreamingAgentService {
         }
 
         @Override
+        public void onSearchRetry(int attempt, int max) {
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
+            // image_analysis 와 같은 이유로 id 가 "retrieval" 이면 안 된다 — onStage() 가 그 id 에서 출처·이미지 패널을 비운다(재시도 의미).
+            sendEvent(emitter, "stage", Map.of(
+                    "id", "search_retry",
+                    "text", "다른 표현으로 다시 찾는 중 (" + attempt + "/" + max + ")"));
+        }
+
+        @Override
         public void onUpgrade(String provider) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
             thinking = false;

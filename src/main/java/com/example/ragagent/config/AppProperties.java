@@ -58,7 +58,10 @@ public record AppProperties(
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
         UploadConfig upload,                     // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
-        Double searchCuratedQaMinSimilarity      // 큐레이션 축 벡터 절반의 최소 유사도 — 문서 축의 임계값보다 높게 둔다(큐레이션 풀은 작아서 문턱만 넘으면 RRF 1위를 받는다). 0 = 문서 임계값만. 핫에디터블 — searchCuratedQaMinSimilaritySafe()
+        Double searchCuratedQaMinSimilarity,     // 큐레이션 축 벡터 절반의 최소 유사도 — 문서 축의 임계값보다 높게 둔다(큐레이션 풀은 작아서 문턱만 넘으면 RRF 1위를 받는다). 0 = 문서 임계값만. 핫에디터블 — searchCuratedQaMinSimilaritySafe()
+        RerankerConfig reranker,                 // 교차 인코더 리랭커 서버 접속(AGENT_MCP_DESIGN §4.3). base-url 이 비면 꺼짐. 후보 수·최종 컷은 여기 없다 — search-top-k 에서 파생한다(effectiveRerankCandidates/effectiveRerankTopK)
+        Double searchRerankMinScore,             // §6.33 재검색 문턱 — 리랭커 1위 점수가 이 값 미만이면 다시 찾는다(기본 0.0, 모델 원점수라 음수도 된다). 핫에디터블 — searchRerankMinScoreSafe()
+        Integer searchMaxAttempts                // §6.33 한 턴의 검색 횟수 상한(첫 검색 포함, 기본 3, 1이면 재검색 끔). 핫에디터블 — searchMaxAttemptsSafe()
 ) {
     /**
      * MANDATORY once this record has more than one constructor — see {@link AuthConfig}: without it Spring Boot
@@ -121,7 +124,122 @@ public record AppProperties(
                 searchQueryEmbedCacheEnabled, searchQueryEmbedCacheMaxSize, searchQueryEmbedCacheTtlSeconds, pptxImage,
                 mdCorrectionDefaultCodeLanguage, docxImage, pptxRemoveDuplicateSlides, pptxDropDividerSlides,
                 searchCuratedQaEnabled, searchCuratedQaWeight, pptxDropRedundantTitleSlides, pptxDropEndingSlide,
-                chunkSplitGranular, upload, null);
+                chunkSplitGranular, upload, null, null, null, null);
+    }
+
+    /** Back-compat form without {@code reranker} (the reranker stays off). Test convenience;
+     *  never used for property binding (see {@code @ConstructorBinding} above). */
+    public AppProperties(String dataDir,
+                         int maxRetryCount,
+                         int chunkSize,
+                         int chunkOverlap,
+                         int minChunkSize,
+                         int searchTopK,
+                         double searchSimilarityThreshold,
+                         boolean searchMultiqueryEnabled,
+                         int searchMultiqueryMinLength,
+                         boolean searchHybridEnabled,
+                         boolean searchRetryEscalate,
+                         boolean searchRerankEnabled,
+                         int searchCandidateMultiplier,
+                         Integer sseTimeoutSeconds,
+                         LlmConfig llm,
+                         IndexingConfig indexing,
+                         ChromaHttpConfig chroma,
+                         ImageDescriptionProperties imageDescription,
+                         EmbeddingConfig embedding,
+                         RateLimitConfig rateLimit,
+                         AuditConfig audit,
+                         AuthConfig auth,
+                         VectorStoreConfig vectorstore,
+                         MemoryConfig memory,
+                         SummaryConfig summary,
+                         Integer searchTagCandidateMultiplier,
+                         Integer sseIdleTimeoutSeconds,
+                         Double searchRrfKeywordWeight,
+                         Integer searchRrfK,
+                         Boolean searchQueryEmbedCacheEnabled,
+                         Integer searchQueryEmbedCacheMaxSize,
+                         Integer searchQueryEmbedCacheTtlSeconds,
+                         PptxShapeExtractionConfig pptxImage,
+                         String mdCorrectionDefaultCodeLanguage,
+                         DocxShapeExtractionConfig docxImage,
+                         Boolean pptxRemoveDuplicateSlides,
+                         Boolean pptxDropDividerSlides,
+                         Boolean searchCuratedQaEnabled,
+                         Double searchCuratedQaWeight,
+                         Boolean pptxDropRedundantTitleSlides,
+                         Boolean pptxDropEndingSlide,
+                         Boolean chunkSplitGranular,
+                         UploadConfig upload,
+                         Double searchCuratedQaMinSimilarity) {
+        this(dataDir, maxRetryCount, chunkSize, chunkOverlap, minChunkSize, searchTopK, searchSimilarityThreshold,
+                searchMultiqueryEnabled, searchMultiqueryMinLength, searchHybridEnabled, searchRetryEscalate,
+                searchRerankEnabled, searchCandidateMultiplier, sseTimeoutSeconds, llm, indexing, chroma,
+                imageDescription, embedding, rateLimit, audit, auth, vectorstore, memory, summary,
+                searchTagCandidateMultiplier, sseIdleTimeoutSeconds, searchRrfKeywordWeight, searchRrfK,
+                searchQueryEmbedCacheEnabled, searchQueryEmbedCacheMaxSize, searchQueryEmbedCacheTtlSeconds, pptxImage,
+                mdCorrectionDefaultCodeLanguage, docxImage, pptxRemoveDuplicateSlides, pptxDropDividerSlides,
+                searchCuratedQaEnabled, searchCuratedQaWeight, pptxDropRedundantTitleSlides, pptxDropEndingSlide,
+                chunkSplitGranular, upload, searchCuratedQaMinSimilarity, null, null, null);
+    }
+
+    /** Back-compat form without {@code searchRerankMinScore} / {@code searchMaxAttempts} (their shipped defaults
+     *  apply). Test convenience; never used for property binding (see {@code @ConstructorBinding} above). */
+    public AppProperties(String dataDir,
+                         int maxRetryCount,
+                         int chunkSize,
+                         int chunkOverlap,
+                         int minChunkSize,
+                         int searchTopK,
+                         double searchSimilarityThreshold,
+                         boolean searchMultiqueryEnabled,
+                         int searchMultiqueryMinLength,
+                         boolean searchHybridEnabled,
+                         boolean searchRetryEscalate,
+                         boolean searchRerankEnabled,
+                         int searchCandidateMultiplier,
+                         Integer sseTimeoutSeconds,
+                         LlmConfig llm,
+                         IndexingConfig indexing,
+                         ChromaHttpConfig chroma,
+                         ImageDescriptionProperties imageDescription,
+                         EmbeddingConfig embedding,
+                         RateLimitConfig rateLimit,
+                         AuditConfig audit,
+                         AuthConfig auth,
+                         VectorStoreConfig vectorstore,
+                         MemoryConfig memory,
+                         SummaryConfig summary,
+                         Integer searchTagCandidateMultiplier,
+                         Integer sseIdleTimeoutSeconds,
+                         Double searchRrfKeywordWeight,
+                         Integer searchRrfK,
+                         Boolean searchQueryEmbedCacheEnabled,
+                         Integer searchQueryEmbedCacheMaxSize,
+                         Integer searchQueryEmbedCacheTtlSeconds,
+                         PptxShapeExtractionConfig pptxImage,
+                         String mdCorrectionDefaultCodeLanguage,
+                         DocxShapeExtractionConfig docxImage,
+                         Boolean pptxRemoveDuplicateSlides,
+                         Boolean pptxDropDividerSlides,
+                         Boolean searchCuratedQaEnabled,
+                         Double searchCuratedQaWeight,
+                         Boolean pptxDropRedundantTitleSlides,
+                         Boolean pptxDropEndingSlide,
+                         Boolean chunkSplitGranular,
+                         UploadConfig upload,
+                         Double searchCuratedQaMinSimilarity,
+                         RerankerConfig reranker) {
+        this(dataDir, maxRetryCount, chunkSize, chunkOverlap, minChunkSize, searchTopK, searchSimilarityThreshold,
+                searchMultiqueryEnabled, searchMultiqueryMinLength, searchHybridEnabled, searchRetryEscalate,
+                searchRerankEnabled, searchCandidateMultiplier, sseTimeoutSeconds, llm, indexing, chroma,
+                imageDescription, embedding, rateLimit, audit, auth, vectorstore, memory, summary,
+                searchTagCandidateMultiplier, sseIdleTimeoutSeconds, searchRrfKeywordWeight, searchRrfK,
+                searchQueryEmbedCacheEnabled, searchQueryEmbedCacheMaxSize, searchQueryEmbedCacheTtlSeconds, pptxImage,
+                mdCorrectionDefaultCodeLanguage, docxImage, pptxRemoveDuplicateSlides, pptxDropDividerSlides,
+                searchCuratedQaEnabled, searchCuratedQaWeight, pptxDropRedundantTitleSlides, pptxDropEndingSlide,
+                chunkSplitGranular, upload, searchCuratedQaMinSimilarity, reranker, null, null);
     }
 
     public record LlmConfig(
@@ -289,6 +407,33 @@ public record AppProperties(
             Integer maxConcurrentBatches    // §6.21 E2 — parallel sub-batch embeds during indexing; 1/null = serial
     ) {}
 
+    /**
+     * 교차 인코더 리랭커 서버({@code llama-server --reranking}) 접속 설정 — AGENT_MCP_DESIGN §4.3. {@code baseUrl} 이 비면
+     * 리랭커는 꺼진 것이고 검색은 지금과 똑같이 동작한다. 후보 수와 최종 컷은 여기 없다: {@code search-top-k} 하나에서 파생한다
+     * ({@link AppProperties#effectiveRerankCandidates()} · {@link AppProperties#effectiveRerankTopK()}).
+     */
+    public record RerankerConfig(
+            String baseUrl,                // app.reranker.base-url / RERANK_BASE_URL — 비면 꺼짐. 뒤의 /v1 은 있어도 없어도 된다
+            String model,                  // app.reranker.model / RERANK_MODEL — 요청 본문의 model, 기본 bge-reranker-v2-m3
+            Integer connectTimeoutSeconds, // app.reranker.connect-timeout-seconds, 기본 5
+            Integer timeoutSeconds,        // app.reranker.timeout-seconds — 읽기 타임아웃(= 한 호출의 상한), 기본 15
+            Integer maxConcurrent,         // app.reranker.max-concurrent — 동시에 서버로 나가는 호출 수, 기본 2
+            String apiKey                  // app.reranker.api-key / RERANK_API_KEY — 선택. 있으면 Authorization: Bearer 로 싣는다(llama-server --api-key 등). 임베딩의 app.embedding.api-key 와 같은 역할
+    ) {
+        public static final String DEFAULT_MODEL = "bge-reranker-v2-m3";
+
+        /** 바인딩에 쓰는 정식 생성자 — 생성자가 둘이라 스프링이 고르지 못한다. */
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public RerankerConfig {
+        }
+
+        /** API 키를 모르는 호출부(테스트)를 위한 축약 — 키 없이 부른다. */
+        public RerankerConfig(String baseUrl, String model, Integer connectTimeoutSeconds, Integer timeoutSeconds,
+                              Integer maxConcurrent) {
+            this(baseUrl, model, connectTimeoutSeconds, timeoutSeconds, maxConcurrent, null);
+        }
+    }
+
     public record ChromaHttpConfig(
             int connectTimeoutSeconds,
             int readTimeoutSeconds
@@ -300,8 +445,26 @@ public record AppProperties(
             int uploadPerMinute,
             int syncPerMinute,
             int imagePerMinute,
-            int defaultPerMinute
-    ) {}
+            int defaultPerMinute,
+            Integer mcpPerMinute        // MCP 엔드포인트(/api/v1/mcp) 전용 버킷. 미설정/0 이하면 60 — chat 한도를 우회하지 않게 default 버킷에 넣지 않는다
+    ) {
+        /** 바인딩에 쓰는 정식 생성자 — 생성자가 둘이라 스프링이 고르지 못한다. */
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public RateLimitConfig {
+        }
+
+        /** MCP 한도를 모르는 호출부(테스트)를 위한 축약 — 기본값이 적용된다. */
+        public RateLimitConfig(boolean enabled, int chatPerMinute, int uploadPerMinute, int syncPerMinute,
+                               int imagePerMinute, int defaultPerMinute) {
+            this(enabled, chatPerMinute, uploadPerMinute, syncPerMinute, imagePerMinute, defaultPerMinute, null);
+        }
+
+        public static final int DEFAULT_MCP_PER_MINUTE = 60;
+
+        public int mcpLimit() {
+            return (mcpPerMinute == null || mcpPerMinute <= 0) ? DEFAULT_MCP_PER_MINUTE : mcpPerMinute;
+        }
+    }
 
     public record AuditConfig(
             boolean enabled,
@@ -822,6 +985,77 @@ public record AppProperties(
                 additionalBaseUrls,
                 maxConcurrentBatches
         );
+    }
+
+    /**
+     * 교차 인코더 리랭커 접속 설정 — 미설정·0 이하는 기본값으로 채워진다. {@code baseUrl} 은 없으면 빈 문자열(= 꺼짐)이다.
+     * 이 값은 빈이 만들어질 때 한 번 굳는다({@code CrossEncoderReranker}): 주소 유무가 곧 빈의 유무라 핫 편집 대상이 아니다.
+     */
+    public RerankerConfig rerankerSafe() {
+        String url = (reranker == null || reranker.baseUrl() == null) ? "" : reranker.baseUrl().strip();
+        String model = (reranker == null || reranker.model() == null || reranker.model().isBlank())
+                ? RerankerConfig.DEFAULT_MODEL : reranker.model().strip();
+        int connect = (reranker != null && reranker.connectTimeoutSeconds() != null && reranker.connectTimeoutSeconds() > 0)
+                ? reranker.connectTimeoutSeconds() : 5;
+        int timeout = (reranker != null && reranker.timeoutSeconds() != null && reranker.timeoutSeconds() > 0)
+                ? reranker.timeoutSeconds() : 15;
+        int concurrent = (reranker != null && reranker.maxConcurrent() != null && reranker.maxConcurrent() > 0)
+                ? reranker.maxConcurrent() : 2;
+        String apiKey = (reranker == null || reranker.apiKey() == null) ? "" : reranker.apiKey().strip();
+        return new RerankerConfig(url, model, connect, timeout, concurrent, apiKey);
+    }
+
+    /** 리랭커 1위 점수가 이 값 미만이면 다시 찾는다(§6.33). 모델의 원점수라 음수도 유효하다 — 값이 없을 때만 0.0. Hot-editable. */
+    public double searchRerankMinScoreSafe() {
+        Double o = overrideDouble(SettingsKeys.SEARCH_RERANK_MIN_SCORE);
+        Double v = (o != null) ? o : searchRerankMinScore;
+        return (v == null || v.isNaN() || v.isInfinite()) ? DEFAULT_RERANK_MIN_SCORE : v;
+    }
+
+    /** 한 턴의 검색 횟수 상한(첫 검색 포함, §6.33). 1 이면 재검색이 꺼진다. {@code [1, 5]} 로 누른다. Hot-editable. */
+    public int searchMaxAttemptsSafe() {
+        Integer o = overrideInt(SettingsKeys.SEARCH_MAX_ATTEMPTS);
+        Integer v = (o != null) ? o : searchMaxAttempts;
+        int n = (v == null || v < 1) ? DEFAULT_SEARCH_MAX_ATTEMPTS : v;
+        return Math.min(n, MAX_SEARCH_MAX_ATTEMPTS);
+    }
+
+    /** 교차 인코더 리랭커를 쓰는가 — {@code app.reranker.base-url} 이 있는가. 켜면 검색이 후보 풀을 리랭크한다. */
+    public boolean rerankerEnabled() {
+        return !rerankerSafe().baseUrl().isBlank();
+    }
+
+    /** 리랭크 최종 컷이 후보 수보다 작아도 이 아래로는 내려가지 않는다(후보가 이보다 적으면 후보 수). */
+    public static final int RERANK_MIN_TOP_K = 5;
+    /** 재검색 문턱의 폴백 — 설정값이 없을 때(§6.33). */
+    public static final double DEFAULT_RERANK_MIN_SCORE = 0.0;
+    /** 한 턴의 검색 횟수 기본값·상한(§6.33, 첫 검색 포함). 상한은 설정이 잘못 커져도 LLM 호출이 곱해지지 않게 하는 안전판이다. */
+    public static final int DEFAULT_SEARCH_MAX_ATTEMPTS = 3;
+    public static final int MAX_SEARCH_MAX_ATTEMPTS = 5;
+
+    /**
+     * 리랭커에 넣을 후보 수 = {@code search-top-k × 2} (AGENT_MCP_DESIGN §4.3). 설정이 아니라 파생값이다 — 고치는 값은
+     * {@code search-top-k} 하나이고, 이 값은 {@code /settings} 에 조회 전용으로 보인다. 매 호출 다시 계산한다(핫).
+     */
+    public int effectiveRerankCandidates() {
+        return rerankCandidates(searchTopKSafe());
+    }
+
+    /**
+     * 리랭크 뒤의 최종 컷 = {@code max(5, ⌈search-top-k ÷ 2⌉)}, 후보 수를 넘지 않는다. 리랭커가 동작할 때 답변·검증 프롬프트에
+     * 들어가는 문서 수의 기준이다. 리랭커가 없거나 죽었을 때는 쓰이지 않고 {@code search-top-k} 가 최종 컷이다.
+     */
+    public int effectiveRerankTopK() {
+        return rerankTopK(searchTopKSafe());
+    }
+
+    static int rerankCandidates(int topK) {
+        return Math.max(1, topK) * 2;
+    }
+
+    static int rerankTopK(int topK) {
+        int half = (Math.max(1, topK) + 1) / 2;
+        return Math.min(rerankCandidates(topK), Math.max(RERANK_MIN_TOP_K, half));
     }
 
     public RateLimitConfig rateLimitSafe() {

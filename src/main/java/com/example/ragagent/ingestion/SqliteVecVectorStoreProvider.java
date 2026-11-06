@@ -455,7 +455,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 return out;
             }
             // A read timeout is a wall-clock problem, not a token-limit one — retrying the exact
-            // same batch (RetryTemplate in EmbeddingBeanConfig) just times out again. Halving the
+            // same batch (the SDK client's retry, see EmbeddingBeanConfig) just times out again. Halving the
             // batch shrinks the request until it fits within the read-timeout window, without
             // needing to know the embedding server's actual throughput up front.
             if (isTimeoutLike(e) && texts.size() > 1) {

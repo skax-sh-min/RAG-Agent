@@ -331,8 +331,8 @@ class StreamingFailoverWireTest {
         List<String> reprobed = new CopyOnWriteArrayList<>();
         LlmRouter router = observedRouter(overflowingServer(Integer.MAX_VALUE, requests), reprobed);
 
-        // 예전에는 WebClientResponseException 이 그대로 올라와 StreamingAgentService 의 일반 catch 로 떨어졌다 —
-        // 사용자는 "400 Bad Request from POST …" 를 봤고, 로그는 ERROR, 응답은 completeWithError 였다.
+        // 변환하지 않으면 SDK 의 날것 예외가 그대로 올라와 StreamingAgentService 의 일반 catch 로 떨어진다 —
+        // 사용자는 서버의 날것 오류 문구를 보고, 로그는 ERROR, 응답은 completeWithError 가 된다.
         assertThatThrownBy(() -> answerService(router).executeStreaming(ragStateWithThreeDocs(), new Collected()))
                 .isInstanceOf(LlmContextOverflowException.class);
 

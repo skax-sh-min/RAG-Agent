@@ -21,9 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 체인을 지나지 않는 스트리밍 요청과 체인 안의 블로킹 요청이 <b>같이 쓰는</b> 생각 필드 변환({@link ThinkingControl#applyTo}),
  * 사이트 표시({@link ThinkingControl#mark}), 그리고 두 경로가 공유하는 거부 판정({@link ThinkingControl#rejectedField}).
  *
- * <p>Spring AI 1.x 에서는 {@code applyTo} 가 32개 컴포넌트 레코드를 손으로 복사해서 "한 필드도 떨어뜨리지 않는다"를 반사로
- * 고정했다. 2.0 의 옵션은 {@code mutate()} 가 모든 값을 이어받는 빌더를 주므로 그 복사가 없다 — 대신 아래 테스트가 "다른 값이
- * 보존된다"를 대표 필드들로 고정한다. 와이어에 실제로 어떻게 나가는지는 {@code ThinkingControlWireTest} 가 본다.
+ * <p>2.0 의 옵션은 {@code mutate()} 가 모든 값을 이어받는 빌더를 주므로 {@code applyTo} 는 필드를 손으로 복사하지 않는다 —
+ * 아래 테스트가 "다른 값이 보존된다"를 대표 필드들로 고정한다. 와이어에 실제로 어떻게 나가는지는 {@code ThinkingControlWireTest} 가 본다.
  */
 class ThinkingControlTest {
 

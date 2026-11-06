@@ -41,8 +41,7 @@ public final class LlmCurlLogger {
     /**
      * 요청 본문 JSON — {@link LoggingChatModel} 과 채팅 답변 스트리밍({@code AnswerStreamer})이 <b>같은 모양</b>으로 찍는다:
      * model, stream, messages[role, content], temperature, max_tokens, reasoning_effort, 그리고 {@code extraBody} 항목은
-     * 본문 최상위에 그대로. Spring AI 1.x 에서는 {@code OpenAiApi.ChatCompletionRequest} 를 이 모양으로 다시 짰는데, 2.0 은
-     * SDK 가 요청을 만들어 그 레코드가 없다 — 대신 호출부가 넘긴 옵션에서 같은 필드를 읽는다.
+     * 본문 최상위에 그대로. 실제 요청은 SDK 가 만들므로 이 메서드는 호출부가 넘긴 옵션에서 같은 필드를 읽어 본문을 다시 짠다.
      *
      * @param model 요청에 실리는 모델 id
      */

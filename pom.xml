@@ -86,6 +86,12 @@
             <artifactId>spring-ai-rag</artifactId>
         </dependency>
 
+        <!-- Spring AI - MCP Server (STATELESS, streamable HTTP). Off unless MCP_SERVER_ENABLED=true; see McpSecurityConfig -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+        </dependency>
+
         <!-- Apache POI for PPTX and DOCX -->
         <dependency>
             <groupId>org.apache.poi</groupId>

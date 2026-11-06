@@ -205,6 +205,24 @@ class ThinkingControlWireTest {
     }
 
     @Test
+    @DisplayName("블로킹 호출의 요청 본문 model 은 설정값이다 — 호출부가 옵션에 model 을 싣지 않아도(분류·독립화·검증이 그렇다)")
+    void blockingCallsSendTheConfiguredModel() throws IOException {
+        LlmRouter router = router(provider("LOCAL", startServer(false), null), new CircuitBreaker(2));
+
+        // 표시한 호출(ThinkingControl.mark)과 표시 없는 호출, 상한이 걸리는 호출(maxTokens 가 프로바이더 상한을 넘는다) 셋 다
+        callAt(router, ThinkingSite.CONDENSE, 256);
+        router.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, "test:",
+                model -> model.call(new Prompt(List.of(new UserMessage("질문")),
+                        OpenAiChatOptions.builder().maxTokens(256).build())));
+        callAt(router, ThinkingSite.CONDENSE, 100_000);
+
+        assertThat(requests).hasSize(3);
+        assertThat(requests).extracting(body -> body.path("model").asText())
+                .as("설정의 모델(\"m\")이어야 한다 — 옵션 기본값 gpt-5-mini 가 나가면 모델 이름을 보는 서버에서 다른 모델 호출·404")
+                .containsExactly("m", "m", "m");
+    }
+
+    @Test
     @DisplayName("프로바이더별 max-tokens 상한이 옵션을 복사해 낮춰도 실은 값은 남는다")
     void providerMaxTokensCapKeepsTheSwitch() throws IOException {
         LlmRouter router = router(provider("LOCAL", startServer(false), 1000), new CircuitBreaker(2));
@@ -235,8 +253,8 @@ class ThinkingControlWireTest {
     @Test
     @DisplayName("블로킹 응답 — Spring AI 가 reasoning_content 를 버려도, 출력 토큰 초과로 생각한 호출로 센다")
     void thinkingIsObservedFromTheOutputTokens() throws IOException {
-        // 2026-10-02 llama.cpp(b10236) + gemma-4-E2B 실측 응답의 모양 — reasoning_tokens 는 보고하지 않는다. Spring AI
-        // 1.1.8 은 블로킹 응답에서 reasoning_content 를 메타데이터에 싣지 않으므로(같은 날 확인), 관측이 기댈 것은 usage 다.
+        // 2026-10-02 llama.cpp(b10236) + gemma-4-E2B 실측 응답의 모양 — reasoning_tokens 는 보고하지 않는다. 2.0 은
+        // reasoning_content 를 메타데이터에 싣지만 토큰 수는 usage(출력 227)에서 온다 — 답 '391' 로 설명되지 않는 몫이 생각이다.
         String thinkingResponse = "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"m\","
                 + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"391\","
                 + "\"reasoning_content\":\"Thinking Process: 17*23 = 391\"},\"finish_reason\":\"stop\"}],"

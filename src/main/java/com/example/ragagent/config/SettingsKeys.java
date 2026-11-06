@@ -44,6 +44,8 @@ public final class SettingsKeys {
     public static final String SEARCH_CURATED_QA_ENABLED      = "search-curated-qa-enabled"; // §10.10
     public static final String SEARCH_CURATED_QA_WEIGHT       = "search-curated-qa-weight";  // §10.10
     public static final String SEARCH_CURATED_QA_MIN_SIMILARITY = "search-curated-qa-min-similarity"; // 큐레이션 축 벡터 절반의 최소 유사도
+    public static final String SEARCH_RERANK_MIN_SCORE        = "search-rerank-min-score";  // §6.33 재검색 문턱(리랭커 1위 점수)
+    public static final String SEARCH_MAX_ATTEMPTS            = "search-max-attempts";      // §6.33 한 턴의 검색 횟수 상한(첫 검색 포함)
 
     // ── Indexing / chunking (apply on the next indexing / ↺ re-index) ────────
     public static final String CHUNK_SIZE                     = "chunk-size";
@@ -101,6 +103,8 @@ public final class SettingsKeys {
             SEARCH_CURATED_QA_ENABLED,
             SEARCH_CURATED_QA_WEIGHT,
             SEARCH_CURATED_QA_MIN_SIMILARITY,
+            SEARCH_RERANK_MIN_SCORE,
+            SEARCH_MAX_ATTEMPTS,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,
