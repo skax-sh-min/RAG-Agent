@@ -554,6 +554,23 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("§6.33 4a — TOOL 이 정형 답을 남기면(워크플로 시작) ANSWER·RETRIEVAL 없이 FINALIZE 로 가고 답이 토큰으로 나간다")
+    void toolAnswer_skipsAnswerNode() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().answer("분석 시작").build());
+        GraphListener listener = mock(GraphListener.class);
+
+        AgentState out = graphWithTool(dispatch).runStreaming(withPlan("analyzeImpact"), listener);
+
+        verify(retrievalService, never()).execute(any(), any());
+        verify(answerService, never()).executeStreaming(any(), any());
+        verify(criticService, never()).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+        verify(listener).onToken("분석 시작");
+        assertThat(out.answer()).isEqualTo("분석 시작");
+    }
+
+    @Test
     @DisplayName("§6.33 — 검색 Tool 을 골랐거나 계획이 없으면 TOOL 노드는 거치지 않는다(기존 경로 불변)")
     void searchToolOrNoPlan_neverTouchesToolNode() {
         com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);

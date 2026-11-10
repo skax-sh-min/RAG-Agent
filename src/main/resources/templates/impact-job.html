@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{impact.title}">Impact analysis</title>
+</head>
+<body>
+
+<section layout:fragment="content" class="container py-4">
+    <div th:fragment="body"
+         th:attr="hx-get=${running} ? @{/ui/impact-jobs/{id}/body(id=${job.id})} : null,
+                  hx-trigger=${running} ? 'every 3s' : null,
+                  hx-swap=${running} ? 'outerHTML' : null">
+
+        <h5 class="fw-semibold mb-1">
+            <i class="bi bi-diagram-3 me-2"></i><span th:text="#{impact.title}">Impact analysis</span>
+            <span class="text-muted fs-6" th:text="'#' + ${job.id}">#1</span>
+        </h5>
+        <p class="mb-3"><span class="text-muted" th:text="#{impact.subject}">Subject</span>:
+            <strong th:text="${job.requestText}">ABC API</strong></p>
+
+        <div th:if="${running}" class="alert alert-info py-2">
+            <span class="spinner-border spinner-border-sm me-2"></span><span th:text="#{impact.running}">Running…</span>
+        </div>
+        <div th:if="${job.status == 'interrupted'}" class="alert alert-warning py-2" th:text="#{impact.interrupted}">Interrupted</div>
+        <div th:if="${job.status == 'failed'}" class="alert alert-danger py-2">
+            <span th:text="#{impact.failed}">Failed</span>: <span th:text="${job.error}"></span>
+        </div>
+
+        <div th:if="${report != null}">
+            <div th:if="${report.tooShort}" class="alert alert-warning py-2" th:text="#{impact.too-short}">Too short</div>
+            <div th:if="${report.truncated}" class="alert alert-warning py-2"
+                 th:text="#{impact.truncated(${report.mentions})}">Truncated</div>
+
+            <p class="text-muted small" th:unless="${report.tooShort}"
+               th:text="#{impact.summary(${report.mentions}, ${report.judged})}">n mentions, m judged</p>
+
+            <div class="list-group mb-4">
+                <div th:each="f : ${report.findings}" class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                            <strong th:text="${f.file}">file.pdf</strong>
+                            <span class="text-muted small" th:if="${f.page != null and f.page != ''}" th:text="'p.' + ${f.page}"></span>
+                        </div>
+                        <span class="badge"
+                              th:classappend="${f.verdict == 'impacted'} ? 'bg-danger' : (${f.verdict == 'unverified'} ? 'bg-warning text-dark' : (${f.verdict == 'error'} ? 'bg-secondary' : 'bg-success'))"
+                              th:text="#{'impact.verdict.' + ${f.verdict}}">verdict</span>
+                    </div>
+                    <div class="small mt-1" th:text="${f.reason}">reason</div>
+                    <blockquote class="small text-muted border-start ps-2 mt-1 mb-0"
+                                th:if="${f.quote != null and f.quote != ''}" th:text="${f.quote}">quote</blockquote>
+                </div>
+            </div>
+
+            <div th:if="${!report.unjudged.isEmpty()}">
+                <h6 th:text="#{impact.unjudged}">Not judged</h6>
+                <ul class="small">
+                    <li th:each="u : ${report.unjudged}" th:text="${u.file} + ' — ' + ${u.chunks}">file — n</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+</body>
+</html>

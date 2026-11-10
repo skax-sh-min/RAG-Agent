@@ -148,6 +148,12 @@ public class AgentGraph {
                     state = toolDispatchService.execute(state);
                     // 실패하면 서비스가 계획을 지웠다 — 그 턴은 평소처럼 검색한다. 성공이면 Tool 결과가 근거 문서로 실렸고 출처는 비어 있다.
                     if (state.toolPlan() == null) yield Node.RETRIEVAL;
+                    if (state.answer() != null) {
+                        // 워크플로를 시작한 턴 — 서비스가 정형 답을 남겼다. 답변 노드를 거치지 않는다(검색 0건 경로와 같은 이벤트 모양).
+                        listener.onNodeEnter("answer");
+                        listener.onToken(state.answer());
+                        yield Node.FINALIZE;
+                    }
                     listener.onSourcesReady(state.sources());
                     yield Node.ANSWER;
                 }

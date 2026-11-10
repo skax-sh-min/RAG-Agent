@@ -527,7 +527,14 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 
 ### 영향도 분석 (4a) — `ImpactAnalysisWorkflow`
 
-[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.4. 이 조각은 **백엔드만**이다 — Tool(`analyzeImpact`)·채팅 연결·리포트 화면은 없고 어떤 요청도 이 워크플로를 부르지 않는다. 리포트를 볼 길이 없는 채로 Tool 을 열면 작업만 쌓이므로 일부러 미뤘다.
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.4. 백엔드를 먼저 만들고(리포트를 볼 길 없이 Tool 을 열면 작업만 쌓인다) 같은 날 Tool · 채팅 연결 · 리포트 화면을 이었다.
+
+- **워크플로 Tool 은 근거 문서를 만들지 않는다.** `analyzeImpact` 는 시작만 하므로 결과(`{jobId,status}`)를 문서로 읽어 LLM 이 답하게 하면 JSON 을 해설하는 답이 나온다. `ToolDispatchService` 가 정형 답을 `answer` 로 남기고 `AgentGraph` 의 `TOOL` 노드가 그것을 보면 `onNodeEnter("answer")`+`onToken` 만 내고 FINALIZE 로 간다(검색 0건 경로와 같은 이벤트 모양 · 모드 S · 출처·판정 없음). 새 워크플로 Tool 을 더하면 `IMPACT_TOOL` 같은 분기를 일반화할 것.
+- **이미 진행 중이면 예외가 아니라 `busy`.** 예외로 던지면 `ToolDispatchService` 가 "실행 실패"로 읽어 그 턴을 일반 검색으로 내려보내 안내가 사라진다.
+- **번호는 문자열로 포맷한다.** `MessageFormat` 은 `long` 을 천 단위 서식(`1,234`)으로 찍어 링크 `/ui/impact-jobs/1,234` 가 깨진다 — `String.valueOf(jobId)` 를 넘긴다(`impactToolLeavesAFixedAnswer` 가 고정).
+- **남의 작업은 404, 존재를 알리지 않는다.** 작업 번호가 순번이라 403 이면 번호를 훑어 남의 요청 대상(바꾸려는 식별자)의 존재를 엿볼 수 있다. 이를 위해 `GlobalExceptionHandler` 에 `ResponseStatusException` 처리기를 더했다 — 없으면 마지막 `Exception` 처리기가 의도한 404 를 500 으로 바꾼다(기존 코드 어디도 이 예외를 던지지 않아 드러나지 않았던 구멍).
+- **리포트 화면은 쓰기가 없다.** `/ui/**` GET 이라 게스트도 열 수 있고 CSRF 와 무관하다. 폴링 조각은 진행 중일 때만 `hx-get`·`every 3s` 를 달고 끝나면 달지 않아 스스로 멈춘다.
+- **영향도가 Tool 선택지에 들어왔다.** `ToolPlanService.PLANNABLE` 에 `analyzeImpact` 가 더해졌고(`ToolCatalog.ACCESS` 는 PUBLIC) 규칙 키 `prompt.agent.plan.rule.analyzeImpact` 가 한/영에 있다. 사전 평가는 영향도가 선택지가 아닌 구성(채팅 관점)으로 쟀으므로 **선택 정확도 재측정이 필요하다** — 영향도 5건이 `analyzeImpact` 로 가야 하고 문서 질문이 우회하면 안 된다.
 
 - **전수 조회는 순위 검색이 아니다.** `findMentions` 는 `content : "<문자열>"` 구(phrase) MATCH + 대소문자 무시 부분 문자열 재확인 + `ORDER BY rowid`(같은 데이터면 같은 순서). 식별자에 따옴표·`*`·`AND` 가 섞여도 깨지지 않게 따옴표를 이스케이프한다(`KeywordSearchFindMentionsTest`). 큐레이션 청크는 `version=curated` 라 일반 버전을 물으면 나오지 않는다.
 - **3글자 미만은 빈 결과가 아니라 `tooShort`.** trigram 이 못 찾는데 빈 리포트를 돌려주면 "영향 없음"으로 읽힌다. 리포트가 그 사실을 싣고 LLM 도 부르지 않는다.
@@ -535,7 +542,7 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **상한과 한계는 리포트가 말한다.** 판정은 40개까지(`MAX_JUDGED`), 넘는 만큼은 파일별 언급 수(`unjudged`)로만. 전수 조회 상한 200 을 넘으면 `truncated`. **의미적으로만 연관된(글자가 다른) 청크는 이 단계에서 찾지 않는다** — 설계서의 하이브리드 후보는 미구현.
 - **호출 지점은 새 사이트가 아니라 `ThinkingSite.RERANK`**(TEXT · `COST_FIRST` 고정 · 생각 끔) — 3단계가 `CONDENSE` 를 쓴 것과 같은 이유(사이트를 더하면 설정 카드·미리보기가 함께 바뀐다). 출력 예약은 `min(설정, 512)` 를 호출부가 싣는다.
 - **동시성.** 사용자당 한 건(`countRunning`)·가상 스레드·호출마다 로컬 LLM 의 대화형 게이트(`localTier1Concurrency().inUse()`)가 비기를 기다린다(상한 30초 — 영원히 굶지 않게, 넘으면 그냥 보낸다). `finish()` 는 `running` 인 행만 바꾸므로 재기동이 `interrupted` 로 돌린 작업을 늦게 끝난 스레드가 되살리지 못한다.
-- **열린 항목.** `analyzeImpact` Tool(`ToolCatalog.ACCESS` 선언 + `ToolPlanService.PLANNABLE` + 규칙 번들 키 + 정형 답변) · 리포트 API·화면(요청자와 ADMIN 만) · 진행 SSE · 앱 경로 실측(심은 언급을 전수 조회가 100% 찾는지, 가짜 인용을 걸러내는지) · 의미 연관 후보.
+- **열린 항목.** 실모델 실측(심은 언급을 전수 조회가 100% 찾는지, 가짜 인용을 걸러내는지 — 지금은 모의 응답 테스트뿐) · Tool 선택 정확도 재측정 · 의미 연관 후보 · 진행 중 SSE(지금은 3초 폴링) · 관리자가 남의 작업을 목록으로 보는 화면.
 
 ### MCP 서버 (Phase 2)
 

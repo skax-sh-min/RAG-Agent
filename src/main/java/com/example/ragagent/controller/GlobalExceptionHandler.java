@@ -84,6 +84,16 @@ public class GlobalExceptionHandler {
                 req.getMethod(), req.getRequestURI(), props.sseTimeoutMs() / 1000);
     }
 
+    /**
+     * 컨트롤러가 의도해서 던진 상태 코드(예: 남의 영향도 작업은 404)를 그대로 돌려준다 — 이것이 없으면 아래 {@code Exception} 처리기가 500 으로 바꾼다.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ProblemDetail handleResponseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        ProblemDetail pd = ProblemDetail.forStatus(ex.getStatusCode());
+        pd.setTitle(HttpStatus.valueOf(ex.getStatusCode().value()).getReasonPhrase());
+        return pd;
+    }
+
     @ExceptionHandler(NoResourceFoundException.class)
     public ProblemDetail handleNoResource(NoResourceFoundException ex) {
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);

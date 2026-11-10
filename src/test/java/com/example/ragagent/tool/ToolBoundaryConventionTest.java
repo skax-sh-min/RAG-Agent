@@ -44,7 +44,8 @@ class ToolBoundaryConventionTest {
             "app_secret", "persistent_logins", "settings_override", "llm_provider_override", "curated_submission", "curated_qa_row");
 
     private static final List<Class<?>> TOOLS = List.of(
-            KnowledgeSearchTool.class, DocumentLookupTool.class, CatalogQueryTool.class, DiffTool.class);
+            KnowledgeSearchTool.class, DocumentLookupTool.class, CatalogQueryTool.class, DiffTool.class,
+            com.example.ragagent.tool.change.ImpactAnalysisTool.class);
 
     private static List<Path> sources() throws IOException {
         List<Path> out = new ArrayList<>();
@@ -104,7 +105,7 @@ class ToolBoundaryConventionTest {
                 assertThat(ps[ps.length - 1].getType()).as("%s.%s 의 마지막 인자", c.getSimpleName(), m.getName()).isEqualTo(ToolContext.class);
             }
         }
-        assertThat(toolMethods).isEqualTo(6);
+        assertThat(toolMethods).isEqualTo(7);
     }
 
     @Test

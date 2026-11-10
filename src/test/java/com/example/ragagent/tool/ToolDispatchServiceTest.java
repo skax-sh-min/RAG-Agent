@@ -14,6 +14,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
+import com.example.ragagent.tool.change.ImpactAnalysisTool;
+import com.example.ragagent.workflow.ImpactAnalysisWorkflow;
+import java.util.List;
 
 import java.util.Optional;
 
@@ -84,6 +87,45 @@ class ToolDispatchServiceTest {
 
         assertThat(out.toolPlan()).isNull();
         assertThat(out.retrievedDocs()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("영향도 Tool — 근거 문서가 아니라 정형 답(작업 링크)을 남기고 S 모드로, 출처·판정은 비운다")
+    void impactToolLeavesAFixedAnswer() {
+        ImpactAnalysisWorkflow workflow = mock(ImpactAnalysisWorkflow.class);
+        org.mockito.Mockito.when(workflow.start(org.mockito.ArgumentMatchers.eq("u1"), org.mockito.ArgumentMatchers.eq("ABC API"),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new ImpactAnalysisWorkflow.Started(1234, "running"));
+        ToolGuard guard = new ToolGuard(mock(AuditLogger.class));
+        ToolCatalog catalog = new ToolCatalog(List.of(new ImpactAnalysisTool(workflow, guard)));
+        org.springframework.context.support.ResourceBundleMessageSource bundle = new org.springframework.context.support.ResourceBundleMessageSource();
+        bundle.setBasename("messages");
+        bundle.setDefaultEncoding("UTF-8");
+        bundle.setFallbackToSystemLocale(false);
+
+        AgentState out = new ToolDispatchService(catalog, bundle)
+                .execute(stateWith(new ToolPlan("analyzeImpact", "{\"subject\":\"ABC API\"}")));
+
+        assertThat(out.answer()).contains("/ui/impact-jobs/1234").doesNotContain("1,234");   // 숫자 서식(천 단위)이 링크를 깨지 않는다
+        assertThat(out.responseMode()).isEqualTo(com.example.ragagent.model.ResponseMode.S);
+        assertThat(out.retrievedDocs()).isEmpty();
+        assertThat(out.sources()).isEmpty();
+        assertThat(out.grounded()).isNull();
+    }
+
+    @Test
+    @DisplayName("영향도 Tool — 이미 진행 중이면 새로 시작하지 않고 안내만(예외로 던져 검색으로 내려가지 않는다)")
+    void impactToolBusyAnswer() {
+        ImpactAnalysisWorkflow workflow = mock(ImpactAnalysisWorkflow.class);
+        org.mockito.Mockito.when(workflow.start(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenThrow(new IllegalStateException("busy"));
+        ToolCatalog catalog = new ToolCatalog(List.of(new ImpactAnalysisTool(workflow, new ToolGuard(mock(AuditLogger.class)))));
+
+        AgentState out = new ToolDispatchService(catalog)
+                .execute(stateWith(new ToolPlan("analyzeImpact", "{\"subject\":\"ABC API\"}")));
+
+        assertThat(out.toolPlan()).isNotNull();
+        assertThat(out.answer()).contains("이미 진행 중");
     }
 
     @Test

@@ -50,8 +50,8 @@ public class ToolPlanService {
     private static final Logger log = LoggerFactory.getLogger(ToolPlanService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** 채팅에서 모델이 고를 수 있는 Tool(이 순서로 프롬프트에 적는다). 워크플로 Tool 은 4단계가 끝나야 더한다. */
-    static final List<String> PLANNABLE = List.of(ToolPlan.SEARCH_TOOL, "findRelatedDocuments", "queryCatalog");
+    /** 채팅에서 모델이 고를 수 있는 Tool(이 순서로 프롬프트에 적는다). 영향도(4a)까지 — 유지보수 Tool 은 4b 가 끝나야 더한다. */
+    static final List<String> PLANNABLE = List.of(ToolPlan.SEARCH_TOOL, "findRelatedDocuments", "queryCatalog", "analyzeImpact");
 
     /** 이 턴의 선택 결과와 그 호출의 토큰 — 그래프 바깥의 호출이라 호출부가 상태에 더한다({@code QuestionCondenser.Condensed} 와 같은 이유). */
     public record Planned(ToolPlan plan, int inputTokens, int outputTokens, boolean called) {
