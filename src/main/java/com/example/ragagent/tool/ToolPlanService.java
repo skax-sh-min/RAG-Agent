@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -51,7 +52,15 @@ public class ToolPlanService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 채팅에서 모델이 고를 수 있는 Tool(이 순서로 프롬프트에 적는다). 영향도(4a)까지 — 유지보수 Tool 은 4b 가 끝나야 더한다. */
-    static final List<String> PLANNABLE = List.of(ToolPlan.SEARCH_TOOL, "findRelatedDocuments", "queryCatalog", "analyzeImpact");
+    static final List<String> PLANNABLE = List.of(ToolPlan.SEARCH_TOOL, "findRelatedDocuments", "queryCatalog", "analyzeImpact",
+            ToolDispatchService.CHANGE_TOOL);
+
+    /**
+     * 채팅의 도구 목록 프롬프트에서 숨기는 인자 — 유지보수의 {@code semantic}·{@code caseVariants} 는 비용과 위험이 있어 <b>화면에서만</b> 켠다(채팅은 항상
+     * 끈 채로 시작한다). 모델이 지어서 채워도 {@link ToolDispatchService} 가 읽지 않는다.
+     */
+    static final java.util.Map<String, Set<String>> CHAT_HIDDEN_PARAMS =
+            java.util.Map.of(ToolDispatchService.CHANGE_TOOL, Set.of("semantic", "caseVariants"));
 
     /** 이 턴의 선택 결과와 그 호출의 토큰 — 그래프 바깥의 호출이라 호출부가 상태에 더한다({@code QuestionCondenser.Condensed} 와 같은 이유). */
     public record Planned(ToolPlan plan, int inputTokens, int outputTokens, boolean called) {
@@ -65,14 +74,23 @@ public class ToolPlanService {
     private final MessageSource messageSource;
     private final AppProperties props;
     private final boolean enabled;
+    /** null = 되묻기 없음(테스트·구 구성) — 확정 경로가 없고, 유지보수 계획은 되묻기 없이는 시작되지 않으므로 사실상 그 Tool 이 쓸모없다. */
+    private final PendingChangeConfirmations pending;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ToolPlanService(LlmRouter llmRouter, ToolCatalog catalog, MessageSource messageSource, AppProperties props,
-                           @Value("${app.agent.enabled:false}") boolean enabled) {
+                           @Value("${app.agent.enabled:false}") boolean enabled, PendingChangeConfirmations pending) {
         this.llmRouter = llmRouter;
         this.catalog = catalog;
         this.messageSource = messageSource;
         this.props = props;
         this.enabled = enabled;
+        this.pending = pending;
+    }
+
+    /** 되묻기 저장소 없이 만든다 — 테스트용. */
+    public ToolPlanService(LlmRouter llmRouter, ToolCatalog catalog, MessageSource messageSource, AppProperties props, boolean enabled) {
+        this(llmRouter, catalog, messageSource, props, enabled, null);
     }
 
     /** {@code app.agent.enabled}(기본 꺼짐) — 꺼져 있으면 이 단계는 LLM 을 부르지 않고 그래프도 새 경로를 타지 않는다. */
@@ -93,8 +111,27 @@ public class ToolPlanService {
      * 관리자 여부는 넘기지 않는다: 채팅은 늘 공개 호출자로 계획한다({@link ToolDispatchService} 도 같은 호출자로 실행한다).
      */
     public Planned planFor(boolean directMode, ResponseMode mode, String question, String userId, Locale locale) {
+        return planFor(directMode, mode, question, userId, false, null, locale);
+    }
+
+    /**
+     * @param admin    요청 스레드에서 구한 관리자 여부 — 관리자에게만 유지보수 Tool 이 보이고 되묻기 확정이 적용된다
+     * @param threadId 되묻기 대기는 (사용자, 대화) 단위라 대화를 안다
+     */
+    public Planned planFor(boolean directMode, ResponseMode mode, String question, String userId, boolean admin,
+                           String threadId, Locale locale) {
         if (!appliesTo(directMode, mode)) return Planned.none();
-        return plan(question, new ToolCaller(userId, false, "chat"), locale);
+        if (admin && pending != null) {
+            // 되묻기에 대한 답이면(바로 다음 메시지가 긍정 표현과 정확히 같을 때) 모델을 부르지 않고 확정 계획으로 간다. 어떤 말이든 대기는 지워진다.
+            Optional<PendingChangeConfirmations.Pending> confirmed = pending.resolve(userId, threadId, question);
+            if (confirmed.isPresent()) {
+                PendingChangeConfirmations.Pending c = confirmed.get();
+                String args = MAPPER.createObjectNode().put("instruction", c.instruction()).put("from", c.from()).put("to", c.to()).toString();
+                log.info("[TOOL-PLAN] 유지보수 되묻기 확정 user={} thread={}", userId, threadId);
+                return new Planned(new ToolPlan(ToolDispatchService.CHANGE_TOOL, args, true), 0, 0, false);
+            }
+        }
+        return plan(question, new ToolCaller(userId, admin, "chat"), locale);
     }
 
     /**
@@ -179,14 +216,16 @@ public class ToolPlanService {
     }
 
     /** 도구 목록 한 줄씩 — 이름 · 설명 · 인자(필수 표시). 사전 평가 하네스와 같은 모양이다. */
-    private static String toolList(List<ToolCallback> tools) {
+    static String toolList(List<ToolCallback> tools) {
         StringBuilder sb = new StringBuilder();
         for (ToolCallback t : tools) {
             JsonNode schema = MAPPER.readTree(t.getToolDefinition().inputSchema());
             Set<String> required = new HashSet<>();
             schema.path("required").forEach(r -> required.add(r.asString("")));
             List<String> params = new ArrayList<>();
+            Set<String> hidden = CHAT_HIDDEN_PARAMS.getOrDefault(t.getToolDefinition().name(), Set.of());
             for (String name : schema.path("properties").propertyNames()) {
+                if (hidden.contains(name)) continue;
                 params.add(name + (required.contains(name) ? "(필수)" : ""));
             }
             if (sb.length() > 0) sb.append('\n');
@@ -197,7 +236,7 @@ public class ToolPlanService {
     }
 
     /** 보이는 Tool 마다의 선택 규칙 한 줄 — 보이지 않는 Tool 의 규칙은 싣지 않는다(모르는 이름을 고르게 하지 않는다). */
-    private String ruleList(List<ToolCallback> tools, Locale locale) {
+    String ruleList(List<ToolCallback> tools, Locale locale) {
         StringBuilder sb = new StringBuilder();
         for (ToolCallback t : tools) {
             if (sb.length() > 0) sb.append('\n');

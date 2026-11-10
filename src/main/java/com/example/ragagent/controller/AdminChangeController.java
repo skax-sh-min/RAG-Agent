@@ -61,9 +61,14 @@ public class AdminChangeController {
     }
 
     @GetMapping("/admin/change-jobs")
-    public String list(@RequestParam(required = false) String error, Model model) {
+    public String list(@RequestParam(required = false) String error,
+                       @RequestParam(required = false) String from,
+                       @RequestParam(required = false) String to, Model model) {
         model.addAttribute("jobs", jobs.recentByKind(ChangeJobRepository.KIND_MAINTENANCE, 30));
         model.addAttribute("error", error);
+        // 채팅이 되물으며 건넨 링크 — 바꿀 말·새 말을 폼에 미리 채운다(옵션은 여기서 직접 켠다). 값은 템플릿이 이스케이프한다.
+        model.addAttribute("from", from);
+        model.addAttribute("to", to);
         return "admin-change-jobs";
     }
 

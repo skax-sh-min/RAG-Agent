@@ -100,6 +100,12 @@ public class AgentGraph {
      * 문서를 필요로 하는가"는 모드가 알기 때문이다.
      */
     private Node afterClassify(AgentState state) {
+        // §6.33 4b — 사용자가 되묻기에 "네" 라고 답한 확정 계획은 분류보다 앞선다: "네" 한 마디는 잡담(meta)으로 분류되기 쉽고, 그러면 확정이
+        // DIRECT_ANSWER 로 흘러 작업이 시작되지 않은 채 사라진다. 모델이 고른 계획(확정 아님)은 여전히 meta 가 이긴다.
+        if (toolDispatchService != null && state.toolPlan() != null && state.toolPlan().confirmed()
+                && state.retrievalRetries() == 0 && state.retrievedDocs().isEmpty()) {
+            return Node.TOOL;
+        }
         boolean meta = "meta".equals(state.questionType());
         if (meta && state.responseMode().allowsDirect()) return Node.DIRECT_ANSWER;
         // §6.33 3단계 — 검색 아닌 Tool 을 골랐을 때만 새 경로. 고르지 않았거나(null) 검색 Tool 이거나 TOOL 노드가 없으면 늘 하던 RETRIEVAL.

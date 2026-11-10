@@ -575,4 +575,37 @@ class StreamingAgentServiceTest {
         assertThat(sentEvents()).as("생각이 끝나고 첫 답 토큰에서 단계 표시를 되돌린다")
                 .anySatisfy(e -> assertThat(e).contains("답변 생성 중..."));
     }
+
+    @Test
+    @DisplayName("§6.33 4b — run(userId, admin, …): 워커에는 SecurityContext 가 없으므로 인자로 받은 관리자 여부가 Tool 선택과 그래프 상태로 간다")
+    void run_carriesTheAdminFlagFromTheRequestThread() {
+        com.example.ragagent.tool.ToolPlanService planner = mock(com.example.ragagent.tool.ToolPlanService.class);
+        com.example.ragagent.tool.ToolPlan plan = new com.example.ragagent.tool.ToolPlan("requestDocumentChange", "{}", true);
+        when(planner.planFor(anyBoolean(), any(), anyString(), anyString(), anyBoolean(), any(), any()))
+                .thenReturn(new com.example.ragagent.tool.ToolPlanService.Planned(plan, 0, 0, false));
+        service.setToolPlanService(planner);
+        when(agentGraph.runStreaming(any(), any())).thenReturn(resultState("답"));
+
+        service.run("root", true, form(false, null), emitter);
+
+        verify(planner).planFor(eq(false), any(), eq("질문"), eq("root"), eq(true), eq("t1"), any());
+        org.mockito.ArgumentCaptor<AgentState> captor = org.mockito.ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).runStreaming(captor.capture(), any());
+        assertThat(captor.getValue().callerAdmin()).isTrue();
+        assertThat(captor.getValue().toolPlan()).isEqualTo(plan);
+    }
+
+    @Test
+    @DisplayName("§6.33 4b — 3인자 run 은 관리자가 아니다(기존 호출·테스트의 동작 그대로)")
+    void run_threeArgIsNeverAdmin() {
+        com.example.ragagent.tool.ToolPlanService planner = mock(com.example.ragagent.tool.ToolPlanService.class);
+        when(planner.planFor(anyBoolean(), any(), anyString(), anyString(), anyBoolean(), any(), any()))
+                .thenReturn(com.example.ragagent.tool.ToolPlanService.Planned.none());
+        service.setToolPlanService(planner);
+        when(agentGraph.runStreaming(any(), any())).thenReturn(resultState("답"));
+
+        service.run("u1", form(false, null), emitter);
+
+        verify(planner).planFor(eq(false), any(), eq("질문"), eq("u1"), eq(false), eq("t1"), any());
+    }
 }

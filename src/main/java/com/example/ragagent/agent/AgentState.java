@@ -85,6 +85,7 @@ public record AgentState(
                                      // 분류기가 쓰는 짧은 검색문은 searchQuestion 에 실린다. null = 해당 없음(키워드 축도
                                      // effectiveSearchQuestion() 을 쓴다) — effectiveKeywordQuestion() 참고
         ,
+        boolean callerAdmin,         // §6.33 — 이 턴을 묻은 호출자가 관리자인가(요청 스레드에서 구해 실린다). Tool 선택의 선택지와 실행 권한이 읽는다
         ToolPlan toolPlan            // §6.33 3단계 — 모델이 고른 Tool(프롬프트 JSON). null = 고르지 않았거나 읽지 못했거나 기능이 꺼짐
                                      // → 그래프는 기존 RETRIEVAL 로 간다. 검색 Tool 이면 역시 RETRIEVAL, 그 밖의 Tool 이면 TOOL 노드
 ) {
@@ -134,7 +135,7 @@ public record AgentState(
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
                 0, List.of(), null, null,
-                null, null, false, 0, null, null);
+                null, null, false, 0, null, false, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -267,6 +268,7 @@ public record AgentState(
         private boolean excludeHistory;
         private int historyBoost;
         private String searchKeywords;
+        private boolean callerAdmin;
         private ToolPlan toolPlan;
 
         Builder() {}
@@ -310,6 +312,7 @@ public record AgentState(
             this.excludeHistory     = s.excludeHistory;
             this.historyBoost       = s.historyBoost;
             this.searchKeywords     = s.searchKeywords;
+            this.callerAdmin        = s.callerAdmin;
             this.toolPlan           = s.toolPlan;
         }
 
@@ -349,6 +352,7 @@ public record AgentState(
         public Builder historyBoost(int v)                 { this.historyBoost = v;       return this; }
         public Builder searchKeywords(String v)            { this.searchKeywords = v;     return this; }
         public Builder toolPlan(ToolPlan v)                { this.toolPlan = v;           return this; }
+        public Builder callerAdmin(boolean v)              { this.callerAdmin = v;       return this; }
         /**
          * 이 시도가 본 문서로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). 본 문서는 답변 프롬프트에
          * 실린 집합이다(§6.30 B, {@link AgentState#repeatsLastRejection} 와 같은 키).
@@ -376,7 +380,7 @@ public record AgentState(
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
                     retrievalRetries, excludedDocIds, searchQuestion, lastRejection,
-                    lastSent, lastAnswerDigest, excludeHistory, historyBoost, searchKeywords, toolPlan);
+                    lastSent, lastAnswerDigest, excludeHistory, historyBoost, searchKeywords, callerAdmin, toolPlan);
         }
     }
 }

@@ -601,4 +601,18 @@ class AgentGraphTest {
 
         verify(retrievalService, times(1)).execute(any(), any());
     }
+
+    @Test
+    @DisplayName("§6.33 4b — 되묻기에 \"네\" 한 확정 계획은 meta 분류보다 앞선다(\"네\" 한 마디는 잡담으로 분류되기 쉽다)")
+    void confirmedPlanBeatsMeta() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().answer("시작").build());
+        AgentState state = AgentState.of("네", "v1", "t1", "", RoutingMode.COST_FIRST).toBuilder().questionType("meta")
+                .toolPlan(new com.example.ragagent.tool.ToolPlan("requestDocumentChange", "{}", true)).build();
+
+        graphWithTool(dispatch).run(state);
+
+        verify(dispatch, times(1)).execute(any());
+        verify(directAnswerService, never()).execute(any());
+    }
 }

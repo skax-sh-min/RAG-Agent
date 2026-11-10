@@ -6,8 +6,15 @@ package com.example.ragagent.tool;
  *
  * @param toolName      {@link ToolCatalog} 에 있는 이름
  * @param argumentsJson 스키마 검증을 통과한 인자 JSON 객체
+ * @param confirmed     사용자가 되묻기에 "네" 라고 답해 <b>확정된</b> 계획인가 — 모델이 고른 것이 아니라 {@link PendingChangeConfirmations} 가 만든다.
+ *                      유지보수 Tool 은 확정된 계획만 실제로 시작한다(처음 고른 계획은 되묻기만 한다)
  */
-public record ToolPlan(String toolName, String argumentsJson) {
+public record ToolPlan(String toolName, String argumentsJson, boolean confirmed) {
+
+    /** 모델이 고른 계획 — 확정되지 않았다. */
+    public ToolPlan(String toolName, String argumentsJson) {
+        this(toolName, argumentsJson, false);
+    }
 
     /** 검색 Tool — 이 Tool 을 고르면 그래프는 새 경로를 타지 않고 기존 {@code RETRIEVAL}(검색 루프)로 간다(설계서 D1). */
     public static final String SEARCH_TOOL = "searchKnowledge";

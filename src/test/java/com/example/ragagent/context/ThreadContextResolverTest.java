@@ -59,4 +59,39 @@ class ThreadContextResolverTest {
         ThreadContext ctx = resolve(second);
         assertThat(fresh.getAttribute("threadId")).isEqualTo(ctx.threadId());
     }
+
+    // ── 관리자 여부(§6.33 4b — 채팅에서 관리자 호출) ──────────────────────────
+
+    private static void authenticate(String... roles) {
+        java.util.List<org.springframework.security.core.authority.SimpleGrantedAuthority> auths =
+                java.util.Arrays.stream(roles).map(org.springframework.security.core.authority.SimpleGrantedAuthority::new).toList();
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("u", "n/a", auths));
+    }
+
+    @Test
+    @DisplayName("요청 스레드의 인증이 ROLE_ADMIN 이면 admin=true, 일반 사용자·게스트·인증 없음은 false")
+    void adminFlagComesFromTheRequestThreadAuthentication() {
+        try {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+            assertThat(resolve(new MockHttpServletRequest("GET", "/")).admin()).as("인증 없음").isFalse();
+
+            authenticate("ROLE_USER");
+            assertThat(resolve(new MockHttpServletRequest("GET", "/")).admin()).as("일반 사용자·게스트").isFalse();
+
+            authenticate("ROLE_USER", "ROLE_ADMIN");
+            assertThat(resolve(new MockHttpServletRequest("GET", "/")).admin()).as("관리자").isTrue();
+
+            authenticate("ADMIN");   // 접두사 없는 권한은 ROLE_ADMIN 이 아니다
+            assertThat(resolve(new MockHttpServletRequest("GET", "/")).admin()).isFalse();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    @DisplayName("익명 컨텍스트는 관리자가 아니다")
+    void anonymousContextIsNotAdmin() {
+        assertThat(ThreadContext.anonymous("t").admin()).isFalse();
+    }
 }

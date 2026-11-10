@@ -17,6 +17,9 @@ PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/control.py   # 대조: 건
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/semantic.py  # F: 의미 변경(실모델) — 가드가 거르는 것·통과한 것·MD_PARTIAL
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/casevariants.py          # G: 대소문자 변형 끔/켬 비교 — 청크·FTS·MD 에 변형이 남는지
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/casevariants_reindex.py  # G2: 변형 치환 뒤 재인덱싱해도 되살아나지 않는지(G 바로 다음에)
+# H: 채팅에서 관리자가 유지보수 요청(되묻기→"네"→시작). 앱을 management-only 로 띄우고(-DAUTH_MANAGEMENT_ONLY=true -DAGENT_ENABLED=true -DUSE_CADDY_REVERSE_PROXY_HTTPS=false,
+#    http 로 붙으므로 세션 쿠키 Secure 를 끈다) 계정을 비운 복사본으로: prep.py --no-users 뒤 앱 실행 → 한 시간 가까이 걸릴 수 있다(질문마다 실 LLM 호출)
+PYTHONIOENCODING=utf-8 python -u scripts/maintenance_e2e/chatadmin.py
 ```
 
 - 바꿀 말은 코퍼스에서 하나의 문서에만 2~5번 나오는 식별자(`BEDU2002` · `BEDU2001` · `TOT_CNT`)를 골랐다 — 다른 코퍼스에서는 `prep.py` 가 출력하는 후보로 `drive.py <옛말> <새말>` 을 쓴다(`drive2.py`·`reindex.py` 는 이 이름이 코드에 박혀 있다).

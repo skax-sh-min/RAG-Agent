@@ -23,16 +23,17 @@
                 <div class="mb-2">
                     <label class="form-label small" for="instruction" th:text="#{maint.instruction}">Instruction</label>
                     <input class="form-control" id="instruction" name="instruction" maxlength="500"
+                           th:value="${from != null and to != null} ? ${from} + ' → ' + ${to} : null"
                            th:placeholder="#{maint.instruction.placeholder}" required>
                 </div>
                 <div class="row g-2 mb-3">
                     <div class="col-md-6">
                         <label class="form-label small" for="from" th:text="#{maint.from}">From</label>
-                        <input class="form-control" id="from" name="from" maxlength="200">
+                        <input class="form-control" id="from" name="from" maxlength="200" th:value="${from}">
                     </div>
                     <div class="col-md-6">
                         <label class="form-label small" for="to" th:text="#{maint.to}">To</label>
-                        <input class="form-control" id="to" name="to" maxlength="200">
+                        <input class="form-control" id="to" name="to" maxlength="200" th:value="${to}">
                     </div>
                 </div>
                 <div class="form-check mb-2">

@@ -11,7 +11,9 @@ import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.service.CatalogQueryService;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.tool.catalog.CatalogQueryTool;
+import com.example.ragagent.tool.change.ChangeRequestTool;
 import com.example.ragagent.tool.change.DiffTool;
+import com.example.ragagent.workflow.MaintenanceWorkflow;
 import com.example.ragagent.tool.knowledge.DocumentLookupTool;
 import com.example.ragagent.tool.knowledge.KnowledgeSearchTool;
 import org.junit.jupiter.api.BeforeEach;
@@ -226,5 +228,102 @@ class ToolPlanServiceTest {
         assertThat(on.appliesTo(false, ResponseMode.S)).isFalse();
         assertThat(on.appliesTo(false, ResponseMode.C)).isFalse();
         assertThat(service(mock(LlmRouter.class), false).appliesTo(false, ResponseMode.N)).isFalse();
+    }
+
+    // ── 채팅의 유지보수(관리자) ─────────────────────────────────────────────
+
+    private ToolCatalog catalogWithChange() {
+        ToolGuard guard = new ToolGuard(mock(AuditLogger.class));
+        return new ToolCatalog(List.of(
+                new KnowledgeSearchTool(null, Optional.empty(), null, null, guard),
+                new CatalogQueryTool(mock(CatalogQueryService.class), guard),
+                new ChangeRequestTool(mock(MaintenanceWorkflow.class), guard)));
+    }
+
+    private static final ToolCaller ADMIN = new ToolCaller("root", true, "chat");
+
+    @Test
+    @DisplayName("유지보수 Tool 은 관리자에게만 보이고, 프롬프트의 도구 목록에서 semantic·caseVariants 는 숨는다(옵션은 화면에서만)")
+    void adminSeesTheChangeToolAndTheOptionsAreHidden() {
+        ToolPlanService svc = new ToolPlanService(mock(LlmRouter.class), catalogWithChange(), bundle(), props(), true);
+
+        assertThat(svc.visibleTools(ADMIN).stream().map(cb -> cb.getToolDefinition().name()).toList())
+                .contains("requestDocumentChange");
+        assertThat(svc.visibleTools(GUEST).stream().map(cb -> cb.getToolDefinition().name()).toList())
+                .doesNotContain("requestDocumentChange");
+
+        ArgumentCaptor<Prompt> seen = ArgumentCaptor.forClass(Prompt.class);
+        ToolPlanService withModel = new ToolPlanService(routerReturning("{\"tool\":\"NONE\",\"arguments\":{}}", seen), catalogWithChange(), bundle(), props(), true);
+        withModel.planFor(false, ResponseMode.N, "문서 바꿔 줘", "root", true, "t1", Locale.KOREAN);
+        String adminPrompt = ((SystemMessage) seen.getValue().getInstructions().get(0)).getText();
+        assertThat(adminPrompt).contains("- requestDocumentChange:").contains("from 에 A, to 에 B").contains("방법이나 차이를 묻는 질문은 이 도구가 아니다")
+                .contains("instruction(필수)").contains("from").contains("to")
+                .doesNotContain("semantic").doesNotContain("caseVariants");
+
+        withModel.planFor(false, ResponseMode.N, "문서 바꿔 줘", "guest", false, "t1", Locale.KOREAN);
+        assertThat(((SystemMessage) seen.getValue().getInstructions().get(0)).getText()).doesNotContain("requestDocumentChange");
+    }
+
+    @Test
+    @DisplayName("되묻기에 \"네\" — 모델을 부르지 않고 확정 계획(confirmed)으로 간다")
+    void aConfirmationSkipsTheModel() {
+        PendingChangeConfirmations pending = new PendingChangeConfirmations();
+        pending.put("root", "t1", new PendingChangeConfirmations.Pending("A 를 B 로", "A", "B"));
+        LlmRouter router = mock(LlmRouter.class);
+        ToolPlanService svc = new ToolPlanService(router, catalogWithChange(), bundle(), props(), true, pending);
+
+        ToolPlanService.Planned planned = svc.planFor(false, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN);
+
+        assertThat(planned.called()).isFalse();
+        assertThat(planned.plan().confirmed()).isTrue();
+        assertThat(planned.plan().toolName()).isEqualTo("requestDocumentChange");
+        assertThat(planned.plan().argumentsJson()).contains("\"from\":\"A\"").contains("\"to\":\"B\"").contains("A 를 B 로");
+        verify(router, never()).executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any());
+        assertThat(pending.isPending("root", "t1")).isFalse();
+    }
+
+    @Test
+    @DisplayName("긍정이 아닌 다른 말은 대기를 지우고 평소처럼 Tool 선택으로 간다")
+    void anythingElseCancelsAndPlansNormally() {
+        PendingChangeConfirmations pending = new PendingChangeConfirmations();
+        pending.put("root", "t1", new PendingChangeConfirmations.Pending("A 를 B 로", "A", "B"));
+        ArgumentCaptor<Prompt> seen = ArgumentCaptor.forClass(Prompt.class);
+        ToolPlanService svc = new ToolPlanService(routerReturning("{\"tool\":\"searchKnowledge\",\"arguments\":{\"query\":\"x\"}}", seen),
+                catalogWithChange(), bundle(), props(), true, pending);
+
+        ToolPlanService.Planned planned = svc.planFor(false, ResponseMode.N, "아니요, 그냥 문서 내용이 궁금해요", "root", true, "t1", Locale.KOREAN);
+
+        assertThat(planned.called()).isTrue();
+        assertThat(planned.plan().confirmed()).isFalse();
+        assertThat(pending.isPending("root", "t1")).isFalse();
+    }
+
+    @Test
+    @DisplayName("관리자가 아닌 호출자의 \"네\" 는 대기를 확정하지도 지우지도 못한다 — 다른 대화의 \"네\" 도 같다")
+    void nonAdminsAndOtherThreadsNeverTouchThePending() {
+        PendingChangeConfirmations pending = new PendingChangeConfirmations();
+        pending.put("root", "t1", new PendingChangeConfirmations.Pending("A 를 B 로", "A", "B"));
+        ArgumentCaptor<Prompt> seen = ArgumentCaptor.forClass(Prompt.class);
+        ToolPlanService svc = new ToolPlanService(routerReturning("{\"tool\":\"NONE\",\"arguments\":{}}", seen),
+                catalogWithChange(), bundle(), props(), true, pending);
+
+        assertThat(svc.planFor(false, ResponseMode.N, "네", "root", false, "t1", Locale.KOREAN).plan()).isNull();   // 관리자 아님
+        assertThat(svc.planFor(false, ResponseMode.N, "네", "root", true, "t2", Locale.KOREAN).plan()).isNull();    // 다른 대화
+        assertThat(pending.isPending("root", "t1")).as("대기는 그대로").isTrue();
+        assertThat(svc.planFor(false, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN).plan().confirmed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Direct 요청·S·C 모드·기능 꺼짐에서는 대기가 있어도 확정되지 않는다")
+    void confirmationOnlyAppliesWhereToolSelectionDoes() {
+        PendingChangeConfirmations pending = new PendingChangeConfirmations();
+        pending.put("root", "t1", new PendingChangeConfirmations.Pending("A 를 B 로", "A", "B"));
+        ToolPlanService on = new ToolPlanService(mock(LlmRouter.class), catalogWithChange(), bundle(), props(), true, pending);
+        ToolPlanService off = new ToolPlanService(mock(LlmRouter.class), catalogWithChange(), bundle(), props(), false, pending);
+
+        assertThat(on.planFor(true, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN).plan()).isNull();
+        assertThat(on.planFor(false, ResponseMode.C, "네", "root", true, "t1", Locale.KOREAN).plan()).isNull();
+        assertThat(off.planFor(false, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN).plan()).isNull();
+        assertThat(pending.isPending("root", "t1")).isTrue();
     }
 }

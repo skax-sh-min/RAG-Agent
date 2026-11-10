@@ -147,7 +147,8 @@ public class AgentService {
                     CompletableFuture<ToolPlanService.Planned> planF = condensedF.thenApplyAsync(
                             c -> toolPlanService == null ? ToolPlanService.Planned.none()
                                     : toolPlanService.planFor(false, request.responseMode(),
-                                            c == null ? request.question() : c.searchQuestion(), userId, ctx.locale()), exec);
+                                            c == null ? request.question() : c.searchQuestion(), userId, ctx.admin(),
+                                            request.threadId(), ctx.locale()), exec);
                     QuestionCondenser.Condensed condensed = condensedF.join();
                     AgentState.Builder builder = AgentState.of(
                             request.question(),
@@ -180,6 +181,7 @@ public class AgentService {
                 .selectedTags(request.selectedTags())
                 .responseMode(request.responseMode())
                 .excludeHistory(request.excludeHistory())
+                .callerAdmin(ctx.admin())   // 요청 스레드에서 구한 관리자 여부 — Tool 선택의 선택지와 실행 권한이 읽는다
                 .build();
 
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

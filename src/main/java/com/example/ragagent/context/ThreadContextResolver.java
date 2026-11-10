@@ -21,6 +21,14 @@ public class ThreadContextResolver implements HandlerMethodArgumentResolver {
         this.currentUser = currentUser;  // 향후 JwtCurrentUser 등 구현체로 교체
     }
 
+    /** 이 요청의 인증이 관리자인가 — 요청 스레드에서만 읽을 수 있다. 인증이 없거나 익명이면 {@code false}. */
+    static boolean isAdminRequest() {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.isAuthenticated()
+                && auth.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
     @Override
     public boolean supportsParameter(MethodParameter p) {
         return p.getParameterType().equals(ThreadContext.class);
@@ -46,6 +54,6 @@ public class ThreadContextResolver implements HandlerMethodArgumentResolver {
             threadId = UUID.randomUUID().toString();
             if (session != null) session.setAttribute("threadId", threadId);
         }
-        return new ThreadContext(threadId, currentUser.userId(), currentUser.locale());
+        return new ThreadContext(threadId, currentUser.userId(), currentUser.locale(), isAdminRequest());
     }
 }

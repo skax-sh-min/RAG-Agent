@@ -8,7 +8,7 @@ ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..', '..')).r
 HERE = ROOT + '/scripts/maintenance_e2e'
 import hashlib, io, json, os, re, sqlite3, struct, sys, time, urllib.parse, urllib.request
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 DATA = ROOT + '/target/e2e-data'
 APP = 'http://127.0.0.1:8098'
 EMBED = 'http://127.0.0.1:28091/v1/embeddings'

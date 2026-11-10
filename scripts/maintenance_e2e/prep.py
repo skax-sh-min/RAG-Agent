@@ -2,7 +2,7 @@ import os as _os
 ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..', '..')).replace('\\', '/')
 HERE = ROOT + '/scripts/maintenance_e2e'
 import os, shutil, sqlite3, sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 DST = ROOT + '/target/e2e-data'
 if os.path.exists(DST):
     shutil.rmtree(DST)
@@ -19,6 +19,13 @@ shutil.copytree(ROOT + '/data/converted', DST + '/converted')
 for d in ('documents', 'images'):
     os.makedirs(DST + '/' + d, exist_ok=True)
 
+if '--no-users' in sys.argv:
+    # 채팅 관리자 시나리오(chatadmin.py) — 복사본의 계정을 비워 /setup 으로 일회용 관리자를 만든다(원본 data/ 는 건드리지 않는다)
+    u = sqlite3.connect(DST + '/memory.db')
+    u.execute('DELETE FROM users')
+    u.commit()
+    u.close()
+    print('users emptied in the scratch copy')
 c = sqlite3.connect(DST + '/memory.db')
 c.enable_load_extension(True)
 c.load_extension(ROOT + '/lib/win64/vec0')

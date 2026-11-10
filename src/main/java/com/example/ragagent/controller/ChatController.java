@@ -203,11 +203,12 @@ public class ChatController {
             return emitter;
         }
         String userId = ctx.userId();
+        final boolean admin = ctx.admin();   // 요청 스레드에서 구한 값 — 아래 워커에는 SecurityContext 가 없다
         threadMetaService.getOrCreate(userId, normalizedForm.threadId(), normalizedForm.version());
         threadMetaService.updateTags(userId, normalizedForm.threadId(), normalizedForm.selectedTags());
         // MdcPropagation — 워커(와 그 안의 future·검색·Vision)가 이 요청의 traceId 로 로그를 남긴다.
         Thread worker = Thread.ofVirtual().start(
-                MdcPropagation.wrap(() -> streamingAgentService.run(userId, normalizedForm, emitter)));
+                MdcPropagation.wrap(() -> streamingAgentService.run(userId, admin, normalizedForm, emitter)));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
                     normalizedForm.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);

@@ -56,7 +56,7 @@ class ImpactJobControllerTest {
     void setUp() throws Exception {
         when(threadContextResolver.supportsParameter(any())).thenReturn(true);
         when(threadContextResolver.resolveArgument(any(), any(), any(), any()))
-                .thenReturn(new ThreadContext("t1", "u1", Locale.KOREAN));
+                .thenReturn(new ThreadContext("t1", "u1", Locale.KOREAN, false));
     }
 
     private static ChangeJobRepository.Job job(long id, String owner, String status, String summary) {

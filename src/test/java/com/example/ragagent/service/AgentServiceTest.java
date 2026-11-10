@@ -275,4 +275,46 @@ class AgentServiceTest {
                         .retryAfterSeconds()).isEqualTo(4));
         verify(agentGraph, never()).run(any());
     }
+
+    @Test
+    @DisplayName("§6.33 4b — 요청 스레드에서 구한 ctx.admin 과 대화 id 가 Tool 선택으로 가고, 고른 계획과 관리자 여부가 그래프 상태에 실린다")
+    void chat_carriesTheAdminFlagAndThreadIntoToolPlanningAndTheGraphState() {
+        com.example.ragagent.tool.ToolPlanService planner = mock(com.example.ragagent.tool.ToolPlanService.class);
+        com.example.ragagent.tool.ToolPlan plan = new com.example.ragagent.tool.ToolPlan("requestDocumentChange", "{}", true);
+        when(planner.planFor(anyBoolean(), any(), anyString(), anyString(), anyBoolean(), any(), any()))
+                .thenReturn(new com.example.ragagent.tool.ToolPlanService.Planned(plan, 10, 5, true));
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+        service.setToolPlanService(planner);
+
+        service.chat(new ThreadContext("t1", "root", Locale.KOREAN, true), new ChatRequest("네", "v1", "t1", RoutingMode.COST_FIRST));
+
+        verify(planner).planFor(eq(false), any(), eq("네"), eq("root"), eq(true), eq("t1"), any());
+        ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).run(captor.capture());
+        assertThat(captor.getValue().callerAdmin()).isTrue();
+        assertThat(captor.getValue().toolPlan()).isEqualTo(plan);
+        assertThat(captor.getValue().llmCallCount()).as("계획 호출이 실제로 있었을 때만 호출 수에 더한다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("§6.33 4b — 관리자가 아닌 요청은 admin=false 로 계획하고 상태에도 false 다")
+    void chat_nonAdminStaysNonAdmin() {
+        com.example.ragagent.tool.ToolPlanService planner = mock(com.example.ragagent.tool.ToolPlanService.class);
+        when(planner.planFor(anyBoolean(), any(), anyString(), anyString(), anyBoolean(), any(), any()))
+                .thenReturn(com.example.ragagent.tool.ToolPlanService.Planned.none());
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+        service.setToolPlanService(planner);
+
+        service.chat(new ThreadContext("t1", "guest", Locale.KOREAN, false), new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+
+        verify(planner).planFor(eq(false), any(), eq("질문"), eq("guest"), eq(false), eq("t1"), any());
+        ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).run(captor.capture());
+        assertThat(captor.getValue().callerAdmin()).isFalse();
+        assertThat(captor.getValue().toolPlan()).isNull();
+    }
 }

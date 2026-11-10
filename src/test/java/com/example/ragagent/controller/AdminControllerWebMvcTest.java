@@ -88,7 +88,7 @@ class AdminControllerWebMvcTest {
         // 컨트롤러의 ThreadContext 파라미터를 해석하도록 mock resolver 배선
         when(threadContextResolver.supportsParameter(any())).thenReturn(true);
         when(threadContextResolver.resolveArgument(any(), any(), any(), any()))
-                .thenReturn(new ThreadContext("t1", "u1", Locale.KOREAN));
+                .thenReturn(new ThreadContext("t1", "u1", Locale.KOREAN, false));
         when(adminService.listCollections()).thenReturn(new CollectionsResult(List.of(), true));
         when(ragService.listDocuments(anyString())).thenReturn(List.of());
         when(curatedQaService.listActive(anyInt())).thenReturn(List.of());

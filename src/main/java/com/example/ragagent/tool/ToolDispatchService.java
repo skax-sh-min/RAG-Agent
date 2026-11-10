@@ -37,18 +37,32 @@ public class ToolDispatchService {
     /** 분석을 시작할 뿐 근거 문서를 만들지 않는 Tool — 결과를 문서로 읽어 답하게 하지 않고 정형 안내를 답으로 남긴다(설계서 §5.3). */
     static final String IMPACT_TOOL = "analyzeImpact";
 
+    /** 문서 유지보수 요청 Tool(관리자 전용) — 채팅에서는 <b>되묻고 확정되어야</b> 시작한다({@link #changeRequest}). */
+    public static final String CHANGE_TOOL = "requestDocumentChange";
+
+    /** 바꿀 말·새 말의 길이 상한 — {@code MaintenanceWorkflow.MAX_TERM_CHARS} 와 같다(식별자·용어이지 문장이 아니다). */
+    private static final int MAX_TERM_CHARS = 200;
+
     private final ToolCatalog catalog;
     private final MessageSource messages;
+    /** null = 되묻기 저장소 없음(테스트·구 구성) — 유지보수 계획은 되물을 곳이 없으므로 시작하지 않고 검색으로 내려간다. */
+    private final PendingChangeConfirmations pending;
 
     @Autowired
-    public ToolDispatchService(ToolCatalog catalog, MessageSource messages) {
+    public ToolDispatchService(ToolCatalog catalog, MessageSource messages, PendingChangeConfirmations pending) {
         this.catalog = catalog;
         this.messages = messages;
+        this.pending = pending;
+    }
+
+    /** 되묻기 저장소 없이 — 테스트용. */
+    public ToolDispatchService(ToolCatalog catalog, MessageSource messages) {
+        this(catalog, messages, null);
     }
 
     /** 메시지 번들 없이 — 테스트용. 정형 안내는 한국어 기본 문구다. */
     public ToolDispatchService(ToolCatalog catalog) {
-        this(catalog, null);
+        this(catalog, null, null);
     }
 
     /**
@@ -58,8 +72,12 @@ public class ToolDispatchService {
     public AgentState execute(AgentState state) {
         ToolPlan plan = state.toolPlan();
         if (plan == null) return state;
-        ToolCaller caller = new ToolCaller(state.userId(), false, "chat");
+        // 호출자는 서버가 정한다 — 요청 스레드에서 구해 상태에 실린 관리자 여부(모델이 만든 인자·이름은 권한을 넓히지 못한다).
+        ToolCaller caller = new ToolCaller(state.userId(), state.callerAdmin(), "chat");
         try {
+            if (CHANGE_TOOL.equals(plan.toolName())) {
+                return changeRequest(state, plan, caller);
+            }
             String result = catalog.call(plan.toolName(), plan.argumentsJson(), caller);
             if (result == null || result.isBlank()) {
                 log.info("[TOOL] 빈 결과 — 검색으로 진행한다 tool={} thread={}", plan.toolName(), state.threadId());
@@ -95,6 +113,60 @@ public class ToolDispatchService {
                 : text("chat.answer.impact-started", "영향도 분석을 시작했습니다 (작업 #{0}). 끝나면 아래 링크에서 리포트를 볼 수 있습니다: /ui/impact-jobs/{0}", state,
                         String.valueOf(r.path("jobId").asLong(0)));
         log.info("[TOOL] 영향도 분석 {} thread={}", busy ? "중복 요청" : "시작", state.threadId());
+        return fixedAnswer(state, answer);
+    }
+
+    /**
+     * 채팅의 유지보수 요청 — <b>되묻고, 사용자가 "네" 라고 답해야 시작한다</b>(§6.33 4b).
+     * <ol>
+     *   <li><b>관리자가 아니면 아무것도 하지 않는다</b>(계획을 지워 검색으로 내려간다) — 모델이 이 Tool 을 골랐더라도, 되묻기 문장조차 보내지 않는다.</li>
+     *   <li>바꿀 말·새 말이 없거나 같거나 너무 길면 시작도 되묻기도 하지 않고 "무엇을 무엇으로 바꿀지" 안내만 한다(모델이 인자를 못 채웠다).</li>
+     *   <li>처음 고른 계획({@code confirmed=false}): Tool 을 부르지 않고 "A 를 B 로 바꾸는 수정안을 만들까요?" 를 답으로 남기며 요청을 기억한다.
+     *       <b>코퍼스는 이 단계에서도 승인 전에는 바뀌지 않는다.</b> {@code semantic}·{@code caseVariants} 같은 옵션은 화면(링크)에서만 켠다.</li>
+     *   <li>확정된 계획({@code confirmed=true} — 되묻기에 "네"): {@link ToolCatalog#call} 로 Tool 을 실제로 부른다(여기서 관리자 권한을 한 번 더 검사한다).
+     *       옵션은 싣지 않으므로 항상 끈 채로 시작한다.</li>
+     * </ol>
+     */
+    private AgentState changeRequest(AgentState state, ToolPlan plan, ToolCaller caller) {
+        if (!state.callerAdmin() || pending == null) {
+            log.warn("[TOOL] 유지보수 요청을 시작하지 않는다 admin={} pendingStore={} thread={}", state.callerAdmin(), pending != null, state.threadId());
+            return state.toBuilder().toolPlan(null).build();
+        }
+        JsonNode a = MAPPER.readTree(plan.argumentsJson());
+        String from = a.path("from").asString("").strip();
+        String to = a.path("to").asString("").strip();
+        String instruction = a.path("instruction").asString("").strip();
+        if (from.isEmpty() || to.isEmpty() || from.equals(to) || from.length() > MAX_TERM_CHARS || to.length() > MAX_TERM_CHARS) {
+            return fixedAnswer(state, text("chat.answer.change-needs-terms",
+                    "무엇을 무엇으로 바꿀지 분명하지 않습니다. 예: PostgreSQL 을 Oracle 로 바꿔 줘", state));
+        }
+        if (!plan.confirmed()) {
+            pending.put(state.userId(), state.threadId(), new PendingChangeConfirmations.Pending(instruction.isEmpty() ? from + " → " + to : instruction, from, to));
+            log.info("[TOOL] 유지보수 되묻기 user={} thread={}", state.userId(), state.threadId());
+            return fixedAnswer(state, text("chat.answer.change-ask", "「{0}」을(를) 「{1}」(으)로 바꾸는 수정안을 만들까요? 만들려면 네 라고 답해 주세요. "
+                    + "옵션은 {2} 에서 직접 요청하세요.", state, from, to, "/admin/change-jobs?from=" + enc(from) + "&to=" + enc(to)));
+        }
+        String json = MAPPER.createObjectNode().put("instruction", instruction.isEmpty() ? from + " → " + to : instruction)
+                .put("from", from).put("to", to).toString();
+        String result = catalog.call(CHANGE_TOOL, json, caller);   // 관리자 권한을 여기서 한 번 더 검사한다(거부는 예외 → 검색으로)
+        JsonNode r = MAPPER.readTree(result);
+        boolean busy = "busy".equals(r.path("status").asString(""));
+        log.info("[TOOL] 유지보수 {} user={} thread={}", busy ? "중복 요청" : "시작", state.userId(), state.threadId());
+        return fixedAnswer(state, busy
+                ? text("chat.answer.change-busy", "이미 진행 중인 유지보수 요청이 있습니다. 끝난 뒤 다시 요청해 주세요.", state)
+                : text("chat.answer.change-started", "수정안 만들기를 시작했습니다 (작업 #{0}). 끝나면 아래 화면에서 Diff 를 검토하고 승인하세요: /admin/change-jobs/{0}", state,
+                        String.valueOf(r.path("jobId").asLong(0))));
+    }
+
+    private static String enc(String s) {
+        return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 정형 답 — 근거 문서·출처·판정이 없는 턴(검색 0건 경로와 같은 모양): 응답 모드 {@code S}(검증 없음 · 좋아요 제안 불가). 그래프가 ANSWER 를 건너뛰고
+     * FINALIZE 로 간다.
+     */
+    private AgentState fixedAnswer(AgentState state, String answer) {
         return state.toBuilder()
                 .answer(answer)
                 .responseMode(com.example.ragagent.model.ResponseMode.S)

@@ -186,6 +186,14 @@ public class StreamingAgentService {
     }
 
     public void run(String userId, ChatForm form, SseEmitter emitter) {
+        run(userId, false, form, emitter);
+    }
+
+    /**
+     * @param admin 요청 스레드({@code ChatController})에서 구한 관리자 여부 — 이 메서드는 SSE 워커에서 돌아 {@code SecurityContext} 가 없으므로 인자로 받는다.
+     *              Tool 선택의 선택지(유지보수)와 실행 권한이 이 값을 읽는다
+     */
+    public void run(String userId, boolean admin, ChatForm form, SseEmitter emitter) {
         // 공개 채팅 진입점의 첫 호출(AgentService.chat() 과 같은 규칙). 이 경로에만 빠져 있던 동안 화면의 질문은
         // 길이 제한(2,000자) 없이 들어갔다 — 17,500자 질문이 답변·검증 프롬프트를 창에 맞추느라 문서를 덜어냈다.
         try {
@@ -265,7 +273,8 @@ public class StreamingAgentService {
                         CompletableFuture<ToolPlanService.Planned> planF = condensedF.thenApplyAsync(
                                 c -> toolPlanService == null ? ToolPlanService.Planned.none()
                                         : toolPlanService.planFor(false, form.responseModeOrDefault(),
-                                                c == null ? form.question() : c.searchQuestion(), userId, locale), exec);
+                                                c == null ? form.question() : c.searchQuestion(), userId, admin,
+                                                form.threadId(), locale), exec);
 
                         QuestionCondenser.Condensed condensed = condensedF.join();
                         AgentState.Builder builder =
@@ -292,6 +301,7 @@ public class StreamingAgentService {
                     .selectedTags(form.selectedTags())
                     .responseMode(form.responseModeOrDefault())
                     .excludeHistory(form.excludesHistory())
+                    .callerAdmin(admin)
                     .build();
 
             listener = new SseGraphListener(emitter, lastActivityNanos);

@@ -291,4 +291,20 @@ class AdminChangeControllerTest {
                 .andExpect(content().string(containsString("3개 청크의 변형을 그 대소문자 모양에 맞춰 바꿨습니다")))
                 .andExpect(content().string(not(containsString("바뀌지 않고 남습니다"))));
     }
+
+    @Test
+    @DisplayName("채팅이 건넨 링크(?from=&to=)는 폼을 미리 채우고, 값은 이스케이프된다")
+    void theChatLinkPrefillsTheFormSafely() throws Exception {
+        when(jobs.recentByKind(any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/admin/change-jobs").param("from", "PostgreSQL").param("to", "Oracle").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("value=\"PostgreSQL\"")))
+                .andExpect(content().string(containsString("value=\"Oracle\"")))
+                .andExpect(content().string(containsString("value=\"PostgreSQL → Oracle\"")));
+
+        mvc.perform(get("/admin/change-jobs").param("from", "\"><script>alert(1)</script>").param("to", "x").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("<script>alert(1)</script>"))));
+    }
 }
