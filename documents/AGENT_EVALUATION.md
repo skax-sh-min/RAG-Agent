@@ -68,3 +68,20 @@ mvn -o test -Dtest=ToolCallingEvaluationTest -Dtool-eval.enabled=true \
 ```
 
 케이스별 원자료는 `target/agent-eval/<label>/tool.jsonl`(고른 Tool · 인자 · 지연 · 본문 앞부분). 표의 집계는 이 파일을 세어 얻었다. `mvn clean` 이 `target/` 을 지우므로 숫자는 이 문서에 옮겨 두었다.
+
+## 7. 앱 경로 실측 (2026-11-10, 3단계 구현 뒤)
+
+사전 평가는 앱 밖 하네스의 프롬프트로 쟀다. 구현 뒤에는 **실제 `ToolPlanService`**(번들 프롬프트 · 실제 파싱·인자 검증 · 채팅의 선택지 셋)를 같은 서버·모델(llama-server b11960 · gemma-4-E2B, 생각 끔)에 붙여 같은 49건(문서 26 + `tool-gold.json` 23)으로 다시 쟀다. 채팅에서 고를 수 없는 영향도·유지보수 질문은 "계획 없음 또는 검색"이 맞는 답으로 센다(어차피 검색으로 내려간다).
+
+| 지표 | 결과 |
+|---|---|
+| 정확도(채팅 관점) | **47/49 = 0.959** (사전 평가 JSON 0.939 — 기준이 다르다: 거기서는 영향도·유지보수 Tool 도 선택지였다) |
+| 문서 질문의 잘못된 우회 | **0/26** |
+| 문서 26 · 카탈로그 5 · 잡담 3 · 유지보수 5 | 전부 맞음 |
+| 관련 문서 | 4/5 — `rel-05`(EIMS 연계 내용이 있는 문서) 가 `searchKnowledge` 로(사전 평가와 같은 안전한 오답) |
+| 영향도 | 4/5 — `imp-05`(NOTX 가 바뀌면 영향받는 문서) 가 `findRelatedDocuments` 로: 영향도 Tool 이 없는 지금은 관련 문서 찾기가 받는 것이 자연스러운 오답이다 |
+| 지연 | 평균 913 ms / 호출(LLM 49회 전부 성공) |
+
+판단: 사전 평가와 같은 결과이고 우회·형식 실패가 없다. 켜도 되는 수준이다. **한계는 사전 평가와 같다** — 질문 세트가 같고(프롬프트를 이 세트로 다듬었다), 모델이 하나이며, 실제 사용자 질문 로그로는 아직 재지 않았다.
+
+**재현**: `mvn -o test -Dtest=ToolPlanAppPathEvaluationTest -Dtool-app-eval.enabled=true [-Dtool-app-eval.base-url=http://127.0.0.1:1234/v1] [-Dtool-app-eval.model=gemma-4-E2B]`. 하네스가 ChatModel 체인 대신 표시를 걷고 `enable_thinking=false` 를 싣는 래퍼를 쓰므로, 로컬 서버 키는 아무 문자열이면 된다(빈 키는 SDK 가 거절한다).

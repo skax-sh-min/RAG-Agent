@@ -17,7 +17,7 @@
 
 > **최근 완료 요약 (최신순)** — 아래는 날짜별 한두 문장 요약이다. 구현 설명·측정·열린 항목은 각 § 절과 [PITFALLS.md](PITFALLS.md), 측정 보고서에 있다. 압축 전 전문은 커밋 `d1f7290` 의 이 대시보드에 있다.
 >
-> - **2026-11-06 §6.33 Agent·MCP 전환** — 0단계(블로킹 호출 `model` 누락 → `ModelPinningChatModel`) · Phase 1a 검색 개선(`HybridSearchService` 추출 · 교차 인코더 리랭커 · 재검색 루프 · `/settings` 표시) · 1b 읽기 Tool 계층 · 2 MCP 서버 · 3 사전 평가(프롬프트 JSON 으로 결정). 진행 상태와 남은 것은 §6.33 절과 아래 "진행할 것".
+> - **2026-11-06~10 §6.33 Agent·MCP 전환** — 0단계(블로킹 호출 `model` 누락 → `ModelPinningChatModel`) · 1a 검색 개선(`HybridSearchService` 추출 · 교차 인코더 리랭커 · 재검색 루프) · 1b 읽기 Tool 계층 · 2 MCP 서버 · 3 사전 평가(프롬프트 JSON) → Tool 선택(`TOOL` 노드, 기본 꺼짐) · 4 영향도 분석(`analyzeImpact`, 인용은 코드가 검증) · 유지보수(수정안 → 문서 단위 승인 → DB 백업·임베딩 먼저·변환 MD 되쓰기, 의미 변경·대소문자 옵션, 채팅의 되묻기 확인, 문서 쓰기 잠금). 남은 것은 §6.33 절과 아래 "진행할 것".
 > - **2026-11-04 §6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집** — 질문 한도 2,000 → 10,000자(`QuestionLimit` 가 창 기준으로도 거절) · 500자 초과 질문의 2단계 검색 질의(`LongQuestionQuery`) · 답변·검증 프롬프트 전용 이미지 마커 축약 · 그림 설명 `형식: 한두 문장` 단일화 · `/admin` 청크 그림 편집. 화면: `/settings` "화면 표시" 카드 재배치 · `/admin` 레이아웃 · 컨텍스트 창 미탐지 표기. 열린 항목은 §6.32 끝.
 > - **2026-10-27 §6.31 이력 제외 체크박스** · **10-26 §6.30 프롬프트 축소 사다리**(`PromptLadder` + 검증 실패 재시도 A~D) — 각 절 참고. 측정은 [PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md). 측정 중 재시도 규칙 D 의 왕복 결함을 찾아 고쳤다.
 > - **2026-10-23** `/settings` LLM 라우팅 표의 **프로바이더 편집**(`ProviderCatalog`, Flyway V10 — 컨텍스트만 저장 즉시, 나머지는 재기동 때 · API 키는 화면에서 받지 않는다) + **16K 미만 경고를 재탐지에도**. **범위 변경(운영 결정)**: `app.llm.max-tokens` 허용 범위 8,000~64,000 → 지원하는 최소 창 16K (PITFALLS §6.26 A6).
@@ -50,7 +50,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 0 | **§6.33 0단계 — 선결 결함** (블로킹 호출의 `model` 누락) | ✅ 2026-11-06 요청 본문으로 확인하고 `ModelPinningChatModel` 로 수정. 검색 기준선도 같은 날 기록([SEARCH_EVALUATION.md](SEARCH_EVALUATION.md) §7) |
-| 1 | **§6.33 Agent·MCP 전환** — 검색 개선(Retriever + Reranker + 재검색) → Tool 계층 → MCP Server · Tool 선택 · 영향도·유지보수 | 🟡 2026-11-05 설계 → 11-06 1a(리랭커·재검색 루프)·1b(읽기 Tool)·2(MCP 서버) 구현, 3 사전 평가 완료(프롬프트 JSON). 남은 것: 후속 질문 recall 0.85(1a) · Tool 선택 구현(3) · 워크플로(4) · 추적 패널(5). 단계별 상태는 §6.33. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
+| 1 | **§6.33 Agent·MCP 전환** — 검색 개선(Retriever + Reranker + 재검색) → Tool 계층 → MCP Server · Tool 선택 · 영향도·유지보수 | 🟡 2026-11-05 설계 → 11-06 1a·1b·2 구현, 3 사전 평가(프롬프트 JSON) → 11-10 3(Tool 선택)·4(영향도 · 유지보수 수정안 · 문서 단위 승인·적용 · 의미 변경·대소문자 옵션 · 채팅 관리자 호출 · 문서 쓰기 잠금) 구현·종단 확인. 남은 것: 영향도 실모델 실측 · 후속 질문 recall 0.85(1a) · Tool 선택 실사용 질문 재측정 · 추적 패널(5). [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
 | ~~1~~ | ~~**§10.11 좋아요 → 지식 제안 경유**~~ | ✅ 2026-09-02 완료 (5단계 + 정책 3건 전부) |
 | ~~1~~ | ~~**§10.12 짧은 후속 질문의 독립화**~~ | ✅ 2026-09-03 완료 (재작성 → 검색 축 셋 + 분류기, 진단 한 줄, 열린 항목 (b) 해소). 2026-10-13 측정: 원문보다 1~2건 낫고 주제 전환에서 손해 없음 — 대안(이어 붙이기 · 함께 검색 · 되풀이 가드) 대신 그대로 두기로 결정(열린 항목 (e) 닫음) |
 | ~~2~~ | ~~**§10.13 Direct 턴의 이력 확대**~~ | ✅ 2026-09-03 완료 (1단계 프롬프트 + 예산/렌더 규칙 + Direct 안전망) |
@@ -473,14 +473,16 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 #### 설계 (요약 — 번호와 (가)~(자) 라벨은 소스 주석이 가리키는 자리다)
 
-- **① 세 축을 분리한다** — 호출부는 **사이트만** 표시하고(`ThinkingSite`, 코드 고정), 수준은 설정에서 읽고(`ThinkingLevel` 넷뿐 — "서버 기본값" 수준은 앱이 모르는 값이라 두지 않는다. 생각 제어를 받을 수 없는 서버는 프로바이더의 성질 `NONE` 으로 옮겼다), 그 수준을 어떤 필드로 바꿀지는 **프로바이더가 정해진 뒤** 데코레이터가 정한다(`ThinkingDialect` = `app.llm.providers[n].thinking-dialect`, 재시작 필요 — 받을 프로바이더를 라우터가 나중에 정하므로 `MaxTokensCappingChatModel` 과 같은 이유).
-- **② 호출 지점과 출하값** — 21곳(처음 22곳 — `IMAGE_TYPE` 제거), 출하값은 위 결과대로 전부 끔. 측정하지 못한 `SUMMARY`·이미지 둘도 끔이다(열린 항목 (f)). 서버를 생각 끔으로 띄운 배포에서도 낮게인 사이트는 요청의 `enable_thinking=true` 가 서버 기본값을 덮어 생각한다(검증이 한 번에 2~14초 → 45~60초).
-- **③ 수준 → 필드 변환** — `AUTO`(지정하지 않으면: LOCAL 이면 `TEMPLATE_KWARGS`, 아니면 `NONE`) · `NONE`(싣지 않음 — 서버가 정한다, 생각 여유도 더하지 않는다) · `TEMPLATE_KWARGS`(`enable_thinking` — 세 단계가 같은 값으로 접힘) · `TEMPLATE_KWARGS_EFFORT`(gpt-oss — 끔이 `low` 로 접힘) · `OPENAI_EFFORT`(최상위 `reasoning_effort`, 끔은 `none`). 접힘 여부는 `dialect.effective(level)` 하나로 화면과 실제 전송이 함께 계산한다.
-- **④ 출력 예약 — 이 기능에서 가장 위험한 부분.** 생각 토큰도 `max_tokens` 를 먹으므로 상한이 작은 호출은 생각을 켜는 순간 빈 응답이 나고, 반대로 상한을 넉넉히 올리면 `max_tokens` 가 예약이라 입력(검색 문서·이력·검증 발췌)이 먼저 잘린다. 그래서 `예약 = base + clamp(C − base, 0, h)`, `C = min(프로바이더 max-tokens, 창 × 25%)`(창을 모르면 프로바이더 max-tokens), `h` = 낮게 1,024 · 중간 2,048 · 높게 4,096(켬으로 나갈 때만) — **더하기만 하고 기본 예약은 깎지 않는다**. `ThinkingBudget.compute()` 하나를 요청(`ThinkingControlChatModel` 이 받는 프로바이더가 정해진 뒤 더한다)·입력 예산을 미리 재는 일곱 자리·미리보기가 함께 부르고, 재작성 사이트(`MD_CORRECT`·`TXT_TO_MD`)는 여유를 깎지 않고 조각을 줄인다(`PromptBudget.rewriteInputChars`). 상수(낮게 512 → 1,024, `expectedOutputTokens`)는 6단계 실측으로 정했다.
-- **⑤ 스트리밍** — 채팅 답변(`stream=true`)은 `ChatModel` 체인을 통째로 우회하므로 `AnswerStreamer` 하나가 체인이 하던 일을 같은 함수로 한다: 수준 싣기(`ThinkingControl.applyTo`) · 생각 델타는 화면에 내보내지 않고 **활동으로만**(유휴 워치독 + "모델이 생각하는 중... (N초)") · 첫 청크 전의 거부만 한 번 재시도 · 관측 · 실제로 나간 본문의 curl 로그. `provider.openAiApi()` 를 다른 곳에서 부르면 빌드가 막는다.
-- **⑥ 의도를 나르는 방법** — 블로킹은 `ThinkingControl.mark(builder, site)` 가 `extraBody` 의 내부 키(`__rag_thinking_site`)에 사이트를 싣고 체인 맨 바깥의 `ThinkingControlChatModel` 이 **항상** 그 키를 걷어낸 뒤 변환을 싣는다. 옵션을 넘길 수 없는 프레임워크 호출(`MultiQueryExpander`)은 `ThinkingSiteChatModel` 래퍼가 표시한다. dialect 는 이름 키 레지스트리(`ProviderThinkingDialects`)에 둔다. 서버가 필드를 거부하면 (프로바이더, 필드)로 기억하고 빼서 한 번 다시 보낸다 — 차단 없음.
-- **⑦ `/settings` 카드 — 관리자 전용 · 수준별 예산 미리보기.** 수준을 **고르기 전에** 그 호출에서 무엇이 얼마나 바뀌는지 숫자로 본다. **(가) 권한** — 읽기까지 관리자만, 엔드포인트는 전부 `/admin/settings/**`(화면에서 숨기는 것은 보안이 아니다) · **(나) 구성** — 프로바이더 표의 "생각 제어" 열(사용자 설정 적용 · 서버 설정 사용 · Unknown), 접힌 채 시작하는 카드, 기준 줄, 그룹 표 6개, 행마다 [자세히] · **(다) 칸** — 수준·실제 전송·받는 프로바이더·출력 예약·입력 예산·뜻하는 것·생각 자리(= 예약 − `expectedOutputTokens`)·최악 소요·상태 · **(라) "뜻하는 것"** 은 사이트 종류별(문서 k/top-K · 이력 상한 · 발췌 k/top-K · 후보 수 · 조각 크기 …, `shapeOf` exhaustive switch) · **(마) 상태 배지는 막지 않는다**(저장은 언제나 된다 — 응답 자리 없음·잘림·여유 깎임·입력 축소·스위치 무시됨·타임아웃 넘음 등, 임계값은 `ThinkingPreviewService` 상수) · **(바) 미리보기 = 런타임** — 숫자를 직접 만들지 않고 호출부가 쓰는 함수를 그대로 부른다(`ThinkingPreviewParityTest`) · **(사) 상호작용** — 네 수준을 서버가 미리 계산해 렌더하고 드롭다운은 보이기만 한다(JS 계산 없음), 저장은 행을 새로 계산해 교체, 창 재탐지는 `HX-Trigger: thinking-preview-stale` · **(아) 설정 키** — `llm.thinking.<id>`(`Spec.Kind.CHOICE`, `ThinkingSite` 에서 생성), 매 호출 읽기, 틀린 줄은 출하값 + 기동 WARN(`ThinkingStartupReport`), 환경변수 없음 · **(자) 테스트** — 권한·기본값·미리보기=런타임·골든(16k·8k)·불변식·컨벤션.
-- **⑧ 관측** — `ThinkingObservations` 가 (사이트, 프로바이더, 수준)별 최근 50회를 **숫자로만** 메모리에 둔다(재시작 시 초기화 — 프롬프트·생각 본문에는 검색 문서가 들어 있다). 블로킹은 생각 본문을 받지 못해 출력이 답 추정의 두 배를 넘고 64 이상 남을 때만 그 초과분을 생각으로 센다(긴 출력 앞의 짧은 생각은 놓친다). **관측만 하고 예산을 바꾸지 않는다** — 같은 요청이 표본 수에 따라 다른 예산을 받으면 재현이 안 된다.
+동작 명세는 CLAUDE.md(`ThinkingSite` · `ThinkingControlChatModel` · `ThinkingBudget` · `AnswerStreamer` · `ThinkingPreviewService`), 깨지기 쉬운 곳은 PITFALLS. 여기에는 **결정만** 남긴다.
+
+- **① 세 축 분리** — 호출부는 사이트만 표시, 수준은 설정(`ThinkingLevel` 넷뿐 — "서버 기본값" 수준은 앱이 모르는 값이라 없다), 수준 → 필드 변환은 프로바이더가 정해진 뒤 데코레이터(`ThinkingDialect`, 재시작 필요).
+- **② 출하값** — 21곳 전부 끔(측정은 `EVAL`·`EVAL_CREATIVE`·`ANSWER_RAG_C` 만 낮게를 권했으나 속도를 택했다).
+- **③ 변환** — `AUTO`·`NONE`·`TEMPLATE_KWARGS`(켬/끔만, 세 단계가 접힘)·`TEMPLATE_KWARGS_EFFORT`(gpt-oss)·`OPENAI_EFFORT`. 접힘 여부는 `dialect.effective(level)` 하나가 화면과 실제 전송을 함께 계산한다.
+- **④ 출력 예약(가장 위험한 부분)** — 생각 토큰도 `max_tokens` 를 먹는다. `예약 = base + clamp(C − base, 0, h)`, `C = min(프로바이더 max-tokens, 창 × 25%)`, `h` = 1,024·2,048·4,096(켬일 때만) — **더하기만 하고 기본 예약은 깎지 않는다**. `ThinkingBudget.compute()` 하나를 요청 · 입력 예산 · 미리보기가 함께 부른다.
+- **⑤ 스트리밍** — 체인을 우회하는 채팅 답변은 `AnswerStreamer` 하나가 같은 일을 한다(생각 델타는 화면에 내지 않고 활동으로만 · 첫 청크 전의 거부만 재시도 · curl 로그). 다른 곳에서 `provider.rawModel()` 을 부르면 빌드가 막는다.
+- **⑥ 의도 전달** — `ThinkingControl.mark(builder, site)` 가 내부 키를 싣고 체인 맨 바깥이 **항상** 걷어낸다. 서버가 필드를 거부하면 (프로바이더, 필드)로 기억하고 빼서 한 번 다시 보낸다(차단 없음).
+- **⑦ `/settings` 카드** — **관리자 전용**(읽기까지) · 수준별 예산 미리보기. 숫자는 런타임 함수를 그대로 부른다(`ThinkingPreviewParityTest`).
+- **⑧ 관측** — `ThinkingObservations` 가 (사이트, 프로바이더, 수준)별 최근 50회를 숫자로만 메모리에 둔다. **관측만 하고 예산을 바꾸지 않는다**(같은 요청이 표본 수에 따라 다른 예산을 받으면 재현이 안 된다).
 
 **작업 단계 — ✅ 전부 완료**: 1 골격·출하값·관측(10-02, 기동 리포트를 앞당김) · 2 블로킹 호출부 배선 + 라우팅의 단일 출처(10-02, `ThinkingSiteConventionTest`) · 3 스트리밍 `AnswerStreamer`(10-02 — **채팅 스트리밍의 축소 재시도(§6.26-9)가 실서버에서 한 번도 발동하지 않았던 것**을 `LlmErrorText` 로 고침) · 4 `ThinkingBudget`(10-02 — Direct 블로킹 경로의 이력 안전망이 스트리밍 예약을 빼던 어긋남도 고침) · 5 `/settings` 미리보기(10-07 — `settings.html` 의 툴팁 스크립트가 한 번도 실리지 않던 것도 고침) · 6 실측 → 출하값(10-07, `ThinkingLevelEvaluationTest` + `scripts/thinking_eval_summary.py`). 6단계의 발견(독립화는 생각이 켜지면 원문을 그대로 돌려주는 일이 늘고, 답변 뒤 보강은 낮게면 칩이 뜨지 않으며, 질의 확장은 이 코퍼스에서 recall 을 올리지 못한다 등)과 한계(모델·서버·코퍼스 하나, 작은 표본 — 크기보다 방향)는 THINKING_EVALUATION.md.
 
@@ -496,29 +498,14 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 **구현.** 사다리는 순수 클래스 `PromptLadder` 하나(칸 · 되돌려 채우기 · 바닥 · 재시도 순서). 사전 예산 `AnswerService.fitToBudget` 과 축소 재시도 `withShrinkRetry` 의 걸음이 같은 `Plan`(`at(level)`)을 보고, `/settings` 미리보기의 "문서 k/top-K"도 그것을 부른다(`ThinkingPreviewParityTest`). 이력 조각은 `HistoryPolicy.parse/render/capQuestionsIn/digest`, 칸 4 의 직전 Direct 답변 요약은 이력과 따로 불러온다(`MemoryService.lastDirectAnswerDigest` → `AgentState.lastAnswerDigest`). 재시도는 `AgentState.lastSent`(`SentPrompt` — 실린 문서 키 · 이력 절단 · 검증이 쓴다고 보고한 문서 키)를 읽는다. 테스트: `PromptLadderTest`(네 예의 골든 포함) · `AnswerServiceLadderTest` · `RetrievalEvictionTest`/`HistoryPolicyTest`/`AgentGraphTest` 추가분.
 
-#### 사다리
+#### 사다리 (요약)
 
-넘칠 때만 한 칸씩 내려가고 칸마다 다시 잰다(`TokenEstimator` 기준). 들어가면 멈추고, 멈춘 칸에서 앞 칸들을 **거꾸로 되돌려 채운다**(문서는 빠진 것 중 순위 높은 것부터, 턴은 최근 것부터). 절대 줄이지 않는 것: 시스템 프롬프트 · `[질문]` 원문 · `[경고]` · `[직전 시도 메모]`.
+넘칠 때만 한 칸씩 내려가고 칸마다 다시 잰 뒤, 멈춘 칸에서 앞 칸들을 **거꾸로 되돌려 채운다**. 칸: ① 과거 질문 500자 자르기 → ② 직전 1턴만 → ③ 문서를 **top-k 의 50%(올림, 최소 1) 바닥**까지 → ④ 직전 Direct 답변을 요약으로 → ⑤ 이력 전부(후속 질문이면 다시 쓴 질문 한 줄) → ⑥ 문서 1개 → ⑦ 최상위만으로 보내고 서버가 거절하면 축소 재시도. 절대 줄이지 않는 것: 시스템 프롬프트 · `[질문]` 원문 · `[경고]` · `[직전 시도 메모]`.
 
-| 칸 | 하는 일 |
-|---|---|
-| 1 | 직전 질문을 뺀 **과거 질문**을 질문당 500자로 자른다(`Q:` 줄만, 답변은 그대로) |
-| 2 | 이력을 **직전 1턴만** 남긴다 — 요약 블록 통째로 먼저, 그다음 오래된 턴부터 턴 통째로 |
-| 3 | 하위 문서를 RRF 하위부터, **top-k 의 50%(올림, 최소 1)까지** |
-| 4 | 직전 턴의 답변을 `## 요약` 만(없으면 앞 1,200자) — 실제 대상은 직전 **Direct** 턴 답변(§10.13 에서 줄이지 않고 이력에 실리기 때문) |
-| 5 | 이력을 전부 뺀다 — 후속 질문(`wasCondensed()`)이면 다시 쓴 질문 한 줄 |
-| 6 | 문서를 1개까지 |
-| 7 | 최상위 문서만으로 보낸다 → 서버가 초과로 거절하면 축소 재시도 → `RAG-LLM-003` |
-
-**불변식**: 바닥 아래에서는 이력 때문에 문서가 빠지지 않는다. 안내(`budgetNote`)는 칸 2·4·5 "이전 대화 일부/전부 제외", 칸 3·6 "문서 N개 중 M개만 사용"이고 실제로 보낸 시도의 결과로 한 번만 세운다(`withSent`).
-
-**바닥값 규칙.** 기준은 설정값 `app.search-top-k`, 실제로 검색된 문서 수를 넘지 않는다. 올림, 최소 1(10 → 5, 5 → 3, 3 → 2, 1 → 1). 재시도의 escalation 으로 문서가 늘어도 바닥은 설정값 기준 그대로다. 50% 와 칸 1 의 500자는 상수로 두고, 배포마다 다르게 나오면 그때 설정(핫)으로 뺀다.
-
-**적용 범위.** RAG 답변 프롬프트(`AnswerService` 의 블로킹 · 스트리밍 · PROGRESSIVE 2차)만. Direct·`meta` 턴은 예전대로(`DirectAnswerService.withFittedHistory()` — 칸 1 도 적용하지 않는다: Direct 에서는 이력이 유일한 재료라 과거 질문 원문이 대화의 주제일 수 있다), 검증 호출도 그대로다(이력이 없고 발췌 예산을 따로 잡는다).
-
-**네 예**(16k 창 · N 모드 · 스트리밍 — 입력 예산 9,746토큰, 문서 1개 ≈ 1,500토큰)는 `PromptLadderTest` 의 골든이 들고 있다: ① 긴 독립 질문 5,000자 → 문서 1 + 이력 전부 였던 것이 문서 2 + 최근 2턴 ② 후속 질문 + 직전 Direct 4,300 → 문서 2 + 이력 전부 였던 것이 문서 5 + 직전 턴(요약) + 그 앞 턴 ③ 직전 Direct 5,500 → 문서 5 + 직전 턴(앞 1,200자) ④ 직전 RAG 턴 → 지금과 같다(되돌려 채우기가 없으면 그 앞 턴을 잃는다).
-
-**설계와 다르게 정한 것.** ① 턴으로 나뉘지 않는 이력(요약 블록뿐 · 경계를 못 읽은 이력)은 칸 2 가 빼지 않고 칸 5 전에 앞쪽 줄부터 하나씩 뺀다(예전 `trimToBudget` 의 줄 단위 폴백이 막던 사고를 되살리지 않는다) ② 축소 재시도 상한 = 적용할 수 있는 이력 칸 수 + 문서 걸음 5 ③ 검증 호출의 축소 재시도는 사다리와 묶지 않았다(발췌 꼬리만 덜고 상한은 문서 걸음만 센다) ④ 안내·`미사용` 표시·보낸 집합은 실제로 보낸 시도 기준 ⑤ **D 의 "모름"**(측정으로 바꿨다, 아래).
+- **불변식**: 바닥 아래에서는 이력 때문에 문서가 빠지지 않는다. 안내(`budgetNote`)는 실제로 보낸 시도의 결과로 한 번만 세운다(`withSent`). 50%·500자는 상수(배포마다 다르게 나오면 설정으로).
+- **범위**: RAG 답변 프롬프트(블로킹·스트리밍·PROGRESSIVE 2차)만. Direct·`meta` 는 예전대로(Direct 는 이력이 유일한 재료라 칸 1 도 적용하지 않는다), 검증 호출은 발췌 꼬리만 덜고 사다리와 묶지 않는다.
+- **설계와 다르게 정한 것**: 턴으로 나뉘지 않는 이력은 칸 5 전에 줄 단위로 줄인다 · 축소 재시도 상한 = 이력 칸 수 + 문서 걸음 5 · **D 의 "모름" 기본값은 측정으로 바꿨다**(아래).
+- 네 예의 골든은 `PromptLadderTest` 가 들고 있다.
 
 #### 검증 실패 재시도와의 관계 (검토 2026-10-22)
 
@@ -571,7 +558,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 - 새 설명 프롬프트의 **실제 출력 품질**과 이미 인덱싱된 문서의 옛 설명은 재인덱싱(↺)·「설명 생성」을 해야 바뀐다(`image_descriptions` 캐시의 옛 행도).
 - 청크 편집에서 마커를 지워도 `images/chunks/` 의 파일은 남는다(다른 청크가 같은 그림을 쓸 수 있고 저장 전에는 되돌릴 수 있다) — 고아 정리는 없다.
 
-### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 진행 중 — 설계 2026-11-05, 0단계·1a·1b·2 구현·3 사전 평가 완료 2026-11-06 (Tool 선택·워크플로 미착수)
+### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 진행 중 — 설계 2026-11-05, 0·1a·1b·2·3·4 구현 2026-11-06~10 (5단계 추적 패널·실사용 관측 미착수)
 
 **무엇을 왜.** 지금 `AgentGraph` 는 고정 순서로 돌고 LLM 이 도구를 고르지 않는다. LLM 이 Tool 을 골라 문서 검색·카탈로그 조회로 답하고, 그 위에서 영향도 분석과 문서 유지보수까지 지원하는 구조로 옮긴다. 이 절은 결정과 진행을 추적한다. 구조·Tool 명세·시퀀스·클래스·리스크·실측 표는 [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) 에 있다.
 
@@ -598,8 +585,20 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 | 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔) · 리랭크를 켜기 전 여러 청크 질문 골든셋 | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🟡 진행 — 추출·교차 인코더·검색 연결·`/settings` 표시·재검색 루프·하네스 확장·여러 청크 세트 구현 완료(2026-11-06). 골든셋 recall@5 1.000(≥ 끔의 @10)과 여러 청크 coverage 0.903 · complete 0.833(끔 컷 10: 0.861 · 0.667)은 충족했으나 **후속 질문 pipeline 0.714 로 "recall@5 0.85 이상"은 미충족**, 재검색의 순효과는 표본으로 증명되지 않았다([SEARCH_EVALUATION §7.6](SEARCH_EVALUATION.md)). **11-06 독립화 가드 셋(되풀이·표지·말을 거는 응답)과 독립화 점수가 낮을 때의 원문 시험으로 pipeline 0.762~0.810(+1~2건)** — 목표는 여전히 미충족, 남은 놓침은 독립화가 틀렸는데 점수가 문턱 이상인 경우 등([§7.7](SEARCH_EVALUATION.md)). 남은 것: 후속 질문 목표 달성 방안(독립화 점수와 무관한 원문 병행 검색 — 호출 +1), `SourceRef` 점수와 `/admin` 진단, `ChunkReranker` 인터페이스(1b), 리랭크 기본값을 켜기 전 컷 6~7 재측정 |
 | 1b | Tool 계층(`ToolCatalog`, `ToolGuard`, 읽기 Tool) | 권한 거부 테스트 · `curated` 네임스페이스와 민감 테이블에 닿지 않음을 고정 | 🟡 진행 — 구현 완료(2026-11-06): 읽기 Tool 여섯 · 권한·경계 테스트 50건. 아직 어떤 요청에서도 불리지 않는다(채팅 `TOOL` 노드·MCP 는 3·2단계). 미룬 것: `findMentions`(소비자가 4단계) |
 | 2 | MCP Server(전용 보안 체인 · API 키 · `mcp` 레이트리밋 버킷) | 세 보안 모드의 401·권한 거부를 고정 · 외부 클라이언트의 `tools/call` 동작 | 🟡 진행 — 구현 완료(2026-11-06, 기본 꺼짐): 전용 체인 · API 키 · `mcp` 버킷 · 네 모드 보안 테스트 · 직접 만든 JSON-RPC 로 `initialize`/`tools/list`/`tools/call` 왕복 확인. **MCP Inspector·Claude Code 로의 연결은 아직 확인하지 않았다** |
-| 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | 🟡 진행 — **사전 평가 완료(2026-11-06)**: 이 서버·모델(llama-server b11960 · gemma-4-E2B)에서 네이티브 Tool Calling 은 정확도 0.20 · 형식 실패 0.59 로 쓸 수 없고 **프롬프트 JSON 은 0.939 · 우회 0 · 형식 실패 0** → 방식은 프롬프트 JSON. 비교 모델 e4b · 31b 는 띄워져 있지 않아 미측정([AGENT_EVALUATION.md](AGENT_EVALUATION.md)). `ToolPlanService` · `TOOL` 노드 구현은 미착수 |
-| 4 | 영향도 워크플로, 그다음 유지보수 워크플로(`change_job`, `change_proposal`, `/admin` 대기열) | 승인 없이 코퍼스 불변 · 재인덱싱 뒤 MD 수정 유지 · 경합은 `stale` | 🔵 미착수 |
+| 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | ✅ 구현 완료 2026-11-10(앱 경로 실측 남음) — **사전 평가 완료(2026-11-06)**: 이 서버·모델(llama-server b11960 · gemma-4-E2B)에서 네이티브 Tool Calling 은 정확도 0.20 · 형식 실패 0.59 로 쓸 수 없고 **프롬프트 JSON 은 0.939 · 우회 0 · 형식 실패 0** → 방식은 프롬프트 JSON. 비교 모델 e4b · 31b 는 띄워져 있지 않아 미측정([AGENT_EVALUATION.md](AGENT_EVALUATION.md)). **2026-11-10 구현 완료(기본 꺼짐)**: `ToolPlanService`(프롬프트 JSON, `CONDENSE` 사이트 재사용 — 새 사이트 없음) · `ToolDispatchService` · `AgentGraph` 의 `TOOL` 노드 · `AgentState.toolPlan` · `app.agent.enabled`(`AGENT_ENABLED`). 선택지는 `searchKnowledge`·`findRelatedDocuments`·`queryCatalog`·`analyzeImpact`(관리자는 `requestDocumentChange` 도 — 4단계에서 더했다), N 모드 RAG 턴만(`ResponseMode.allowsAgent()`). 꺼짐 동작 불변·실패 주입(호출 실패·잘못된 JSON·모르는/권한 없는 Tool·인자 오류·Tool 예외 → 전부 `RETRIEVAL`)을 단위 테스트로 고정(전체 3,158건 통과). **앱 경로 실측(2026-11-10, E2B)**: 49건 정확도 0.959 · 문서 질문의 잘못된 우회 0/26 · 평균 913 ms([AGENT_EVALUATION.md §7](AGENT_EVALUATION.md)). 실제 사용자 질문 로그로의 재측정과 켠 채 운영 관측은 아직 |
+| 4 | 영향도 워크플로, 그다음 유지보수 워크플로(`change_job`, `change_proposal`, `/admin` 대기열) | 승인 없이 코퍼스 불변 · 재인덱싱 뒤 MD 수정 유지 · 경합은 `stale` | ✅ 구현·종단 확인 완료 2026-11-10 (영향도 실모델 실측 · 더 큰 모델의 의미 변경 품질은 남음) — 요약은 아래 "4단계 요약" |
+
+**4단계 요약 (2026-11-10 구현 · 세부는 CLAUDE.md 표 · [PITFALLS.md](PITFALLS.md) · 매뉴얼 [OPERATOR §6.14](OPERATOR_MANUAL.md))**
+
+- **4a 영향도**: Flyway V12 `change_job` · `findMentions`(전수 조회, 3글자 미만은 `tooShort`) · `ImpactAnalysisWorkflow`(저장 원문 → 청크별 LLM 판정 → **인용 검증은 코드** — 근거가 본문에 없으면 `unverified`; 상한 40 · 사용자당 동시 1건 · 채팅에 양보 · 기동 시 `interrupted`) · `analyzeImpact` Tool(PUBLIC, 시작만) · 리포트 `/ui/impact-jobs/{id}`(요청자·관리자만).
+- **4b 유지보수**: Flyway V13 `change_proposal` · `MaintenanceWorkflow`(결정적 치환 — 본문 + `chunk_context`·`excerpt_keywords` + 불변식 검사: 이미지·페이지 마커, 코드 펜스) · `/admin/change-jobs`(Diff 검토 · **문서 단위 승인·거절**) · `requestDocumentChange` Tool(ADMIN). 수정안을 만드는 것은 코퍼스를 바꾸지 않는다(쓰는 곳은 승인 뒤 `ChangeApplyService` 하나).
+- **적용 순서**(`ChangeApplyService`): 문서 잠금 → **DB 백업**(실패하면 쓰지 않고 `approved` 로 남김) → 청크마다 `AdminService.applyChunkEdit`(해시 대조 → `stale` · **임베딩 먼저** → 실패하면 `failed`·청크 불변 · id 유지 · 재사용 `modified`) → `MarkdownWriteBack`(발생 수 대조, 아니면 `MD_CONFLICT`·`MD_MISSING`, 의미 변경이 있으면 `MD_PARTIAL`). 원본 DOCX/PDF 는 고치지 않는다.
+- **선택 기능**(화면에서만, 기본 꺼짐): `semantic`(글자 치환 뒤 LLM 이 연관 변경 제안 — 가드: 되살아남·새 말 감소·마커/펜스·길이 0.6~1.4·바뀐 줄 ≤50%·순삭제 금지) · `caseVariants`(대소문자 변형을 그 모양에 맞춰 치환; 꺼져도 변형 청크 수는 항상 보고). 치환 규칙은 `TermReplacement` 하나.
+- **채팅에서 관리자 호출**: 로그인한 ADMIN 의 "A 를 B 로" → **먼저 되묻고**(`PendingChangeConfirmations` — 사용자·대화당 하나 · 5분 · 한 번), **바로 다음 메시지가 정확히 긍정일 때만** 시작. 옵션은 채팅에서 켜지 않는다. 관리자 여부는 요청 스레드에서(`ThreadContext.admin`) — plain no-auth 채팅은 늘 게스트.
+- **재인덱싱과의 동시 실행 잠금**: `DocumentWriteLocks`(문서 단위 · 기다리지 않고 거절 · 비재진입)를 `ChangeApplyService` 와 `DocumentIndexer.reindexFromMd` 가 공유. 단위 테스트만(실서버 확인 없음).
+- **확인한 것**: 실제 코퍼스 복사본(2,388청크)·실제 앱·실제 임베딩 서버로 종단 확인 — 승인 전 불변 · 적용 · `stale` · `MD_CONFLICT` · 거절 · 재인덱싱 뒤 유지(유지보수 41, 의미 변경 14, 대소문자 26, 채팅 관리자 19/20 — 실패 1건은 하네스 텍스트 검사 약점)([scripts/maintenance_e2e](../scripts/maintenance_e2e/README.md)). 이 확인이 잡은 결함: `heading` 메타데이터에 옛 말 잔존(적용 전용 키로 치환) · sqlite-vec `add()` 가 임베딩 전에 옛 행을 지워 실패 시 청크 소실(삭제를 삽입과 같은 트랜잭션·임베딩 뒤로).
+- **소형 모델의 한계**(E2B): 의미 변경 수확이 작다(10청크 중 1개 통과, 전부 검토 필요) · 대상 없는 짧은 수정 명령은 `NONE`(→검색)으로 두는 일이 많다(두 시험 세트 4/6, 오탐 0/7) — 놓치면 검색 답변이 나오고 화면을 쓰면 된다.
+- **남은 것**: 영향도 **실모델 실측**(심은 언급 100% 회수 · 가짜 인용 걸러냄 — 지금은 모의 응답 테스트뿐) · 더 큰 모델에서의 의미 변경 품질 · 의미 연관 후보(하이브리드 검색) · Tool 선택 정확도 재측정(영향도·수정이 선택지에 들어왔다) · 임베딩 실패 주입의 종단 확인(단위 테스트만).
 | 5 | Tool 호출 추적 패널 · 매뉴얼 · 단계적 전환 | 2주 관측 · 설정 하나로 기존 경로 복귀 | 🔵 미착수 |
 
 2·3·4 는 1b 뒤에 병행할 수 있다. 다만 3 의 워크플로 Tool 은 4 가 끝나야 켠다. 1a 는 MCP 와 무관하게 채팅 품질을 올리는 단계라 먼저 효과가 난다.

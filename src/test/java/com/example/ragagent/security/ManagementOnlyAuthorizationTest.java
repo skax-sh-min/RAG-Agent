@@ -160,7 +160,7 @@ class ManagementOnlyAuthorizationTest {
     void setUp() throws Exception {
         when(userDetailsService.findFirstAdmin()).thenReturn(Optional.of(adminUser()));
         when(threadContextResolver.resolveArgument(any(), any(), any(), any()))
-                .thenReturn(new ThreadContext("t1", "guest", Locale.KOREAN));
+                .thenReturn(new ThreadContext("t1", "guest", Locale.KOREAN, false));
         when(ragService.listDocuments(any())).thenReturn(List.of());
         // GET /admin dereferences both unconditionally (AdminController#adminPage) — needed so
         // the session round-trip test below actually renders the page instead of throwing an NPE

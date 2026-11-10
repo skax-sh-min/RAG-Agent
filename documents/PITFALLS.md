@@ -512,6 +512,114 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **`DocumentExportService.reassembledText()`** — 내보내기와 같은 재조립(overlap 되돌리기)과 결정적 후처리까지만 하고 렌더는 하지 않는다. 문서 전체를 메모리에 올리므로 `getDocument` 는 ADMIN 전용이고 8,000자씩 구간으로만 돌려준다(오래 걸리는 조회를 Tool 로 내지 않는다는 DB 연결 1개 제약, 설계서 §2.2).
 - **하지 않은 것(1b 에서 미룸).** `KeywordSearchRepository.findMentions()` — 소비자(`analyzeImpact`)가 Phase 4 라 그때 만든다. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` — 워크플로(Phase 4)가 있어야 한다. `ToolCatalog.mcpExposedTools()` — Phase 2. `ChunkReranker` 인터페이스 — `KnowledgeSearchTool` 이 지금은 `CrossEncoderReranker` 를 직접 쓴다(두 번째 구현이 필요해질 때). 전송(채팅 `TOOL` 노드·MCP)에 연결하지 않았으므로 **이 Tool 들은 아직 어떤 요청에서도 불리지 않는다.**
 
+### Tool 선택 (3단계) — `ToolPlanService` · `ToolDispatchService`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.1 · [AGENT_EVALUATION](AGENT_EVALUATION.md). **기본 꺼짐**(`app.agent.enabled=false`) — 꺼져 있으면 추가 LLM 호출도, `TOOL` 노드 진입도 없어 채팅이 이전과 같다.
+
+- **프롬프트 JSON 이다, 네이티브가 아니다.** 사전 평가에서 이 서버·모델의 네이티브 Tool Calling 은 0.20(형식 실패 0.59), 프롬프트 JSON 은 0.939 · 우회 0. 그래서 요청에 `tools` 를 싣지 않고, "서버가 `tools` 를 거부하면 기억" 같은 설계서 초안의 처리와 계측 3곳(`CalibratingChatModel`·`LlmCurlLogger`·`ThinkingObservations`)의 Tool 메시지 대응이 필요 없다. 네이티브로 바꾸려면 e4b 이상 모델에서 같은 하네스로 다시 잰 뒤에.
+- **새 `ThinkingSite` 를 만들지 않았다.** `CONDENSE` 를 쓴다(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 · `MICRO_TEXT`). 사이트를 더하면 `/settings` 생각 카드 · 미리보기의 exhaustive `switch` · 문서의 "21곳"이 함께 바뀌는데 얻는 것은 별도 손잡이 하나뿐이다. 대가: **라우팅이 대화 모드를 따르지 않는다**(분류기·독립화와 같다 — LOCAL_ONLY 대화에서도 `COST_FIRST` 로 라우팅되는 기존 한계를 이 호출도 가진다). 손잡이가 필요해지면 사이트를 따로 만들 것.
+- **어떤 실패도 턴을 실패시키지 않는다.** `plan()` 은 호출 예외를 삼키고 "계획 없음 · 호출 안 함"을 돌려준다 — 소진·게이트 대기 초과 같은 진짜 장애는 이어지는 기존 `RETRIEVAL` 이 기존 방식으로 보고한다. `NONE` 도 잡담이 아니라 **검색**이다(설계서 D3 — 소형 모델의 실수가 근거 없는 답변이 되지 않게).
+- **보이는 Tool 과 실행 권한이 둘 다 막는다.** 프롬프트에는 `PLANNABLE` ∩ `ToolCatalog.forCaller()` 만 실리고(영향도·유지보수 Tool 은 4단계 뒤), 파싱은 보이지 않는 이름·스키마 밖 인자·빈 필수 인자를 버리고, 실행은 `ToolCatalog.call` 의 권한 검사를 다시 지난다. **채팅 호출자는 `new ToolCaller(userId, false, "chat")`** — 관리자 여부를 채팅으로 올리지 않는다(`ToolPlanService.planFor`/`ToolDispatchService` 가 같은 모양). 관리자에게 관리자 Tool 을 열려면 요청 스레드에서 호출자를 만들어 상태로 실어야 한다(SSE 워커에는 `SecurityContext` 가 없다).
+- **Tool 결과는 `retrievedDocs` 로, `sources` 는 비운다.** 답변·검증·사다리는 그대로 이 문서 하나를 근거로 읽는다. 출처가 비어 `turn_source_ref` 가 만들어지지 않으므로 낡는 카탈로그 답변이 **재사용 후보가 되지 않는다**. 대가: 출처 패널이 비고, 응답 참여도(`AnswerAttribution`)는 문서 하나에 대해서만 계산된다. 알려진 점: `sufficient=false` 로 `RETRIEVAL` 로 내려가면 그 턴은 `retrievalRetries>0` 이라 **재검색 루프(첫 RETRIEVAL 한정)를 타지 않는다**.
+- **`afterClassify` 의 조건 셋**: `toolDispatchService != null`(TOOL 노드가 없는 구성은 계획을 무시) · `retrievalRetries()==0 && retrievedDocs().isEmpty()`(재진입 방지) · `meta` 가 먼저. 검색 Tool(`searchKnowledge`)은 `routesToToolNode()==false` 라 늘 하던 경로다.
+- **번들 함정.** 프롬프트는 여러 줄이라 줄 끝 `\n\` 가 필수다 — 처음에 스크립트 이스케이프가 그것을 지워 첫 줄만 값이 됐고 `MessageBundleConventionTest` 가 잡았다. 테스트는 목이 아니라 **실제 번들**로 `{tools}`·`{rules}` 치환과 한/영 키 짝을 확인한다.
+- **열린 항목.** 앱 경로 실측(`AGENT_ENABLED=true` 로 `tool-gold.json` 49건을 채팅 경로로) · 영향도·유지보수 Tool 이 생기면 `PLANNABLE`·규칙 키·`ToolCatalog.ACCESS` 를 함께 · 추적 패널(5단계).
+
+### 영향도 분석 (4a) — `ImpactAnalysisWorkflow`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.4. 백엔드를 먼저 만들고(리포트를 볼 길 없이 Tool 을 열면 작업만 쌓인다) 같은 날 Tool · 채팅 연결 · 리포트 화면을 이었다.
+
+- **워크플로 Tool 은 근거 문서를 만들지 않는다.** `analyzeImpact` 는 시작만 하므로 결과(`{jobId,status}`)를 문서로 읽어 LLM 이 답하게 하면 JSON 을 해설하는 답이 나온다. `ToolDispatchService` 가 정형 답을 `answer` 로 남기고 `AgentGraph` 의 `TOOL` 노드가 그것을 보면 `onNodeEnter("answer")`+`onToken` 만 내고 FINALIZE 로 간다(검색 0건 경로와 같은 이벤트 모양 · 모드 S · 출처·판정 없음). 새 워크플로 Tool 을 더하면 `IMPACT_TOOL` 같은 분기를 일반화할 것.
+- **이미 진행 중이면 예외가 아니라 `busy`.** 예외로 던지면 `ToolDispatchService` 가 "실행 실패"로 읽어 그 턴을 일반 검색으로 내려보내 안내가 사라진다.
+- **번호는 문자열로 포맷한다.** `MessageFormat` 은 `long` 을 천 단위 서식(`1,234`)으로 찍어 링크 `/ui/impact-jobs/1,234` 가 깨진다 — `String.valueOf(jobId)` 를 넘긴다(`impactToolLeavesAFixedAnswer` 가 고정).
+- **남의 작업은 404, 존재를 알리지 않는다.** 작업 번호가 순번이라 403 이면 번호를 훑어 남의 요청 대상(바꾸려는 식별자)의 존재를 엿볼 수 있다. 이를 위해 `GlobalExceptionHandler` 에 `ResponseStatusException` 처리기를 더했다 — 없으면 마지막 `Exception` 처리기가 의도한 404 를 500 으로 바꾼다(기존 코드 어디도 이 예외를 던지지 않아 드러나지 않았던 구멍).
+- **리포트 화면은 쓰기가 없다.** `/ui/**` GET 이라 게스트도 열 수 있고 CSRF 와 무관하다. 폴링 조각은 진행 중일 때만 `hx-get`·`every 3s` 를 달고 끝나면 달지 않아 스스로 멈춘다.
+- **영향도가 Tool 선택지에 들어왔다.** `ToolPlanService.PLANNABLE` 에 `analyzeImpact` 가 더해졌고(`ToolCatalog.ACCESS` 는 PUBLIC) 규칙 키 `prompt.agent.plan.rule.analyzeImpact` 가 한/영에 있다. 사전 평가는 영향도가 선택지가 아닌 구성(채팅 관점)으로 쟀으므로 **선택 정확도 재측정이 필요하다** — 영향도 5건이 `analyzeImpact` 로 가야 하고 문서 질문이 우회하면 안 된다.
+
+- **전수 조회는 순위 검색이 아니다.** `findMentions` 는 `content : "<문자열>"` 구(phrase) MATCH + 대소문자 무시 부분 문자열 재확인 + `ORDER BY rowid`(같은 데이터면 같은 순서). 식별자에 따옴표·`*`·`AND` 가 섞여도 깨지지 않게 따옴표를 이스케이프한다(`KeywordSearchFindMentionsTest`). 큐레이션 청크는 `version=curated` 라 일반 버전을 물으면 나오지 않는다.
+- **3글자 미만은 빈 결과가 아니라 `tooShort`.** trigram 이 못 찾는데 빈 리포트를 돌려주면 "영향 없음"으로 읽힌다. 리포트가 그 사실을 싣고 LLM 도 부르지 않는다.
+- **인용 검증이 이 워크플로의 핵심이다.** 모델이 "영향 있음"과 함께 낸 `quote` 가 청크 원문(공백을 한 칸으로 줄인)의 부분 문자열이 아니면 `unverified` 다 — 지어낸 근거로 "영향 있음"이 실리지 않는다. 인용이 비어도 같다. 검증은 **색인의 파생 텍스트가 아니라 저장 원문**(`withStoredText`)으로 한다.
+- **상한과 한계는 리포트가 말한다.** 판정은 40개까지(`MAX_JUDGED`), 넘는 만큼은 파일별 언급 수(`unjudged`)로만. 전수 조회 상한 200 을 넘으면 `truncated`. **의미적으로만 연관된(글자가 다른) 청크는 이 단계에서 찾지 않는다** — 설계서의 하이브리드 후보는 미구현.
+- **호출 지점은 새 사이트가 아니라 `ThinkingSite.RERANK`**(TEXT · `COST_FIRST` 고정 · 생각 끔) — 3단계가 `CONDENSE` 를 쓴 것과 같은 이유(사이트를 더하면 설정 카드·미리보기가 함께 바뀐다). 출력 예약은 `min(설정, 512)` 를 호출부가 싣는다.
+- **동시성.** 사용자당 한 건(`countRunning`)·가상 스레드·호출마다 로컬 LLM 의 대화형 게이트(`localTier1Concurrency().inUse()`)가 비기를 기다린다(상한 30초 — 영원히 굶지 않게, 넘으면 그냥 보낸다). `finish()` 는 `running` 인 행만 바꾸므로 재기동이 `interrupted` 로 돌린 작업을 늦게 끝난 스레드가 되살리지 못한다.
+- **열린 항목.** 실모델 실측(심은 언급을 전수 조회가 100% 찾는지, 가짜 인용을 걸러내는지 — 지금은 모의 응답 테스트뿐) · Tool 선택 정확도 재측정 · 의미 연관 후보 · 진행 중 SSE(지금은 3초 폴링) · 관리자가 남의 작업을 목록으로 보는 화면.
+
+### 유지보수 (4b-1) — `MaintenanceWorkflow`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.5. **수정안을 만들고 보여 줄 뿐 코퍼스는 쓰지 않는다** — 청크 본문·벡터·FTS·변환 MD 모두 그대로다. 코퍼스를 바꾸는 승인·적용은 4b-2 다. 가장 위험한 쓰기를 가장 나중에 두고, 그 전에 "무엇을 어떻게 바꿀지"가 믿을 만한지부터 사람이 볼 수 있게 했다(`MaintenanceWorkflowTest.neverWritesTheCorpus` 가 `updateChunk`·`reindexChunk`·`deleteChunk` 호출 없음을 고정).
+
+- **치환은 코드가, 글자 그대로.** `String.replace` — 정규식·대소문자 무시 없음. 전수 조회(trigram)는 대소문자를 무시해 걸리므로 **글자 그대로 일치하지 않는 청크는 건너뛰고 `unchanged` 로 센다**(바꿀 곳이 없다). 의미를 바꿔 써야 하는 청크(드라이버 클래스·SQL 문법 등)는 LLM 수정안이 필요한데 이 조각에는 없다 — 리포트의 "수정안 N곳 / 언급 M곳"의 차이가 그 몫이다.
+- **맥락·키워드에도 같은 치환.** 검색 텍스트가 `chunk_context + 본문`(`SearchTextBuilder`)이라 본문만 고치면 옛 말로 계속 검색된다. 수정안이 `before/after_context`·`before/after_keywords` 를 함께 나른다(적용은 4b-2). 키워드는 소문자로 저장되는 경우가 있어 글자 그대로 일치하지 않으면 그대로 남는다 — 4b-2 에서 재생성할지 정한다.
+- **불변식은 "새로 생긴 것"만 탓한다.** 이미지 마커(경로 · 변환불가 여부 순서까지)와 `[페이지: N]` 마커가 그대로여야 하고, 코드 펜스 결함은 **수정 전보다 늘면** 위반이다(원래 열려 있던 펜스를 이 수정이 만든 것으로 몰지 않는다). **바꿀 말이 이미지 경로 안에 있으면**(`images/ABC/…`) 마커가 바뀌어 그 수정안이 버려진다 — 그림이 깨지는 것보다 낫다. 버려진 것은 파일·청크·사유와 함께 리포트에 남는다.
+- **큐레이션 청크는 수정안을 만들지 않는다.** 단일 출처가 `curated_qa` 라 청크를 고쳐도 재임베딩 때 되돌아간다. 일반 버전 전수 조회는 `version=latest` 라 큐레이션(`version=curated`)이 안 걸리므로 **별도로 한 번 더 물어 수만 센다**("수동 처리 N곳").
+- **못 읽으면 추측하지 않는다.** from/to 를 지시문에서 뽑지 못하면(JSON 아님 · 한쪽이 비어 있음) 작업이 `failed` 다. 틀린 말로 전수 치환하는 것보다 낫다. 200자를 넘는 말(문장)·같은 말로의 치환도 거절한다.
+- **`truncated` 의 위험.** 전수 조회 상한(200)을 넘으면 일부만 고치게 된다 — 일관성이 깨질 수 있어 화면이 그렇게 경고한다. 적용(4b-2)이 이 경우를 막을지 정해야 한다.
+- **관리자 전용의 두 겹.** 화면은 `/admin/**`(보안 체인), Tool 은 `ToolAccess.ADMIN`. 채팅 호출자는 늘 관리자가 아니라(`ToolPlanService.planFor`) 채팅에서는 부를 수 없다 — 관리자 여부를 채팅 Tool 선택까지 싣는 것은 SSE 워커에 `SecurityContext` 가 없어 요청 스레드에서 호출자를 만들어 상태로 실어야 한다.
+- **열린 항목(4b-2).** 승인 UI(문서 단위 — 일부 청크만 고치면 이웃 청크의 겹침 구간이 달라져 `ChunkReassembler` 재조립에 중복이 생긴다) · `ChangeApplyService`(백업 → 해시 대조 → `stale` → `AdminService.applyChunkEdit` 임베딩 먼저 → 변환 MD 되쓰기, `MD_CONFLICT`/`MD_MISSING`) · 의미 변경 수정안 · 문서 재인덱싱이 청크 id 를 바꾸므로 대기 수정안이 `stale` 이 되는 것.
+
+### 유지보수 (4b-2) — `ChangeApplyService` · `applyChunkEdit` · `MarkdownWriteBack`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.5. 4b-1 이 만든 수정안을 **관리자가 문서 단위로 승인하면** 코퍼스에 쓴다 — 이 앱에서 유지보수가 청크·벡터·FTS·변환 MD 를 바꾸는 유일한 자리다.
+
+- **찾은 결함: sqlite-vec `add()` 가 임베딩 *전에* 지웠다.** 예전 `add()` 는 첫 줄에서 옛 행(`vec_embeddings`·`vec_document_chunks`)을 지우고 그 뒤에 임베딩을 불렀다 — 임베딩 서버가 죽거나 타임아웃이면 **청크가 사라졌다**(`reindexChunk`·문서 재인덱싱도 같은 위험 — 설계서가 "임베딩 먼저"를 전제로 쓴 `vectorStore.add` 가 실제로는 그 순서가 아니었다). 삭제를 `insertSubBatch` 의 트랜잭션 안으로 옮겼다: 그 서브배치의 임베딩이 이미 있을 때 삭제 + 삽입이 함께 일어난다. 동작은 성공 경로에서 같고 실패 경로에서만 달라진다(`SqliteVecVectorStoreProviderTest` — 실패하면 삭제·삽입 SQL 이 하나도 안 나가고, 성공하면 임베딩 → 삭제 → 삽입 순).
+- **`applyChunkEdit` 은 `updateChunk` 가 아니다.** `updateChunk` 는 임베딩을 그대로 두고 본문만 바꿔(벡터와 본문이 어긋난다) `void` 로 실패를 삼킨다. `applyChunkEdit` 은 ① 해시 대조(`STALE` — 수정안을 만든 뒤 누가 고쳤다) ② 새 본문·바뀐 맥락/키워드로 `vectorStore.add`(임베딩 먼저) ③ FTS 갈이 ④ 재사용 표시 갱신 순이고 결과 enum 을 돌려준다. 메타데이터는 `EDITABLE_CHUNK_META_KEYS` 둘만 받는다(요청에 `doc_id` 를 실어도 무시). `edited_at` 은 찍힌다 — MD 되쓰기가 성공해도 재인덱싱 사전 경고가 뜨는 것은 설계서가 밝힌 알려진 한계다.
+- **백업이 실패하면 쓰지 않는다.** 복구 지점이 없는 채로 코퍼스를 바꾸지 않는다 — 수정안은 `approved` 로 남아 다시 시도할 수 있다. sqlite-vec 에서는 벡터까지 한 파일이라 백업이 곧 복구 지점이다. **MD 파일은 백업에 들어 있지 않다**(DB 백업은 `memory.db` 뿐이다) — `MarkdownWriteBack` 은 `.bak` 도 남기지 않는다. MD 를 되돌리려면 같은 치환을 반대로 하면 된다(리포트의 from/to).
+- **MD 는 구간 일치가 아니라 발생 수로 대조한다.** 청크에는 부모 제목·`(2)` 제목·이어짐 마커·표 머리글이 더해져 MD 본문과 다르다. 조건: ① 문서의 **어느 청크에도 바꿀 말이 안 남았다**(일부만 고친 문서에서 MD 만 바꾸면 청크와 MD 가 갈라진다) ② MD 발생 수 ≥ 1 ③ MD 발생 수 ≤ 적용한 청크들의 수정 전 본문에서 센 수(청크는 겹침 때문에 같은 자리를 두 번 셀 수는 있어도 MD 의 자리를 빠뜨리지 않는다). 하나라도 어긋나면 **MD 를 건드리지 않고** `MD_CONFLICT` — 그 문서는 청크만 바뀌고 다음 재인덱싱이 되돌린다(화면 문구). 임시 파일에 쓰고 원자적으로 옮긴다(미지원 파일시스템이면 일반 이동으로 물러난다).
+- **승인은 문서 단위 · 코퍼스 일괄 승인은 없다.** 일부 청크만 고치면 이웃 청크와 겹침 구간이 달라져 `ChunkReassembler` 의 재조립에 중복이 생긴다. `transitionDocument` 는 `pending` 인 것만(CAS) 바꾸므로 두 관리자가 동시에 눌러도 한 번만 승인된다. 승인과 적용은 한 동작이다(승인하면 곧바로 가상 스레드 적용) — 서버가 그 사이에 죽으면 `approved` 로 남고, 같은 문서의 "승인" 이 다시 눌리면 남은 것부터 적용한다(`approveAndApply` 가 `approved` 잔여분도 본다).
+- **종단 확인(2026-11-10)이 잡은 것과 확인한 것.** 실제 코퍼스 복사본(SQLite 백업 API로 복사한 2,388청크 + 변환 MD 46개)을 실제 앱·실제 임베딩 서버로 돌려 HTTP 로 끝까지 확인했다([scripts/maintenance_e2e](../scripts/maintenance_e2e/README.md), 41건 통과). **잡은 결함 하나**: 청크 메타데이터 `heading`(섹션 제목, 예 `"10. BEDU2002 — File → DB"`)에 옛 말이 남았다 — `heading` 은 화면 편집 키가 아니라 `applyChunkEdit` 이 받지 않았고 단위 테스트 데이터에는 제목이 없어 드러나지 않았다. 이제 `ChangeApplyService` 가 현재 제목을 읽어 같은 치환을 얹어 넘기고(`AdminService.APPLY_ONLY_META_KEYS`) 검색 텍스트에는 들어가지 않는다. **확인한 것**: 승인 전 불변 · 적용 뒤 청크 id 유지·행 수 불변·벡터 재생성·FTS 옛 말 0 · 교정본 MD 치환/원본 변환본 불변 · 청크를 직접 고친 사이의 stale(덮어쓰지 않음)과 `MD_CONFLICT` · 거절 불변 · 3글자 미만 · 문서 재인덱싱 뒤에도 수정 유지.
+- **종단 확인에서 본 것 둘(이 기능 때문이 아니다).** ① **벡터 검색은 새 말(인공 토큰)로 5청크 중 1개만 상위 10에 올렸다** — 임베딩은 의미 검색이라 처음 보는 식별자에는 약하다. 정확 일치는 FTS 몫이고 거기서는 5/5 다. "새 용어로 검색된다"의 판정은 FTS 로 한다. ② **문서 재인덱싱은 청크 수를 크게 바꾼다**(수정한 문서 30→52, **건드리지 않은 문서도 48→83** — 대조 실험). 기존 코퍼스가 지금 설정과 다른 청킹으로 만들어졌거나 MD 재분할이 다르다는 뜻이고 유지보수와 무관하다 — 재인덱싱을 하면 청크 id 가 모두 바뀌어 대기 중인 수정안은 `stale` 이 된다는 것의 실제 크기다.
+- **알려진 구멍.** ① ~~잠금은 이 서비스끼리만~~ → **해소**(`DocumentWriteLocks` — 아래 "문서 쓰기 잠금"). 남은 틈: 문서 삭제·태그 편집·청크 단건 편집·큐레이션 재임베딩은 이 잠금을 잡지 않는다. ② 전수 조회 상한(200)을 넘은(`truncated`) 작업도 승인할 수 있다 — 화면 경고뿐이다. ③ 적용 중 서버가 죽으면 일부 청크만 바뀐 문서가 남고 MD 는 그대로다(백업이 복구 지점). ④ 키워드(`excerpt_keywords`)는 소문자라 글자 그대로 일치하지 않으면 치환되지 않아 옛 말이 키워드에 남을 수 있다(본문·맥락은 바뀐다). ⑤ **임베딩 실패 주입의 종단 확인은 없다** — 공유 임베딩 서버를 끄지 않았다. 그 경로(`EMBED_FAILED` → 청크·FTS·재사용 표시 불변, sqlite-vec `add()` 가 실패 시 지우지 않음)는 단위 테스트로만 고정돼 있다.
+
+### 유지보수 — 의미 변경 수정안 (4b, 선택)
+
+글자 치환만으로는 모자란 곳(제품이 바뀌면 함께 바뀌는 드라이버 클래스·포트·SQL 문법)을 LLM 이 제안한다. **기본 꺼짐** — 요청 폼의 체크박스(또는 `requestDocumentChange` 의 `semantic`)를 켜야 하고, 켜면 청크마다 LLM 호출이 한 번 늘며(상한 40개·3,000자) 결과는 전부 "검토 필요"다.
+
+- **LLM 은 치환 *결과*를 받는다.** 원문이 아니라 글자 치환이 끝난 본문을 입력으로 줘서 "무엇이 이미 바뀌었는가"가 명확하고, 모델은 그 위에서 *함께 바뀌어야 할 것만* 고친다. 바꿀 말이 다시 나타나면 가드가 버린다.
+- **출력 형식은 JSON 이 아니다.** `판정: 변경 필요|변경 없음` / `이유:` / `---본문---` 다음 줄부터 새 본문 전체. 본문에 따옴표·줄바꿈·코드 펜스가 가득해 JSON 이스케이프가 깨지기 쉽다(앞의 Tool 선택·영향도 판정은 짧은 값이라 JSON 이 맞다).
+- **가드가 이 기능의 핵심이다 — 모델을 믿지 않는다.** `validateRewrite`: ① 비었거나 치환 결과와 같음 ② **바꿀 말이 되살아남** ③ **새 말이 줄어듦**(되돌렸거나 지움) ④ 이미지·페이지 마커·코드 펜스 불변식(리터럴과 같은 검사) ⑤ 길이 0.6~1.4(요약·덧붙임) ⑥ 바뀐 줄이 50% 초과(`ChunkDiff`) ⑦ **순삭제 금지** — 사라진 낱말이 생긴 낱말보다 1 넘게 많으면(`tokenChurn`, 공백 분할 다중집합). 하나라도 어기면 **리터럴 수정안을 그대로** 두고 사유를 리포트(`semanticSkipped`)에 남긴다. 호출 실패·형식 오류·"변경 없음"도 같다 — 작업이 실패하지 않는다.
+- **⑦은 실측이 만들었다.** 실제 코퍼스 복사본·gemma-4-E2B 로 `Oracle`→`PostgreSQL`(10청크) 을 돌렸더니 ①~⑥ 만으로 통과한 2개 중 하나가 무관한 구절(`SQLException인 경우`)을 통째로 지웠고 이유 문장도 엉터리였다(길이 1%·줄 수 1줄이라 ⑤⑥ 을 지났다). 의존 식별자를 고치는 일은 *치환*이지 *삭제*가 아니다 — 슬랙 1 은 조사·문장부호 변화를 위한 것이다.
+- **실측 결과(E2B, 10청크, 순삭제 가드 뒤).** 9청크를 검토 → **1개 제안 · 8개를 가드가 거름**(바꿀 말 되살아남 4 · 이미지 마커 변경 1 · 바뀐 줄 과다 1 · 길이 52% 1 · 순삭제 1). 남은 1개는 글자 치환이 놓친 **대문자 변형(`ORACLE`)** 을 키워드·표·코드의 세 곳에서 `PostgreSQL` 로 바꾼 것이다 — 쓸모 있지만 `"ORACLE".equals(dbType)` 같은 코드는 런타임 값과 맞춰야 하므로 **반드시 사람이 본다**(그래서 배지가 "검토 필요"다). 표본이 한 코퍼스·한 용어·소형 모델 하나라 수확률로 읽지 말 것. 더 큰 모델에서는 다시 재야 한다.
+- **의미 변경은 변환 MD 에 되쓸 수 없다.** 글자 치환은 발생 수 대조로 MD 를 바꿀 수 있지만 자유 서술은 MD 의 어느 자리인지 가리킬 수 없다. 그래서 의미 변경 수정안이 적용된 문서는 `MD_PARTIAL`(글자 치환만 MD 에) — 재인덱싱하면 의미 변경 부분이 되돌아간다고 화면이 말한다.
+- **`ORACLE` 대문자 변형은 별도 옵션으로 다룬다(아래 "대소문자 변형").** 글자 치환은 대소문자를 구분하므로 켜지 않으면 변형은 남는다 — 의미 변경 모드가 그 일부를 줍는 것은 우연이다.
+- **저장된 리포트는 필드가 늘어도 읽혀야 한다.** 리포트에 `semantic*` 필드(`boolean`/`int`)를 더했더니 *이미 만들어진 작업*의 옛 리포트가 `ChangeApplyService` 에서 "작업 리포트를 읽지 못했습니다"로 실패했다 — Jackson 3 는 빠진 기본형 필드를 오류로 본다(`FAIL_ON_NULL_FOR_PRIMITIVES`). 리포트를 읽는 세 곳(`AdminChangeController`·`ImpactJobController`·`ChangeApplyService`)이 `LenientJson.MAPPER` 를 쓴다. **앞서 쓴 "옛 리포트도 그려진다" 테스트는 아무것도 단언하지 않아(리포트가 null 이어도 통과) 이것을 못 잡았다** — 이제 리포트 내용이 실제로 그려지는지 본다.
+
+### 유지보수 — 대소문자 변형 (`TermReplacement`)
+
+[PLAN §6.33 4b](PLAN.md). 글자 치환(`String.replace`)은 대소문자를 구분한다. 전수 조회(trigram FTS)는 **대소문자를 무시해** 걸리므로 걸린 청크가 곧 바뀌는 청크가 아니다 — `Oracle` 을 바꾸면 같은 청크의 `ORACLE`·`oracle` 은 **조용히 남았고**, 변형뿐인 청크는 `unchanged` 로 건너뛰었다(실측: 10청크 중 변형이 있는 것 3 · 변형뿐인 것 1 · 변환 MD 는 대소문자 무시 52 vs 정확 40).
+
+- **두 단계로 푼다.** ① **투명성은 항상**: `Report.caseVariantChunks` — 옵션과 무관하게 변형이 있는 청크 수를 센다. 옵션이 꺼져 있으면 화면이 "N개 청크의 변형은 바뀌지 않고 남는다, 켜고 다시 요청하라"고 경고한다(조용한 불일치를 드러냄). ② **옵트인 치환**(`caseVariants`, 기본 꺼짐): 변형을 그 표기의 대소문자 모양에 맞춰 바꾼다.
+- **모양 규칙(`TermReplacement.shaped`)**: 정확히 같으면 새 말 그대로 · 모두 대문자(`ORACLE`)면 새 말을 대문자로 · 모두 소문자(`oracle`)면 소문자로 · 그 밖의 섞인 표기(`oRacle`)는 새 말 그대로. 새 말이 한글이면 모양이 달라지지 않는다. 식별자의 정규식 문자(`.`·`(`·`$`)는 글자로 취급하고(`Pattern.quote`), 새 말의 `$`·`\` 도 그대로 들어간다(`Matcher.quoteReplacement`).
+- **규칙은 한 곳에 있다.** 수정안을 만드는 쪽(본문·`chunk_context`·`excerpt_keywords`), 적용하는 쪽(섹션 제목·"청크에 바꿀 말이 안 남았다" 검사·발생 수), **변환 MD 되쓰기**, 의미 변경의 "되살아남" 가드가 모두 `TermReplacement` 를 쓴다 — 한 곳만 변형을 바꾸면 청크와 MD 가 다시 갈라져 재인덱싱이 수정을 되돌린다(예: 청크는 `POSTGRESQL`, MD 는 `ORACLE`). 적용은 리포트에 저장된 `from`/`to`/`caseVariants` 로 같은 규칙을 다시 만든다(`ChangeApplyService`).
+- **소문자 키워드가 이제 바뀐다.** 이전에는 `excerpt_keywords`(소문자 `oracle, 접속`)가 글자 그대로 일치하지 않아 옛 말이 키워드에 남을 수 있었다(4b-2 의 알려진 구멍 ④) — 변형을 켜면 해결된다. 꺼져 있으면 그대로다.
+- **위험: 식별자 의미가 바뀐다.** `"ORACLE".equals(dbType)` 는 코드 속 문자열 상수라 런타임 값과 맞춰야 한다 — 그래서 기본 꺼짐이고 켜는 것은 요청 때의 명시적 선택이며 결과는 사람이 Diff 로 본다. 이미지 경로 안의 변형(`images/ORACLE/…`)은 마커 불변식이 막는다(`variantReplacementStillHonoursTheInvariants`).
+- **의미 변경 가드와의 상호작용.** 가드의 "바꿀 말이 되살아남"은 규칙을 따른다: 변형을 바꾸는 규칙이면 모델이 `ORACLE` 을 되살린 것도 위반이고, 글자 그대로 규칙이면 변형은 "바꿀 말"이 아니라서 모델이 `ORACLE`→`PostgreSQL` 로 바꾸는 것(앞선 실측)은 허용된다.
+- **종단 확인(코퍼스 복사본, 26건)**: 끔 — 3개 청크의 변형이 남는다고 리포트·화면이 밝히고, 수정안의 after 에 대문자 변형이 남고, 변형뿐인 청크는 건너뜀 · 켬 — 10청크 모두 수정안(`unchanged` 0), 변형이 모양에 맞춰 바뀌고(`ORACLE`→`POSTGRESQL`), 적용 뒤 **대소문자 무시로** 청크·FTS·교정본 MD 어디에도 옛 말이 없고(MD_CONFLICT 0, 원본 변환본 불변), 문서 재인덱싱 뒤에도 되살아나지 않는다. 변형이 켜진 작업에서 FTS 검증은 반드시 대소문자 무시로 해야 한다(trigram 이 원래 그렇다) — 정확 일치 검증은 변형을 놓친다.
+
+### 채팅에서 관리자 호출 (유지보수)
+
+[PLAN §6.33 4b](PLAN.md). 로그인한 관리자가 채팅에서 "A 를 B 로 바꿔 줘" 라고 하면 유지보수 수정안 작업을 시작한다 — **시작 전에 되묻고**, **옵션(`semantic`·`caseVariants`)은 화면에서만** 켠다.
+
+- **관리자 여부는 요청 스레드에서 구해 워커로 넘긴다.** 채팅 답변(SSE)은 가상 스레드 워커에서 돌아 `SecurityContext` 가 없다. `ThreadContextResolver` 가 `ROLE_ADMIN` 을 `ThreadContext.admin` 에 싣고 `ChatController` 가 `StreamingAgentService.run(userId, admin, …)` 으로 넘긴다. **plain no-auth 의 채팅은 늘 게스트다** — `NoAuthAutoLoginFilter` 가 관리자 신원을 `/admin/**` 에만 주입하므로 아무도 우연히 관리자가 되지 않는다(management-only·full-auth 에서 실제로 로그인한 ADMIN 만). 모델이 만든 인자·이름은 권한을 넓히지 못한다: 선택지(스키마)·실행(`ToolCatalog.call`)·되묻기 직전의 `callerAdmin` 검사가 모두 이 값을 읽는다.
+- **`ThreadContext` 에 기본형을 더하면 컨트롤러 슬라이스 테스트가 500 이 된다.** 처음에 `boolean admin` 을 더했더니 리졸버를 등록하지 않는 슬라이스에서 Spring 이 이 레코드를 요청 파라미터로 바인딩하다 `MethodArgumentNotValidException`(기본형은 파라미터가 없으면 바인딩 오류)으로 39건이 깨졌다. `Boolean` 으로 두고 compact 생성자에서 null→false 로 정규화한다. **생성자도 하나만 둔다** — 편의 생성자를 더하면 데이터 바인더가 고르지 못한다.
+- **되묻기는 결정적이다.** `PendingChangeConfirmations`: (사용자, 대화) 당 하나·5분·한 번만·메모리. **그 대화의 바로 다음 메시지**가 해소한다 — 긍정 표현(`isAffirmative`: 공백을 전부 지우고 끝 문장부호·대소문자를 무시한 **전체 일치**)이면 확정, 그 밖의 **어떤 말이든 취소**다(대기는 어느 쪽이든 지워진다). "네, 그런데 B 가 아니라 C 로…" 같은 섞인 말은 확정이 아니다. 관리자 호출자만 저장소를 부르므로 일반 사용자의 "네" 는 대기를 확정하지도 지우지도 못한다. LLM 이 "네" 를 해석하지 않는다.
+- **확정 계획은 meta 분류보다 앞선다.** "네" 한 마디는 잡담(`meta`)으로 분류되기 쉽고, `meta` 가 이기면(`afterClassify`) 확정이 `DIRECT_ANSWER` 로 흘러 작업이 시작되지 않은 채 사라진다. 모델이 고른 계획(확정 아님)은 여전히 `meta` 가 이긴다.
+- **옵션은 채팅에서 켜지 않는다.** 되묻는 문장이 미리 채운 화면 링크(`/admin/change-jobs?from=&to=`)를 주고, 확정 호출은 `from`·`to`·`instruction` 만 실어 `semantic`·`caseVariants` 는 항상 꺼진 채 시작한다. 모델이 채운 두 인자는 읽지 않고, 프롬프트의 도구 목록에서도 숨긴다. 링크의 값은 URL 인코딩해 만들고 폼에서는 Thymeleaf 가 이스케이프한다.
+- **MessageFormat 함정.** 되묻는 문구는 `MessageFormat` 으로 채워져 **작은따옴표를 쓰면 그 사이가 따옴표 문자열로 먹힌다**(`'네'` 가 사라진다) — 큰따옴표·「」 를 쓴다. 작업 번호는 문자열로 넘긴다(`1,234` 가 링크를 깨뜨린다).
+- **실모델(E2B) 종단 확인**(코퍼스 복사본, management-only + `AGENT_ENABLED`, 20건 중 19 통과): 되묻기 → "네" → 작업 시작(옵션 끔 · 바꿀 말·새 말 요청 그대로) · 스트리밍 경로 동일 · "아니요"·"네 근데…" 취소 · 게스트는 되묻지도 시작하지도 않음 · 관리자의 문서 질문은 되묻기로 가지 않음 · 다양한 표현 5개 중 3개를 올바른 바꿀 말·새 말로 되물음. 실패 1건(A3)은 하네스 문제였다 — 같은 대화에서 "네"에 모델이 이력을 되읊어 답에 "시작했습니다"가 섞였을 뿐 작업은 만들어지지 않았다(새 대화에서 재현하면 일반 답변). 판정을 답 텍스트가 아니라 새 작업·새 링크로 바꿨다.
+- **소형 모델의 계획 선택은 약하다.** "PostgreSQL 을 Oracle 로 바꿔 줘" 처럼 대상("문서")이 없는 짧은 명령은 모델이 `NONE`(→검색)으로 두는 일이 많았다(처음 규칙 2/6, 새 표현 4/6). 규칙에 명령 예시(`"A 를 B 로 바꿔 줘"`, `"A 대신 B 로 고쳐"`)와 "방법·차이를 묻는 질문은 이 도구가 아니다"를 더했다 — **두 시험 세트에서 4/6, 오탐 0/7**(질문 7개가 한 번도 이 Tool 로 가지 않음). 시험 문장과 거의 겹치는 예시를 넣으면 6/6 이 나오지만 새 표현에서는 같은 4/6 이라 **과적합이라 채택하지 않았다**(표본 12개 · 온도 0.2 라 차이는 잡음 범위). 놓치면 검색 답변이 나오고 관리자는 다시 말하거나 화면을 쓰면 된다 — 되묻기가 있으므로 이 정확도로도 잘못된 작업이 시작되지는 않는다.
+- **하네스가 알려 준 것(운영과 무관하지 않다).** 세션 쿠키가 `Secure`(운영은 Caddy HTTPS 전제, `USE_CADDY_REVERSE_PROXY_HTTPS` 기본 true)라 http 로 직접 붙는 클라이언트는 세션을 못 잇는다 — 스크래치 앱은 `-DUSE_CADDY_REVERSE_PROXY_HTTPS=false`. 폼 CSRF 는 쿠키 원값이 아니라 **페이지가 렌더한 마스킹 토큰**을 보내야 하고 로그인 뒤 토큰이 돈다. 그리고 **모든 요청이 403 일 때 "되묻지 않았다" 같은 부정 검사가 공허하게 통과한다** — 하네스가 채팅 응답이 200 인지 먼저 확인한다.
+- **알려진 한계.** 대기가 메모리라 재기동하면 사라진다(사용자는 한 번 더 말하면 된다) · 한 관리자가 여러 대화에서 동시에 되묻기 중일 수 있다(대화별로 따로) · 계획 호출 때문에 관리자의 모든 일반 질문에 LLM 호출이 한 번 더 든다(`app.agent.enabled` 가 켜진 경우 — 채팅 전체의 기존 동작).
+
+### 문서 쓰기 잠금 (`DocumentWriteLocks`)
+
+같은 문서에서 `↺ 재인덱싱`(`DocumentIndexer.reindexFromMd`)과 유지보수 적용(`ChangeApplyService`)이 겹치면 — 재인덱싱이 청크 id 를 **모두 새로 만들고** 변환 MD 를 읽는 동안 적용이 옛 id 를 고쳐 쓰거나(수정은 사라지고 일부는 `stale`), 적용이 청크를 바꾸는 사이에 재인덱싱이 MD 를 읽어 반쯤 바뀐 문서가 된다. 적용 서비스 안의 잠금은 **서비스끼리만** 막았다.
+
+- **공유 빈 하나.** 두 곳이 같은 `DocumentWriteLocks` 를 쓴다(`ChangeApplyService` 는 생성자 주입, `DocumentIndexer` 는 세터 — 생성자가 여럿이다). **기다리지 않고 거절**한다: 적용은 `approved` 로 남아 다시 시도할 수 있고(`DocResult.error` "다른 쓰기 작업이 진행 중"), 재인덱싱은 `IllegalStateException` → 컨트롤러 워커의 오류 이벤트로 사용자에게 간다(아무것도 읽거나 쓰기 전에).
+- **비재진입이다 — 처음 구현이 틀렸다.** `ReentrantLock` 으로 만들었더니 같은 스레드가 다시 잡으면 통과해, 잠금을 쥔 채 같은 스레드에서 부르는 테스트가 거절 대신 정상 진행했다(2건 실패). "이 문서가 쓰이는 중"은 부르는 스레드가 누구든 같으므로 `ConcurrentHashMap.newKeySet()` 의 `add` 로 바꿨다. 증표는 두 번 닫아도 한 번만 풀린다 — 이미 닫은 증표가 그 사이 다른 작업이 잡은 잠금을 풀면 안 된다.
+- **끝나면(실패·조기 반환 포함) 풀린다**(`try-with-resources`/`finally`). 거절이 잠금을 남기지 않는다.
+- **범위.** 문서 삭제·태그 편집·청크 단건 편집(`updateChunk`/`reindexChunk`)·큐레이션 재임베딩은 이 잠금을 **잡지 않는다** — 새로 같은 문서의 청크·벡터·변환 MD 를 쓰는 경로를 만들 때 잡을 것. 같은 JVM 안의 잠금이다(앱은 한 프로세스 · SQLite 단일 파일 전제).
+- **검증은 단위 테스트뿐이다** — 실제 앱에서 적용과 재인덱싱을 겹쳐 돌려 보지는 않았다(`DocumentWriteLocksTest` · `ChangeApplyServiceTest` · `DocumentIndexerTest`).
+
 ### MCP 서버 (Phase 2)
 
 [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).

@@ -25,9 +25,14 @@ HTTP 요청
         ├─ [병렬] 대화 히스토리 로드
         │         (짧은 후속 질문이면 질의 독립화 LLM ③′) → 질문 유형 분류 (LLM ①)
         │
+        │         (AGENT_ENABLED · N 모드면 Tool 계획 LLM ⑧ 도 병렬 — §2 TOOL)
+        │
         └─ AgentGraph.run()
               │
               ├─ meta 질문 ──→ DIRECT_ANSWER → FINALIZE
+              │
+              ├─ Tool 계획(카탈로그·영향도·유지보수 요청) ──→ TOOL → (정형 답이면) FINALIZE
+              │                                              └─ (근거 문서면) ANSWER
               │
                 └─ 일반 질문 ──→ RETRIEVAL → ANSWER ─────→ FINALIZE
                                     ↑      │
@@ -65,6 +70,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
+| **TOOL** | §6.33 — `app.agent.enabled` 이고 N 모드 RAG 턴에서 사전 단계의 Tool 계획(`ToolPlanService`, 프롬프트 JSON 한 번 ⑧)이 검색이 아닌 Tool 을 골랐을 때만. `ToolDispatchService` 가 Tool 을 **게이트 밖**에서 실행해 결과를 `retrievedDocs` 의 문서 하나(파일명 `Tool: <이름>`)로 싣고 `sources` 는 비운다(카탈로그 답변이 재사용 후보가 되면 낡는다). 영향도·유지보수 시작은 근거 문서가 아니라 **정형 답**(`chat.answer.impact-started` 등 + 작업 링크, 응답 모드 S, 출처·판정 없음)이라 ANSWER 를 건너뛴다. **어떤 실패도 계획 없음이고 `RETRIEVAL` 로 간다** | ⑧(사전) |
 | **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`; **그 구간은 대신 §10.12 독립화가 담당**해 검색 축 셋이 다시 쓴 질의를 본다) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) + 큐레이션 Q&A 축 병렬 조회(§10.10, 예약 version `"curated"`, `search.curated-qa-enabled`로 게이팅 — **벡터와 BM25 를 둘 다 그 네임스페이스로 물어 축 안에서 합친다**. 일반 키워드 축은 문서 version 으로 거르므로 큐레이션 FTS 행은 그쪽 질의로는 나오지 않는다) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치 + 큐레이션축 가중치) → 선택적 LLM 리랭킹(opt-in). 재검색 시 후보 풀 ×1.5씩 **및 최종 컷 +1**(컨텍스트 여유가 있을 때만) 에스컬레이션 + **근거 미사용 하위 청크 교체**(§5) | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + **충분도·근거 통합 평가**(1콜, §5.1). **검색이 0건이면 두 호출 모두 생략**하고 정형 응답(`chat.answer.no-documents`)을 그대로 답변으로 쓴다 — 모드가 `S` 로 남아 CRITIC 도 건너뛰고, 턴은 `RS` + 미검증으로 저장된다 | ④ 답변, ⑤ 평가 (검색 0건이면 **0콜**) |
 | **CRITIC** | ⑤가 계산해 둔 `grounded` 플래그를 읽어 재시도 여부만 결정 | **없음** (별도 LLM 왕복 없음) |
@@ -74,7 +80,9 @@ HTTP 요청
 
 | 조건 | 전환 |
 |------|------|
+| 확정된 유지보수 계획(채팅 관리자의 "네") | CLASSIFIER → **TOOL** (meta 분류보다 앞선다 — "네" 는 잡담으로 분류되기 쉽다) |
 | questionType == "meta" | CLASSIFIER → DIRECT_ANSWER |
+| 검색이 아닌 Tool 계획 | CLASSIFIER → TOOL → ANSWER(근거 문서) 또는 FINALIZE(정형 답) |
 | 그 외 | CLASSIFIER → RETRIEVAL |
 | ANSWER sufficient=false, retryCount < max | ANSWER → RETRIEVAL |
 | ANSWER responseMode == S | ANSWER → FINALIZE (CRITIC 스킵) |
@@ -201,7 +209,11 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 | ⑤ | ANSWER | 충분도(`sufficient`) + 근거(`grounded`) + 사유(`reason`) + 환경 의존 값 안내(`envNote`) **동시 평가** | ✓ |
 | ⑥ | CRITIC | — **LLM 호출 없음**. ⑤가 낸 `grounded`를 소비할 뿐 | — |
 | ⑦ | ANSWER (PROGRESSIVE) | PREMIUM 재답변 | ✓ |
+| ⑧ | AgentService (사전 병렬, `AGENT_ENABLED` · N 모드 RAG 만) | **Tool 계획** — 프롬프트 JSON `{"tool":…,"arguments":…}` 한 번. 호출 지점은 `ThinkingSite.CONDENSE`(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 · `MICRO_TEXT`). 꺼져 있으면 호출도 노드도 없다 | 호출 수만 `accumulateTokens` |
+| ⑨ | RETRIEVAL (검색 루프) | 재검색의 **새 검색어 한 줄**(`SearchQueryRewriter`, 사이트 `CONDENSE`) — 교차 인코더 리랭커가 있고 1위 점수가 `search-rerank-min-score` 미만일 때만, **턴의 첫 RETRIEVAL 에서만** 최대 `search-max-attempts` 번(§6.33 1a) | ✓ |
 
+> **검색 루프(§6.33 1a)**: 교차 인코더(`CrossEncoderReranker` — `LlmRouter` 밖, 전용 서버)가 있으면 RETRIEVAL 이 후보 `search-top-k × 2` 를 점수로 재순위해 최종 컷(`max(5, ⌈top-k ÷ 2⌉)`)만 싣고 LLM 리랭킹(`RerankerService`)·질의 확장은 건너뛴다. 1위 점수가 문턱 미만이면 ⑨ 로 새 검색어를 만들어 다시 찾고(판단은 코드, LLM 은 검색어만) 회차를 청크별 점수 최댓값으로 합친다. 리랭커가 없거나 장애면 RRF 순서 그대로(위 RETRIEVAL 행). 검증 실패(`grounded=false`) 재시도에서는 재검색 루프가 다시 돌지 않는다.
+>
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
 > ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.  
 > ③′ **질의 독립화(§10.12, `QuestionCondenser`)** — ③이 생략되는 그 구간(15자 미만 + 이전 질문 있음)에서만 도는 `MICRO_TEXT` 호출이다. 두 게이트가 **여집합**이라 한 턴의 질의 전처리 LLM 호출은 여전히 최대 하나이며(확장 게이트는 재작성 결과가 아니라 **원문 길이**로 잰다), 그래프 바깥(`AgentService`/`StreamingAgentService`의 초기 상태 조립)에서 돌지만 ①과 달리 **토큰이 누적된다**. 결과는 `AgentState.searchQuestion` 에 실려 **벡터·BM25·큐레이션 세 축과 리랭커·분류기**가 함께 쓰고, 답변 프롬프트의 `[현재 질문]` 은 원문 그대로다. 재료는 최근 3턴의 **질문**뿐이며 답변은 넣지 않는다(검색이 자기 답변을 다시 찾는 순환 + Direct 답변의 지어낸 용어 유입 차단). 실패·재료 없음·원문 그대로 반환은 모두 원문 검색으로 수렴한다.  

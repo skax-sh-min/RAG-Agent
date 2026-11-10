@@ -370,7 +370,7 @@ class ChatControllerHtmxTest {
 
         assertThat(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).contains("event:error", "질문이 너무 깁니다");
         org.mockito.Mockito.verify(threadMetaService, org.mockito.Mockito.never()).getOrCreate(any(), any(), any());
-        org.mockito.Mockito.verify(streamingAgentService, org.mockito.Mockito.never()).run(any(), any(), any());
+        org.mockito.Mockito.verify(streamingAgentService, org.mockito.Mockito.never()).run(any(), org.mockito.ArgumentMatchers.anyBoolean(), any(), any());
     }
 
     @Test
@@ -454,7 +454,27 @@ class ChatControllerHtmxTest {
 
         verify(streamingAgentService,
                 org.mockito.Mockito.timeout((int) TimeUnit.SECONDS.toMillis(1)))
-                .run(any(), argThat(form -> form.responseModeOrDefault() == com.example.ragagent.model.ResponseMode.S), any());
+                .run(any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                        argThat(form -> form.responseModeOrDefault() == com.example.ragagent.model.ResponseMode.S), any());
+    }
+
+    @Test
+    @DisplayName("§6.33 4b — 스트리밍 워커에는 SecurityContext 가 없으므로 요청 스레드에서 구한 관리자 여부(ctx.admin)를 인자로 넘긴다")
+    void streamChat_passesTheAdminFlagFromTheRequestThread() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+        // 이 슬라이스는 ThreadContextResolver 를 등록하지 않아 ThreadContext 가 요청 파라미터로 바인딩된다 — 운영에서는 리졸버가 SecurityContext 에서
+        // 만든다(ThreadContextResolverTest). 여기서 확인하는 것은 컨트롤러가 ctx.admin() 을 워커로 그대로 넘긴다는 것이다.
+        mvc.perform(post("/ui/chat/stream").param("question", "테스트").param("threadId", "t1").param("version", "latest")
+                        .param("userId", "root").param("admin", "true").with(csrf()))
+                .andExpect(request().asyncStarted());
+        verify(streamingAgentService, org.mockito.Mockito.timeout((int) TimeUnit.SECONDS.toMillis(1)))
+                .run(org.mockito.ArgumentMatchers.eq("root"), org.mockito.ArgumentMatchers.eq(true), any(), any());
+
+        mvc.perform(post("/ui/chat/stream").param("question", "테스트").param("threadId", "t1").param("version", "latest")
+                        .param("userId", "guest").with(csrf()))
+                .andExpect(request().asyncStarted());
+        verify(streamingAgentService, org.mockito.Mockito.timeout((int) TimeUnit.SECONDS.toMillis(1)))
+                .run(org.mockito.ArgumentMatchers.eq("guest"), org.mockito.ArgumentMatchers.eq(false), any(), any());
     }
 
     /**

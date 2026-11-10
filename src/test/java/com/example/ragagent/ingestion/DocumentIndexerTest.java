@@ -769,4 +769,38 @@ class DocumentIndexerTest {
         // interrupt landed on slow.txt; the cancel path must still persist that partial work.
         assertThat(docRegistry.docIds(DocRegistry.SHARED)).hasSize(1);
     }
+
+    @Test
+    @DisplayName("reindexFromMd — 같은 문서에 다른 쓰기 작업(수정안 적용)이 진행 중이면 기다리지 않고 거절한다 — 아무것도 읽거나 쓰지 않는다")
+    void reindexFromMd_refusedWhileTheDocumentIsBeingWritten() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", List.of(), e -> {}));
+        DocumentWriteLocks locks = new DocumentWriteLocks();
+        indexer.setWriteLocks(locks);
+        List<String> chunksBefore = docRegistry.findByDocId(info.docId()).orElseThrow().springDocIds();
+
+        try (DocumentWriteLocks.Lease applying = locks.tryAcquire(info.docId())) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexer.reindexFromMd(info.docId()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("다른 쓰기 작업이 진행 중");
+        }
+
+        assertThat(docRegistry.findByDocId(info.docId()).orElseThrow().springDocIds()).as("청크는 그대로").isEqualTo(chunksBefore);
+        // 풀린 뒤에는 정상으로 돈다 — 거절이 잠금을 남기지 않았다
+        indexer.reindexFromMd(info.docId());
+        assertThat(locks.isLocked(info.docId())).isFalse();
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 끝나면(실패해도) 문서 잠금을 푼다")
+    void reindexFromMd_releasesTheLockEvenWhenItFails() {
+        DocumentWriteLocks locks = new DocumentWriteLocks();
+        indexer.setWriteLocks(locks);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexer.reindexFromMd("없는-문서"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(locks.isLocked("없는-문서")).isFalse();
+    }
 }

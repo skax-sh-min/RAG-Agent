@@ -2,6 +2,7 @@ package com.example.ragagent.agent;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.service.*;
+import com.example.ragagent.tool.ToolDispatchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Component;
  * Flow:
  *   START → CLASSIFIER
  *     ├─ (meta)  → DIRECT_ANSWER → FINALIZE → END
+ *     ├─ (Tool 계획이 검색 아닌 Tool, §6.33 3단계) → TOOL ─(실패)→ RETRIEVAL
+ *     │                                                └─(성공)→ ANSWER
  *     └─ (other) → RETRIEVAL → ANSWER
  *                                ├─ (sufficient=false) → RETRIEVAL (재검색: escalation + 청크 교체)
  *                                └─ (ok)               → CRITIC
@@ -33,7 +36,7 @@ public class AgentGraph {
 
     private static final Logger log = LoggerFactory.getLogger(AgentGraph.class);
 
-    private enum Node { CLASSIFIER, DIRECT_ANSWER, RETRIEVAL, ANSWER, CRITIC, FINALIZE, END }
+    private enum Node { CLASSIFIER, DIRECT_ANSWER, TOOL, RETRIEVAL, ANSWER, CRITIC, FINALIZE, END }
 
     private final ClassifierService classifierService;
     private final DirectAnswerService directAnswerService;
@@ -41,6 +44,8 @@ public class AgentGraph {
     private final AnswerService answerService;
     private final CriticService criticService;
     private final FinalizeService finalizeService;
+    /** null = TOOL 노드 없음(테스트·구 구성) — Tool 계획이 있어도 RETRIEVAL 로 간다. */
+    private final ToolDispatchService toolDispatchService;
     private final int maxRetryCount;
 
     public AgentGraph(
@@ -51,12 +56,27 @@ public class AgentGraph {
             CriticService criticService,
             FinalizeService finalizeService,
             AppProperties appProperties) {
+        this(classifierService, directAnswerService, retrievalService, answerService, criticService,
+                finalizeService, null, appProperties);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentGraph(
+            ClassifierService classifierService,
+            DirectAnswerService directAnswerService,
+            RetrievalService retrievalService,
+            AnswerService answerService,
+            CriticService criticService,
+            FinalizeService finalizeService,
+            ToolDispatchService toolDispatchService,
+            AppProperties appProperties) {
         this.classifierService = classifierService;
         this.directAnswerService = directAnswerService;
         this.retrievalService = retrievalService;
         this.answerService = answerService;
         this.criticService = criticService;
         this.finalizeService = finalizeService;
+        this.toolDispatchService = toolDispatchService;
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
@@ -79,9 +99,22 @@ public class AgentGraph {
      * 분류기를 고치는 대신 여기서 막는 이유는, 분류기는 "이 질문이 잡담인가"만 알고 "이 턴이
      * 문서를 필요로 하는가"는 모드가 알기 때문이다.
      */
-    private static Node afterClassify(AgentState state) {
+    private Node afterClassify(AgentState state) {
+        // §6.33 4b — 사용자가 되묻기에 "네" 라고 답한 확정 계획은 분류보다 앞선다: "네" 한 마디는 잡담(meta)으로 분류되기 쉽고, 그러면 확정이
+        // DIRECT_ANSWER 로 흘러 작업이 시작되지 않은 채 사라진다. 모델이 고른 계획(확정 아님)은 여전히 meta 가 이긴다.
+        if (toolDispatchService != null && state.toolPlan() != null && state.toolPlan().confirmed()
+                && state.retrievalRetries() == 0 && state.retrievedDocs().isEmpty()) {
+            return Node.TOOL;
+        }
         boolean meta = "meta".equals(state.questionType());
-        return (meta && state.responseMode().allowsDirect()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+        if (meta && state.responseMode().allowsDirect()) return Node.DIRECT_ANSWER;
+        // §6.33 3단계 — 검색 아닌 Tool 을 골랐을 때만 새 경로. 고르지 않았거나(null) 검색 Tool 이거나 TOOL 노드가 없으면 늘 하던 RETRIEVAL.
+        // meta 가 우선이다(위) — 분류가 잡담이라 한 턴의 Tool 계획은 무시한다.
+        if (toolDispatchService != null && state.toolPlan() != null && state.toolPlan().routesToToolNode()
+                && state.retrievalRetries() == 0 && state.retrievedDocs().isEmpty()) {
+            return Node.TOOL;
+        }
+        return Node.RETRIEVAL;
     }
 
     private AgentState runInternal(AgentState initialState, GraphListener listener) {
@@ -115,6 +148,20 @@ public class AgentGraph {
                             ? directAnswerService.execute(state)
                             : directAnswerService.executeStreaming(state, listener);
                     yield Node.FINALIZE;
+                }
+                case TOOL -> {
+                    listener.onNodeEnter("tool");
+                    state = toolDispatchService.execute(state);
+                    // 실패하면 서비스가 계획을 지웠다 — 그 턴은 평소처럼 검색한다. 성공이면 Tool 결과가 근거 문서로 실렸고 출처는 비어 있다.
+                    if (state.toolPlan() == null) yield Node.RETRIEVAL;
+                    if (state.answer() != null) {
+                        // 워크플로를 시작한 턴 — 서비스가 정형 답을 남겼다. 답변 노드를 거치지 않는다(검색 0건 경로와 같은 이벤트 모양).
+                        listener.onNodeEnter("answer");
+                        listener.onToken(state.answer());
+                        yield Node.FINALIZE;
+                    }
+                    listener.onSourcesReady(state.sources());
+                    yield Node.ANSWER;
                 }
                 case RETRIEVAL -> {
                     listener.onNodeEnter("retrieval");

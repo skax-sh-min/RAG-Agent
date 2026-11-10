@@ -57,6 +57,11 @@
 │    CuratedQuestionSuggester → MICRO_TEXT  (/admin 큐레이션 편집의 "본문으로 구체화", 배경 호출) │
 │    PostAnswerService        → MICRO_TEXT  (답변 뒤 질문 다듬기·추가 질문, 턴마다 배경 호출) │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
+│    SearchQueryRewriter      → MICRO_TEXT  (§6.33 재검색의 새 검색어 — 사이트 CONDENSE) │
+│    ToolPlanService          → MICRO_TEXT  (§6.33 Tool 선택, AGENT_ENABLED 일 때만 — 사이트 CONDENSE) │
+│    ImpactAnalysisWorkflow   → TEXT        (영향도 청크별 판정 — 사이트 RERANK, 백그라운드 작업) │
+│    MaintenanceWorkflow      → TEXT / MICRO_TEXT (의미 변경 제안 = RERANK · from/to 추출 = CONDENSE) │
+│    CrossEncoderReranker     → —  (LlmRouter 밖 — 임베딩처럼 전용 서버 직접 호출) │
 │                                                                      │
 │  ※ 생각(thinking) 수준은 호출 지점별 app.llm.thinking.* (§6.29)        │
 │    ThinkingControlChatModel — auto: LOCAL 만 chat_template_kwargs      │
@@ -431,6 +436,8 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | |
 | `RetrievalService`의 MultiQuery 확장 모델(`RoutedChatModel` — 호출마다 `executeGatedWithUsage` 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
+| `SearchQueryRewriter` · `ToolPlanService` (§6.33 — 둘 다 `executeGatedWithUsage`, 호출 지점 `CONDENSE` = `MICRO_TEXT` · `COST_FIRST` 고정. `ToolPlanService` 는 `app.agent.enabled` 일 때만, 분류와 병렬) | |
+| `ImpactAnalysisWorkflow` · `MaintenanceWorkflow` (§6.33 4 — 백그라운드 **작업**이지만 사용자가 기다리는 화면이라 `executeGatedWithUsage` 를 탄다. 영향도는 호출 전에 대화형 게이트가 비기를 최대 30초 기다려 채팅에 양보한다. 호출 지점은 판정·의미 변경 = `RERANK`(`TEXT`), 바꿀 말 추출 = `CONDENSE`) | |
 | `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |

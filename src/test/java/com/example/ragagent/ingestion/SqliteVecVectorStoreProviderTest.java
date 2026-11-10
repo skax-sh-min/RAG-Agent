@@ -548,4 +548,35 @@ class SqliteVecVectorStoreProviderTest {
         assertThat(found.get(0).getMetadata()).containsEntry("doc_id", "d1").containsEntry("chunk_index", 3);
         assertThat(p.findByIds("u", "latest", List.of())).isEmpty();
     }
+
+    @Test
+    @DisplayName("add: 임베딩이 실패하면 옛 행을 지우지 않는다 — 실패한 재색인이 청크를 잃게 하지 않는다 (§6.33 4b)")
+    void addDoesNotDeleteOldRowsWhenEmbeddingFails() {
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(java.util.Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenThrow(new RuntimeException("connection reset"));
+
+        assertThatThrownBy(() -> p.add("u", "v1", List.of(doc))).isInstanceOf(RuntimeException.class);
+
+        // 지우는 SQL 도, 넣는 SQL 도 실행되지 않았다 — 옛 벡터와 본문이 그대로다.
+        verify(jdbc, org.mockito.Mockito.never()).update(anyString(), any(Object[].class));
+        verify(jdbc, org.mockito.Mockito.never()).batchUpdate(anyString(), any(BatchPreparedStatementSetter.class));
+    }
+
+    @Test
+    @DisplayName("add: 성공하면 옛 행 삭제는 삽입보다 앞이고 같은 청크 id 를 지운다(멱등 재색인)")
+    void addDeletesOldRowsRightBeforeInsertingTheNewOnes() {
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(java.util.Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f, 0.2f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(embeddingModel, jdbc);
+        order.verify(embeddingModel).embed(anyList());
+        order.verify(jdbc).update(eq("DELETE FROM vec_embeddings WHERE spring_doc_id IN (?)"), any(Object[].class));
+        order.verify(jdbc).update(eq("DELETE FROM vec_document_chunks WHERE spring_doc_id IN (?)"), any(Object[].class));
+        order.verify(jdbc).batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class));
+    }
 }

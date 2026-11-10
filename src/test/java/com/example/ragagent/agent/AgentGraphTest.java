@@ -509,4 +509,110 @@ class AgentGraphTest {
 
         assertThat(fired[0]).isFalse();
     }
+
+    // ── §6.33 3단계 — TOOL 노드 ────────────────────────────────────────────────
+
+    private AgentGraph graphWithTool(com.example.ragagent.tool.ToolDispatchService dispatch) {
+        AppProperties props = new AppProperties(
+            "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        return new AgentGraph(classifierService, directAnswerService, retrievalService,
+                answerService, criticService, finalizeService, dispatch, props);
+    }
+
+    private static AgentState withPlan(String tool) {
+        return AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST)
+                .toBuilder().questionType("concept").toolPlan(new com.example.ragagent.tool.ToolPlan(tool, "{}")).build();
+    }
+
+    @Test
+    @DisplayName("§6.33 — 검색 아닌 Tool 을 골랐고 실행이 성공하면 RETRIEVAL 을 건너뛰고 ANSWER 로 간다")
+    void toolPlan_success_skipsRetrieval() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        graphWithTool(dispatch).run(withPlan("queryCatalog"));
+
+        verify(dispatch, times(1)).execute(any());
+        verify(retrievalService, never()).execute(any(), any());
+        verify(answerService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("§6.33 — TOOL 이 계획을 지우고 돌려주면(실패) 평소처럼 RETRIEVAL 로 간다 — Agent 가 검색을 없앨 수 없다")
+    void toolPlan_failure_fallsBackToRetrieval() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().toolPlan(null).build());
+
+        graphWithTool(dispatch).run(withPlan("queryCatalog"));
+
+        verify(dispatch, times(1)).execute(any());
+        verify(retrievalService, times(1)).execute(any(), any());
+        verify(answerService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("§6.33 4a — TOOL 이 정형 답을 남기면(워크플로 시작) ANSWER·RETRIEVAL 없이 FINALIZE 로 가고 답이 토큰으로 나간다")
+    void toolAnswer_skipsAnswerNode() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().answer("분석 시작").build());
+        GraphListener listener = mock(GraphListener.class);
+
+        AgentState out = graphWithTool(dispatch).runStreaming(withPlan("analyzeImpact"), listener);
+
+        verify(retrievalService, never()).execute(any(), any());
+        verify(answerService, never()).executeStreaming(any(), any());
+        verify(criticService, never()).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+        verify(listener).onToken("분석 시작");
+        assertThat(out.answer()).isEqualTo("분석 시작");
+    }
+
+    @Test
+    @DisplayName("§6.33 — 검색 Tool 을 골랐거나 계획이 없으면 TOOL 노드는 거치지 않는다(기존 경로 불변)")
+    void searchToolOrNoPlan_neverTouchesToolNode() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        AgentGraph g = graphWithTool(dispatch);
+
+        g.run(withPlan("searchKnowledge"));
+        g.run(AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST).toBuilder().questionType("concept").build());
+
+        verify(dispatch, never()).execute(any());
+        verify(retrievalService, times(2)).execute(any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.33 — meta 분류가 Tool 계획보다 우선한다(잡담은 DIRECT_ANSWER)")
+    void metaBeatsToolPlan() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+
+        graphWithTool(dispatch).run(withPlan("queryCatalog").toBuilder().questionType("meta").build());
+
+        verify(dispatch, never()).execute(any());
+        verify(directAnswerService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("§6.33 — TOOL 노드가 없는 구성(null)에서는 Tool 계획이 있어도 RETRIEVAL 로 간다")
+    void noToolNode_ignoresThePlan() {
+        graph.run(withPlan("queryCatalog"));
+
+        verify(retrievalService, times(1)).execute(any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.33 4b — 되묻기에 \"네\" 한 확정 계획은 meta 분류보다 앞선다(\"네\" 한 마디는 잡담으로 분류되기 쉽다)")
+    void confirmedPlanBeatsMeta() {
+        com.example.ragagent.tool.ToolDispatchService dispatch = mock(com.example.ragagent.tool.ToolDispatchService.class);
+        when(dispatch.execute(any())).thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().answer("시작").build());
+        AgentState state = AgentState.of("네", "v1", "t1", "", RoutingMode.COST_FIRST).toBuilder().questionType("meta")
+                .toolPlan(new com.example.ragagent.tool.ToolPlan("requestDocumentChange", "{}", true)).build();
+
+        graphWithTool(dispatch).run(state);
+
+        verify(dispatch, times(1)).execute(any());
+        verify(directAnswerService, never()).execute(any());
+    }
 }

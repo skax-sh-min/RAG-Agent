@@ -279,6 +279,12 @@ public enum ResponseMode {
      */
     public boolean generative() { return generative; }
 
+    /**
+     * Tool 선택(§6.33 3단계)을 돌려도 되는 모드인가 — 시작 범위는 표준(N)뿐이다: S 는 요약 답변(검증 없음), C 는 근거 엄격도가 다른 응용 답변이라
+     * Tool 결과(카탈로그 목록 등)를 문서 근거처럼 다루는 이 경로를 아직 허용하지 않는다. 값이 아니라 성질로 묻는다.
+     */
+    public boolean allowsAgent() { return !generative && !skipsVerification(); }
+
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */
     public boolean allowsDirect() { return directSystemPromptKey != null; }
 
