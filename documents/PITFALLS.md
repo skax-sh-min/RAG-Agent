@@ -525,6 +525,18 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **번들 함정.** 프롬프트는 여러 줄이라 줄 끝 `\n\` 가 필수다 — 처음에 스크립트 이스케이프가 그것을 지워 첫 줄만 값이 됐고 `MessageBundleConventionTest` 가 잡았다. 테스트는 목이 아니라 **실제 번들**로 `{tools}`·`{rules}` 치환과 한/영 키 짝을 확인한다.
 - **열린 항목.** 앱 경로 실측(`AGENT_ENABLED=true` 로 `tool-gold.json` 49건을 채팅 경로로) · 영향도·유지보수 Tool 이 생기면 `PLANNABLE`·규칙 키·`ToolCatalog.ACCESS` 를 함께 · 추적 패널(5단계).
 
+### 영향도 분석 (4a) — `ImpactAnalysisWorkflow`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.4. 이 조각은 **백엔드만**이다 — Tool(`analyzeImpact`)·채팅 연결·리포트 화면은 없고 어떤 요청도 이 워크플로를 부르지 않는다. 리포트를 볼 길이 없는 채로 Tool 을 열면 작업만 쌓이므로 일부러 미뤘다.
+
+- **전수 조회는 순위 검색이 아니다.** `findMentions` 는 `content : "<문자열>"` 구(phrase) MATCH + 대소문자 무시 부분 문자열 재확인 + `ORDER BY rowid`(같은 데이터면 같은 순서). 식별자에 따옴표·`*`·`AND` 가 섞여도 깨지지 않게 따옴표를 이스케이프한다(`KeywordSearchFindMentionsTest`). 큐레이션 청크는 `version=curated` 라 일반 버전을 물으면 나오지 않는다.
+- **3글자 미만은 빈 결과가 아니라 `tooShort`.** trigram 이 못 찾는데 빈 리포트를 돌려주면 "영향 없음"으로 읽힌다. 리포트가 그 사실을 싣고 LLM 도 부르지 않는다.
+- **인용 검증이 이 워크플로의 핵심이다.** 모델이 "영향 있음"과 함께 낸 `quote` 가 청크 원문(공백을 한 칸으로 줄인)의 부분 문자열이 아니면 `unverified` 다 — 지어낸 근거로 "영향 있음"이 실리지 않는다. 인용이 비어도 같다. 검증은 **색인의 파생 텍스트가 아니라 저장 원문**(`withStoredText`)으로 한다.
+- **상한과 한계는 리포트가 말한다.** 판정은 40개까지(`MAX_JUDGED`), 넘는 만큼은 파일별 언급 수(`unjudged`)로만. 전수 조회 상한 200 을 넘으면 `truncated`. **의미적으로만 연관된(글자가 다른) 청크는 이 단계에서 찾지 않는다** — 설계서의 하이브리드 후보는 미구현.
+- **호출 지점은 새 사이트가 아니라 `ThinkingSite.RERANK`**(TEXT · `COST_FIRST` 고정 · 생각 끔) — 3단계가 `CONDENSE` 를 쓴 것과 같은 이유(사이트를 더하면 설정 카드·미리보기가 함께 바뀐다). 출력 예약은 `min(설정, 512)` 를 호출부가 싣는다.
+- **동시성.** 사용자당 한 건(`countRunning`)·가상 스레드·호출마다 로컬 LLM 의 대화형 게이트(`localTier1Concurrency().inUse()`)가 비기를 기다린다(상한 30초 — 영원히 굶지 않게, 넘으면 그냥 보낸다). `finish()` 는 `running` 인 행만 바꾸므로 재기동이 `interrupted` 로 돌린 작업을 늦게 끝난 스레드가 되살리지 못한다.
+- **열린 항목.** `analyzeImpact` Tool(`ToolCatalog.ACCESS` 선언 + `ToolPlanService.PLANNABLE` + 규칙 번들 키 + 정형 답변) · 리포트 API·화면(요청자와 ADMIN 만) · 진행 SSE · 앱 경로 실측(심은 언급을 전수 조회가 100% 찾는지, 가짜 인용을 걸러내는지) · 의미 연관 후보.
+
 ### MCP 서버 (Phase 2)
 
 [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).

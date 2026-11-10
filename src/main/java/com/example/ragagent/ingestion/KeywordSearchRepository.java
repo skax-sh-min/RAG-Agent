@@ -534,6 +534,47 @@ public class KeywordSearchRepository {
                 .toList();
     }
 
+    /**
+     * 영향도 분석의 전수 조회(§6.33 4a) — 이 문자열을 <b>글자 그대로 포함한</b> 청크를 모두(상한까지) 찾는다. 순위 검색({@link #search})은
+     * "관련 있는 몇 개"를 위한 것이라 언급된 곳 전부가 필요한 영향도에는 쓸 수 없다.
+     *
+     * <p>trigram 색인이라 <b>3글자 미만 식별자는 찾을 수 없다</b>({@code tooShort}) — 조용히 빈 결과를 돌려주면 "영향 없음"으로
+     * 읽히므로 호출자가 리포트에 밝힌다. MATCH 는 구(phrase)로 걸고(식 문법 문자가 식별자에 섞여도 깨지지 않게 따옴표를 이스케이프),
+     * 돌아온 본문은 대소문자 무시 부분 문자열로 다시 확인한다. {@code rowid} 순이라 같은 데이터면 같은 순서다. 큐레이션 청크는
+     * {@code version} 이 {@code curated} 라 일반 버전을 물으면 나오지 않는다.
+     *
+     * @param limit 반환 상한. 넘치면 {@code truncated} 이고 {@code hits} 는 앞의 {@code limit} 개다
+     */
+    public Mentions findMentions(String version, String term, int limit) {
+        String t = term == null ? "" : term.strip();
+        if (!available || t.isEmpty()) return new Mentions(List.of(), false, false);
+        if (t.codePointCount(0, t.length()) < 3) return new Mentions(List.of(), false, true);
+        String match = "content : \"" + t.replace("\"", "\"\"") + "\"";
+        List<Document> rows;
+        try {
+            rows = jdbc.query("""
+                    SELECT spring_doc_id, doc_id, version, filename, page, chapter, chunk_index, doc_tags, content
+                    FROM chunk_fts
+                    WHERE chunk_fts MATCH ? AND version = ?
+                    ORDER BY rowid
+                    LIMIT ?
+                    """, CHUNK_ROW_MAPPER, match, version, limit + 1);
+        } catch (Exception e) {
+            log.warn("[KEYWORD] findMentions failed: {}", e.getMessage());
+            return new Mentions(List.of(), false, false);
+        }
+        String needle = t.toLowerCase(Locale.ROOT);
+        List<Document> hits = new ArrayList<>();
+        for (Document d : rows) {
+            if (d.getText() != null && d.getText().toLowerCase(Locale.ROOT).contains(needle)) hits.add(d);
+        }
+        boolean truncated = rows.size() > limit;
+        return new Mentions(List.copyOf(hits.size() > limit ? hits.subList(0, limit) : hits), truncated, false);
+    }
+
+    /** {@link #findMentions} 의 결과 — {@code tooShort} 는 "3글자 미만이라 찾을 수 없었다"(빈 결과와 구별한다). */
+    public record Mentions(List<Document> hits, boolean truncated, boolean tooShort) {}
+
     private List<Document> matchSearch(String question, String version, int topK) {
         String match = toMatchQuery(question);
         if (match == null) return List.of();
