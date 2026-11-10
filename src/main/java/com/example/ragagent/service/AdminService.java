@@ -734,6 +734,65 @@ public class AdminService {
         return true;
     }
 
+    /** {@link #applyChunkEdit} 의 결과 — {@code APPLIED} 외에는 청크가 바뀌지 않았다. */
+    public enum ApplyOutcome {
+        APPLIED,
+        /** 청크가 없다(재인덱싱으로 id 가 바뀌었거나 삭제됨). */
+        NOT_FOUND,
+        /** 큐레이션 청크 — 단일 출처가 {@code curated_qa} 라 이 경로로 고치지 않는다. */
+        CURATED,
+        /** 현재 본문의 해시가 기대와 다르다 — 수정안을 만든 뒤 청크가 바뀌었다. */
+        STALE,
+        /** 임베딩(저장) 실패 — 아무것도 바뀌지 않았다. */
+        EMBED_FAILED
+    }
+
+    /**
+     * 청크 본문을 <b>임베딩을 먼저 하고</b> 제자리에서 바꾼다(§6.33 4b-2) — 청크 id 가 유지되고 벡터·FTS 가 새 본문으로 다시 만들어지며 재사용 표시는
+     * "수정됨"이 된다. {@link #updateChunk} 는 임베딩을 그대로 두고({@code void}, 실패를 삼킨다) 본문만 바꿔 벡터와 본문이 어긋나므로 쓰지 않는다.
+     *
+     * <p>순서가 안전의 전부다: ① 현재 본문 해시가 {@code expectedHash} 와 같은지 확인(다르면 {@code STALE} — 수정안을 만든 뒤 누가 고쳤다) → ② 새
+     * 본문 + 바뀐 맥락/키워드로 검색 텍스트를 만들어 {@code vectorStore.add} (임베딩이 먼저고 삭제·삽입이 그 뒤 한 트랜잭션이라 실패하면 옛 행이 그대로다)
+     * → ③ FTS 색인 갈이. ②가 실패하면 {@code EMBED_FAILED} 이고 청크는 바뀌지 않았다.
+     *
+     * @param metaChanges {@link #EDITABLE_CHUNK_META_KEYS}({@code chunk_context}·{@code excerpt_keywords}) 중 바꿀 값 — 그 밖의 키는 무시한다.
+     *                    키가 없거나 값이 {@code null} 이면 그 메타데이터는 그대로다
+     */
+    public ApplyOutcome applyChunkEdit(String collectionName, String chunkId, String newText,
+                                       Map<String, String> metaChanges, String expectedHash) {
+        ChunkRow row = getChunk(collectionName, chunkId);
+        if (row == null) return ApplyOutcome.NOT_FOUND;
+        if (row.isCurated()) return ApplyOutcome.CURATED;
+        if (!com.example.ragagent.model.TextHash.sha256(row.fullText()).equals(expectedHash)) return ApplyOutcome.STALE;
+
+        String previousHash = questionReuseService == null ? "" : questionReuseService.currentChunkHash(chunkId);
+        Map<String, Object> meta = new HashMap<>(row.metadata());
+        if (metaChanges != null) {
+            for (String key : EDITABLE_CHUNK_META_KEYS) {
+                String v = metaChanges.get(key);
+                if (v != null) meta.put(key, v);
+            }
+        }
+        // 손으로 고친 것과 같은 표식 — 문서 단위 재인덱싱은 저장된 MD 에서 청크를 다시 만들어 이 편집을 버릴 수 있다(MD 되쓰기가 성공하면 그렇지 않지만
+        // 그 판단은 이 메서드가 아니라 호출자의 몫이므로 경고 쪽으로 기운다).
+        meta.put(MetaKey.EDITED_AT, Instant.now().toString());
+
+        Document doc = SearchTextBuilder.precompute(new Document(chunkId, newText == null ? "" : newText, meta));
+        try {
+            vectorStore.add(DocRegistry.SHARED, row.metadata().get(MetaKey.VERSION), List.of(doc));
+        } catch (Exception e) {
+            log.error("applyChunkEdit embed/store failed id={}: {}", chunkId, e.getMessage());
+            return ApplyOutcome.EMBED_FAILED;
+        }
+        keywordRepo.deleteBySpringDocIds(List.of(chunkId));
+        keywordRepo.indexChunks(List.of(doc));
+        if (questionReuseService != null) {
+            questionReuseService.invalidateChunkIfHashChanged(chunkId, previousHash);
+        }
+        log.info("[ADMIN] chunk edit applied id={}", chunkId);
+        return ApplyOutcome.APPLIED;
+    }
+
     // ── sqlite-vec chunk browsing ────────────────────────────
     // For sqlite-vec the "collection" identifier passed from the UI is the version
     // string (vec0 partition key). Chunks live in vec_document_chunks(content/metadata).

@@ -81,6 +81,38 @@ public class ChangeProposalRepository {
                 """, to, reviewer, DbTimestamp.now(), id, from) > 0;
     }
 
+    /** 한 문서의 수정안을 상태별로 — 승인·적용이 문서 단위이므로 이 단위로 읽는다. */
+    public List<Proposal> listByJobDocStatus(long jobId, String docId, String status) {
+        return jdbc.query("SELECT * FROM change_proposal WHERE job_id = ? AND doc_id = ? AND status = ? ORDER BY id",
+                MAPPER, jobId, docId, status);
+    }
+
+    /**
+     * 한 문서의 수정안을 <b>모두</b> {@code from} → {@code to} 로 옮긴다(승인·거절의 문서 단위). 현재 상태가 {@code from} 인 것만 바뀌고(CAS),
+     * 바뀐 수를 돌려준다.
+     */
+    public int transitionDocument(long jobId, String docId, String from, String to, String reviewer) {
+        return jdbc.update("""
+                UPDATE change_proposal SET status = ?, reviewed_by = ?, reviewed_at = ?
+                WHERE job_id = ? AND doc_id = ? AND status = ?
+                """, to, reviewer, DbTimestamp.now(), jobId, docId, from);
+    }
+
+    /**
+     * 적용 결과를 남긴다 — 지금 상태가 {@code approved} 일 때만(compare-and-set). {@code applied} 이면 적용 시각도 찍는다.
+     */
+    public boolean finishApply(long id, String status, String mdStatus) {
+        String appliedAt = APPLIED.equals(status) ? DbTimestamp.now() : null;
+        return jdbc.update("UPDATE change_proposal SET status = ?, md_status = ?, applied_at = ? WHERE id = ? AND status = ?",
+                status, mdStatus, appliedAt, id, APPROVED) > 0;
+    }
+
+    /** 이미 적용된 수정안의 MD 되쓰기 결과 — 문서의 MD 되쓰기는 청크를 다 적용한 뒤 한 번 일어난다. */
+    public int setMdStatus(long jobId, String docId, String mdStatus) {
+        return jdbc.update("UPDATE change_proposal SET md_status = ? WHERE job_id = ? AND doc_id = ? AND status = ?",
+                mdStatus, jobId, docId, APPLIED);
+    }
+
     public int countByStatus(long jobId, String status) {
         Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM change_proposal WHERE job_id = ? AND status = ?",
                 Integer.class, jobId, status);

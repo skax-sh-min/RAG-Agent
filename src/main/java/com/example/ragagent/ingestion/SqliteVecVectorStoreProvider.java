@@ -145,8 +145,10 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                      BiConsumer<Integer, Integer> onProgress) {
         if (docs == null || docs.isEmpty()) return;
 
-        // vec0 does not support INSERT OR REPLACE → delete first so re-indexing is idempotent.
-        deleteBySpringDocIds(docs.stream().map(Document::getId).toList());
+        // vec0 does not support INSERT OR REPLACE, so re-indexing must delete the old rows — but NOT before embedding:
+        // the delete used to run here, ahead of every embed call, so an embedding failure (server down, timeout) left the
+        // chunk deleted and the index silently one chunk short. The delete now happens per sub-batch inside the same
+        // transaction as its insert (insertSubBatch), i.e. only after that batch's embeddings exist.
 
         // Embed per token-bounded sub-batch (not all of docs in one call) so a large document's
         // chunk count can't turn into a single oversized HTTP request that times out against a
@@ -233,7 +235,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             });
         }
 
+        List<String> batchIds = originals.stream().map(Document::getId).toList();
         Runnable insertBoth = () -> {
+            deleteBySpringDocIds(batchIds);   // 임베딩이 이미 있는 지금에야 옛 행을 지운다 — 삽입과 한 트랜잭션
             jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
             jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
         };

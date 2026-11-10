@@ -557,6 +557,17 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **관리자 전용의 두 겹.** 화면은 `/admin/**`(보안 체인), Tool 은 `ToolAccess.ADMIN`. 채팅 호출자는 늘 관리자가 아니라(`ToolPlanService.planFor`) 채팅에서는 부를 수 없다 — 관리자 여부를 채팅 Tool 선택까지 싣는 것은 SSE 워커에 `SecurityContext` 가 없어 요청 스레드에서 호출자를 만들어 상태로 실어야 한다.
 - **열린 항목(4b-2).** 승인 UI(문서 단위 — 일부 청크만 고치면 이웃 청크의 겹침 구간이 달라져 `ChunkReassembler` 재조립에 중복이 생긴다) · `ChangeApplyService`(백업 → 해시 대조 → `stale` → `AdminService.applyChunkEdit` 임베딩 먼저 → 변환 MD 되쓰기, `MD_CONFLICT`/`MD_MISSING`) · 의미 변경 수정안 · 문서 재인덱싱이 청크 id 를 바꾸므로 대기 수정안이 `stale` 이 되는 것.
 
+### 유지보수 (4b-2) — `ChangeApplyService` · `applyChunkEdit` · `MarkdownWriteBack`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.5. 4b-1 이 만든 수정안을 **관리자가 문서 단위로 승인하면** 코퍼스에 쓴다 — 이 앱에서 유지보수가 청크·벡터·FTS·변환 MD 를 바꾸는 유일한 자리다.
+
+- **찾은 결함: sqlite-vec `add()` 가 임베딩 *전에* 지웠다.** 예전 `add()` 는 첫 줄에서 옛 행(`vec_embeddings`·`vec_document_chunks`)을 지우고 그 뒤에 임베딩을 불렀다 — 임베딩 서버가 죽거나 타임아웃이면 **청크가 사라졌다**(`reindexChunk`·문서 재인덱싱도 같은 위험 — 설계서가 "임베딩 먼저"를 전제로 쓴 `vectorStore.add` 가 실제로는 그 순서가 아니었다). 삭제를 `insertSubBatch` 의 트랜잭션 안으로 옮겼다: 그 서브배치의 임베딩이 이미 있을 때 삭제 + 삽입이 함께 일어난다. 동작은 성공 경로에서 같고 실패 경로에서만 달라진다(`SqliteVecVectorStoreProviderTest` — 실패하면 삭제·삽입 SQL 이 하나도 안 나가고, 성공하면 임베딩 → 삭제 → 삽입 순).
+- **`applyChunkEdit` 은 `updateChunk` 가 아니다.** `updateChunk` 는 임베딩을 그대로 두고 본문만 바꿔(벡터와 본문이 어긋난다) `void` 로 실패를 삼킨다. `applyChunkEdit` 은 ① 해시 대조(`STALE` — 수정안을 만든 뒤 누가 고쳤다) ② 새 본문·바뀐 맥락/키워드로 `vectorStore.add`(임베딩 먼저) ③ FTS 갈이 ④ 재사용 표시 갱신 순이고 결과 enum 을 돌려준다. 메타데이터는 `EDITABLE_CHUNK_META_KEYS` 둘만 받는다(요청에 `doc_id` 를 실어도 무시). `edited_at` 은 찍힌다 — MD 되쓰기가 성공해도 재인덱싱 사전 경고가 뜨는 것은 설계서가 밝힌 알려진 한계다.
+- **백업이 실패하면 쓰지 않는다.** 복구 지점이 없는 채로 코퍼스를 바꾸지 않는다 — 수정안은 `approved` 로 남아 다시 시도할 수 있다. sqlite-vec 에서는 벡터까지 한 파일이라 백업이 곧 복구 지점이다. **MD 파일은 백업에 들어 있지 않다**(DB 백업은 `memory.db` 뿐이다) — `MarkdownWriteBack` 은 `.bak` 도 남기지 않는다. MD 를 되돌리려면 같은 치환을 반대로 하면 된다(리포트의 from/to).
+- **MD 는 구간 일치가 아니라 발생 수로 대조한다.** 청크에는 부모 제목·`(2)` 제목·이어짐 마커·표 머리글이 더해져 MD 본문과 다르다. 조건: ① 문서의 **어느 청크에도 바꿀 말이 안 남았다**(일부만 고친 문서에서 MD 만 바꾸면 청크와 MD 가 갈라진다) ② MD 발생 수 ≥ 1 ③ MD 발생 수 ≤ 적용한 청크들의 수정 전 본문에서 센 수(청크는 겹침 때문에 같은 자리를 두 번 셀 수는 있어도 MD 의 자리를 빠뜨리지 않는다). 하나라도 어긋나면 **MD 를 건드리지 않고** `MD_CONFLICT` — 그 문서는 청크만 바뀌고 다음 재인덱싱이 되돌린다(화면 문구). 임시 파일에 쓰고 원자적으로 옮긴다(미지원 파일시스템이면 일반 이동으로 물러난다).
+- **승인은 문서 단위 · 코퍼스 일괄 승인은 없다.** 일부 청크만 고치면 이웃 청크와 겹침 구간이 달라져 `ChunkReassembler` 의 재조립에 중복이 생긴다. `transitionDocument` 는 `pending` 인 것만(CAS) 바꾸므로 두 관리자가 동시에 눌러도 한 번만 승인된다. 승인과 적용은 한 동작이다(승인하면 곧바로 가상 스레드 적용) — 서버가 그 사이에 죽으면 `approved` 로 남고, 같은 문서의 "승인" 이 다시 눌리면 남은 것부터 적용한다(`approveAndApply` 가 `approved` 잔여분도 본다).
+- **알려진 구멍.** ① 잠금은 이 서비스끼리만 겹침을 막는다 — 같은 문서의 `↺ 재인덱싱`과 동시에 돌면 막지 못한다(재인덱싱이 청크 id 를 바꾸므로 그 뒤 수정안은 `NOT_FOUND`→`stale`). ② 전수 조회 상한(200)을 넘은(`truncated`) 작업도 승인할 수 있다 — 화면 경고뿐이다. ③ 적용 중 서버가 죽으면 일부 청크만 바뀐 문서가 남고 MD 는 그대로다(백업이 복구 지점). ④ 키워드(`excerpt_keywords`)는 소문자라 글자 그대로 일치하지 않으면 치환되지 않아 옛 말이 키워드에 남을 수 있다(본문·맥락은 바뀐다). ⑤ 실제 임베딩 서버·DB·MD 위의 종단 확인은 아직 없다 — 지금 테스트는 청크 쓰기·백업을 목으로 두고 실제 스키마·실제 MD 파일 위에서 순서와 상태 전이를 고정한다.
+
 ### MCP 서버 (Phase 2)
 
 [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).

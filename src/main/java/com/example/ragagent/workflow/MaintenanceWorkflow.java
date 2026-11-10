@@ -240,10 +240,6 @@ public class MaintenanceWorkflow {
     }
 
     static String sha256(String s) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
+        return com.example.ragagent.model.TextHash.sha256(s);
     }
 }

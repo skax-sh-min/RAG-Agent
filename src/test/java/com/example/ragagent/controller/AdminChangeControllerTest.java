@@ -6,6 +6,7 @@ import com.example.ragagent.repository.ChangeJobRepository;
 import com.example.ragagent.repository.ChangeProposalRepository;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.workflow.ChangeApplyService;
 import com.example.ragagent.workflow.MaintenanceWorkflow;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +48,7 @@ class AdminChangeControllerTest {
     @Autowired MockMvc mvc;
 
     @MockitoBean MaintenanceWorkflow workflow;
+    @MockitoBean ChangeApplyService applyService;
     @MockitoBean ChangeJobRepository jobs;
     @MockitoBean ChangeProposalRepository proposals;
     @MockitoBean CurrentUser currentUser;
@@ -64,9 +66,13 @@ class AdminChangeControllerTest {
     }
 
     private static ChangeProposalRepository.Proposal proposal() {
+        return proposal("pending", null);
+    }
+
+    private static ChangeProposalRepository.Proposal proposal(String status, String mdStatus) {
         return new ChangeProposalRepository.Proposal(1, 5, "d1", "guide.pdf", "c1", "literal",
-                "PostgreSQL 에 접속한다.", "Oracle 에 접속한다.", "h", null, null, null, null, "리터럴", "pending",
-                null, null, null, null, "t");
+                "PostgreSQL 에 접속한다.", "Oracle 에 접속한다.", "h", null, null, null, null, "리터럴", status,
+                mdStatus, null, null, null, "t");
     }
 
     @Test
@@ -107,8 +113,8 @@ class AdminChangeControllerTest {
     }
 
     @Test
-    @DisplayName("작업 화면 — Diff·상태 배지·리포트(수동 처리·버림)가 그려지고 승인/적용 버튼은 없다")
-    void rendersTheProposalsWithoutApplyButtons() throws Exception {
+    @DisplayName("작업 화면 — Diff·상태 배지·리포트(수동 처리·버림)가 그려지고, 검토 대기 문서에는 승인·거절 버튼이 있다")
+    void rendersTheProposalsWithReviewButtons() throws Exception {
         String report = """
                 {"instruction":"PostgreSQL 을 Oracle 로","from":"PostgreSQL","to":"Oracle","mentions":3,"truncated":false,"tooShort":false,
                  "proposals":1,"unchanged":1,"manualCurated":2,
@@ -125,8 +131,65 @@ class AdminChangeControllerTest {
                 .andExpect(content().string(containsString("수동 처리가 필요합니다")))
                 .andExpect(content().string(containsString("이미지 마커가 바뀜")))
                 .andExpect(content().string(containsString("아직 아무것도 바뀌지 않았습니다")))
-                .andExpect(content().string(not(containsString("승인"))))
+                .andExpect(content().string(containsString("승인하고 적용")))
+                .andExpect(content().string(containsString("/admin/change-jobs/5/docs/approve")))
+                .andExpect(content().string(containsString("/admin/change-jobs/5/docs/reject")))
                 .andExpect(content().string(not(containsString("every 3s"))));
+    }
+
+    @Test
+    @DisplayName("이미 적용된 문서에는 버튼이 없고 MD 결과·원본 파일 경고가 보인다 · 승인돼 적용 중이면 폴링한다")
+    void appliedAndInProgressDocuments() throws Exception {
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", null)));
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal("applied", "MD_CONFLICT")));
+
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("승인하고 적용"))))
+                .andExpect(content().string(containsString("재인덱싱하면 이 수정이 되돌아갑니다")))
+                .andExpect(content().string(containsString("원본 파일(DOCX/PDF 등)은 바뀌지 않습니다")))
+                .andExpect(content().string(not(containsString("아직 아무것도 바뀌지 않았습니다"))));
+
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal("approved", null)));
+        mvc.perform(get("/admin/change-jobs/5/body").with(user(ADMIN)))
+                .andExpect(content().string(containsString("every 3s")));
+    }
+
+    @Test
+    @DisplayName("승인·거절은 관리자만, CSRF 와 함께 POST — 일반 사용자는 서비스에 닿지 못한다")
+    void approveAndRejectAreAdminOnlyAndCsrfProtected() throws Exception {
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", null)));
+        when(applyService.approveAndApply(5L, "d1", "root")).thenReturn(2);
+        when(applyService.reject(5L, "d1", "root")).thenReturn(2);
+
+        mvc.perform(post("/admin/change-jobs/5/docs/approve").with(user(USER)).with(csrf()).param("docId", "d1"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/change-jobs/5/docs/approve").with(user(ADMIN)).param("docId", "d1"))
+                .andExpect(status().isForbidden());   // CSRF 없음
+        verify(applyService, never()).approveAndApply(org.mockito.ArgumentMatchers.anyLong(), any(), any());
+
+        mvc.perform(post("/admin/change-jobs/5/docs/approve").with(user(ADMIN)).with(csrf()).param("docId", "d1"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "/admin/change-jobs/5"));
+        mvc.perform(post("/admin/change-jobs/5/docs/reject").with(user(ADMIN)).with(csrf()).param("docId", "d1"))
+                .andExpect(status().is3xxRedirection());
+        verify(applyService).approveAndApply(5L, "d1", "root");
+        verify(applyService).reject(5L, "d1", "root");
+    }
+
+    @Test
+    @DisplayName("승인할 것이 없으면(이미 처리됨) 안내와 함께 돌아가고, 없는 작업·영향도 작업의 승인은 404 — 서비스는 불리지 않는다")
+    void nothingToApproveAndWrongJobs() throws Exception {
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", null)));
+        when(applyService.approveAndApply(5L, "d1", "root")).thenReturn(0);
+        when(jobs.find(7L)).thenReturn(Optional.of(job(7, "impact", "done", null)));
+        when(jobs.find(8L)).thenReturn(Optional.empty());
+
+        mvc.perform(post("/admin/change-jobs/5/docs/approve").with(user(ADMIN)).with(csrf()).param("docId", "d1"))
+                .andExpect(header().string("Location", "/admin/change-jobs/5?notice=nothing"));
+        mvc.perform(post("/admin/change-jobs/7/docs/approve").with(user(ADMIN)).with(csrf()).param("docId", "d1")).andExpect(status().isNotFound());
+        mvc.perform(post("/admin/change-jobs/8/docs/reject").with(user(ADMIN)).with(csrf()).param("docId", "d1")).andExpect(status().isNotFound());
+        verify(applyService, never()).approveAndApply(org.mockito.ArgumentMatchers.eq(7L), any(), any());
     }
 
     @Test
