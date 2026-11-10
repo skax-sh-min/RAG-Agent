@@ -106,6 +106,11 @@ public class ChangeApplyService {
                 Map<String, String> metaChanges = new HashMap<>();
                 if (p.afterContext() != null) metaChanges.put(MetaKey.CHUNK_CONTEXT, p.afterContext());
                 if (p.afterKeywords() != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, p.afterKeywords());
+                // 섹션 제목에도 같은 치환 — 본문에서 바꾼 말이 제목에 있으면 제목만 옛 이름으로 남는다(종단 확인에서 드러난 것).
+                String heading = currentHeading(collection, p.chunkId());
+                if (heading != null && heading.contains(report.from())) {
+                    metaChanges.put(MetaKey.HEADING, heading.replace(report.from(), report.to()));
+                }
                 AdminService.ApplyOutcome outcome;
                 try {
                     outcome = adminService.applyChunkEdit(collection, p.chunkId(), p.afterText(), metaChanges, p.beforeHash());
@@ -148,6 +153,16 @@ public class ChangeApplyService {
             return DocResult.error(docId, String.valueOf(e.getMessage()));
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 청크의 현재 섹션 제목 — 읽지 못하면 {@code null}(그 메타데이터는 건드리지 않는다). */
+    private String currentHeading(String collection, String chunkId) {
+        try {
+            AdminService.ChunkRow row = adminService.getChunk(collection, chunkId);
+            return row == null ? null : row.metadata().get(MetaKey.HEADING);
+        } catch (Exception e) {
+            return null;
         }
     }
 

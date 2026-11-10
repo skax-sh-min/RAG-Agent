@@ -142,6 +142,26 @@ class ChangeApplyServiceTest {
     }
 
     @Test
+    @DisplayName("섹션 제목에 바꿀 말이 있으면 제목도 함께 바꿔 넘긴다(없으면 넘기지 않는다)")
+    void theSectionHeadingFollowsTheReplacement() {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘")));
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        applied("c1", AdminService.ApplyOutcome.APPLIED);
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "t", "t",
+                Map.of(MetaKey.HEADING, "10. PostgreSQL — 접속")));
+        when(admin.getChunk("latest", "c1")).thenReturn(new AdminService.ChunkRow("c1", "t", "t", Map.of(MetaKey.HEADING, "다른 제목")));
+        chunksOfDoc("Oracle 사용", "Oracle 둘");
+
+        service.applyApproved(jobId, "d1", "root");
+
+        verify(admin).applyChunkEdit("latest", "c0", "Oracle 사용",
+                Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle", MetaKey.HEADING, "10. Oracle — 접속"), TextHash.sha256("PostgreSQL 사용"));
+        verify(admin).applyChunkEdit("latest", "c1", "Oracle 둘",
+                Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle"), TextHash.sha256("PostgreSQL 둘"));
+    }
+
+    @Test
     @DisplayName("청크가 그사이 바뀌었으면(stale) · 임베딩이 실패하면(failed) 각각 그 상태로 남고, 적용된 것이 없으면 MD 는 건드리지 않는다")
     void staleAndFailedAreRecordedAndTheMdIsLeftAlone() throws IOException {
         proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 하나"), proposal("d1", "c1", "PostgreSQL 둘")));

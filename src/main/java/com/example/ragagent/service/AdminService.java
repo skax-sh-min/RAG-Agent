@@ -734,6 +734,12 @@ public class AdminService {
         return true;
     }
 
+    /**
+     * 화면에서는 고칠 수 없지만 유지보수 적용({@link #applyChunkEdit})은 함께 바꾸는 메타데이터 — 섹션 제목({@code heading}). 본문에서 바꾼 말이 제목에도
+     * 있으면(예: {@code "10. BEDU2002 — …"}) 그대로 두면 청크 본문·맥락과 제목이 서로 다른 이름을 말한다. 검색 텍스트에는 들어가지 않는다.
+     */
+    static final List<String> APPLY_ONLY_META_KEYS = List.of(MetaKey.HEADING);
+
     /** {@link #applyChunkEdit} 의 결과 — {@code APPLIED} 외에는 청크가 바뀌지 않았다. */
     public enum ApplyOutcome {
         APPLIED,
@@ -755,8 +761,8 @@ public class AdminService {
      * 본문 + 바뀐 맥락/키워드로 검색 텍스트를 만들어 {@code vectorStore.add} (임베딩이 먼저고 삭제·삽입이 그 뒤 한 트랜잭션이라 실패하면 옛 행이 그대로다)
      * → ③ FTS 색인 갈이. ②가 실패하면 {@code EMBED_FAILED} 이고 청크는 바뀌지 않았다.
      *
-     * @param metaChanges {@link #EDITABLE_CHUNK_META_KEYS}({@code chunk_context}·{@code excerpt_keywords}) 중 바꿀 값 — 그 밖의 키는 무시한다.
-     *                    키가 없거나 값이 {@code null} 이면 그 메타데이터는 그대로다
+     * @param metaChanges {@link #EDITABLE_CHUNK_META_KEYS}({@code chunk_context}·{@code excerpt_keywords}) 와 {@link #APPLY_ONLY_META_KEYS}
+     *                    ({@code heading} — 섹션 제목) 중 바꿀 값 — 그 밖의 키는 무시한다. 키가 없거나 값이 {@code null} 이면 그 메타데이터는 그대로다
      */
     public ApplyOutcome applyChunkEdit(String collectionName, String chunkId, String newText,
                                        Map<String, String> metaChanges, String expectedHash) {
@@ -769,6 +775,10 @@ public class AdminService {
         Map<String, Object> meta = new HashMap<>(row.metadata());
         if (metaChanges != null) {
             for (String key : EDITABLE_CHUNK_META_KEYS) {
+                String v = metaChanges.get(key);
+                if (v != null) meta.put(key, v);
+            }
+            for (String key : APPLY_ONLY_META_KEYS) {
                 String v = metaChanges.get(key);
                 if (v != null) meta.put(key, v);
             }

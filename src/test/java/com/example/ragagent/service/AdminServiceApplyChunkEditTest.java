@@ -133,6 +133,18 @@ class AdminServiceApplyChunkEditTest {
     }
 
     @Test
+    @DisplayName("섹션 제목(heading)은 적용 전용으로 바꿀 수 있다 — 화면 편집 키는 아니지만 본문과 제목이 다른 이름을 말하지 않게")
+    void headingIsAnApplyOnlyKey() {
+        chunk("PostgreSQL 에 접속한다.", null);
+
+        svc.applyChunkEdit("latest", "c1", "Oracle", Map.of(MetaKey.HEADING, "10. Oracle — 접속"), TextHash.sha256("PostgreSQL 에 접속한다."));
+
+        ArgumentCaptor<List<Document>> added = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(anyString(), anyString(), added.capture());
+        assertThat(added.getValue().get(0).getMetadata()).containsEntry(MetaKey.HEADING, "10. Oracle — 접속");
+    }
+
+    @Test
     @DisplayName("허용된 메타데이터(맥락·키워드) 말고는 받지 않는다 — doc_id 같은 키를 실어 보내도 무시")
     void onlyEditableMetaIsAccepted() {
         chunk("PostgreSQL 에 접속한다.", null);
