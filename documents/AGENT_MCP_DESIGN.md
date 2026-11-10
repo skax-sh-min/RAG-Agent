@@ -5,6 +5,8 @@
 > 라이브러리 동작은 Spring AI 2.0.2 문서와 로컬 jar(`javap`, `jshell`)로 확인했다.
 > 검색·리랭크·Tool 호출 수치는 2026-11-05에 로컬 모델과 DB 복사본으로 잰 일회성 실측이다(부록 A). 앱에 구현해 잰 값이 아니므로 구현 뒤 하네스로 다시 잰다.
 > 결정과 진행 상태는 [PLAN.md §6.33](PLAN.md) 이 추적한다.
+>
+> **구현 현황 (2026-11-10)**: Phase 0·1a·1b·2·3·4 구현됨(5 미착수). 이 문서는 **설계 시점의 서술**이라 일부는 구현과 다르다 — 같은 자리에 **「구현:」** 으로 표시했다. 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고 새 사이트(`AGENT_PLAN`)를 만들지 않고 `ThinkingSite.CONDENSE` 를 쓴다 ② `getChangeJob` Tool·`onToolCall`/SSE `tool`·`agent_tool_call` 저장은 **만들지 않았다**(작업 조회는 리포트 화면, 추적 패널은 Phase 5) ③ 유지보수 요청은 채팅에서 **되묻고 확정한 뒤에만** 시작하며 관리자 판정은 요청 스레드의 `ThreadContext.admin` 이다. 살아 있는 동작 명세는 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS.
 
 ## Context
 
@@ -314,10 +316,10 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 | `findRelatedDocuments` | `findRelatedDocuments()` | O | O | 읽기 |
 | `queryCatalog` | `searchDatabase()` | O | O | 조회마다 다름 |
 | `analyzeImpact` | 영향도 분석 | O | O | 읽기 |
-| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 | ADMIN만 | 제안 |
+| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 — **채팅은 되묻고 "네"를 받은 뒤에만**(`PendingChangeConfirmations`), 옵션(`semantic`·`caseVariants`)은 채팅에서 못 켠다 | ADMIN만 | 제안 |
 | `getChunkContext` | 추가 | X | O | 읽기 |
 | `getDocument` | `getDocument()` | X | ADMIN만 | ADMIN 읽기 |
-| `getChangeJob` | 추가 | X | O | 읽기 |
+| `getChangeJob` | 추가 | X | O | 읽기 — **구현: 만들지 않았다**(작업 조회는 리포트 화면 `/ui/impact-jobs/{id}`·`/admin/change-jobs/{id}`, MCP 에서는 `analyzeImpact`/`requestDocumentChange` 가 돌려준 번호로 화면을 연다) |
 | `generateDiff` | `generateDiff()` | X | O | 읽기 |
 
 Tool이 아닌 내부 기능: `ChangeApplyService.apply()`(`updateDocument` 의 실제 쓰기)와 재색인(`reindexKnowledge` 에 해당). 둘 다 관리자 승인 뒤 워크플로만 호출한다.
@@ -949,6 +951,8 @@ classDiagram
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.85 미충족) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수.
+
 ### Phase 0. 선결 결함과 검색 기준선
 
 2026-11-06에 범위를 줄였다. 이후 단계가 실제로 의존하는 것만 남기고 나머지는 필요한 단계로 옮겼다.
@@ -1023,10 +1027,10 @@ Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3
   - **사전 평가(구현 전, Phase 0에서 옮김). 완료(2026-11-06) — 결과와 결정은 [AGENT_EVALUATION.md](AGENT_EVALUATION.md): 프롬프트 JSON 방식(E2B 하나만 쟀다 — e4b · 31b 는 미측정). 아래 "Tool 계획 호출"의 네이티브 `tools` 뼈대(§5.1)와 `AGENT_PLAN` 옵션은 이 결정에 맞게 `tools` 없이 프롬프트 JSON 으로 바꿔 구현한다.** `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다. `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교해 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록하고 아래 판단표로 방식을 정한다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다(부록 A.3). 그 실측이 어떤 서버에서 이뤄졌는지 기록이 LM Studio로 되어 있으므로 재측정 때 확인한다. 지연은 생각이 꺼지지 않는 서버에서는 부풀기 때문에 생각을 끌 수 있는 서버(llama-server)에서 잰다.
   - `ToolPlanService`, `ToolPlan`, `ToolDispatchService`, `TOOL` 노드, `AgentState` 컴포넌트(`toolPlan`, `caller`).
   - 두 진입점의 사전 단계에 Tool 계획 future 추가. 호출자는 요청 스레드에서 만든다.
-  - `ThinkingSite.AGENT_PLAN`, `RoutedChatModel` 모드 생성자, `LlmRouter` 비차단 호출 경로와 미지원 기억.
+  - `ThinkingSite.AGENT_PLAN`, `RoutedChatModel` 모드 생성자, `LlmRouter` 비차단 호출 경로와 미지원 기억. **구현: 만들지 않았다** — 프롬프트 JSON 이라 `tools` 를 싣지 않아 비차단 경로·미지원 기억이 필요 없고, 호출 지점은 `ThinkingSite.CONDENSE`(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 — `SearchQueryRewriter` 와 같은 선례)를 재사용한다.
   - `prompt.agent.plan` 한/영 번들.
-  - `GraphListener.onToolCall`, SSE `tool`, 유휴 워치독 활동 처리, `chat-stream.js` 표시.
-  - 계측 3곳 수정, `agent_tool_call` 저장, `app.agent.*` 설정과 `/settings` 토글.
+  - `GraphListener.onToolCall`, SSE `tool`, 유휴 워치독 활동 처리, `chat-stream.js` 표시. **구현: 만들지 않았다**(Tool 노드는 기존 노드 진입 이벤트로 표시된다 — 추적 표시는 Phase 5).
+  - 계측 3곳 수정, `agent_tool_call` 저장, `app.agent.*` 설정과 `/settings` 토글. **구현: `app.agent.enabled`(`AGENT_ENABLED`, 기본 꺼짐, 재기동) 하나뿐** — 계측 수정은 `tools` 를 싣지 않아 불필요, `agent_tool_call`·`/settings` 토글은 Phase 5.
 - **난이도**: 중. Tool 계획이 기존 경로를 건드리지 않아서 낮아졌다.
 - **위험**: 문서 질문을 다른 Tool로 잘못 보냄. 영향도·유지보수 요청을 놓침(실측 10건 중 3건, `RETRIEVAL` 로 내려가 답변은 나온다). 로컬 서버 부하 증가(턴당 LLM 호출 1회 추가).
 - **완료 기준**
@@ -1057,6 +1061,8 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 - Tool 본문 예외는 문자열로 LLM에 돌아가므로 강등 조건을 형식 오류와 컨텍스트 초과로 좁힌다.
 
 ### Phase 4. 영향도 분석과 문서 유지보수
+
+> **구현 완료 2026-11-10** — 4a 영향도(V12) · 4b-1 수정안 · 4b-2 문서 단위 승인·적용 · 의미 변경 옵션 · 대소문자 변형 옵션 · 채팅 관리자 호출 · 문서 쓰기 잠금(`DocumentWriteLocks`). 실제 코퍼스 복사본 종단 확인과 하네스는 `scripts/maintenance_e2e/`. 아래 완료 기준 중 **영향도 실모델 실측**(심은 언급 100% 회수)과 **임베딩 실패 주입의 종단 확인**은 남았다(단위 테스트로는 고정). 요약은 [PLAN.md §6.33](PLAN.md) "4단계 요약".
 
 - **작업 (4a, 영향도)**: `ImpactAnalysisWorkflow`, `change_job`, 판정 프롬프트, 리포트 화면, 진행 이벤트.
 - **작업 (4b, 유지보수)**: `MaintenanceWorkflow`, `change_proposal`, 불변식 검사, `/admin` 대기열(Diff 화면은 `fragments/admin-chunk-reports.html` 재사용), `AdminService.applyChunkEdit()`, `ChangeApplyService`, `MarkdownWriteBack`, 결과 리포트.
@@ -1191,15 +1197,15 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 1. `model` 누락을 확정하고 고친다. Agent와 무관하게 지금도 영향이 있다. **완료(2026-11-06).**
 2. 현재 검색 기준선은 측정했다(2026-11-06, `SEARCH_EVALUATION.md` §7). 1a 시작 전에 문서·설정·DB가 바뀌었으면 다시 잰다.
-3. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다.
-4. 1a 도중에 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 리랭크를 켜기 전에 여러 청크가 필요한 질문과 큐레이션을 본다.
-5. 읽기 Tool과 `ToolGuard` 를 만든다.
+3. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다. **완료(2026-11-06).**
+4. 1a 도중에 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 리랭크를 켜기 전에 여러 청크가 필요한 질문과 큐레이션을 본다. **완료(2026-11-06, `SEARCH_EVALUATION.md` §7).**
+5. 읽기 Tool과 `ToolGuard` 를 만든다. **완료(2026-11-06).**
 
 ### 나중에 해야 할 일
 
-1. Agent 켜기: Phase 3 직전의 Tool 사전 평가(Tool 골든셋, 모델 비교)로 네이티브 또는 JSON 방식을 정한 뒤.
-2. MCP Server 공개: 외부 클라이언트 수요가 확인된 뒤.
-3. 영향도 분석을 먼저, 유지보수를 그다음에. 영향도는 읽기뿐이라 위험이 낮고 전수 조회를 공유한다.
+1. Agent 켜기: Phase 3 직전의 Tool 사전 평가(Tool 골든셋, 모델 비교)로 네이티브 또는 JSON 방식을 정한 뒤. **사전 평가·구현 완료(프롬프트 JSON, 기본 꺼짐) — 기본값을 켜는 것은 2주 관측(Phase 5) 뒤.**
+2. MCP Server 공개: 외부 클라이언트 수요가 확인된 뒤. **서버는 구현됨(기본 꺼짐) — MCP Inspector·Claude Code 연결 확인은 아직.**
+3. 영향도 분석을 먼저, 유지보수를 그다음에. 영향도는 읽기뿐이라 위험이 낮고 전수 조회를 공유한다. **둘 다 구현됨 — 영향도 실모델 실측이 남았다.**
 4. 분류기를 Tool 선택으로 합치는 최적화: 측정 뒤.
 5. MCP Client: 외부 MCP 서버가 실제로 생기면.
 6. 원본 DOCX 쓰기: 수요가 확인되면 별도 과제로.

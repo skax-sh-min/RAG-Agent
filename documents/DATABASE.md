@@ -31,8 +31,8 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | Flyway V4 / `SqliteMemoryRepository` |
 | `image_descriptions` | 이미지 하나의 Vision 설명(캐시) | 대화 | Flyway V1 / `SqliteMemoryRepository` |
 | `thread_follow_up` | 대화 하나의 마지막 답변 아래 추가 질문 | 대화 | Flyway V8 / `SqliteMemoryRepository` |
-| `change_proposal` | 유지보수 수정안 검토 대기열(§6.33 4b) — 청크별 before/after·해시·맥락/키워드, 상태(`pending`·`approved`·`rejected`·`applied`·`stale`·`failed`). **행을 만드는 것은 코퍼스를 바꾸지 않는다** | 작업(`job_id`) | Flyway V13 / `ChangeProposalRepository` |
-| `change_job` | 영향도 분석 작업(§6.33 4a) — 상태(`running`·`done`·`failed`·`interrupted`)와 리포트 JSON. 코퍼스에는 쓰지 않는다 | 요청자(`requested_by`) | Flyway V12 / `ChangeJobRepository` |
+| `change_proposal` | 유지보수 수정안 검토 대기열(§6.33 4b) — 청크별 before/after·해시·맥락/키워드, 상태(`pending`·`approved`·`rejected`·`applied`·`stale`·`failed`). **행을 만드는 것은 코퍼스를 바꾸지 않는다** (묶는 키: 작업(`job_id`)) | 변경 작업 | Flyway V13 / `ChangeProposalRepository` |
+| `change_job` | 영향도 분석 작업(§6.33 4a) — 상태(`running`·`done`·`failed`·`interrupted`)와 리포트 JSON. 코퍼스에는 쓰지 않는다 (묶는 키: 요청자(`requested_by`)) | 변경 작업 | Flyway V12 / `ChangeJobRepository` |
 | `doc_registry` | 인덱싱된 문서 하나 | 문서 | Flyway V4 / `DocRegistry` |
 | `curated_qa` | 큐레이션 Q&A 한 건 (벡터는 N개) | 큐레이션 | Flyway V4 / `CuratedQaRepository` |
 | `curated_submission` | 지식 제안 한 건 | 큐레이션 | Flyway V4 / `CuratedSubmissionRepository` |
@@ -126,6 +126,9 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `curated_qa.id` | 청크 id `curated-{id}[-n]`, 메타데이터 `doc_id` = `curated:{id}` | 큐레이션 행 ↔ 벡터·FTS 행 (버전 `curated`) |
 | `chunk_report.chunk_id` | 청크 id | 신고된 청크 (위치·원문은 `chunk_fts_key`·`vec_document_chunks`에서 읽음) |
 | `chunk_report.turn_id` / `thread_id` | `conversation_turns.id` / `thread_meta.thread_id` | 신고가 나온 대화 |
+| `change_proposal.job_id` | `change_job.id` | 수정안 → 만든 유지보수 작업 (승인·적용은 `(job_id, doc_id)` 단위) |
+| `change_proposal.chunk_id` / `.doc_id` | 청크 id / `doc_registry.doc_id` | 고칠 청크 — 적용은 청크 id 를 유지한 채 본문·`chunk_context`·`excerpt_keywords` 를 바꾼다(`AdminService.applyChunkEdit`) |
+| `change_proposal.before_hash` | `chunk_fts_key.content_hash` 와 같은 해시 함수(`TextHash.sha256`) | 적용 때 살아 있는 청크와 대조 — 다르면 `stale` |
 | `settings_override.key` | `SettingsKeys` 상수 | 오버라이드 대상 설정 |
 
 ---
@@ -328,6 +331,49 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 인덱스: `idx_chunk_report_open(status, chunk_id)`, `idx_chunk_report_chunk(chunk_id, id DESC)`, `idx_chunk_report_dup` UNIQUE(`chunk_id`, `reporter_user_id`, `thread_id`) WHERE `status = 'open'`
 
 > 중복 방지 키에 `thread_id`가 들어가는 이유: 공유 게스트 전략에서는 모든 방문자의 사용자 id가 같아서, (청크, 신고자)로만 막으면 청크당 한 명만 신고할 수 있게 됩니다. 처리된 신고는 재신고를 막지 않습니다(부분 인덱스).
+
+---
+
+### 5.5 `change_job` — 영향도 분석·유지보수 작업 한 건 (V12)
+
+**코퍼스에 쓰지 않습니다** — 작업 기록과 리포트일 뿐입니다(§6.33 4a·4b, [OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md)).
+
+| 컬럼 | 타입 | 제약·기본값 | 의미 |
+|---|---|---|---|
+| `id` | INTEGER | PK, AUTOINCREMENT | 작업 번호 — 순번이라 리포트 열람은 요청자·관리자만 허용하고 남의 작업은 404 로 존재를 알리지 않는다 |
+| `kind` | TEXT | NOT NULL | `impact`(영향도) / `maintenance`(유지보수 수정안) |
+| `request_text` | TEXT | NOT NULL | 요청 원문(영향도는 대상 이름, 유지보수는 지시문) |
+| `requested_by` | TEXT | NOT NULL | 요청자 사용자 id — 사용자당 동시 1건 판정의 키이기도 하다 |
+| `status` | TEXT | NOT NULL | `running` / `done` / `failed` / `interrupted`(기동 때 `running` 으로 남은 작업을 `markRunningInterrupted` 가 바꾼다) |
+| `summary_json` | TEXT | | 리포트 — 끝날 때 한 번 쓴다(판정한 청크와 **검증된** 인용, 판정하지 못한 나머지, 한계 `tooShort`·`truncated`·`unjudged`, 유지보수는 수정안 수·큐레이션 수동 처리 수·`caseVariantChunks`·`semanticSkipped`). 읽는 곳은 `LenientJson.MAPPER` — 리포트에 필드가 늘어도 옛 작업이 읽혀야 한다 |
+| `error` | TEXT | | 실패 사유 |
+| `created_at`, `updated_at` | TEXT | NOT NULL | UTC |
+
+인덱스: `idx_change_job_user(requested_by, created_at)`
+
+### 5.6 `change_proposal` — 유지보수 수정안 한 건 (V13)
+
+**검토 대기열일 뿐입니다** — 행을 만드는 것은 청크·벡터·FTS·변환 MD 어느 것도 바꾸지 않습니다. 바꾸는 곳은 관리자가 문서 단위로 승인한 뒤의 `ChangeApplyService` 하나입니다.
+
+| 컬럼 | 타입 | 제약·기본값 | 의미 |
+|---|---|---|---|
+| `id` | INTEGER | PK, AUTOINCREMENT | |
+| `job_id` | INTEGER | NOT NULL | 만든 `change_job` |
+| `doc_id`, `filename` | TEXT | NOT NULL | 청크가 속한 문서 — 승인·거절·적용이 문서 단위(일부 청크만 고치면 이웃 청크와 겹침 구간이 어긋난다) |
+| `chunk_id` | TEXT | NOT NULL | 벡터 스토어 청크 id (제자리 수정이라 유지된다) |
+| `kind` | TEXT | NOT NULL | `literal`(결정적 치환) / `semantic`(LLM 의미 변경 제안) |
+| `before_text`, `after_text` | TEXT | NOT NULL | 청크 본문 전·후 |
+| `before_hash` | TEXT | NOT NULL | `before_text` 의 SHA-256 — 적용 때 살아 있는 청크와 대조해 다르면 `stale` |
+| `before_context`, `after_context`, `before_keywords`, `after_keywords` | TEXT | | `chunk_context`·`excerpt_keywords` 전·후 — 검색 텍스트가 `chunk_context + 본문` 이라 본문만 바꾸면 옛 말로 계속 찾힌다 |
+| `rationale` | TEXT | NOT NULL, `''` | 사유(의미 변경이면 모델의 이유) |
+| `status` | TEXT | NOT NULL, `'pending'` | `pending` / `approved` / `rejected` / `applied` / `stale` / `failed`. 전이는 compare-and-set 뿐(`ChangeProposalRepository.transition`) |
+| `md_status` | TEXT | | 변환 MD 되쓰기 결과(적용 때 문서 단위로 채움) — `applied` / `MD_PARTIAL` / `MD_CONFLICT` / `MD_MISSING` |
+| `reviewed_by`, `reviewed_at`, `applied_at` | TEXT | | 승인·거절한 관리자와 시각 · 적용 시각 |
+| `created_at` | TEXT | NOT NULL | UTC |
+
+인덱스: `idx_change_proposal_job(job_id, doc_id)`, `idx_change_proposal_chunk(chunk_id)`
+
+> 문서를 재인덱싱하면 청크 id 가 모두 바뀌어 그때 대기 중이던 수정안은 `stale` 이 됩니다. 적용 직전에는 `DatabaseBackupService` 로 DB 를 백업합니다(`pre-change-<작업번호>`).
 
 ---
 

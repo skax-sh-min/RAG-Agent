@@ -32,6 +32,9 @@ src/main/resources/
 │   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 지식 제안 검토 + 청크 오류 신고 + 큐레이션 Q&A
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
+│   ├── impact-job.html                    # 영향도 분석 리포트 (§6.33 4a — `/ui/impact-jobs/{id}`, 진행 중 3초 폴링)
+│   ├── admin-change-jobs.html             # 유지보수 요청 폼 + 최근 작업 (§6.33 4b — `/admin/change-jobs`)
+│   ├── admin-change-job.html              # 유지보수 수정안 검토·승인 (`/admin/change-jobs/{id}`, 진행 중 3초 폴링)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
 │   ├── settings.html                      # 화면 표시(채팅 글자 크기, 브라우저별) + LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
@@ -351,6 +354,21 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > **이미지 마커 렌더링은 전역 1벌**(`layout/base.html`의 `renderMarkdownWithImageMarkers()`) — `/admin` 청크 뷰(`renderChunkPreview()`)·제안 작성 미리보기·관리자 검토 미리보기가 모두 같은 본문 형식을 그린다. `CHUNK_IMAGE_MARKER`/`PREVIEWABLE_IMAGE_EXT`는 이제 전역 상수이므로 **페이지 스크립트에서 다시 선언하면 안 된다**(최상위 `const` 중복 = 그 페이지 스크립트 전체가 죽는 `SyntaxError`).
 
 ---
+
+### 3.5-ter 영향도 분석 리포트 · 문서 유지보수 (ImpactJobController · AdminChangeController, §6.33)
+
+> 채팅이 Tool 을 골라야(`AGENT_ENABLED`, 기본 꺼짐) 영향도 분석으로 들어오고, 유지보수는 관리자만 쓴다. 동작·한도·복구는 [OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md), 사용법은 [USER_MANUAL §2.8·2.9](USER_MANUAL.md).
+
+| Method | Path | 응답 | 설명 |
+|---|---|---|---|
+| GET | `/ui/impact-jobs/{id}` · `/ui/impact-jobs/{id}/body` | 페이지 · HTMX 조각 | 영향도 리포트. 진행 중이면 `/body` 를 **3초마다** 폴링해 본문만 바꾼다(끝나면 폴링이 멈춘다). **요청자와 관리자만** — 남의 작업은 존재 여부를 알리지 않으려고 404 와 같은 응답(번호가 순번이다). 배지: 영향 있음(근거 확인) · **근거 미확인** · 영향 없음 · 판정 실패, 그리고 한계 안내(3글자 미만 · 40곳 상한 · 잘림) |
+| GET | `/admin/change-jobs` | 페이지 | 유지보수 요청 폼(지시문 · 바꿀 말 · 새 말 · 옵션 둘 — 「대소문자만 다른 표기도 함께」·「AI 도 함께 제안」) + 최근 작업 목록. `?from=&to=` 로 두 칸이 미리 채워진다(채팅 되묻기가 주는 링크 — 값은 이스케이프) |
+| POST | `/admin/change-requests` | 리다이렉트 | 작업 시작(CSRF). 사용자당 동시 1건 |
+| GET | `/admin/change-jobs/{id}` · `/admin/change-jobs/{id}/body` | 페이지 · HTMX 조각 | 리포트(언급 M곳 중 수정안 N곳 · 큐레이션 수동 처리 필요 수 · 버려진 수정안과 사유 · **대소문자 변형 경고**)와 문서별 청크 Diff(`ChunkDiff` + `UnifiedDiffFormatter`, 의미 변경은 「검토 필요」 배지). 적용 중에는 승인된 수정안이 남아 있는 동안 3초 폴링 |
+| POST | `/admin/change-jobs/{id}/docs/approve` · `/reject` | 조각 | **문서 단위** 승인(곧바로 적용 시작)·거절(되살릴 수 없음). 적용 결과는 수정안별 `applied`/`stale`/`failed` + 문서별 변환 MD 상태(반영됨 · 글자 치환만 · 바뀌지 않음 · 없음)와 "원본 파일은 바뀌지 않는다" 경고 |
+
+- 전부 `/admin/**` 는 ADMIN 전용(보안 체인), 리포트 `/ui/impact-jobs/**` 는 로그인한 요청자·관리자. 폴링 조각은 HTMX 가 끝난 작업에서 `hx-trigger` 를 내려 스스로 멈춘다.
+- 채팅 쪽 표시: TOOL 노드 진입은 SSE `stage`(`id=tool`, "도구로 조회 중...", `chat-stream.js` 의 `STAGE_TEXT`), 재검색은 `stage`(`id=search_retry`). 영향도·유지보수 시작·되묻기는 **정형 답**(응답 모드 S, 출처·검증 배지 없음)이고 작업 링크를 담는다.
 
 ### 3.6 인증 (AuthController)
 
