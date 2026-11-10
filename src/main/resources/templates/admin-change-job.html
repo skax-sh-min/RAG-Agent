@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{maint.title}">Document maintenance</title>
+</head>
+<body>
+
+<section layout:fragment="content" class="container py-4">
+    <div th:fragment="body"
+         th:attr="hx-get=${running} ? @{/admin/change-jobs/{id}/body(id=${job.id})} : null,
+                  hx-trigger=${running} ? 'every 3s' : null,
+                  hx-swap=${running} ? 'outerHTML' : null">
+
+        <p class="small mb-2"><a th:href="@{/admin/change-jobs}" th:text="#{maint.back}">Back</a></p>
+        <h5 class="fw-semibold mb-1">
+            <i class="bi bi-pencil-square me-2"></i><span th:text="#{maint.title}">Document maintenance</span>
+            <span class="text-muted fs-6" th:text="'#' + ${job.id}">#1</span>
+        </h5>
+        <p class="mb-3"><strong th:text="${job.requestText}">text</strong></p>
+
+        <div class="alert alert-secondary py-2 small" th:text="#{maint.not-applied}">Nothing has been changed yet.</div>
+
+        <div th:if="${running}" class="alert alert-info py-2">
+            <span class="spinner-border spinner-border-sm me-2"></span><span th:text="#{maint.running}">Running…</span>
+        </div>
+        <div th:if="${job.status == 'interrupted'}" class="alert alert-warning py-2" th:text="#{maint.interrupted}">Interrupted</div>
+        <div th:if="${job.status == 'failed'}" class="alert alert-danger py-2">
+            <span th:text="#{maint.failed}">Failed</span>: <span th:text="${job.error}"></span>
+        </div>
+
+        <div th:if="${report != null}">
+            <p class="mb-2"><code th:text="${report.from}">A</code> → <code th:text="${report.to}">B</code></p>
+            <div th:if="${report.tooShort}" class="alert alert-warning py-2" th:text="#{maint.too-short}">Too short</div>
+            <div th:if="${report.truncated}" class="alert alert-warning py-2" th:text="#{maint.truncated(${report.mentions})}">Truncated</div>
+            <ul class="small text-muted" th:unless="${report.tooShort}">
+                <li th:text="#{maint.report.proposals(${report.proposals}, ${report.mentions})}">n proposals</li>
+                <li th:if="${report.unchanged > 0}" th:text="#{maint.report.unchanged(${report.unchanged})}">n unchanged</li>
+                <li th:if="${report.manualCurated > 0}" th:text="#{maint.report.manual(${report.manualCurated})}">n manual</li>
+                <li th:each="d : ${report.discarded}" class="text-danger"
+                    th:text="${d.file} + ' — ' + ${d.reason}">discarded</li>
+            </ul>
+        </div>
+
+        <div class="card mb-3" th:each="v : ${views}">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><strong th:text="${v.proposal.filename}">file</strong>
+                    <span class="text-muted small" th:text="${v.proposal.chunkId}">id</span></span>
+                <span class="badge bg-secondary" th:text="#{'maint.status.' + ${v.proposal.status}}">pending</span>
+            </div>
+            <div class="card-body">
+                <pre class="small mb-0" style="white-space:pre-wrap" th:text="${v.diff}">diff</pre>
+                <p class="small text-muted mt-2 mb-0" th:if="${v.tooLarge}" th:text="#{maint.diff.too-large}">too large</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+</body>
+</html>

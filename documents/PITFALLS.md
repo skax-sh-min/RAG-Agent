@@ -544,6 +544,19 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **동시성.** 사용자당 한 건(`countRunning`)·가상 스레드·호출마다 로컬 LLM 의 대화형 게이트(`localTier1Concurrency().inUse()`)가 비기를 기다린다(상한 30초 — 영원히 굶지 않게, 넘으면 그냥 보낸다). `finish()` 는 `running` 인 행만 바꾸므로 재기동이 `interrupted` 로 돌린 작업을 늦게 끝난 스레드가 되살리지 못한다.
 - **열린 항목.** 실모델 실측(심은 언급을 전수 조회가 100% 찾는지, 가짜 인용을 걸러내는지 — 지금은 모의 응답 테스트뿐) · Tool 선택 정확도 재측정 · 의미 연관 후보 · 진행 중 SSE(지금은 3초 폴링) · 관리자가 남의 작업을 목록으로 보는 화면.
 
+### 유지보수 (4b-1) — `MaintenanceWorkflow`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.5. **수정안을 만들고 보여 줄 뿐 코퍼스는 쓰지 않는다** — 청크 본문·벡터·FTS·변환 MD 모두 그대로다. 코퍼스를 바꾸는 승인·적용은 4b-2 다. 가장 위험한 쓰기를 가장 나중에 두고, 그 전에 "무엇을 어떻게 바꿀지"가 믿을 만한지부터 사람이 볼 수 있게 했다(`MaintenanceWorkflowTest.neverWritesTheCorpus` 가 `updateChunk`·`reindexChunk`·`deleteChunk` 호출 없음을 고정).
+
+- **치환은 코드가, 글자 그대로.** `String.replace` — 정규식·대소문자 무시 없음. 전수 조회(trigram)는 대소문자를 무시해 걸리므로 **글자 그대로 일치하지 않는 청크는 건너뛰고 `unchanged` 로 센다**(바꿀 곳이 없다). 의미를 바꿔 써야 하는 청크(드라이버 클래스·SQL 문법 등)는 LLM 수정안이 필요한데 이 조각에는 없다 — 리포트의 "수정안 N곳 / 언급 M곳"의 차이가 그 몫이다.
+- **맥락·키워드에도 같은 치환.** 검색 텍스트가 `chunk_context + 본문`(`SearchTextBuilder`)이라 본문만 고치면 옛 말로 계속 검색된다. 수정안이 `before/after_context`·`before/after_keywords` 를 함께 나른다(적용은 4b-2). 키워드는 소문자로 저장되는 경우가 있어 글자 그대로 일치하지 않으면 그대로 남는다 — 4b-2 에서 재생성할지 정한다.
+- **불변식은 "새로 생긴 것"만 탓한다.** 이미지 마커(경로 · 변환불가 여부 순서까지)와 `[페이지: N]` 마커가 그대로여야 하고, 코드 펜스 결함은 **수정 전보다 늘면** 위반이다(원래 열려 있던 펜스를 이 수정이 만든 것으로 몰지 않는다). **바꿀 말이 이미지 경로 안에 있으면**(`images/ABC/…`) 마커가 바뀌어 그 수정안이 버려진다 — 그림이 깨지는 것보다 낫다. 버려진 것은 파일·청크·사유와 함께 리포트에 남는다.
+- **큐레이션 청크는 수정안을 만들지 않는다.** 단일 출처가 `curated_qa` 라 청크를 고쳐도 재임베딩 때 되돌아간다. 일반 버전 전수 조회는 `version=latest` 라 큐레이션(`version=curated`)이 안 걸리므로 **별도로 한 번 더 물어 수만 센다**("수동 처리 N곳").
+- **못 읽으면 추측하지 않는다.** from/to 를 지시문에서 뽑지 못하면(JSON 아님 · 한쪽이 비어 있음) 작업이 `failed` 다. 틀린 말로 전수 치환하는 것보다 낫다. 200자를 넘는 말(문장)·같은 말로의 치환도 거절한다.
+- **`truncated` 의 위험.** 전수 조회 상한(200)을 넘으면 일부만 고치게 된다 — 일관성이 깨질 수 있어 화면이 그렇게 경고한다. 적용(4b-2)이 이 경우를 막을지 정해야 한다.
+- **관리자 전용의 두 겹.** 화면은 `/admin/**`(보안 체인), Tool 은 `ToolAccess.ADMIN`. 채팅 호출자는 늘 관리자가 아니라(`ToolPlanService.planFor`) 채팅에서는 부를 수 없다 — 관리자 여부를 채팅 Tool 선택까지 싣는 것은 SSE 워커에 `SecurityContext` 가 없어 요청 스레드에서 호출자를 만들어 상태로 실어야 한다.
+- **열린 항목(4b-2).** 승인 UI(문서 단위 — 일부 청크만 고치면 이웃 청크의 겹침 구간이 달라져 `ChunkReassembler` 재조립에 중복이 생긴다) · `ChangeApplyService`(백업 → 해시 대조 → `stale` → `AdminService.applyChunkEdit` 임베딩 먼저 → 변환 MD 되쓰기, `MD_CONFLICT`/`MD_MISSING`) · 의미 변경 수정안 · 문서 재인덱싱이 청크 id 를 바꾸므로 대기 수정안이 `stale` 이 되는 것.
+
 ### MCP 서버 (Phase 2)
 
 [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).

@@ -19,6 +19,7 @@ import java.util.Optional;
 public class ChangeJobRepository {
 
     public static final String KIND_IMPACT = "impact";
+    public static final String KIND_MAINTENANCE = "maintenance";
 
     public static final String RUNNING = "running";
     public static final String DONE = "done";
@@ -77,6 +78,11 @@ public class ChangeJobRepository {
     /** 이 사용자의 최근 작업(최신순). */
     public List<Job> recentFor(String userId, int limit) {
         return jdbc.query("SELECT * FROM change_job WHERE requested_by = ? ORDER BY id DESC LIMIT ?", MAPPER, userId, limit);
+    }
+
+    /** 이 종류의 최근 작업(최신순) — 관리자 화면용. */
+    public List<Job> recentByKind(String kind, int limit) {
+        return jdbc.query("SELECT * FROM change_job WHERE kind = ? ORDER BY id DESC LIMIT ?", MAPPER, kind, limit);
     }
 
     /** 이 사용자가 진행 중인 작업 수 — 사용자별 동시 1건 제한이 읽는다. */

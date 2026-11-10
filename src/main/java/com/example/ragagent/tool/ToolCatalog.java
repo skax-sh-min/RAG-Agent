@@ -1,6 +1,7 @@
 package com.example.ragagent.tool;
 
 import com.example.ragagent.tool.catalog.CatalogQueryTool;
+import com.example.ragagent.tool.change.ChangeRequestTool;
 import com.example.ragagent.tool.change.DiffTool;
 import com.example.ragagent.tool.change.ImpactAnalysisTool;
 import com.example.ragagent.tool.knowledge.DocumentLookupTool;
@@ -37,6 +38,7 @@ public class ToolCatalog {
             "queryCatalog", ToolAccess.PUBLIC,     // 조회마다 관리자 전용이 있다 — CatalogQueryTool 이 한 번 더 검사한다
             "getChunkContext", ToolAccess.PUBLIC,
             "generateDiff", ToolAccess.PUBLIC,
+            "requestDocumentChange", ToolAccess.ADMIN,   // 수정안 대기열만 만든다 — 코퍼스는 승인 뒤 다른 단계(§6.33 4b)
             "analyzeImpact", ToolAccess.PUBLIC,    // 분석을 시작할 뿐 코퍼스는 쓰지 않는다(§6.33 4a)
             "getDocument", ToolAccess.ADMIN);
 
@@ -46,8 +48,8 @@ public class ToolCatalog {
 
     @Autowired
     public ToolCatalog(KnowledgeSearchTool knowledge, DocumentLookupTool lookup, CatalogQueryTool catalog, DiffTool diff,
-                       ImpactAnalysisTool impact) {
-        this(List.of(knowledge, lookup, catalog, diff, impact));
+                       ImpactAnalysisTool impact, ChangeRequestTool change) {
+        this(List.of(knowledge, lookup, catalog, diff, impact, change));
     }
 
     /** 영향도 Tool 없이 만든다 — 테스트용. */
