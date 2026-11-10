@@ -1,6 +1,7 @@
 package com.example.ragagent.workflow;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.DocumentWriteLocks;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.repository.ChangeJobRepository;
 import com.example.ragagent.repository.ChangeProposalRepository;
@@ -15,8 +16,6 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 승인된 수정안을 <b>문서 단위로</b> 코퍼스에 적용한다(§6.33 4b-2) — 이 앱에서 유지보수 워크플로가 청크·벡터·FTS·변환 MD 를 쓰는 <b>유일한</b> 자리다.
@@ -55,15 +54,24 @@ public class ChangeApplyService {
     private final AdminService adminService;
     private final DatabaseBackupService backups;
     private final AppProperties props;
-    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
+    /** 문서 단위 쓰기 잠금 — 같은 문서의 {@code ↺ 재인덱싱}({@code DocumentIndexer}) 과 공유한다. */
+    private final DocumentWriteLocks writeLocks;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ChangeApplyService(ChangeProposalRepository proposals, ChangeJobRepository jobs, AdminService adminService,
-                              DatabaseBackupService backups, AppProperties props) {
+                              DatabaseBackupService backups, AppProperties props, DocumentWriteLocks writeLocks) {
         this.proposals = proposals;
         this.jobs = jobs;
         this.adminService = adminService;
         this.backups = backups;
         this.props = props;
+        this.writeLocks = writeLocks;
+    }
+
+    /** 재인덱싱과 잠금을 공유하지 않는 인스턴스 — 테스트용. */
+    public ChangeApplyService(ChangeProposalRepository proposals, ChangeJobRepository jobs, AdminService adminService,
+                              DatabaseBackupService backups, AppProperties props) {
+        this(proposals, jobs, adminService, backups, props, new DocumentWriteLocks());
     }
 
     /**
@@ -86,8 +94,9 @@ public class ChangeApplyService {
 
     /** 승인된 수정안을 적용한다(동기) — {@link #approveAndApply} 의 몸체이자 테스트의 입구. 어떤 예외도 던지지 않고 결과에 담는다. */
     DocResult applyApproved(long jobId, String docId, String reviewer) {
-        ReentrantLock lock = locks.computeIfAbsent(docId, k -> new ReentrantLock());
-        if (!lock.tryLock()) return DocResult.error(docId, "이 문서의 적용이 이미 진행 중입니다");
+        // 같은 문서의 다른 쓰기 작업(수정안 적용·재인덱싱)과 겹치지 않는다 — 기다리지 않고 거절하며 수정안은 승인 상태로 남는다(다시 시도할 수 있다).
+        DocumentWriteLocks.Lease lease = writeLocks.tryAcquire(docId);
+        if (lease == null) return DocResult.error(docId, "이 문서에 다른 쓰기 작업(수정안 적용 또는 재인덱싱)이 진행 중입니다");
         try {
             List<ChangeProposalRepository.Proposal> todo = proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED);
             if (todo.isEmpty()) return DocResult.error(docId, "적용할 승인된 수정안이 없습니다");
@@ -159,7 +168,7 @@ public class ChangeApplyService {
             log.warn("[APPLY] 실패 job={} doc={}: {}", jobId, docId, e.getMessage());
             return DocResult.error(docId, String.valueOf(e.getMessage()));
         } finally {
-            lock.unlock();
+            lease.close();
         }
     }
 

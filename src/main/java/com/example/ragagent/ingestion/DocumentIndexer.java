@@ -427,6 +427,16 @@ public class DocumentIndexer {
 
     /** The MD file {@link #reindexFromMd} would read — corrected one first, raw fallback — or
      *  {@code null} when neither exists (scanned PDF/image documents never produce one). */
+    /**
+     * 문서 단위 쓰기 잠금 — 세터로 받는다(이 클래스의 생성자는 여럿이라 더하지 않았다). 빈이 없는 자리(단위 테스트)는 이 인스턴스만의 잠금이다.
+     */
+    private DocumentWriteLocks writeLocks = new DocumentWriteLocks();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setWriteLocks(DocumentWriteLocks writeLocks) {
+        this.writeLocks = writeLocks;
+    }
+
     private Path resolveMdPath(String docId) {
         Path corrected = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         if (Files.exists(corrected)) return corrected;
@@ -436,6 +446,16 @@ public class DocumentIndexer {
 
     /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
     public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        // 같은 문서의 유지보수 수정안 적용과 겹치지 않는다 — 재인덱싱은 청크 id 를 모두 새로 만들고 변환 MD 를 읽는다. 기다리지 않고 거절한다.
+        try (DocumentWriteLocks.Lease lease = writeLocks.tryAcquire(docId)) {
+            if (lease == null) {
+                throw new IllegalStateException("이 문서에 수정안 적용 같은 다른 쓰기 작업이 진행 중이라 지금은 재인덱싱할 수 없습니다. 끝난 뒤 다시 시도해 주세요: " + docId);
+            }
+            reindexFromMdLocked(docId, onProgress);
+        }
+    }
+
+    private void reindexFromMdLocked(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 

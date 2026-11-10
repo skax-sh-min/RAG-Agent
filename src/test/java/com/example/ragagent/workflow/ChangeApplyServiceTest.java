@@ -2,6 +2,7 @@ package com.example.ragagent.workflow;
 
 import com.example.ragagent.SqliteTestDatabase;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.DocumentWriteLocks;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.TextHash;
 import com.example.ragagent.repository.ChangeJobRepository;
@@ -299,5 +300,55 @@ class ChangeApplyServiceTest {
 
         assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.CONFLICT);
         assertThat(Files.readString(md)).isEqualTo("Oracle 사용 ORACLE");
+    }
+
+    // ── 재인덱싱과의 상호 배제(§6.33 4b) ────────────────────────────────────
+
+    private ChangeApplyService serviceSharing(DocumentWriteLocks locks) {
+        AppProperties props = mock(AppProperties.class);
+        when(props.dataDir()).thenReturn(tmp.toString());
+        return new ChangeApplyService(proposals, jobs, admin, backups, props, locks);
+    }
+
+    @Test
+    @DisplayName("같은 문서에 재인덱싱 같은 쓰기 작업이 진행 중이면 적용하지 않는다 — 백업도 청크 쓰기도 없고 수정안은 승인 상태로 남는다")
+    void refusesToApplyWhileTheDocumentIsBeingWritten() {
+        DocumentWriteLocks locks = new DocumentWriteLocks();
+        ChangeApplyService sharing = serviceSharing(locks);
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        approve("d1");
+
+        try (DocumentWriteLocks.Lease reindexing = locks.tryAcquire("d1")) {
+            ChangeApplyService.DocResult r = sharing.applyApproved(jobId, "d1", "root");
+
+            assertThat(r.error()).contains("다른 쓰기 작업").contains("재인덱싱");
+        }
+        verify(backups, never()).run(anyString());
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+        assertThat(statuses()).containsExactly(ChangeProposalRepository.APPROVED);
+    }
+
+    @Test
+    @DisplayName("다른 문서의 쓰기 작업은 적용을 막지 않고, 적용이 끝나면(실패해도) 잠금을 푼다 — 풀린 뒤 다시 승인 상태에서 적용된다")
+    void otherDocumentsDoNotBlockAndTheLockIsReleased() {
+        DocumentWriteLocks locks = new DocumentWriteLocks();
+        ChangeApplyService sharing = serviceSharing(locks);
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용");
+
+        try (DocumentWriteLocks.Lease other = locks.tryAcquire("d2")) {
+            assertThat(sharing.applyApproved(jobId, "d1", "root").applied()).isEqualTo(1);
+        }
+        assertThat(locks.isLocked("d1")).as("적용이 끝났으니 잠금이 풀렸다").isFalse();
+
+        // 백업 실패(예외 없는 조기 반환)·예상 밖 예외에서도 풀린다
+        long job2 = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, "x", "root");
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(job2, "d3", "d3.pdf", "c9", ChangeProposalRepository.KIND_LITERAL,
+                "PostgreSQL", "Oracle", TextHash.sha256("PostgreSQL"), null, null, null, null, "r")));
+        proposals.transitionDocument(job2, "d3", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        sharing.applyApproved(job2, "d3", "root");   // 리포트가 없어(작업이 끝나지 않음) 오류로 돌아온다
+        assertThat(locks.isLocked("d3")).isFalse();
     }
 }
