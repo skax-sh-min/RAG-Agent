@@ -71,9 +71,11 @@ public class AdminChangeController {
     public String request(@RequestParam String instruction,
                           @RequestParam(required = false) String from,
                           @RequestParam(required = false) String to,
-                          @RequestParam(required = false, defaultValue = "false") boolean semantic) {
+                          @RequestParam(required = false, defaultValue = "false") boolean semantic,
+                          @RequestParam(required = false, defaultValue = "false") boolean caseVariants) {
         try {
-            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, semantic, LocaleContextHolder.getLocale());
+            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
+                    LocaleContextHolder.getLocale());
             return "redirect:/admin/change-jobs/" + s.jobId();
         } catch (IllegalStateException busy) {
             return "redirect:/admin/change-jobs?error=busy";

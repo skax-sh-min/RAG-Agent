@@ -256,4 +256,48 @@ class ChangeApplyServiceTest {
         verify(admin).applyChunkEdit("latest", "c0", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
                 Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle"), TextHash.sha256("PostgreSQL 사용\ndriver: org.postgresql.Driver"));
     }
+
+    @Test
+    @DisplayName("변형 규칙으로 만든 작업은 제목·남은 말 검사·MD 되쓰기가 모두 같은 규칙을 쓴다(대문자 변형이 남아 있으면 MD 를 건드리지 않는다)")
+    void applyUsesTheSameCaseVariantRuleAsTheProposals() throws IOException {
+        long job2 = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, "Oracle → PostgreSQL", "root");
+        jobs.finish(job2, ChangeJobRepository.DONE,
+                "{\"instruction\":\"x\",\"from\":\"Oracle\",\"to\":\"PostgreSQL\",\"mentions\":2,\"truncated\":false,\"tooShort\":false,"
+                        + "\"proposals\":1,\"unchanged\":0,\"manualCurated\":0,\"discarded\":[],\"caseVariants\":true,\"caseVariantChunks\":1}", null);
+        String before = "Oracle 와 ORACLE 사용";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(job2, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                before, "PostgreSQL 와 POSTGRESQL 사용", TextHash.sha256(before), null, null, null, null, "리터럴")));
+        proposals.transitionDocument(job2, "d1", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        when(admin.applyChunkEdit(eq("latest"), eq("c0"), anyString(), any(), anyString())).thenReturn(AdminService.ApplyOutcome.APPLIED);
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "t", "t", Map.of(MetaKey.HEADING, "3. ORACLE 설정")));
+        chunksOfDoc("PostgreSQL 와 POSTGRESQL 사용");
+        Path md = Files.writeString(converted.resolve("d1.md"), "Oracle 와 ORACLE 사용\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(job2, "d1", "root");
+
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("PostgreSQL 와 POSTGRESQL 사용\n");   // MD 의 대문자 변형도 같은 규칙으로
+        verify(admin).applyChunkEdit("latest", "c0", "PostgreSQL 와 POSTGRESQL 사용",
+                Map.of(MetaKey.HEADING, "3. POSTGRESQL 설정"), TextHash.sha256(before));      // 제목의 대문자 변형도
+    }
+
+    @Test
+    @DisplayName("변형 규칙인데 다른 청크에 대문자 변형이 남아 있으면 MD_CONFLICT — 남은 말 검사도 같은 규칙")
+    void leftoverCaseVariantsBlockTheMdWhenTheRuleIncludesThem() throws IOException {
+        long job2 = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, "Oracle → PostgreSQL", "root");
+        jobs.finish(job2, ChangeJobRepository.DONE,
+                "{\"instruction\":\"x\",\"from\":\"Oracle\",\"to\":\"PostgreSQL\",\"mentions\":2,\"truncated\":false,\"tooShort\":false,"
+                        + "\"proposals\":1,\"unchanged\":0,\"manualCurated\":0,\"discarded\":[],\"caseVariants\":true,\"caseVariantChunks\":1}", null);
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(job2, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                "Oracle 사용", "PostgreSQL 사용", TextHash.sha256("Oracle 사용"), null, null, null, null, "리터럴")));
+        proposals.transitionDocument(job2, "d1", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        when(admin.applyChunkEdit(eq("latest"), eq("c0"), anyString(), any(), anyString())).thenReturn(AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("PostgreSQL 사용", "다른 청크에 ORACLE 이 남음");
+        Path md = Files.writeString(converted.resolve("d1.md"), "Oracle 사용 ORACLE");
+
+        ChangeApplyService.DocResult r = service.applyApproved(job2, "d1", "root");
+
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.CONFLICT);
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용 ORACLE");
+    }
 }

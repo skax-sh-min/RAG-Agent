@@ -82,13 +82,13 @@ class AdminChangeControllerTest {
         mvc.perform(get("/admin/change-jobs/5").with(user(USER))).andExpect(status().isForbidden());
         mvc.perform(post("/admin/change-requests").with(user(USER)).with(csrf()).param("instruction", "x"))
                 .andExpect(status().isForbidden());
-        verify(workflow, never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+        verify(workflow, never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.anyBoolean(), any());
     }
 
     @Test
     @DisplayName("요청은 CSRF 토큰이 있어야 하고, 성공하면 작업 화면으로 넘어간다")
     void requestRequiresCsrfAndRedirects() throws Exception {
-        when(workflow.start(eq("root"), eq("PostgreSQL 을 Oracle 로"), eq("PostgreSQL"), eq("Oracle"), eq(false), any()))
+        when(workflow.start(eq("root"), eq("PostgreSQL 을 Oracle 로"), eq("PostgreSQL"), eq("Oracle"), eq(false), eq(false), any()))
                 .thenReturn(new MaintenanceWorkflow.Started(5, "running"));
 
         mvc.perform(post("/admin/change-requests").with(user(ADMIN))
@@ -103,11 +103,11 @@ class AdminChangeControllerTest {
     @Test
     @DisplayName("진행 중 요청·잘못된 요청은 오류 코드로 목록에 돌아간다")
     void busyAndInvalidRedirectBack() throws Exception {
-        when(workflow.start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenThrow(new IllegalStateException("busy"));
+        when(workflow.start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenThrow(new IllegalStateException("busy"));
         mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf()).param("instruction", "x"))
                 .andExpect(header().string("Location", "/admin/change-jobs?error=busy"));
 
-        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad")).when(workflow).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad")).when(workflow).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.anyBoolean(), any());
         mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf()).param("instruction", "x"))
                 .andExpect(header().string("Location", "/admin/change-jobs?error=invalid"));
     }
@@ -209,7 +209,7 @@ class AdminChangeControllerTest {
     @Test
     @DisplayName("의미 변경 체크박스가 켜지면 semantic=true 로 시작한다 — 요청 폼에 체크박스와 안내가 있다")
     void semanticCheckboxIsPassedThrough() throws Exception {
-        when(workflow.start(eq("root"), eq("x"), eq("ABC"), eq("XYZ"), eq(true), any()))
+        when(workflow.start(eq("root"), eq("x"), eq("ABC"), eq("XYZ"), eq(true), eq(false), any()))
                 .thenReturn(new MaintenanceWorkflow.Started(9, "running"));
         when(jobs.recentByKind(any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
 
@@ -256,5 +256,39 @@ class AdminChangeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("1곳의 수정안을 만들었습니다")))   // 리포트가 실제로 읽혔다(null 이면 이 줄이 없다)
                 .andExpect(content().string(not(containsString("AI 가 검토해"))));
+    }
+
+    @Test
+    @DisplayName("대소문자 변형 체크박스가 켜지면 caseVariants=true 로 시작한다 — 폼에 체크박스와 경고가 있다")
+    void caseVariantsCheckboxIsPassedThrough() throws Exception {
+        when(workflow.start(eq("root"), eq("x"), eq("ABC"), eq("XYZ"), eq(false), eq(true), any()))
+                .thenReturn(new MaintenanceWorkflow.Started(11, "running"));
+        when(jobs.recentByKind(any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+
+        mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf())
+                        .param("instruction", "x").param("from", "ABC").param("to", "XYZ").param("caseVariants", "true"))
+                .andExpect(header().string("Location", "/admin/change-jobs/11"));
+        mvc.perform(get("/admin/change-jobs").with(user(ADMIN)))
+                .andExpect(content().string(containsString("name=\"caseVariants\"")))
+                .andExpect(content().string(containsString("문자열 상수가 바뀔 수 있으니")));
+    }
+
+    @Test
+    @DisplayName("리포트가 변형이 남은 청크를 밝힌다 — 옵션이 꺼져 있으면 '바뀌지 않고 남는다' 경고, 켜져 있으면 바꿨다는 안내")
+    void reportSaysWhatHappenedToCaseVariants() throws Exception {
+        String off = "{\"instruction\":\"x\",\"from\":\"Oracle\",\"to\":\"PostgreSQL\",\"mentions\":3,\"truncated\":false,\"tooShort\":false,"
+                + "\"proposals\":2,\"unchanged\":1,\"manualCurated\":0,\"discarded\":[],\"caseVariants\":false,\"caseVariantChunks\":3}";
+        String on = off.replace("\"caseVariants\":false", "\"caseVariants\":true");
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal()));
+
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", off)));
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(content().string(containsString("이 변형은 바뀌지 않고 남습니다")))
+                .andExpect(content().string(containsString("청크 3개")));
+
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", on)));
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(content().string(containsString("3개 청크의 변형을 그 대소문자 모양에 맞춰 바꿨습니다")))
+                .andExpect(content().string(not(containsString("바뀌지 않고 남습니다"))));
     }
 }

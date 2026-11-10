@@ -14,6 +14,9 @@ PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/drive.py     # A: 요청 �
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/drive2.py    # B: 적용 전 청크가 바뀜(stale) · C: 거절 · D: 3글자 미만
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/reindex.py   # E: 문서 재인덱싱 뒤에도 수정 유지(MD 되쓰기)
 PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/control.py   # 대조: 건드리지 않은 문서의 재인덱싱 청크 수 변화
+PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/semantic.py  # F: 의미 변경(실모델) — 가드가 거르는 것·통과한 것·MD_PARTIAL
+PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/casevariants.py          # G: 대소문자 변형 끔/켬 비교 — 청크·FTS·MD 에 변형이 남는지
+PYTHONIOENCODING=utf-8 python scripts/maintenance_e2e/casevariants_reindex.py  # G2: 변형 치환 뒤 재인덱싱해도 되살아나지 않는지(G 바로 다음에)
 ```
 
 - 바꿀 말은 코퍼스에서 하나의 문서에만 2~5번 나오는 식별자(`BEDU2002` · `BEDU2001` · `TOT_CNT`)를 골랐다 — 다른 코퍼스에서는 `prep.py` 가 출력하는 후보로 `drive.py <옛말> <새말>` 을 쓴다(`drive2.py`·`reindex.py` 는 이 이름이 코드에 박혀 있다).

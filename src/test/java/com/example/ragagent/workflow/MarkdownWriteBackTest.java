@@ -82,4 +82,28 @@ class MarkdownWriteBackTest {
         assertThat(MarkdownWriteBack.occurrences("abc", "")).isZero();
         assertThat(MarkdownWriteBack.occurrences(null, "a")).isZero();
     }
+
+    @Test
+    @DisplayName("변형 규칙이면 MD 도 같은 규칙으로 센다·바꾼다 — 대문자 변형이 MD 에 남아 재인덱싱이 되돌리지 않게")
+    void caseVariantRuleIsAppliedToTheMdToo() throws IOException {
+        Path md = write("d1.md", "Oracle 사용\nORACLE 드라이버\noracle 설정\n");
+        TermReplacement rule = new TermReplacement("Oracle", "PostgreSQL", true);
+
+        MarkdownWriteBack.Result r = MarkdownWriteBack.apply(dir, "d1", rule, 3, true);
+
+        assertThat(r.status()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(r.replaced()).isEqualTo(3);
+        assertThat(Files.readString(md)).isEqualTo("PostgreSQL 사용\nPOSTGRESQL 드라이버\npostgresql 설정\n");
+    }
+
+    @Test
+    @DisplayName("글자 그대로 규칙이면 MD 의 변형은 건드리지 않고 발생 수에도 세지 않는다")
+    void exactRuleIgnoresVariantsInTheMd() throws IOException {
+        Path md = write("d1.md", "Oracle 사용\nORACLE 드라이버\n");
+
+        MarkdownWriteBack.Result r = MarkdownWriteBack.apply(dir, "d1", TermReplacement.exact("Oracle", "PostgreSQL"), 1, true);
+
+        assertThat(r.status()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("PostgreSQL 사용\nORACLE 드라이버\n");
+    }
 }

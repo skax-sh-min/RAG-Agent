@@ -40,11 +40,12 @@ public class ChangeRequestTool {
             @ToolParam(required = false, description = "Exact text to replace, for literal replacement") String from,
             @ToolParam(required = false, description = "Replacement text, for literal replacement") String to,
             @ToolParam(required = false, description = "True to also let the model propose related changes beyond the literal replacement (drivers, ports, SQL syntax); costs one model call per chunk and every such proposal needs review") Boolean semantic,
+            @ToolParam(required = false, description = "True to also replace spellings that differ from the text only in letter case (ORACLE, oracle), shaped to the matched case; may change identifiers or string constants, so review the diff") Boolean caseVariants,
             ToolContext context) {
         ToolCaller caller = ToolCaller.from(context);
         guard.require(caller, ToolAccess.ADMIN, "requestDocumentChange");
         try {
-            MaintenanceWorkflow.Started s = workflow.start(caller.userId(), instruction, from, to, Boolean.TRUE.equals(semantic), Locale.KOREAN);
+            MaintenanceWorkflow.Started s = workflow.start(caller.userId(), instruction, from, to, Boolean.TRUE.equals(semantic), Boolean.TRUE.equals(caseVariants), Locale.KOREAN);
             return new Started(s.jobId(), s.status());
         } catch (IllegalStateException busy) {
             return new Started(0, STATUS_BUSY);

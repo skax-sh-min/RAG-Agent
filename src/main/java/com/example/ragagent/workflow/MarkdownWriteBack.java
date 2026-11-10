@@ -34,18 +34,24 @@ public final class MarkdownWriteBack {
      */
     public static Result apply(Path convertedDir, String docId, String from, String to,
                                int chunkOccurrences, boolean noChunkLeftWithTerm) {
+        return apply(convertedDir, docId, TermReplacement.exact(from, to), chunkOccurrences, noChunkLeftWithTerm);
+    }
+
+    /** 청크를 고친 것과 <b>같은 규칙</b>({@link TermReplacement} — 대소문자 변형 포함 여부까지)으로 MD 를 센다·바꾼다. */
+    public static Result apply(Path convertedDir, String docId, TermReplacement rule,
+                               int chunkOccurrences, boolean noChunkLeftWithTerm) {
         Path md = resolve(convertedDir, docId);
         if (md == null) return new Result(MISSING, 0, 0, "변환 MD 없음");
         if (!noChunkLeftWithTerm) return new Result(CONFLICT, 0, 0, "일부 청크에 바꿀 말이 남아 있어 MD 만 바꾸면 청크와 갈라진다");
         try {
             String text = Files.readString(md, StandardCharsets.UTF_8);
-            int count = occurrences(text, from);
+            int count = rule.count(text);
             if (count == 0) return new Result(CONFLICT, 0, 0, "MD 에 바꿀 말이 없다(MD 가 청크와 다르다)");
             if (count > chunkOccurrences) {
                 return new Result(CONFLICT, 0, count, "MD 의 발생 수(" + count + ")가 청크에서 센 수(" + chunkOccurrences + ")보다 많다");
             }
             Path tmp = md.resolveSibling(md.getFileName() + ".tmp");
-            Files.writeString(tmp, text.replace(from, to), StandardCharsets.UTF_8);
+            Files.writeString(tmp, rule.apply(text), StandardCharsets.UTF_8);
             try {
                 Files.move(tmp, md, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (java.nio.file.AtomicMoveNotSupportedException e) {

@@ -102,10 +102,14 @@ public class MaintenanceWorkflow {
      * @param semanticTried    LLM 이 다시 쓴 청크 수
      * @param semanticProposed 그중 가드를 통과해 의미 변경 수정안이 된 수
      * @param semanticSkipped  시도했지만 버린 것·건너뛴 것(길이·상한·가드 위반·호출 실패) — 그 청크는 리터럴 수정안으로 남는다
+     * @param caseVariants     대소문자만 다른 표기도 그 표기의 대소문자 모양에 맞춰 바꿨는가(요청 옵션 — {@link TermReplacement})
+     * @param caseVariantChunks 대소문자만 다른 표기가 <b>있는</b> 청크 수 — 옵션과 무관하게 센다. 옵션이 꺼져 있으면 이 청크들의 변형은 바뀌지 않은 채
+     *                         남는다(조용한 불일치) — 리포트가 그 사실을 밝힌다
      */
     public record Report(String instruction, String from, String to, int mentions, boolean truncated, boolean tooShort,
                          int proposals, int unchanged, int manualCurated, List<Discarded> discarded,
-                         boolean semantic, int semanticTried, int semanticProposed, List<Discarded> semanticSkipped) {}
+                         boolean semantic, int semanticTried, int semanticProposed, List<Discarded> semanticSkipped,
+                         boolean caseVariants, int caseVariantChunks) {}
 
     public record Started(long jobId, String status) {}
 
@@ -157,6 +161,14 @@ public class MaintenanceWorkflow {
 
     /** @param semantic 글자 치환이 끝난 청크를 LLM 이 한 번 더 보고 함께 바뀌어야 할 내용을 고치게 한다(선택 — 호출이 청크 수만큼 늘고 결과는 "검토 필요") */
     public Started start(String userId, String instruction, String from, String to, boolean semantic, Locale locale) {
+        return start(userId, instruction, from, to, semantic, false, locale);
+    }
+
+    /**
+     * @param caseVariants {@code from} 과 대소문자만 다른 표기(예: {@code ORACLE}·{@code oracle})도 그 모양에 맞춰 바꾼다. 꺼져 있으면 글자 그대로만
+     *                     바꾸고, 변형이 남은 청크 수를 리포트가 밝힌다
+     */
+    public Started start(String userId, String instruction, String from, String to, boolean semantic, boolean caseVariants, Locale locale) {
         boolean literal = from != null && !from.isBlank() && to != null;
         if (!literal && (instruction == null || instruction.isBlank())) {
             throw new IllegalArgumentException("instruction 이(가) 필요합니다");
@@ -165,7 +177,7 @@ public class MaintenanceWorkflow {
         String text = instruction == null || instruction.isBlank() ? from.strip() + " → " + to.strip() : instruction.strip();
         long id = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, text, userId);
         Thread.ofVirtual().name("maintenance-" + id).start(MdcPropagation.wrap(
-                () -> proposeAndStore(id, text, from, to, semantic, locale)));
+                () -> proposeAndStore(id, text, from, to, semantic, caseVariants, locale)));
         return new Started(id, ChangeJobRepository.RUNNING);
     }
 
@@ -175,8 +187,12 @@ public class MaintenanceWorkflow {
     }
 
     void proposeAndStore(long jobId, String instruction, String from, String to, boolean semantic, Locale locale) {
+        proposeAndStore(jobId, instruction, from, to, semantic, false, locale);
+    }
+
+    void proposeAndStore(long jobId, String instruction, String from, String to, boolean semantic, boolean caseVariants, Locale locale) {
         try {
-            Report report = propose(jobId, instruction, from, to, semantic, locale);
+            Report report = propose(jobId, instruction, from, to, semantic, caseVariants, locale);
             jobs.finish(jobId, ChangeJobRepository.DONE, MAPPER.writeValueAsString(report), null);
             log.info("[MAINTENANCE] 수정안 작성 완료 job={} 언급={} 수정안={} 버림={}", jobId, report.mentions(),
                     report.proposals(), report.discarded().size());
@@ -191,6 +207,10 @@ public class MaintenanceWorkflow {
     }
 
     Report propose(long jobId, String instruction, String fromArg, String toArg, boolean semantic, Locale locale) {
+        return propose(jobId, instruction, fromArg, toArg, semantic, false, locale);
+    }
+
+    Report propose(long jobId, String instruction, String fromArg, String toArg, boolean semantic, boolean caseVariants, Locale locale) {
         String from;
         String to;
         if (fromArg != null && !fromArg.isBlank() && toArg != null) {
@@ -209,8 +229,9 @@ public class MaintenanceWorkflow {
         int manual = keywords.findMentions("curated", from, MENTION_LIMIT).hits().size();
         KeywordSearchRepository.Mentions mentions = keywords.findMentions(VERSION, from, MENTION_LIMIT);
         if (mentions.tooShort()) {
-            return new Report(instruction, from, to, 0, false, true, 0, 0, manual, List.of(), semantic, 0, 0, List.of());
+            return new Report(instruction, from, to, 0, false, true, 0, 0, manual, List.of(), semantic, 0, 0, List.of(), caseVariants, 0);
         }
+        TermReplacement rule = new TermReplacement(from, to, caseVariants);
         String collection = adminService.collectionFor(VERSION);
         List<ChangeProposalRepository.NewProposal> out = new ArrayList<>();
         List<Discarded> discarded = new ArrayList<>();
@@ -218,12 +239,15 @@ public class MaintenanceWorkflow {
         int unchanged = 0;
         int semanticTried = 0;
         int semanticProposed = 0;
+        int caseVariantChunks = 0;
         for (var hit : mentions.hits()) {
             AdminService.ChunkRow row = adminService.getChunk(collection, hit.getId());
             if (row == null) continue;   // 조회와 읽기 사이에 사라진 청크
             String before = row.fullText() == null ? "" : row.fullText();
-            if (!before.contains(from)) { unchanged++; continue; }   // 대소문자만 다르게 걸림 — 글자 그대로 바꿀 곳이 없다
-            String after = before.replace(from, to);
+            // 대소문자만 다른 표기가 있는 청크 수 — 옵션과 무관하게 센다(꺼져 있으면 그 변형은 바뀌지 않은 채 남는다는 사실을 리포트가 밝힌다).
+            if (rule.variantCount(before) > 0) caseVariantChunks++;
+            if (!rule.matches(before)) { unchanged++; continue; }   // 규칙이 찾는 표기가 없다(대소문자 옵션이 꺼져 있으면 변형만 걸린 청크)
+            String after = rule.apply(before);
             String problem = invariantViolation(before, after);
             if (problem != null) {
                 discarded.add(new Discarded(row.filename(), row.id(), problem));
@@ -231,7 +255,7 @@ public class MaintenanceWorkflow {
             }
             String finalAfter = after;
             String kind = ChangeProposalRepository.KIND_LITERAL;
-            String rationale = "리터럴 치환: \"" + from + "\" → \"" + to + "\"";
+            String rationale = "리터럴 치환: \"" + from + "\" → \"" + to + "\"" + (caseVariants ? " (대소문자 변형 포함)" : "");
             if (semantic) {
                 if (after.length() > MAX_SEMANTIC_CHARS) {
                     semanticSkipped.add(new Discarded(row.filename(), row.id(), "너무 길어 의미 변경을 건너뜀(" + after.length() + "자)"));
@@ -239,7 +263,7 @@ public class MaintenanceWorkflow {
                     semanticSkipped.add(new Discarded(row.filename(), row.id(), "의미 변경 상한(" + MAX_SEMANTIC + "개)을 넘어 건너뜀"));
                 } else {
                     semanticTried++;
-                    Rewrite rw = semanticRewrite(after, from, to, locale);
+                    Rewrite rw = semanticRewrite(after, rule, locale);
                     if (rw.text() != null) {
                         finalAfter = rw.text();
                         kind = ChangeProposalRepository.KIND_SEMANTIC;
@@ -254,13 +278,13 @@ public class MaintenanceWorkflow {
             String kw = row.metadata().get(MetaKey.EXCERPT_KEYWORDS);
             out.add(new ChangeProposalRepository.NewProposal(jobId, row.docId(), row.filename(), row.id(),
                     kind, before, finalAfter, sha256(before),
-                    ctx, ctx == null ? null : ctx.replace(from, to), kw, kw == null ? null : kw.replace(from, to),
+                    ctx, ctx == null ? null : rule.apply(ctx), kw, kw == null ? null : rule.apply(kw),
                     rationale));
         }
         proposals.insertAll(out);
         return new Report(instruction, from, to, mentions.hits().size(), mentions.truncated(), false,
                 out.size(), unchanged, manual, List.copyOf(discarded),
-                semantic, semanticTried, semanticProposed, List.copyOf(semanticSkipped));
+                semantic, semanticTried, semanticProposed, List.copyOf(semanticSkipped), caseVariants, caseVariantChunks);
     }
 
     /**
@@ -297,16 +321,16 @@ public class MaintenanceWorkflow {
      * 치환이 끝난 본문을 LLM 이 한 번 더 보고 함께 바뀌어야 할 내용을 고친다. <b>실패는 전부 "리터럴 수정안으로 남김"</b>이다 — 호출 실패·형식
      * 오류·"변경 없음"·가드 위반 어느 것도 작업을 실패시키지 않는다.
      */
-    private Rewrite semanticRewrite(String literalAfter, String from, String to, Locale locale) {
+    private Rewrite semanticRewrite(String literalAfter, TermReplacement rule, Locale locale) {
         awaitChatQuiet();
         try {
             String system = messages.getMessage("prompt.maintenance.rewrite", null, locale)
-                    .replace("{from}", from).replace("{to}", to);
+                    .replace("{from}", rule.from()).replace("{to}", rule.to());
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
                     ThinkingSite.RERANK.taskType(), ThinkingSite.RERANK.fixedRoutingMode(),
                     model -> model.call(new Prompt(List.of(new SystemMessage(system),
                             new UserMessage(PromptInjectionGuard.wrap(literalAfter))), rewriteOptions())));
-            return interpretRewrite(result.text(), literalAfter, from, to);
+            return interpretRewrite(result.text(), literalAfter, rule);
         } catch (Exception e) {
             log.warn("[MAINTENANCE] 의미 변경 호출 실패 — 리터럴 수정안으로 남긴다: {}", e.getMessage());
             return Rewrite.skipped("의미 변경 호출 실패");
@@ -322,6 +346,10 @@ public class MaintenanceWorkflow {
      * 아닌 이유는 본문에 따옴표·줄바꿈·코드 펜스가 가득해 이스케이프가 깨지기 쉽기 때문이다.
      */
     static Rewrite interpretRewrite(String response, String literalAfter, String from, String to) {
+        return interpretRewrite(response, literalAfter, TermReplacement.exact(from, to));
+    }
+
+    static Rewrite interpretRewrite(String response, String literalAfter, TermReplacement rule) {
         if (response == null) return Rewrite.skipped("응답 없음");
         Matcher v = VERDICT.matcher(response);
         if (!v.find()) return Rewrite.skipped("판정을 읽지 못함");
@@ -333,7 +361,7 @@ public class MaintenanceWorkflow {
         String text = response.substring(d + TEXT_DELIMITER.length()).strip();
         Matcher r = REASON.matcher(response.substring(0, d));
         String reason = r.find() ? r.group(1).strip() : "";
-        String problem = validateRewrite(literalAfter, text, from, to);
+        String problem = validateRewrite(literalAfter, text, rule);
         return problem == null ? new Rewrite(text, reason, null) : Rewrite.skipped("가드 위반 — " + problem);
     }
 
@@ -344,10 +372,15 @@ public class MaintenanceWorkflow {
      * @param literalAfter 글자 치환이 끝난 본문(다시 쓰기의 입력 — 비교 기준)
      */
     static String validateRewrite(String literalAfter, String rewritten, String from, String to) {
+        return validateRewrite(literalAfter, rewritten, TermReplacement.exact(from, to));
+    }
+
+    static String validateRewrite(String literalAfter, String rewritten, TermReplacement rule) {
         if (rewritten == null || rewritten.isBlank()) return "본문이 비었다";
         if (rewritten.equals(literalAfter)) return "치환 결과와 같다";
-        if (rewritten.contains(from)) return "바꿀 말이 되살아났다";
-        if (MarkdownWriteBack.occurrences(rewritten, to) < MarkdownWriteBack.occurrences(literalAfter, to)) return "새 말이 줄었다";
+        // 규칙이 찾는 표기가 되살아났는가 — 대소문자 변형을 바꾸는 규칙이면 변형이 되살아난 것도 같다.
+        if (rule.matches(rewritten)) return "바꿀 말이 되살아났다";
+        if (MarkdownWriteBack.occurrences(rewritten, rule.to()) < MarkdownWriteBack.occurrences(literalAfter, rule.to())) return "새 말이 줄었다";
         String invariant = invariantViolation(literalAfter, rewritten);
         if (invariant != null) return invariant;
         double ratio = literalAfter.isEmpty() ? 1.0 : (double) rewritten.length() / literalAfter.length();

@@ -41,6 +41,9 @@
                 <li th:if="${report.unchanged > 0}" th:text="#{maint.report.unchanged(${report.unchanged})}">n unchanged</li>
                 <li th:if="${report.manualCurated > 0}" th:text="#{maint.report.manual(${report.manualCurated})}">n manual</li>
                 <li th:if="${report.semantic}" th:text="#{maint.report.semantic(${report.semanticTried}, ${report.semanticProposed})}">semantic</li>
+                <li th:if="${report.caseVariants and report.caseVariantChunks > 0}" th:text="#{maint.report.case-on(${report.caseVariantChunks})}">case on</li>
+                <li th:if="${!report.caseVariants and report.caseVariantChunks > 0}" class="text-warning"
+                    th:text="#{maint.report.case-off(${report.caseVariantChunks})}">case off</li>
                 <li th:each="d : ${report.discarded}" class="text-danger"
                     th:text="${d.file} + ' — ' + ${d.reason}">discarded</li>
             </ul>

@@ -93,6 +93,8 @@ public class ChangeApplyService {
             if (todo.isEmpty()) return DocResult.error(docId, "적용할 승인된 수정안이 없습니다");
             MaintenanceWorkflow.Report report = report(jobId);
             if (report == null) return DocResult.error(docId, "작업 리포트를 읽지 못했습니다");
+            // 수정안을 만든 때와 같은 규칙(대소문자 변형 포함 여부까지) — 제목·남은 말 검사·MD 되쓰기가 모두 이것을 쓴다.
+            TermReplacement rule = new TermReplacement(report.from(), report.to(), report.caseVariants());
 
             DatabaseBackupService.RunResult backup = backups.run("pre-change-" + jobId);
             if (!backup.ok()) {
@@ -109,8 +111,8 @@ public class ChangeApplyService {
                 if (p.afterKeywords() != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, p.afterKeywords());
                 // 섹션 제목에도 같은 치환 — 본문에서 바꾼 말이 제목에 있으면 제목만 옛 이름으로 남는다(종단 확인에서 드러난 것).
                 String heading = currentHeading(collection, p.chunkId());
-                if (heading != null && heading.contains(report.from())) {
-                    metaChanges.put(MetaKey.HEADING, heading.replace(report.from(), report.to()));
+                if (heading != null && rule.matches(heading)) {
+                    metaChanges.put(MetaKey.HEADING, rule.apply(heading));
                 }
                 AdminService.ApplyOutcome outcome;
                 try {
@@ -123,7 +125,7 @@ public class ChangeApplyService {
                     case APPLIED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.APPLIED, null);
                         applied++;
-                        appliedOccurrences += MarkdownWriteBack.occurrences(p.beforeText(), report.from());
+                        appliedOccurrences += rule.count(p.beforeText());
                     }
                     case STALE, NOT_FOUND, CURATED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.STALE, null);
@@ -139,9 +141,9 @@ public class ChangeApplyService {
             String md = null;
             if (applied > 0) {
                 boolean clean = adminService.getAllChunks(collection, docId).stream()
-                        .noneMatch(c -> c.fullText() != null && c.fullText().contains(report.from()));
+                        .noneMatch(c -> c.fullText() != null && rule.matches(c.fullText()));
                 MarkdownWriteBack.Result r = MarkdownWriteBack.apply(Path.of(props.dataDir()).resolve("converted"),
-                        docId, report.from(), report.to(), appliedOccurrences, clean);
+                        docId, rule, appliedOccurrences, clean);
                 md = r.status();
                 // 의미 변경은 변환 MD 에 되쓸 수 없다 — 글자 치환만 MD 에 들어갔으니, 그 문서의 의미 변경은 재인덱싱하면 되돌아간다.
                 boolean anySemanticApplied = todo.stream().anyMatch(p -> ChangeProposalRepository.KIND_SEMANTIC.equals(p.kind())

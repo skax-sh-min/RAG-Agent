@@ -425,4 +425,70 @@ class MaintenanceWorkflowTest {
         assertThat(MaintenanceWorkflow.tokenChurn("a a b", "a b")).containsExactly(1, 0);
         assertThat(MaintenanceWorkflow.tokenChurn("a b", "a x y")).containsExactly(1, 2);
     }
+
+    // ── 대소문자 변형(§6.33 4b) ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("꺼져 있으면(기본) 글자 그대로만 바꾸고, 변형이 남은 청크 수를 리포트가 밝힌다 — 조용한 불일치를 드러낸다")
+    void variantsStayAndAreReportedWhenTheOptionIsOff() {
+        mentions("c1", "c2", "c3");
+        chunk("c1", "d1", "Oracle 과 ORACLE 이 함께 있다", "ctx Oracle", "oracle, 접속");
+        chunk("c2", "d1", "ORACLE 만 있다", null, null);
+        chunk("c3", "d2", "Oracle 만 있다", null, null);
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "Oracle", "PostgreSQL", Locale.KOREAN);
+
+        assertThat(r.caseVariants()).isFalse();
+        assertThat(r.caseVariantChunks()).isEqualTo(2);     // c1(섞임) · c2(변형뿐)
+        assertThat(r.unchanged()).isEqualTo(1);             // c2 — 글자 그대로 바꿀 곳이 없다
+        assertThat(r.proposals()).isEqualTo(2);
+        ChangeProposalRepository.NewProposal p1 = stored().get(0);
+        assertThat(p1.afterText()).isEqualTo("PostgreSQL 과 ORACLE 이 함께 있다");   // 변형은 그대로 남는다
+        assertThat(p1.afterKeywords()).isEqualTo("oracle, 접속");
+    }
+
+    @Test
+    @DisplayName("켜면 변형도 그 모양에 맞춰 바꾼다 — 본문·맥락·키워드(소문자 키워드 포함)에 같은 규칙, 변형뿐인 청크도 수정안이 생긴다")
+    void variantsAreReplacedShapedToTheMatchedCase() {
+        mentions("c1", "c2");
+        chunk("c1", "d1", "Oracle 과 ORACLE 과 oracle 이 함께 있다", "ctx Oracle > ORACLE", "oracle, 접속");
+        chunk("c2", "d1", "ORACLE 만 있다", null, null);
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "Oracle", "PostgreSQL", false, true, Locale.KOREAN);
+
+        assertThat(r.caseVariants()).isTrue();
+        assertThat(r.unchanged()).isZero();
+        assertThat(r.proposals()).isEqualTo(2);
+        assertThat(r.caseVariantChunks()).isEqualTo(2);
+        List<ChangeProposalRepository.NewProposal> out = stored();
+        assertThat(out.get(0).afterText()).isEqualTo("PostgreSQL 과 POSTGRESQL 과 postgresql 이 함께 있다");
+        assertThat(out.get(0).afterContext()).isEqualTo("ctx PostgreSQL > POSTGRESQL");
+        assertThat(out.get(0).afterKeywords()).isEqualTo("postgresql, 접속");
+        assertThat(out.get(0).rationale()).contains("대소문자 변형 포함");
+        assertThat(out.get(1).afterText()).isEqualTo("POSTGRESQL 만 있다");
+    }
+
+    @Test
+    @DisplayName("변형 치환도 불변식을 지난다 — 이미지 경로 안의 변형을 바꾸면 마커가 바뀌어 그 수정안은 버려진다")
+    void variantReplacementStillHonoursTheInvariants() {
+        mentions("img");
+        chunk("img", "d1", "그림 [이미지: images/ORACLE/p1.png]\n설명", null, null);
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "Oracle", "PostgreSQL", false, true, Locale.KOREAN);
+
+        assertThat(r.proposals()).isZero();
+        assertThat(r.discarded()).extracting(MaintenanceWorkflow.Discarded::reason).containsExactly("이미지 마커가 바뀜");
+    }
+
+    @Test
+    @DisplayName("의미 변경 가드는 규칙을 따른다 — 변형을 바꾸는 규칙이면 되살아난 변형(ORACLE)도 '바꿀 말이 되살아남'")
+    void semanticGuardHonoursTheRule() {
+        TermReplacement variants = new TermReplacement("Oracle", "PostgreSQL", true);
+        String lit = "PostgreSQL 접속\ndriver: x.Driver\n끝.";
+        String revived = "PostgreSQL 접속\ndriver: ORACLE.Driver\n끝.";
+
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, revived, variants)).isEqualTo("바꿀 말이 되살아났다");
+        // 규칙이 글자 그대로면 변형은 "바꿀 말"이 아니다(실측에서 모델이 ORACLE 을 PostgreSQL 로 바꾼 것처럼 허용된다)
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, revived, TermReplacement.exact("Oracle", "PostgreSQL"))).isNull();
+    }
 }
