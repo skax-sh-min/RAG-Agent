@@ -39,11 +39,12 @@ public class ChangeRequestTool {
             @ToolParam(description = "What should be changed, e.g. 'replace PostgreSQL with Oracle' (required)") String instruction,
             @ToolParam(required = false, description = "Exact text to replace, for literal replacement") String from,
             @ToolParam(required = false, description = "Replacement text, for literal replacement") String to,
+            @ToolParam(required = false, description = "True to also let the model propose related changes beyond the literal replacement (drivers, ports, SQL syntax); costs one model call per chunk and every such proposal needs review") Boolean semantic,
             ToolContext context) {
         ToolCaller caller = ToolCaller.from(context);
         guard.require(caller, ToolAccess.ADMIN, "requestDocumentChange");
         try {
-            MaintenanceWorkflow.Started s = workflow.start(caller.userId(), instruction, from, to, Locale.KOREAN);
+            MaintenanceWorkflow.Started s = workflow.start(caller.userId(), instruction, from, to, Boolean.TRUE.equals(semantic), Locale.KOREAN);
             return new Started(s.jobId(), s.status());
         } catch (IllegalStateException busy) {
             return new Started(0, STATUS_BUSY);

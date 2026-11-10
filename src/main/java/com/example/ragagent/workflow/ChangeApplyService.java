@@ -10,8 +10,6 @@ import com.example.ragagent.web.MdcPropagation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import tools.jackson.databind.DeserializationFeature;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -39,8 +37,11 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ChangeApplyService {
 
     private static final Logger log = LoggerFactory.getLogger(ChangeApplyService.class);
-    private static final JsonMapper MAPPER = JsonMapper.builder()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    /** 저장된 리포트 blob 을 읽는다 — 리포트에 필드가 늘어도 이미 만들어진 작업의 옛 리포트가 읽혀야 한다(Jackson 3 는 빠진 기본형 필드를 오류로 본다). */
+    private static final tools.jackson.databind.ObjectMapper MAPPER = com.example.ragagent.llm.LenientJson.MAPPER;
+
+    /** 글자 치환은 변환 MD 에 반영됐지만 이 문서의 의미 변경 수정안은 청크에만 있다(MD 에 되쓸 수 없다). */
+    public static final String MD_PARTIAL = "MD_PARTIAL";
 
     /** 한 문서의 적용 결과. {@code error} 가 있으면 아무것도 적용하지 않았다(백업 실패·잠금 충돌 등). */
     public record DocResult(String docId, int applied, int stale, int failed, String mdStatus, String error) {
@@ -142,6 +143,10 @@ public class ChangeApplyService {
                 MarkdownWriteBack.Result r = MarkdownWriteBack.apply(Path.of(props.dataDir()).resolve("converted"),
                         docId, report.from(), report.to(), appliedOccurrences, clean);
                 md = r.status();
+                // 의미 변경은 변환 MD 에 되쓸 수 없다 — 글자 치환만 MD 에 들어갔으니, 그 문서의 의미 변경은 재인덱싱하면 되돌아간다.
+                boolean anySemanticApplied = todo.stream().anyMatch(p -> ChangeProposalRepository.KIND_SEMANTIC.equals(p.kind())
+                        && proposals.find(p.id()).map(x -> ChangeProposalRepository.APPLIED.equals(x.status())).orElse(false));
+                if (anySemanticApplied && MarkdownWriteBack.APPLIED.equals(md)) md = MD_PARTIAL;
                 proposals.setMdStatus(jobId, docId, md);
                 log.info("[APPLY] 완료 job={} doc={} 적용={} stale={} 실패={} md={} ({})", jobId, docId, applied, stale, failed, md, r.detail());
             } else {

@@ -18,8 +18,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.server.ResponseStatusException;
-import tools.jackson.databind.DeserializationFeature;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -37,8 +35,8 @@ import java.util.Map;
 public class AdminChangeController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminChangeController.class);
-    private static final JsonMapper MAPPER = JsonMapper.builder()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    /** 저장된 리포트 blob 을 읽는다 — 리포트에 필드가 늘어도 이미 만들어진 작업의 옛 리포트가 읽혀야 한다(Jackson 3 는 빠진 기본형 필드를 오류로 본다). */
+    private static final tools.jackson.databind.ObjectMapper MAPPER = com.example.ragagent.llm.LenientJson.MAPPER;
 
     /** 수정안 하나와 그 Diff(축약된 unified 텍스트). */
     public record ProposalView(ChangeProposalRepository.Proposal proposal, String diff, boolean identical, boolean tooLarge) {}
@@ -72,9 +70,10 @@ public class AdminChangeController {
     @PostMapping("/admin/change-requests")
     public String request(@RequestParam String instruction,
                           @RequestParam(required = false) String from,
-                          @RequestParam(required = false) String to) {
+                          @RequestParam(required = false) String to,
+                          @RequestParam(required = false, defaultValue = "false") boolean semantic) {
         try {
-            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, LocaleContextHolder.getLocale());
+            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, semantic, LocaleContextHolder.getLocale());
             return "redirect:/admin/change-jobs/" + s.jobId();
         } catch (IllegalStateException busy) {
             return "redirect:/admin/change-jobs?error=busy";

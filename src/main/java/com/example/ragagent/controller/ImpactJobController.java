@@ -13,8 +13,6 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.server.ResponseStatusException;
-import tools.jackson.databind.DeserializationFeature;
-import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 영향도 분석 리포트 화면(§6.33 4a) — 채팅이 남긴 링크({@code /ui/impact-jobs/{id}})의 도착지. <b>읽기 전용</b>이다.
@@ -29,8 +27,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class ImpactJobController {
 
     private static final Logger log = LoggerFactory.getLogger(ImpactJobController.class);
-    private static final JsonMapper MAPPER = JsonMapper.builder()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    /** 저장된 리포트 blob 을 읽는다 — 리포트에 필드가 늘어도 이미 만들어진 작업의 옛 리포트가 읽혀야 한다(Jackson 3 는 빠진 기본형 필드를 오류로 본다). */
+    private static final tools.jackson.databind.ObjectMapper MAPPER = com.example.ragagent.llm.LenientJson.MAPPER;
 
     private final ChangeJobRepository jobs;
 

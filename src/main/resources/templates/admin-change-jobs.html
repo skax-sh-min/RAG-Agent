@@ -35,6 +35,11 @@
                         <input class="form-control" id="to" name="to" maxlength="200">
                     </div>
                 </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="semantic" name="semantic" value="true">
+                    <label class="form-check-label small" for="semantic" th:text="#{maint.semantic}">Also propose semantic changes</label>
+                    <div class="form-text" th:text="#{maint.semantic.hint}">hint</div>
+                </div>
                 <button type="submit" class="btn btn-primary btn-sm" th:text="#{maint.submit}">Create proposals</button>
             </form>
         </div>

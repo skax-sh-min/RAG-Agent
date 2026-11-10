@@ -214,4 +214,215 @@ class MaintenanceWorkflowTest {
         assertThatThrownBy(() -> workflow.start("admin", "x", "ABC", "XYZ", Locale.KOREAN)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> workflow.start("admin2", " ", null, null, Locale.KOREAN)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── 의미 변경 수정안(§6.33 4b) ─────────────────────────────────────────
+
+    private void modelSays(String answer) {
+        when(router.executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any()))
+                .thenReturn(new LlmRouter.LlmResult(answer, 10, 10));
+    }
+
+    private static String rewrite(String reason, String body) {
+        return "판정: 변경 필요\n이유: " + reason + "\n---본문---\n" + body;
+    }
+
+    @Test
+    @DisplayName("끄면(기본) LLM 을 부르지 않고 리터럴 수정안뿐이다")
+    void semanticIsOffByDefault() {
+        mentions("c1");
+        chunk("c1", "d1", "PostgreSQL 에 org.postgresql.Driver 로 접속한다.", null, null);
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", Locale.KOREAN);
+
+        verify(router, never()).executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any());
+        assertThat(r.semantic()).isFalse();
+        assertThat(stored().get(0).kind()).isEqualTo(ChangeProposalRepository.KIND_LITERAL);
+    }
+
+    @Test
+    @DisplayName("켜면 치환 결과를 LLM 이 한 번 더 고치고, 가드를 통과하면 semantic 수정안이 된다(before 는 원본, after 는 LLM 본문)")
+    void semanticRewriteBecomesASemanticProposal() {
+        mentions("c1");
+        chunk("c1", "d1", "PostgreSQL 에 접속한다.\ndriver: org.postgresql.Driver\n끝.", "ctx PostgreSQL", null);
+        modelSays(rewrite("드라이버 클래스", "Oracle 에 접속한다.\ndriver: oracle.jdbc.OracleDriver\n끝."));
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        assertThat(r.semantic()).isTrue();
+        assertThat(r.semanticTried()).isEqualTo(1);
+        assertThat(r.semanticProposed()).isEqualTo(1);
+        ChangeProposalRepository.NewProposal p = stored().get(0);
+        assertThat(p.kind()).isEqualTo(ChangeProposalRepository.KIND_SEMANTIC);
+        assertThat(p.beforeText()).contains("PostgreSQL");
+        assertThat(p.afterText()).contains("oracle.jdbc.OracleDriver");
+        assertThat(p.rationale()).contains("검토 필요").contains("드라이버 클래스");
+        assertThat(p.afterContext()).isEqualTo("ctx Oracle");   // 맥락은 계속 글자 치환
+    }
+
+    @Test
+    @DisplayName("다시 쓰기 프롬프트는 실제 번들로 채워진다 — 바꿀 말·새 말·출력 형식 구분선이 들어간다")
+    void rewritePromptComesFromTheRealBundle() {
+        mentions("c1");
+        chunk("c1", "d1", "PostgreSQL 사용", null, null);
+        ArgumentCaptor<java.util.function.Function<org.springframework.ai.chat.model.ChatModel, org.springframework.ai.chat.model.ChatResponse>> fn =
+                ArgumentCaptor.forClass(java.util.function.Function.class);
+        List<String> systems = new java.util.ArrayList<>();
+        when(router.executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), fn.capture())).thenAnswer(inv -> {
+            org.springframework.ai.chat.model.ChatModel model = mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(c -> {
+                systems.add(((org.springframework.ai.chat.messages.SystemMessage)
+                        ((org.springframework.ai.chat.prompt.Prompt) c.getArgument(0)).getInstructions().get(0)).getText());
+                return new org.springframework.ai.chat.model.ChatResponse(List.of(new org.springframework.ai.chat.model.Generation(
+                        new org.springframework.ai.chat.messages.AssistantMessage("x"))));
+            });
+            ((java.util.function.Function<org.springframework.ai.chat.model.ChatModel, org.springframework.ai.chat.model.ChatResponse>) inv.getArgument(2)).apply(model);
+            return new LlmRouter.LlmResult("판정: 변경 없음\n이유: 없음\n---본문---", 1, 1);
+        });
+
+        workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        assertThat(systems).hasSize(1);
+        assertThat(systems.get(0)).doesNotContain("{from}").doesNotContain("{to}")
+                .contains("\"PostgreSQL\"").contains("\"Oracle\"").contains("---본문---").contains("판정:").contains("최소한");
+    }
+
+    @Test
+    @DisplayName("'변경 없음'이면 리터럴 수정안을 그대로 두고 건너뜀 목록에도 올리지 않는다")
+    void noChangeNeededKeepsTheLiteralProposal() {
+        mentions("c1");
+        chunk("c1", "d1", "PostgreSQL 사용", null, null);
+        modelSays("판정: 변경 없음\n이유: 함께 바꿀 것 없음\n---본문---");
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        assertThat(r.semanticTried()).isEqualTo(1);
+        assertThat(r.semanticProposed()).isZero();
+        assertThat(r.semanticSkipped()).isEmpty();
+        assertThat(stored().get(0).kind()).isEqualTo(ChangeProposalRepository.KIND_LITERAL);
+        assertThat(stored().get(0).afterText()).isEqualTo("Oracle 사용");
+    }
+
+    @Test
+    @DisplayName("응답을 읽지 못하거나 호출이 실패하면 리터럴 수정안으로 남고 사유가 건너뜀 목록에 오른다 — 작업은 실패하지 않는다")
+    void unreadableOrFailedRewritesFallBackToLiteral() {
+        mentions("c1", "c2");
+        chunk("c1", "d1", "PostgreSQL 하나", null, null);
+        chunk("c2", "d1", "PostgreSQL 둘", null, null);
+        when(router.executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any()))
+                .thenReturn(new LlmRouter.LlmResult("잘 모르겠습니다", 1, 1))
+                .thenThrow(new IllegalStateException("down"));
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        assertThat(r.proposals()).isEqualTo(2);
+        assertThat(r.semanticProposed()).isZero();
+        assertThat(r.semanticSkipped()).extracting(MaintenanceWorkflow.Discarded::reason)
+                .containsExactly("판정을 읽지 못함", "의미 변경 호출 실패");
+        assertThat(stored()).extracting(ChangeProposalRepository.NewProposal::kind)
+                .containsOnly(ChangeProposalRepository.KIND_LITERAL);
+    }
+
+    @Test
+    @DisplayName("너무 긴 청크는 LLM 에 보내지 않고 건너뛴다")
+    void tooLongChunksAreSkipped() {
+        mentions("c1");
+        chunk("c1", "d1", "PostgreSQL " + "가".repeat(MaintenanceWorkflow.MAX_SEMANTIC_CHARS), null, null);
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        verify(router, never()).executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any());
+        assertThat(r.semanticTried()).isZero();
+        assertThat(r.semanticSkipped().get(0).reason()).contains("너무 길어");
+        assertThat(r.proposals()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("한 작업의 의미 변경 호출은 상한까지 — 넘는 청크는 리터럴만")
+    void theNumberOfSemanticCallsIsCapped() {
+        String[] ids = new String[MaintenanceWorkflow.MAX_SEMANTIC + 2];
+        for (int i = 0; i < ids.length; i++) {
+            ids[i] = "c" + i;
+            chunk(ids[i], "d1", "PostgreSQL " + i, null, null);
+        }
+        mentions(ids);
+        modelSays("판정: 변경 없음\n이유: x\n---본문---");
+
+        MaintenanceWorkflow.Report r = workflow.propose(1L, "x", "PostgreSQL", "Oracle", true, Locale.KOREAN);
+
+        assertThat(r.semanticTried()).isEqualTo(MaintenanceWorkflow.MAX_SEMANTIC);
+        assertThat(r.semanticSkipped()).hasSize(2).allSatisfy(d -> assertThat(d.reason()).contains("상한"));
+        assertThat(r.proposals()).isEqualTo(ids.length);
+    }
+
+    @Test
+    @DisplayName("가드 — 바꿀 말이 되살아남 · 새 말이 줄어듦 · 같은 본문 · 빈 본문")
+    void guardRejectsReintroducedOrDroppedTerms() {
+        String lit = "Oracle 에 접속한다.\ndriver: org.postgresql.Driver\n끝.";
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, "", "PostgreSQL", "Oracle")).isEqualTo("본문이 비었다");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, lit, "PostgreSQL", "Oracle")).isEqualTo("치환 결과와 같다");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, "PostgreSQL 에 접속한다.\ndriver: x\n끝.", "PostgreSQL", "Oracle"))
+                .isEqualTo("바꿀 말이 되살아났다");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, "DB 에 접속한다.\ndriver: x.jdbc.Driver\n끝.", "PostgreSQL", "Oracle"))
+                .isEqualTo("새 말이 줄었다");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, "Oracle 에 접속한다.\ndriver: oracle.jdbc.OracleDriver\n끝.", "PostgreSQL", "Oracle")).isNull();
+    }
+
+    @Test
+    @DisplayName("가드 — 이미지·페이지 마커·코드 펜스를 어기거나 길이가 크게 달라지거나 너무 많은 줄을 고치면 버린다")
+    void guardRejectsStructuralDamageAndOverReach() {
+        String lit = "[페이지: 2]\nOracle 설명\n![x](a)\n[이미지: images/a.png]\n```java\nint a;\n```\n끝 문장입니다 하나 둘 셋";
+        String ok = lit.replace("int a;", "long a;");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, ok, "PostgreSQL", "Oracle")).isNull();
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, ok.replace("[페이지: 2]", "[페이지: 3]"), "PostgreSQL", "Oracle")).isEqualTo("페이지 마커가 바뀜");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, ok.replace("images/a.png", "images/b.png"), "PostgreSQL", "Oracle")).isEqualTo("이미지 마커가 바뀜");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, ok.replace("```java\nlong a;\n```", "```java\nlong a;"), "PostgreSQL", "Oracle")).isEqualTo("코드 펜스가 깨짐");
+        // 마커를 지운 요약은 마커 검사가 먼저 잡고, 마커가 없는 본문의 요약·덧붙임은 길이가 잡는다.
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, "Oracle", "PostgreSQL", "Oracle")).isEqualTo("이미지 마커가 바뀜");
+        String plain = "Oracle 설명 문장입니다 그리고 길게 이어집니다. ".repeat(10);
+        assertThat(MaintenanceWorkflow.validateRewrite(plain, "Oracle ".repeat(10), "PostgreSQL", "Oracle")).startsWith("길이가 크게 달라졌다");   // 요약
+        assertThat(MaintenanceWorkflow.validateRewrite(plain, plain + "덧붙인 설명 문장입니다. ".repeat(20), "PostgreSQL", "Oracle"))
+                .startsWith("길이가 크게 달라졌다");   // 덧붙임
+        String lines = String.join("\n", java.util.Collections.nCopies(10, "Oracle 한 줄입니다 번호 "));
+        String rewritten = String.join("\n", java.util.Collections.nCopies(10, "Oracle 다시 쓴 줄입니다 번호"));
+        assertThat(MaintenanceWorkflow.validateRewrite(lines, rewritten, "PostgreSQL", "Oracle")).startsWith("너무 많은 줄을 고쳤다");
+    }
+
+    @Test
+    @DisplayName("응답 해석 — 판정·이유·구분선 형식을 읽고, 형식이 깨지면 건너뛴다")
+    void interpretRewriteFormats() {
+        String lit = "Oracle 에 접속한다.\ndriver: org.postgresql.Driver\n끝.";
+        MaintenanceWorkflow.Rewrite ok = MaintenanceWorkflow.interpretRewrite(
+                rewrite("드라이버", "Oracle 에 접속한다.\ndriver: oracle.jdbc.OracleDriver\n끝."), lit, "PostgreSQL", "Oracle");
+        assertThat(ok.text()).contains("oracle.jdbc.OracleDriver");
+        assertThat(ok.reason()).isEqualTo("드라이버");
+
+        assertThat(MaintenanceWorkflow.interpretRewrite("판정: 변경 없음\n이유: x", lit, "PostgreSQL", "Oracle").skipped()).isNull();
+        assertThat(MaintenanceWorkflow.interpretRewrite("판정: 변경 필요\n이유: x\n본문만 있음", lit, "PostgreSQL", "Oracle").skipped())
+                .isEqualTo("본문 구분선이 없음");
+        assertThat(MaintenanceWorkflow.interpretRewrite("판정: 글쎄\n---본문---\nx", lit, "PostgreSQL", "Oracle").skipped()).isEqualTo("판정을 읽지 못함");
+        assertThat(MaintenanceWorkflow.interpretRewrite(null, lit, "PostgreSQL", "Oracle").skipped()).isEqualTo("응답 없음");
+        assertThat(MaintenanceWorkflow.interpretRewrite(rewrite("r", "Oracle"), lit, "PostgreSQL", "Oracle").skipped()).startsWith("가드 위반");
+    }
+
+    @Test
+    @DisplayName("가드 — 함께 바뀌는 식별자의 치환은 통과하고, 무관한 구절을 지운 것은 버린다(실측에서 모델이 지운 것)")
+    void guardRejectsDeletionsButAllowsSubstitutions() {
+        String lit = "입력된 예외의 원인이 SQLException인 경우 PostgreSQL DBMS Lock에러여부를 반환한다.\ndriver: org.postgresql.Driver\n끝.";
+        // 치환 — 사라진 낱말과 생긴 낱말이 같은 수
+        assertThat(MaintenanceWorkflow.validateRewrite(lit,
+                lit.replace("org.postgresql.Driver", "oracle.jdbc.OracleDriver"), "Oracle2", "PostgreSQL")).isNull();
+        // 삭제 — 무관한 구절을 통째로 지움(길이·줄 수 가드는 통과한다)
+        String deleted = lit.replace("SQLException인 경우 ", "");
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, deleted, "Oracle2", "PostgreSQL")).startsWith("내용을 지웠다");
+        // 한 낱말 정도의 재배열·조사 변화는 허용(슬랙)
+        assertThat(MaintenanceWorkflow.validateRewrite(lit, lit.replace("반환한다.", "반환."), "Oracle2", "PostgreSQL")).isNull();
+    }
+
+    @Test
+    @DisplayName("낱말 다중집합 차이 — 순서·줄바꿈은 세지 않고 개수는 센다")
+    void tokenChurnIsAMultisetDifference() {
+        assertThat(MaintenanceWorkflow.tokenChurn("a b c", "c\nb a")).containsExactly(0, 0);
+        assertThat(MaintenanceWorkflow.tokenChurn("a a b", "a b")).containsExactly(1, 0);
+        assertThat(MaintenanceWorkflow.tokenChurn("a b", "a x y")).containsExactly(1, 2);
+    }
 }

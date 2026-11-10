@@ -233,4 +233,27 @@ class ChangeApplyServiceTest {
         assertThat(proposals.transitionDocument(jobId, "d1", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "b")).isZero();
         assertThat(statuses()).containsExactly(ChangeProposalRepository.APPROVED, ChangeProposalRepository.APPROVED, ChangeProposalRepository.PENDING);
     }
+
+    @Test
+    @DisplayName("의미 변경 수정안이 적용된 문서는 MD 에 글자 치환만 들어가고 MD_PARTIAL 로 남는다 — 의미 변경은 MD 에 되쓸 수 없다")
+    void semanticProposalsLeaveTheMdPartial() throws IOException {
+        proposals.insertAll(List.of(
+                new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_SEMANTIC,
+                        "PostgreSQL 사용\ndriver: org.postgresql.Driver", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
+                        TextHash.sha256("PostgreSQL 사용\ndriver: org.postgresql.Driver"), "ctx PostgreSQL", "ctx Oracle", null, null, "검토 필요")));
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용\ndriver: oracle.jdbc.OracleDriver");
+        Path md = Files.writeString(converted.resolve("d1.md"), "PostgreSQL 사용\ndriver: org.postgresql.Driver\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        assertThat(r.mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
+        // 글자 치환만 MD 에 — 드라이버 줄은 그대로(되쓸 방법이 없다)
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\ndriver: org.postgresql.Driver\n");
+        assertThat(proposals.listByJob(jobId).get(0).mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
+        verify(admin).applyChunkEdit("latest", "c0", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
+                Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle"), TextHash.sha256("PostgreSQL 사용\ndriver: org.postgresql.Driver"));
+    }
 }

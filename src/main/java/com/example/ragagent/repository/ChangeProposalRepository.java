@@ -14,6 +14,8 @@ import java.util.List;
 public class ChangeProposalRepository {
 
     public static final String KIND_LITERAL = "literal";
+    /** LLM 이 치환 결과를 한 번 더 고친 수정안 — 항상 "검토 필요". 변환 MD 에는 되쓰지 못한다. */
+    public static final String KIND_SEMANTIC = "semantic";
 
     public static final String PENDING = "pending";
     public static final String APPROVED = "approved";

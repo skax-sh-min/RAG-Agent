@@ -82,13 +82,13 @@ class AdminChangeControllerTest {
         mvc.perform(get("/admin/change-jobs/5").with(user(USER))).andExpect(status().isForbidden());
         mvc.perform(post("/admin/change-requests").with(user(USER)).with(csrf()).param("instruction", "x"))
                 .andExpect(status().isForbidden());
-        verify(workflow, never()).start(any(), any(), any(), any(), any());
+        verify(workflow, never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
     }
 
     @Test
     @DisplayName("요청은 CSRF 토큰이 있어야 하고, 성공하면 작업 화면으로 넘어간다")
     void requestRequiresCsrfAndRedirects() throws Exception {
-        when(workflow.start(eq("root"), eq("PostgreSQL 을 Oracle 로"), eq("PostgreSQL"), eq("Oracle"), any()))
+        when(workflow.start(eq("root"), eq("PostgreSQL 을 Oracle 로"), eq("PostgreSQL"), eq("Oracle"), eq(false), any()))
                 .thenReturn(new MaintenanceWorkflow.Started(5, "running"));
 
         mvc.perform(post("/admin/change-requests").with(user(ADMIN))
@@ -103,11 +103,11 @@ class AdminChangeControllerTest {
     @Test
     @DisplayName("진행 중 요청·잘못된 요청은 오류 코드로 목록에 돌아간다")
     void busyAndInvalidRedirectBack() throws Exception {
-        when(workflow.start(any(), any(), any(), any(), any())).thenThrow(new IllegalStateException("busy"));
+        when(workflow.start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenThrow(new IllegalStateException("busy"));
         mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf()).param("instruction", "x"))
                 .andExpect(header().string("Location", "/admin/change-jobs?error=busy"));
 
-        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad")).when(workflow).start(any(), any(), any(), any(), any());
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("bad")).when(workflow).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
         mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf()).param("instruction", "x"))
                 .andExpect(header().string("Location", "/admin/change-jobs?error=invalid"));
     }
@@ -204,5 +204,57 @@ class AdminChangeControllerTest {
                 .andExpect(status().isOk()).andExpect(content().string(containsString("every 3s")));
         mvc.perform(get("/admin/change-jobs/7").with(user(ADMIN))).andExpect(status().isNotFound());
         mvc.perform(get("/admin/change-jobs/8").with(user(ADMIN))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("의미 변경 체크박스가 켜지면 semantic=true 로 시작한다 — 요청 폼에 체크박스와 안내가 있다")
+    void semanticCheckboxIsPassedThrough() throws Exception {
+        when(workflow.start(eq("root"), eq("x"), eq("ABC"), eq("XYZ"), eq(true), any()))
+                .thenReturn(new MaintenanceWorkflow.Started(9, "running"));
+        when(jobs.recentByKind(any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+
+        mvc.perform(post("/admin/change-requests").with(user(ADMIN)).with(csrf())
+                        .param("instruction", "x").param("from", "ABC").param("to", "XYZ").param("semantic", "true"))
+                .andExpect(header().string("Location", "/admin/change-jobs/9"));
+        mvc.perform(get("/admin/change-jobs").with(user(ADMIN)))
+                .andExpect(content().string(containsString("name=\"semantic\"")))
+                .andExpect(content().string(containsString("검토해야 합니다")));
+    }
+
+    @Test
+    @DisplayName("의미 변경 수정안은 배지로 구분되고 리포트에 시도·제안 수와 건너뛴 사유가 보인다")
+    void semanticProposalsAreMarkedAndReported() throws Exception {
+        String report = """
+                {"instruction":"x","from":"PostgreSQL","to":"Oracle","mentions":2,"truncated":false,"tooShort":false,
+                 "proposals":2,"unchanged":0,"manualCurated":0,"discarded":[],
+                 "semantic":true,"semanticTried":2,"semanticProposed":1,
+                 "semanticSkipped":[{"file":"guide.pdf","chunkId":"c2","reason":"가드 위반 — 새 말이 줄었다"}]}""";
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", report)));
+        ChangeProposalRepository.Proposal literal = proposal();
+        ChangeProposalRepository.Proposal semantic = new ChangeProposalRepository.Proposal(2, 5, "d1", "guide.pdf", "c3", "semantic",
+                "PostgreSQL 드라이버", "Oracle 드라이버(ojdbc)", "h", null, null, null, null, "검토 필요", "pending",
+                null, null, null, null, "t");
+        when(proposals.listByJob(5L)).thenReturn(List.of(literal, semantic));
+
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("의미 변경 · 검토 필요")))
+                .andExpect(content().string(containsString("글자 치환")))
+                .andExpect(content().string(containsString("2곳을 AI 가 검토해 1곳을 제안했습니다")))
+                .andExpect(content().string(containsString("가드 위반 — 새 말이 줄었다")));
+    }
+
+    @Test
+    @DisplayName("옛 리포트(의미 변경 필드가 없는)도 그대로 그려진다")
+    void reportsWithoutSemanticFieldsStillRender() throws Exception {
+        String old = "{\"instruction\":\"x\",\"from\":\"A\",\"to\":\"B\",\"mentions\":1,\"truncated\":false,\"tooShort\":false,"
+                + "\"proposals\":1,\"unchanged\":0,\"manualCurated\":0,\"discarded\":[]}";
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", old)));
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal()));
+
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("1곳의 수정안을 만들었습니다")))   // 리포트가 실제로 읽혔다(null 이면 이 줄이 없다)
+                .andExpect(content().string(not(containsString("AI 가 검토해"))));
     }
 }
