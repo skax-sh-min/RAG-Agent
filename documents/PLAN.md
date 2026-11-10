@@ -17,7 +17,7 @@
 
 > **최근 완료 요약 (최신순)** — 아래는 날짜별 한두 문장 요약이다. 구현 설명·측정·열린 항목은 각 § 절과 [PITFALLS.md](PITFALLS.md), 측정 보고서에 있다. 압축 전 전문은 커밋 `d1f7290` 의 이 대시보드에 있다.
 >
-> - **2026-11-06 §6.33 Agent·MCP 전환** — 0단계(블로킹 호출 `model` 누락 → `ModelPinningChatModel`) · Phase 1a 검색 개선(`HybridSearchService` 추출 · 교차 인코더 리랭커 · 재검색 루프 · `/settings` 표시) · 1b 읽기 Tool 계층 · 2 MCP 서버 · 3 사전 평가(프롬프트 JSON 으로 결정). 진행 상태와 남은 것은 §6.33 절과 아래 "진행할 것".
+> - **2026-11-06 §6.33 Agent·MCP 전환** — 0단계(블로킹 호출 `model` 누락 → `ModelPinningChatModel`) · Phase 1a 검색 개선(`HybridSearchService` 추출 · 교차 인코더 리랭커 · 재검색 루프 · `/settings` 표시) · 1b 읽기 Tool 계층 · 2 MCP 서버 · 3 사전 평가(프롬프트 JSON 으로 결정) · 11-10 3단계 Tool 선택 구현(`TOOL` 노드, 기본 꺼짐). 진행 상태와 남은 것은 §6.33 절과 아래 "진행할 것".
 > - **2026-11-04 §6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집** — 질문 한도 2,000 → 10,000자(`QuestionLimit` 가 창 기준으로도 거절) · 500자 초과 질문의 2단계 검색 질의(`LongQuestionQuery`) · 답변·검증 프롬프트 전용 이미지 마커 축약 · 그림 설명 `형식: 한두 문장` 단일화 · `/admin` 청크 그림 편집. 화면: `/settings` "화면 표시" 카드 재배치 · `/admin` 레이아웃 · 컨텍스트 창 미탐지 표기. 열린 항목은 §6.32 끝.
 > - **2026-10-27 §6.31 이력 제외 체크박스** · **10-26 §6.30 프롬프트 축소 사다리**(`PromptLadder` + 검증 실패 재시도 A~D) — 각 절 참고. 측정은 [PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md). 측정 중 재시도 규칙 D 의 왕복 결함을 찾아 고쳤다.
 > - **2026-10-23** `/settings` LLM 라우팅 표의 **프로바이더 편집**(`ProviderCatalog`, Flyway V10 — 컨텍스트만 저장 즉시, 나머지는 재기동 때 · API 키는 화면에서 받지 않는다) + **16K 미만 경고를 재탐지에도**. **범위 변경(운영 결정)**: `app.llm.max-tokens` 허용 범위 8,000~64,000 → 지원하는 최소 창 16K (PITFALLS §6.26 A6).
@@ -50,7 +50,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 0 | **§6.33 0단계 — 선결 결함** (블로킹 호출의 `model` 누락) | ✅ 2026-11-06 요청 본문으로 확인하고 `ModelPinningChatModel` 로 수정. 검색 기준선도 같은 날 기록([SEARCH_EVALUATION.md](SEARCH_EVALUATION.md) §7) |
-| 1 | **§6.33 Agent·MCP 전환** — 검색 개선(Retriever + Reranker + 재검색) → Tool 계층 → MCP Server · Tool 선택 · 영향도·유지보수 | 🟡 2026-11-05 설계 → 11-06 1a(리랭커·재검색 루프)·1b(읽기 Tool)·2(MCP 서버) 구현, 3 사전 평가 완료(프롬프트 JSON). 남은 것: 후속 질문 recall 0.85(1a) · Tool 선택 구현(3) · 워크플로(4) · 추적 패널(5). 단계별 상태는 §6.33. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
+| 1 | **§6.33 Agent·MCP 전환** — 검색 개선(Retriever + Reranker + 재검색) → Tool 계층 → MCP Server · Tool 선택 · 영향도·유지보수 | 🟡 2026-11-05 설계 → 11-06 1a(리랭커·재검색 루프)·1b(읽기 Tool)·2(MCP 서버) 구현, 3 사전 평가 완료(프롬프트 JSON). 남은 것: 후속 질문 recall 0.85(1a) · 3단계 앱 경로 실측(`app.agent.enabled=true` 로 49건 질문을 채팅 경로로) · 워크플로(4) · 추적 패널(5). 단계별 상태는 §6.33. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
 | ~~1~~ | ~~**§10.11 좋아요 → 지식 제안 경유**~~ | ✅ 2026-09-02 완료 (5단계 + 정책 3건 전부) |
 | ~~1~~ | ~~**§10.12 짧은 후속 질문의 독립화**~~ | ✅ 2026-09-03 완료 (재작성 → 검색 축 셋 + 분류기, 진단 한 줄, 열린 항목 (b) 해소). 2026-10-13 측정: 원문보다 1~2건 낫고 주제 전환에서 손해 없음 — 대안(이어 붙이기 · 함께 검색 · 되풀이 가드) 대신 그대로 두기로 결정(열린 항목 (e) 닫음) |
 | ~~2~~ | ~~**§10.13 Direct 턴의 이력 확대**~~ | ✅ 2026-09-03 완료 (1단계 프롬프트 + 예산/렌더 규칙 + Direct 안전망) |
@@ -571,7 +571,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 - 새 설명 프롬프트의 **실제 출력 품질**과 이미 인덱싱된 문서의 옛 설명은 재인덱싱(↺)·「설명 생성」을 해야 바뀐다(`image_descriptions` 캐시의 옛 행도).
 - 청크 편집에서 마커를 지워도 `images/chunks/` 의 파일은 남는다(다른 청크가 같은 그림을 쓸 수 있고 저장 전에는 되돌릴 수 있다) — 고아 정리는 없다.
 
-### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 진행 중 — 설계 2026-11-05, 0단계·1a·1b·2 구현·3 사전 평가 완료 2026-11-06 (Tool 선택·워크플로 미착수)
+### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 진행 중 — 설계 2026-11-05, 0단계·1a·1b·2 구현·3 사전 평가 완료 2026-11-06 (워크플로 미착수 · Tool 선택 구현 2026-11-10)
 
 **무엇을 왜.** 지금 `AgentGraph` 는 고정 순서로 돌고 LLM 이 도구를 고르지 않는다. LLM 이 Tool 을 골라 문서 검색·카탈로그 조회로 답하고, 그 위에서 영향도 분석과 문서 유지보수까지 지원하는 구조로 옮긴다. 이 절은 결정과 진행을 추적한다. 구조·Tool 명세·시퀀스·클래스·리스크·실측 표는 [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) 에 있다.
 
@@ -598,7 +598,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 | 1a | `HybridSearchService` 추출 · `ChunkReranker`, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` · 하네스 확장(recall@3·5·10, 리랭크·재검색 켬/끔) · 리랭크를 켜기 전 여러 청크 질문 골든셋 | 끄면 기존 결과 그대로 · 켜면 골든셋 recall@5 가 끔의 recall@10 이상, 후속 질문 recall@5 0.85 이상 · 리랭커 장애 시 현재 동작 | 🟡 진행 — 추출·교차 인코더·검색 연결·`/settings` 표시·재검색 루프·하네스 확장·여러 청크 세트 구현 완료(2026-11-06). 골든셋 recall@5 1.000(≥ 끔의 @10)과 여러 청크 coverage 0.903 · complete 0.833(끔 컷 10: 0.861 · 0.667)은 충족했으나 **후속 질문 pipeline 0.714 로 "recall@5 0.85 이상"은 미충족**, 재검색의 순효과는 표본으로 증명되지 않았다([SEARCH_EVALUATION §7.6](SEARCH_EVALUATION.md)). **11-06 독립화 가드 셋(되풀이·표지·말을 거는 응답)과 독립화 점수가 낮을 때의 원문 시험으로 pipeline 0.762~0.810(+1~2건)** — 목표는 여전히 미충족, 남은 놓침은 독립화가 틀렸는데 점수가 문턱 이상인 경우 등([§7.7](SEARCH_EVALUATION.md)). 남은 것: 후속 질문 목표 달성 방안(독립화 점수와 무관한 원문 병행 검색 — 호출 +1), `SourceRef` 점수와 `/admin` 진단, `ChunkReranker` 인터페이스(1b), 리랭크 기본값을 켜기 전 컷 6~7 재측정 |
 | 1b | Tool 계층(`ToolCatalog`, `ToolGuard`, 읽기 Tool) | 권한 거부 테스트 · `curated` 네임스페이스와 민감 테이블에 닿지 않음을 고정 | 🟡 진행 — 구현 완료(2026-11-06): 읽기 Tool 여섯 · 권한·경계 테스트 50건. 아직 어떤 요청에서도 불리지 않는다(채팅 `TOOL` 노드·MCP 는 3·2단계). 미룬 것: `findMentions`(소비자가 4단계) |
 | 2 | MCP Server(전용 보안 체인 · API 키 · `mcp` 레이트리밋 버킷) | 세 보안 모드의 401·권한 거부를 고정 · 외부 클라이언트의 `tools/call` 동작 | 🟡 진행 — 구현 완료(2026-11-06, 기본 꺼짐): 전용 체인 · API 키 · `mcp` 버킷 · 네 모드 보안 테스트 · 직접 만든 JSON-RPC 로 `initialize`/`tools/list`/`tools/call` 왕복 확인. **MCP Inspector·Claude Code 로의 연결은 아직 확인하지 않았다** |
-| 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | 🟡 진행 — **사전 평가 완료(2026-11-06)**: 이 서버·모델(llama-server b11960 · gemma-4-E2B)에서 네이티브 Tool Calling 은 정확도 0.20 · 형식 실패 0.59 로 쓸 수 없고 **프롬프트 JSON 은 0.939 · 우회 0 · 형식 실패 0** → 방식은 프롬프트 JSON. 비교 모델 e4b · 31b 는 띄워져 있지 않아 미측정([AGENT_EVALUATION.md](AGENT_EVALUATION.md)). `ToolPlanService` · `TOOL` 노드 구현은 미착수 |
+| 3 | 사전 평가(Tool 골든셋 · 모델 비교로 방식 결정) → Tool 선택(`ToolPlanService`, `TOOL` 노드) | 사전 평가를 `AGENT_EVALUATION.md` 에 기록 · 꺼짐 동작 불변 · 실패 주입에서 답변이 나오고 프로바이더가 차단되지 않음 | ✅ 구현 완료 2026-11-10(앱 경로 실측 남음) — **사전 평가 완료(2026-11-06)**: 이 서버·모델(llama-server b11960 · gemma-4-E2B)에서 네이티브 Tool Calling 은 정확도 0.20 · 형식 실패 0.59 로 쓸 수 없고 **프롬프트 JSON 은 0.939 · 우회 0 · 형식 실패 0** → 방식은 프롬프트 JSON. 비교 모델 e4b · 31b 는 띄워져 있지 않아 미측정([AGENT_EVALUATION.md](AGENT_EVALUATION.md)). **2026-11-10 구현 완료(기본 꺼짐)**: `ToolPlanService`(프롬프트 JSON, `CONDENSE` 사이트 재사용 — 새 사이트 없음) · `ToolDispatchService` · `AgentGraph` 의 `TOOL` 노드 · `AgentState.toolPlan` · `app.agent.enabled`(`AGENT_ENABLED`). 선택지는 `searchKnowledge`·`findRelatedDocuments`·`queryCatalog` 셋(워크플로 Tool 은 4단계 뒤), N 모드 RAG 턴만(`ResponseMode.allowsAgent()`). 꺼짐 동작 불변·실패 주입(호출 실패·잘못된 JSON·모르는/권한 없는 Tool·인자 오류·Tool 예외 → 전부 `RETRIEVAL`)을 단위 테스트로 고정(전체 3,158건 통과). **실서버에서의 선택 정확도(앱 경로)과 켠 상태의 실사용 관측은 아직 하지 않았다** |
 | 4 | 영향도 워크플로, 그다음 유지보수 워크플로(`change_job`, `change_proposal`, `/admin` 대기열) | 승인 없이 코퍼스 불변 · 재인덱싱 뒤 MD 수정 유지 · 경합은 `stale` | 🔵 미착수 |
 | 5 | Tool 호출 추적 패널 · 매뉴얼 · 단계적 전환 | 2주 관측 · 설정 하나로 기존 경로 복귀 | 🔵 미착수 |
 

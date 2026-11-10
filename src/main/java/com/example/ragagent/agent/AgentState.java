@@ -4,6 +4,7 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SentPrompt;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.tool.ToolPlan;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
@@ -83,6 +84,9 @@ public record AgentState(
         String searchKeywords        // 긴 질문(LongQuestionQuery) — 키워드(BM25) 축이 쓸 검색어(공백으로 이은 낱말). 벡터 축·리랭커·
                                      // 분류기가 쓰는 짧은 검색문은 searchQuestion 에 실린다. null = 해당 없음(키워드 축도
                                      // effectiveSearchQuestion() 을 쓴다) — effectiveKeywordQuestion() 참고
+        ,
+        ToolPlan toolPlan            // §6.33 3단계 — 모델이 고른 Tool(프롬프트 JSON). null = 고르지 않았거나 읽지 못했거나 기능이 꺼짐
+                                     // → 그래프는 기존 RETRIEVAL 로 간다. 검색 Tool 이면 역시 RETRIEVAL, 그 밖의 Tool 이면 TOOL 노드
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -130,7 +134,7 @@ public record AgentState(
                 routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
                 0, List.of(), null, null,
-                null, null, false, 0, null);
+                null, null, false, 0, null, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -263,6 +267,7 @@ public record AgentState(
         private boolean excludeHistory;
         private int historyBoost;
         private String searchKeywords;
+        private ToolPlan toolPlan;
 
         Builder() {}
 
@@ -305,6 +310,7 @@ public record AgentState(
             this.excludeHistory     = s.excludeHistory;
             this.historyBoost       = s.historyBoost;
             this.searchKeywords     = s.searchKeywords;
+            this.toolPlan           = s.toolPlan;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -342,6 +348,7 @@ public record AgentState(
         public Builder excludeHistory(boolean v)           { this.excludeHistory = v;     return this; }
         public Builder historyBoost(int v)                 { this.historyBoost = v;       return this; }
         public Builder searchKeywords(String v)            { this.searchKeywords = v;     return this; }
+        public Builder toolPlan(ToolPlan v)                { this.toolPlan = v;           return this; }
         /**
          * 이 시도가 본 문서로 이 반려를 기억한다 — 재시도를 거는 분기에서만 부른다(§6.27 조기 종료). 본 문서는 답변 프롬프트에
          * 실린 집합이다(§6.30 B, {@link AgentState#repeatsLastRejection} 와 같은 키).
@@ -369,7 +376,7 @@ public record AgentState(
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
                     retrievalRetries, excludedDocIds, searchQuestion, lastRejection,
-                    lastSent, lastAnswerDigest, excludeHistory, historyBoost, searchKeywords);
+                    lastSent, lastAnswerDigest, excludeHistory, historyBoost, searchKeywords, toolPlan);
         }
     }
 }

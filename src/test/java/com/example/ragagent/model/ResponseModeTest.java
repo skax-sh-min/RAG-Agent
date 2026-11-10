@@ -186,4 +186,12 @@ class ResponseModeTest {
         assertThat(ResponseMode.S.directSystemPromptKey()).isEqualTo("prompt.direct.system.s");
         assertThat(ResponseMode.N.directSystemPromptKey()).isEqualTo("prompt.direct.system.n");
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("§6.33 — Tool 선택은 표준(N) 모드만 허용한다(S 는 검증 없는 요약, C 는 응용 답변)")
+    void allowsAgent_onlyStandardMode() {
+        org.assertj.core.api.Assertions.assertThat(ResponseMode.N.allowsAgent()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(ResponseMode.S.allowsAgent()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(ResponseMode.C.allowsAgent()).isFalse();
+    }
 }

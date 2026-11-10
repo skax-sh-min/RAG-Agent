@@ -512,6 +512,19 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **`DocumentExportService.reassembledText()`** — 내보내기와 같은 재조립(overlap 되돌리기)과 결정적 후처리까지만 하고 렌더는 하지 않는다. 문서 전체를 메모리에 올리므로 `getDocument` 는 ADMIN 전용이고 8,000자씩 구간으로만 돌려준다(오래 걸리는 조회를 Tool 로 내지 않는다는 DB 연결 1개 제약, 설계서 §2.2).
 - **하지 않은 것(1b 에서 미룸).** `KeywordSearchRepository.findMentions()` — 소비자(`analyzeImpact`)가 Phase 4 라 그때 만든다. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` — 워크플로(Phase 4)가 있어야 한다. `ToolCatalog.mcpExposedTools()` — Phase 2. `ChunkReranker` 인터페이스 — `KnowledgeSearchTool` 이 지금은 `CrossEncoderReranker` 를 직접 쓴다(두 번째 구현이 필요해질 때). 전송(채팅 `TOOL` 노드·MCP)에 연결하지 않았으므로 **이 Tool 들은 아직 어떤 요청에서도 불리지 않는다.**
 
+### Tool 선택 (3단계) — `ToolPlanService` · `ToolDispatchService`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §5.1 · [AGENT_EVALUATION](AGENT_EVALUATION.md). **기본 꺼짐**(`app.agent.enabled=false`) — 꺼져 있으면 추가 LLM 호출도, `TOOL` 노드 진입도 없어 채팅이 이전과 같다.
+
+- **프롬프트 JSON 이다, 네이티브가 아니다.** 사전 평가에서 이 서버·모델의 네이티브 Tool Calling 은 0.20(형식 실패 0.59), 프롬프트 JSON 은 0.939 · 우회 0. 그래서 요청에 `tools` 를 싣지 않고, "서버가 `tools` 를 거부하면 기억" 같은 설계서 초안의 처리와 계측 3곳(`CalibratingChatModel`·`LlmCurlLogger`·`ThinkingObservations`)의 Tool 메시지 대응이 필요 없다. 네이티브로 바꾸려면 e4b 이상 모델에서 같은 하네스로 다시 잰 뒤에.
+- **새 `ThinkingSite` 를 만들지 않았다.** `CONDENSE` 를 쓴다(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 · `MICRO_TEXT`). 사이트를 더하면 `/settings` 생각 카드 · 미리보기의 exhaustive `switch` · 문서의 "21곳"이 함께 바뀌는데 얻는 것은 별도 손잡이 하나뿐이다. 대가: **라우팅이 대화 모드를 따르지 않는다**(분류기·독립화와 같다 — LOCAL_ONLY 대화에서도 `COST_FIRST` 로 라우팅되는 기존 한계를 이 호출도 가진다). 손잡이가 필요해지면 사이트를 따로 만들 것.
+- **어떤 실패도 턴을 실패시키지 않는다.** `plan()` 은 호출 예외를 삼키고 "계획 없음 · 호출 안 함"을 돌려준다 — 소진·게이트 대기 초과 같은 진짜 장애는 이어지는 기존 `RETRIEVAL` 이 기존 방식으로 보고한다. `NONE` 도 잡담이 아니라 **검색**이다(설계서 D3 — 소형 모델의 실수가 근거 없는 답변이 되지 않게).
+- **보이는 Tool 과 실행 권한이 둘 다 막는다.** 프롬프트에는 `PLANNABLE` ∩ `ToolCatalog.forCaller()` 만 실리고(영향도·유지보수 Tool 은 4단계 뒤), 파싱은 보이지 않는 이름·스키마 밖 인자·빈 필수 인자를 버리고, 실행은 `ToolCatalog.call` 의 권한 검사를 다시 지난다. **채팅 호출자는 `new ToolCaller(userId, false, "chat")`** — 관리자 여부를 채팅으로 올리지 않는다(`ToolPlanService.planFor`/`ToolDispatchService` 가 같은 모양). 관리자에게 관리자 Tool 을 열려면 요청 스레드에서 호출자를 만들어 상태로 실어야 한다(SSE 워커에는 `SecurityContext` 가 없다).
+- **Tool 결과는 `retrievedDocs` 로, `sources` 는 비운다.** 답변·검증·사다리는 그대로 이 문서 하나를 근거로 읽는다. 출처가 비어 `turn_source_ref` 가 만들어지지 않으므로 낡는 카탈로그 답변이 **재사용 후보가 되지 않는다**. 대가: 출처 패널이 비고, 응답 참여도(`AnswerAttribution`)는 문서 하나에 대해서만 계산된다. 알려진 점: `sufficient=false` 로 `RETRIEVAL` 로 내려가면 그 턴은 `retrievalRetries>0` 이라 **재검색 루프(첫 RETRIEVAL 한정)를 타지 않는다**.
+- **`afterClassify` 의 조건 셋**: `toolDispatchService != null`(TOOL 노드가 없는 구성은 계획을 무시) · `retrievalRetries()==0 && retrievedDocs().isEmpty()`(재진입 방지) · `meta` 가 먼저. 검색 Tool(`searchKnowledge`)은 `routesToToolNode()==false` 라 늘 하던 경로다.
+- **번들 함정.** 프롬프트는 여러 줄이라 줄 끝 `\n\` 가 필수다 — 처음에 스크립트 이스케이프가 그것을 지워 첫 줄만 값이 됐고 `MessageBundleConventionTest` 가 잡았다. 테스트는 목이 아니라 **실제 번들**로 `{tools}`·`{rules}` 치환과 한/영 키 짝을 확인한다.
+- **열린 항목.** 앱 경로 실측(`AGENT_ENABLED=true` 로 `tool-gold.json` 49건을 채팅 경로로) · 영향도·유지보수 Tool 이 생기면 `PLANNABLE`·규칙 키·`ToolCatalog.ACCESS` 를 함께 · 추적 패널(5단계).
+
 ### MCP 서버 (Phase 2)
 
 [AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §4.2. 1b 의 `ToolCatalog` 를 `/api/v1/mcp` 로 공개한다. **기본 꺼짐** — `MCP_SERVER_ENABLED=false` 이면 `McpSecurityConfig`·`McpToolsConfig` 가 `@ConditionalOnProperty` 라 체인·필터·`ToolCallbackProvider` 가 없고, 스타터의 자동 구성도 `spring.ai.mcp.server.enabled` 로 꺼진다(`McpServerWiringTest.nothingIsRegisteredWhenDisabled`).

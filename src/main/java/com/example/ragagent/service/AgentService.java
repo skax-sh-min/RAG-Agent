@@ -10,6 +10,7 @@ import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
+import com.example.ragagent.tool.ToolPlanService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -98,6 +99,14 @@ public class AgentService {
         this.questionLimit = questionLimit;
     }
 
+    /** §6.33 3단계 — Tool 선택. 세터 주입인 이유는 {@link #setQuestionLimit} 와 같다. null 이면 이 단계 없이 늘 하던 대로다. */
+    private ToolPlanService toolPlanService;
+
+    @Autowired(required = false)
+    public void setToolPlanService(ToolPlanService toolPlanService) {
+        this.toolPlanService = toolPlanService;
+    }
+
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
         if (questionLimit != null) {
             questionLimit.validate(request.question(), request.directMode(), request.routingMode(),
@@ -133,6 +142,12 @@ public class AgentService {
                     CompletableFuture<String> typeF = condensedF.thenApplyAsync(
                             c -> classifierService.classifyOnly(
                                     c == null ? request.question() : c.searchQuestion(), ctx.locale()), exec);
+                    // §6.33 3단계 — Tool 선택도 같은 사전 단계에서 분류와 병렬로(독립화된 질문을 본다). 꺼져 있거나 적용 대상이
+                    // 아니면 LLM 을 부르지 않는다.
+                    CompletableFuture<ToolPlanService.Planned> planF = condensedF.thenApplyAsync(
+                            c -> toolPlanService == null ? ToolPlanService.Planned.none()
+                                    : toolPlanService.planFor(false, request.responseMode(),
+                                            c == null ? request.question() : c.searchQuestion(), userId, ctx.locale()), exec);
                     QuestionCondenser.Condensed condensed = condensedF.join();
                     AgentState.Builder builder = AgentState.of(
                             request.question(),
@@ -150,6 +165,9 @@ public class AgentService {
                                .searchKeywords(condensed.searchKeywords())
                                .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
                     }
+                    ToolPlanService.Planned planned = planF.join();
+                    builder.toolPlan(planned.plan());
+                    if (planned.called()) builder.accumulateTokens(planned.inputTokens(), planned.outputTokens());
                     initial = builder.build();
                 }
             } catch (CompletionException e) {

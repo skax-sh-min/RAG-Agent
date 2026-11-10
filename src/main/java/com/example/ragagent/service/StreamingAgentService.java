@@ -14,6 +14,7 @@ import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.web.MdcPropagation;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.tool.ToolPlanService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -171,6 +172,14 @@ public class StreamingAgentService {
      */
     private QuestionLimit questionLimit;
 
+    /** §6.33 3단계 — Tool 선택(블로킹 경로와 같다). null 이면 이 단계 없이 늘 하던 대로다. */
+    private ToolPlanService toolPlanService;
+
+    @Autowired(required = false)
+    public void setToolPlanService(ToolPlanService toolPlanService) {
+        this.toolPlanService = toolPlanService;
+    }
+
     @Autowired(required = false)
     public void setQuestionLimit(QuestionLimit questionLimit) {
         this.questionLimit = questionLimit;
@@ -252,6 +261,12 @@ public class StreamingAgentService {
                                 c -> classifierService.classifyOnly(
                                         c == null ? form.question() : c.searchQuestion(), locale), exec);
 
+                        // §6.33 3단계 — Tool 선택(블로킹 경로와 같다).
+                        CompletableFuture<ToolPlanService.Planned> planF = condensedF.thenApplyAsync(
+                                c -> toolPlanService == null ? ToolPlanService.Planned.none()
+                                        : toolPlanService.planFor(false, form.responseModeOrDefault(),
+                                                c == null ? form.question() : c.searchQuestion(), userId, locale), exec);
+
                         QuestionCondenser.Condensed condensed = condensedF.join();
                         AgentState.Builder builder =
                                 AgentState.of(form.question(), form.version(), form.threadId(),
@@ -262,6 +277,9 @@ public class StreamingAgentService {
                                    .searchKeywords(condensed.searchKeywords())
                                    .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
                         }
+                        ToolPlanService.Planned planned = planF.join();
+                        builder.toolPlan(planned.plan());
+                        if (planned.called()) builder.accumulateTokens(planned.inputTokens(), planned.outputTokens());
                         initial = builder.build();
                     }
                 } catch (CompletionException e) {
@@ -494,6 +512,7 @@ public class StreamingAgentService {
             return switch (nodeId) {
                 case "classifier" -> "질문 분류 중...";
                 case "retrieval"  -> "관련 문서 검색 중...";
+                case "tool"       -> "도구로 조회 중...";
                 case "answer"     -> "답변 생각 중...";
                 case "critic"     -> "답변 검증 중...";
                 default           -> nodeId;
