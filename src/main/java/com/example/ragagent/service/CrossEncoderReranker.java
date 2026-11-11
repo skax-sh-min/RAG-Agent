@@ -3,7 +3,9 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.HttpClientTimeouts;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
+import com.example.ragagent.llm.LlmPing;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ServerModelResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -79,10 +81,13 @@ public class CrossEncoderReranker {
         final AtomicInteger inFlight = new AtomicInteger();
         /** 건너뛰기 창의 만료 시각({@code nanoClock} 기준). 0 = 건너뛰지 않음. */
         final AtomicLong blockedUntil = new AtomicLong();
+        /** 요청에 실을 모델명을 정한다 — 설정한 이름이 서버 목록의 id 에 포함되면 그 id. {@code null} = 풀지 않는다(설정 그대로). */
+        final ServerModelResolver resolver;
 
-        Target(String label, RestClient client) {
+        Target(String label, RestClient client, ServerModelResolver resolver) {
             this.label = label;
             this.client = client;
+            this.resolver = resolver;
         }
     }
 
@@ -95,11 +100,21 @@ public class CrossEncoderReranker {
 
     @Autowired
     public CrossEncoderReranker(AppProperties props) {
-        this(props, System::nanoTime);
+        this(props, System::nanoTime, true, null);
     }
 
-    /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. */
+    /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. 모델명은 풀지 않는다(서버로 목록 요청이 나가지 않는다). */
     CrossEncoderReranker(AppProperties props, LongSupplier nanoClock) {
+        this(props, nanoClock, false, null);
+    }
+
+    /** 테스트용 — 모델 목록을 묻는 함수(주소 → id 목록)를 바꿔 끼워 모델명 해석을 본다. */
+    CrossEncoderReranker(AppProperties props, java.util.function.Function<String, List<String>> lister) {
+        this(props, System::nanoTime, true, lister);
+    }
+
+    private CrossEncoderReranker(AppProperties props, LongSupplier nanoClock, boolean resolveModel,
+                                 java.util.function.Function<String, List<String>> lister) {
         AppProperties.RerankerConfig cfg = props.rerankerSafe();
         List<Target> built = new ArrayList<>();
         for (String url : props.rerankerBaseUrls()) {
@@ -107,7 +122,14 @@ public class CrossEncoderReranker {
                     .baseUrl(endpointBase(url));
             // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
             if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
-            built.add(new Target(url, builder.build()));
+            ServerModelResolver resolver = null;
+            if (resolveModel) {
+                String modelsBase = endpointBase(url) + "/v1";
+                String key = cfg.apiKey().isBlank() ? "no-key" : cfg.apiKey();
+                resolver = new ServerModelResolver(url, cfg.model(), lister != null
+                        ? () -> lister.apply(url) : () -> LlmPing.listModelIds(modelsBase, key, 3, 5));
+            }
+            built.add(new Target(url, builder.build(), resolver));
         }
         this.targets = List.copyOf(built);
         this.model = cfg.model();
@@ -142,11 +164,12 @@ public class CrossEncoderReranker {
         }
         if (!acquired) throw new UnavailableException("리랭커 동시 호출 자리를 " + timeoutSeconds + "초 안에 얻지 못했다");
         try {
-            String body = requestBody(query, candidates);
             UnavailableException last = null;
             for (Target t : order) {
                 t.inFlight.incrementAndGet();
                 try {
+                    // 이 서버가 아는 이름으로 — 첫 호출 때 한 번 /v1/models 로 풀린다(못 풀면 설정한 이름 그대로)
+                    String body = requestBody(query, candidates, t.resolver == null ? model : t.resolver.modelName());
                     String response = t.client.post().uri("/v1/rerank")
                             .contentType(MediaType.APPLICATION_JSON)
                             .body(body)
@@ -206,10 +229,14 @@ public class CrossEncoderReranker {
 
     /** 요청 본문 — 문서는 입력 순서 그대로이고 응답의 {@code index} 가 이 순서를 가리킨다. */
     String requestBody(String query, List<Document> candidates) {
+        return requestBody(query, candidates, model);
+    }
+
+    String requestBody(String query, List<Document> candidates, String modelName) {
         List<String> docs = new ArrayList<>(candidates.size());
         for (Document d : candidates) docs.add(textFor(d));
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", model);
+        body.put("model", modelName);
         body.put("query", truncate(query == null ? "" : query.strip(), MAX_QUERY_CHARS));
         body.put("documents", docs);
         body.put("top_n", docs.size());   // 자르기는 이쪽이 한다 — 서버의 top_n 해석에 기대지 않는다

@@ -718,6 +718,24 @@ class SettingsControllerRenderTest {
         assertThat(count(html, ">모델없음<")).as("모델이 없는 임베딩 한 곳만").isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("GET /settings/llm-status — 모델이 있는 주소의 '정상' 배지가 사라지지 않는다(주소마다 자기 배지가 한 개씩)")
+    void everyAddressKeepsItsOwnBadge() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of());
+        when(settingsService.embeddingEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.reachable(7L, false)),
+                new SettingsView.EndpointRow("http://e2:1/v1", SettingsView.ProviderConnection.unreachable("refused"))));
+        when(settingsService.rerankerEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://r1:1", SettingsView.ProviderConnection.reachable(9L, true))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(count(html, ">모델없음<")).isEqualTo(1);
+        assertThat(count(html, ">접속불가<")).isEqualTo(1);
+        assertThat(count(html, ">정상<")).as("모델이 있는 리랭커 주소의 정상 배지").isEqualTo(1);
+    }
+
     // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
 
     @Test

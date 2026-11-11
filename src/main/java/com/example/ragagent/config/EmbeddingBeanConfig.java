@@ -97,6 +97,18 @@ public class EmbeddingBeanConfig {
      *  reproduction of every embedding call, mirroring {@code LlmConfig}'s {@link
      *  com.example.ragagent.llm.LoggingChatModel} for chat calls. */
     private EmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
+        // 설정한 모델명이 서버 /v1/models 의 id 에 (대소문자 무시) 포함되면 그 id 로 요청한다 — 첫 호출 때 한 번 풀린다.
+        String apiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
+        String root = rawUrl.strip().replaceAll("/+$", "");
+        if (root.endsWith("/v1")) root = root.substring(0, root.length() - 3).replaceAll("/+$", "");
+        final String modelsBase = root + "/v1";
+        com.example.ragagent.llm.ServerModelResolver resolver = new com.example.ragagent.llm.ServerModelResolver(
+                rawUrl, model, () -> com.example.ragagent.llm.LlmPing.listModelIds(modelsBase, apiKey, 3, 5));
+        return new com.example.ragagent.llm.ModelResolvingEmbeddingModel(resolver,
+                name -> buildRawModelNamed(rawUrl, cfg, name), model);
+    }
+
+    private EmbeddingModel buildRawModelNamed(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
         String effectiveApiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
         // maxRetries=1 (i.e. one retry): the SDK default is 2, and a long retry chain on connection
         // failures (e.g. LM Studio not running) leaves the UI on "벡터 DB 저장 중..." for minutes. The

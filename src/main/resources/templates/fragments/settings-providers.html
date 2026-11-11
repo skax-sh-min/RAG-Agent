@@ -339,15 +339,13 @@
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
               th:title="#{settings.status.unreachable.hint(${conn.error ?: '-'})}"
               th:text="#{settings.status.unreachable}">Unreachable</span>
-        <!--/* 서버는 응답하는데 설정한 모델(EMBED_MODEL · RERANK_MODEL)이 /v1/models 목록에 없으면 "모델없음" — 정상과 구별한다 */-->
-        <span th:case="'OK'" th:if="${conn.modelMissing}" class="badge bg-warning text-dark"
+        <!--/* 서버는 응답하는데 설정한 모델(EMBED_MODEL · RERANK_MODEL)이 /v1/models 목록에 없으면 "모델없음" — 정상과 구별한다.
+             OK 칸은 span 하나로 둔다: th:case 가 붙은 두 span 에 th:if/th:unless 를 나눠 달면 첫 span 이 th:case 를 소비해
+             "정상" 배지가 통째로 사라진다. */-->
+        <span th:case="'OK'" class="badge" th:classappend="${conn.modelMissing} ? 'bg-warning text-dark' : 'bg-success'"
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
-              th:title="#{settings.status.aux-model-missing.hint(${conn.latencyMs})}"
-              th:text="#{settings.status.model-missing}">Model missing</span>
-        <span th:case="'OK'" th:unless="${conn.modelMissing}" class="badge bg-success"
-              data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
-              th:title="${#messages.msg('settings.status.normal.hint', conn.latencyMs)}"
-              th:text="#{llm.status.normal}">Normal</span>
+              th:title="${conn.modelMissing} ? ${#messages.msg('settings.status.aux-model-missing.hint', conn.latencyMs)} : ${#messages.msg('settings.status.normal.hint', conn.latencyMs)}"
+              th:text="${conn.modelMissing} ? #{settings.status.model-missing} : #{llm.status.normal}">Normal</span>
     </th:block>
 </span>
 
