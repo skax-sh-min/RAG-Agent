@@ -152,6 +152,11 @@ public class ToolPlanService {
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(userMessage)), options())));
             ToolPlan plan = parse(result.text(), visible);
+            if (plan != null && ToolDispatchService.IMPACT_TOOL.equals(plan.toolName()) && !asksAboutImpact(question)) {
+                // 수정 요청("A 를 B 로 바꿔줘")을 가장 가까운 Tool 로 받아 영향도 분석이 돌지 않게 한다 — 비관리자에게는 수정 Tool 이 안 보여 생기는 오선택이다.
+                log.info("[TOOL-PLAN] analyzeImpact 거절 — 질문에 영향을 묻는 표현이 없다");
+                plan = null;
+            }
             log.info("[TOOL-PLAN] tool={} args={}", plan == null ? "-" : plan.toolName(), plan == null ? "-" : plan.argumentsJson());
             return new Planned(plan, result.inputTokens(), result.outputTokens(), true);
         } catch (Exception e) {
@@ -160,6 +165,15 @@ public class ToolPlanService {
             log.warn("[TOOL-PLAN] Tool 선택 실패 — 검색으로 진행한다: {}", e.getMessage());
             return Planned.none();
         }
+    }
+
+    private static final java.util.regex.Pattern IMPACT_MARKER = java.util.regex.Pattern.compile(
+            "영향|범위|분석|어떤\\s*문서|어느\\s*문서|문서\\s*(중|가|는)?\\s*어디|어디가|어디를|impact|affect|which\\s+docs?|which\\s+documents?",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** 질문이 "바꾸면 어떤 문서가 영향을 받는가"를 묻는 표현을 담고 있는가 — 모델이 고른 {@code analyzeImpact} 를 코드가 한 번 더 확인하는 데 쓴다. */
+    static boolean asksAboutImpact(String question) {
+        return question != null && IMPACT_MARKER.matcher(question).find();
     }
 
     /** 이 호출자에게 보이는 채팅 선택지 — {@link #PLANNABLE} 순서. */

@@ -86,7 +86,9 @@ class ToolPlanAppPathEvaluationTest {
                 new KnowledgeSearchTool(null, Optional.empty(), null, null, guard),
                 new DocumentLookupTool(null, mock(DocumentExportService.class), guard),
                 new CatalogQueryTool(mock(CatalogQueryService.class), guard),
-                new DiffTool(guard));
+                new DiffTool(guard),
+                new com.example.ragagent.tool.change.ImpactAnalysisTool(mock(com.example.ragagent.workflow.ImpactAnalysisWorkflow.class), guard),
+                new com.example.ragagent.tool.change.ChangeRequestTool(mock(com.example.ragagent.workflow.MaintenanceWorkflow.class), guard));
         ResourceBundleMessageSource bundle = new ResourceBundleMessageSource();
         bundle.setBasename("messages");
         bundle.setDefaultEncoding("UTF-8");
@@ -109,43 +111,46 @@ class ToolPlanAppPathEvaluationTest {
             cases.add(new String[]{c.path("id").asString("doc"), "doc", "searchKnowledge", c.path("question").asString(c.path("query").asString())});
         }
 
-        Map<String, int[]> byKind = new LinkedHashMap<>();   // kind → {맞음, 전체}
-        int wrongDetour = 0, docTotal = 0, calls = 0, nullPlans = 0;
-        List<String> misses = new ArrayList<>();
-        long totalMs = 0;
-        for (String[] c : cases) {
-            long t0 = System.nanoTime();
-            ToolPlanService.Planned p = service.planFor(false, ResponseMode.N, c[3], "u", Locale.KOREAN);
-            totalMs += (System.nanoTime() - t0) / 1_000_000;
-            calls += p.called() ? 1 : 0;
-            ToolPlan plan = p.plan();
-            String picked = plan == null ? "NONE" : plan.toolName();
-            if (plan == null) nullPlans++;
-            // 채팅에서 고를 수 없는 기대(영향도·유지보수)는 "검색으로 내려감(NONE 또는 searchKnowledge)"이 맞다.
-            boolean chatTool = List.of("searchKnowledge", "findRelatedDocuments", "queryCatalog").contains(c[2]);
-            boolean ok = chatTool ? picked.equals(c[2]) || ("NONE".equals(c[2]) && picked.equals("NONE"))
-                    : (picked.equals("NONE") || picked.equals("searchKnowledge"));
-            if ("NONE".equals(c[2])) ok = picked.equals("NONE") || picked.equals("searchKnowledge");   // 잡담은 검색으로 가도 안전(NONE 이 이상적)
-            // 문서 질문이 검색이 아닌 Tool 로 우회하면 틀린 우회다.
-            if ("doc".equals(c[1])) {
-                docTotal++;
-                if (!picked.equals("NONE") && !picked.equals("searchKnowledge")) wrongDetour++;
-                ok = picked.equals("NONE") || picked.equals("searchKnowledge");
+        for (boolean admin : new boolean[]{false, true}) {
+            Map<String, int[]> byKind = new LinkedHashMap<>();   // kind → {맞음, 전체}
+            int wrongDetour = 0, docTotal = 0, calls = 0, nullPlans = 0;
+            List<String> misses = new ArrayList<>();
+            long totalMs = 0;
+            for (String[] c : cases) {
+                long t0 = System.nanoTime();
+                ToolPlanService.Planned p = service.planFor(false, ResponseMode.N, c[3], "u", admin, "t-" + c[0], Locale.KOREAN);
+                totalMs += (System.nanoTime() - t0) / 1_000_000;
+                calls += p.called() ? 1 : 0;
+                ToolPlan plan = p.plan();
+                String picked = plan == null ? "NONE" : plan.toolName();
+                if (plan == null) nullPlans++;
+                // 채팅에서 고를 수 없는 기대(영향도·유지보수)는 "검색으로 내려감(NONE 또는 searchKnowledge)"이 맞다.
+                boolean chatTool = List.of("searchKnowledge", "findRelatedDocuments", "queryCatalog", "analyzeImpact").contains(c[2])
+                        || ("requestDocumentChange".equals(c[2]) && admin);
+                boolean ok = chatTool ? picked.equals(c[2]) || ("NONE".equals(c[2]) && picked.equals("NONE"))
+                        : (picked.equals("NONE") || picked.equals("searchKnowledge"));
+                if ("NONE".equals(c[2])) ok = picked.equals("NONE") || picked.equals("searchKnowledge");   // 잡담은 검색으로 가도 안전(NONE 이 이상적)
+                // 문서 질문이 검색이 아닌 Tool 로 우회하면 틀린 우회다.
+                if ("doc".equals(c[1])) {
+                    docTotal++;
+                    if (!picked.equals("NONE") && !picked.equals("searchKnowledge")) wrongDetour++;
+                    ok = picked.equals("NONE") || picked.equals("searchKnowledge");
+                }
+                int[] k = byKind.computeIfAbsent(c[1], x -> new int[2]);
+                k[1]++;
+                if (ok) k[0]++; else misses.add(c[0] + " [" + c[1] + "] expected=" + c[2] + " picked=" + picked + " : " + c[3]);
             }
-            int[] k = byKind.computeIfAbsent(c[1], x -> new int[2]);
-            k[1]++;
-            if (ok) k[0]++; else misses.add(c[0] + " [" + c[1] + "] expected=" + c[2] + " picked=" + picked + " : " + c[3]);
+            StringBuilder sb = new StringBuilder("\n== 앱 경로 Tool 선택 (" + modelId + ") ==\n");
+            int right = 0, all = 0;
+            for (var e : byKind.entrySet()) {
+                sb.append(String.format("%-10s %d/%d%n", e.getKey(), e.getValue()[0], e.getValue()[1]));
+                right += e.getValue()[0];
+                all += e.getValue()[1];
+            }
+            sb.append(String.format("정확도(채팅 관점) %d/%d = %.3f  문서 질문의 잘못된 우회 %d/%d  LLM 호출 %d  계획 없음 %d  평균 %d ms%n",
+                    right, all, right / (double) all, wrongDetour, docTotal, calls, nullPlans, totalMs / Math.max(1, cases.size())));
+            misses.forEach(m -> sb.append("MISS ").append(m).append('\n'));
+            System.out.println(sb);
         }
-        StringBuilder sb = new StringBuilder("\n== 앱 경로 Tool 선택 (" + modelId + ") ==\n");
-        int right = 0, all = 0;
-        for (var e : byKind.entrySet()) {
-            sb.append(String.format("%-10s %d/%d%n", e.getKey(), e.getValue()[0], e.getValue()[1]));
-            right += e.getValue()[0];
-            all += e.getValue()[1];
-        }
-        sb.append(String.format("정확도(채팅 관점) %d/%d = %.3f  문서 질문의 잘못된 우회 %d/%d  LLM 호출 %d  계획 없음 %d  평균 %d ms%n",
-                right, all, right / (double) all, wrongDetour, docTotal, calls, nullPlans, totalMs / Math.max(1, cases.size())));
-        misses.forEach(m -> sb.append("MISS ").append(m).append('\n'));
-        System.out.println(sb);
     }
 }
