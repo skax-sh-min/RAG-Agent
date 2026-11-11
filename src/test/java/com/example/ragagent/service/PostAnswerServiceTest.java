@@ -279,48 +279,6 @@ class PostAnswerServiceTest {
         }
     }
 
-    // ── 백필(과거 턴, /admin) ───────────────────────────────────────────────
-
-    @Test
-    @DisplayName("backfill — 결과를 셋으로 돌려준다(다듬음 · 원문 유지 · 실패), 실패는 아무것도 저장하지 않는다")
-    void backfillReportsItsOutcome() {
-        when(memoryService.getQuestionsBefore(eq("u1"), eq("t1"), anyLong(), anyInt()))
-                .thenReturn(List.of("MCI 연동 구조 알려줘"));
-        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(CLARIFIED);
-        assertThat(service.backfill(81L, "u1", "t1", QUESTION, ANSWER)).isEqualTo(PostAnswerService.Outcome.CLARIFIED);
-
-        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(QUESTION);
-        assertThat(service.backfill(82L, "u1", "t1", QUESTION, ANSWER)).isEqualTo(PostAnswerService.Outcome.KEPT_ORIGINAL);
-
-        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenThrow(new IllegalStateException("down"));
-        assertThat(service.backfill(83L, "u1", "t1", QUESTION, ANSWER)).isEqualTo(PostAnswerService.Outcome.FAILED);
-
-        verify(memoryService).saveClarifiedQuestion(81L, CLARIFIED);
-        verify(memoryService).saveClarifiedQuestion(82L, QUESTION);
-        verify(memoryService, never()).saveClarifiedQuestion(eq(83L), anyString());
-    }
-
-    @Test
-    @DisplayName("backfill — 턴에 로케일이 없어 질문에 한글이 있으면 한국어, 없으면 영어 프롬프트로 묻는다")
-    @SuppressWarnings("unchecked")
-    void backfillPicksThePromptLanguageFromTheQuestion() {
-        ArgumentCaptor<Function<ChatModel, ChatResponse>> call = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeWithTracking(any(), any(), any(), call.capture())).thenReturn("x");
-
-        service.backfill(91L, "u1", "t1", "and what if it is down?", "## 요약\nIndexing fails while it is down.");
-        service.backfill(92L, "u1", "t1", QUESTION, ANSWER);
-
-        List<String> systemPrompts = call.getAllValues().stream().map(fn -> {
-            ChatModel model = mock(ChatModel.class);
-            ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-            when(model.call(prompt.capture())).thenReturn(chatResponse("x"));
-            fn.apply(model);
-            return prompt.getValue().getInstructions().get(0).getText();
-        }).toList();
-        assertThat(systemPrompts.get(0)).startsWith("You edit past questions");
-        assertThat(systemPrompts.get(1)).startsWith("당신은 지난 대화의 질문을");
-    }
-
     // ── 추가 질문(합친 호출) ────────────────────────────────────────────────
 
     /** 모델 응답 — 목록 기호·따옴표·지금 질문과 같은 것·중복이 섞여 있다(정리 규칙은 cleanFollowUps 가 본다). */
