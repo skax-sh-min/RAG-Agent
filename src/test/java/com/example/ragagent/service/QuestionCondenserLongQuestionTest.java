@@ -104,12 +104,12 @@ class QuestionCondenserLongQuestionTest {
     }
 
     @Test
-    @DisplayName("2,000자 이하의 긴 질문은 LLM 을 부르지 않고 1단계 결과만 만든다")
+    @DisplayName("1,000자 이하의 긴 질문은 LLM 을 부르지 않고 1단계 결과만 만든다")
     void stageOneDoesNotCallTheLlm() {
         LlmRouter router = mock(LlmRouter.class);
         QuestionCondenser c = condenser(router, true);
 
-        QuestionCondenser.Condensed plan = c.prepare("u1", "t1", longQuestion(1200), Locale.KOREAN).orElseThrow();
+        QuestionCondenser.Condensed plan = c.prepare("u1", "t1", longQuestion(600), Locale.KOREAN).orElseThrow();
 
         verify(router, never()).executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any());
         assertThat(plan.searchQuestion()).contains(" … ").startsWith("SessionTimeoutHandler");
@@ -118,7 +118,7 @@ class QuestionCondenserLongQuestionTest {
     }
 
     @Test
-    @DisplayName("2,000자 초과 + LLM 성공: 검색문은 LLM 것, 키워드는 LLM 먼저 + 결정적 추출 합집합, 토큰이 실린다")
+    @DisplayName("1,000자 초과 + LLM 성공: 검색문은 LLM 것, 키워드는 LLM 먼저 + 결정적 추출 합집합, 토큰이 실린다")
     @SuppressWarnings("unchecked")
     void stageTwoMergesLlmResult() {
         LlmRouter router = mock(LlmRouter.class);
@@ -135,7 +135,7 @@ class QuestionCondenserLongQuestionTest {
     }
 
     @Test
-    @DisplayName("2,000자 초과 + LLM 실패: 예외 없이 1단계 결과로 검색한다")
+    @DisplayName("1,000자 초과 + LLM 실패: 예외 없이 1단계 결과로 검색한다")
     void stageTwoFallsBackOnFailure() {
         LlmRouter router = mock(LlmRouter.class);
         when(router.executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any()))

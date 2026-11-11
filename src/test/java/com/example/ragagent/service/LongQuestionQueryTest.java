@@ -11,13 +11,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LongQuestionQueryTest {
 
     @Test
-    @DisplayName("1단계는 공백을 뗀 길이가 500자를 넘을 때, 2단계(LLM)는 2,000자를 넘을 때")
+    @DisplayName("1단계는 공백을 뗀 길이가 500자를 넘을 때, 2단계(LLM)는 1,000자를 넘을 때")
     void thresholds() {
         assertThat(LongQuestionQuery.isLong("a".repeat(500))).isFalse();
         assertThat(LongQuestionQuery.isLong("a".repeat(501))).isTrue();
         assertThat(LongQuestionQuery.isLong("  " + "a".repeat(500) + "  ")).as("앞뒤 공백은 세지 않는다").isFalse();
-        assertThat(LongQuestionQuery.needsLlm("a".repeat(2000))).isFalse();
-        assertThat(LongQuestionQuery.needsLlm("a".repeat(2001))).isTrue();
+        assertThat(LongQuestionQuery.needsLlm("a".repeat(1000))).isFalse();
+        assertThat(LongQuestionQuery.needsLlm("a".repeat(1001))).isTrue();
         assertThat(LongQuestionQuery.isLong(null)).isFalse();
     }
 

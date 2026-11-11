@@ -203,7 +203,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 |---|------|------|---------|
 | ① | AgentService (사전 병렬) | 질문 유형 분류 | 없음 |
 | ② | DIRECT_ANSWER | meta 직접 응답 | ✓ |
-| ③ | RETRIEVAL | 쿼리 다양화 (질문 길이 >= `search-multiquery-min-length`, **500자 이하**). 500자 초과 긴 질문은 확장 대신 `LongQuestionQuery` — 앞뒤 발췌 + 낱말(1단계), 2,000자 초과면 LLM 이 검색문·키워드를 추가(2단계). 상세 OPERATOR_MANUAL §6.13 | 없음 |
+| ③ | RETRIEVAL | 쿼리 다양화 (질문 길이 >= `search-multiquery-min-length`, **500자 이하**). 500자 초과 긴 질문은 확장 대신 `LongQuestionQuery` — 앞뒤 발췌 + 낱말(1단계), 1,000자 초과면 LLM 이 검색문·키워드를 추가(2단계). 상세 OPERATOR_MANUAL §6.13 | 없음 |
 | ③′ | AgentService (사전) | 질의 독립화 — 짧은 후속 질문을 자립적 검색어로 재작성(§10.12, 길이 < 임계값). ③과 **여집합**이라 둘이 함께 돌지 않는다 | ✓ |
 | ④ | ANSWER | 답변 생성 | ✓ |
 | ⑤ | ANSWER | 충분도(`sufficient`) + 근거(`grounded`) + 사유(`reason`) + 환경 의존 값 안내(`envNote`) **동시 평가** | ✓ |

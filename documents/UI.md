@@ -532,7 +532,7 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 ### 질문 글자 수 카운터 (긴 질문)
 
-입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 2,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
+입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 1,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
