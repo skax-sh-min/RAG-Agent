@@ -109,7 +109,8 @@ public class LoadBalancingEmbeddingModel implements EmbeddingModel {
      */
     private <T> T withFailover(String what, Function<EmbeddingModel, T> op, boolean balanced) {
         int n = delegates.size();
-        if (n == 1) return op.apply(delegates.get(0)); // 넘길 곳이 없다 — 예전 동작 그대로
+        // 전부 설정한 모델이 없는 서버면 보낼 곳이 없다 — 첫 엔드포인트를 부르면 그쪽이 ModelUnavailableException 으로 거절한다
+        if (n == 1 || allModelMissing()) return op.apply(delegates.get(0)); // 넘길 곳이 없다 — 예전 동작 그대로
         Set<Integer> tried = new HashSet<>();
         RuntimeException firstFailure = null;
         int next = pick(tried, balanced); // 아직 아무것도 시도하지 않았으므로 언제나 하나는 나온다
@@ -149,17 +150,35 @@ public class LoadBalancingEmbeddingModel implements EmbeddingModel {
         long now = clock.getAsLong();
         List<Integer> open = new ArrayList<>();
         for (int i = 0; i < delegates.size(); i++) {
-            if (!tried.contains(i) && !isBlocked(i, now)) open.add(i);
+            // 설정한 모델이 없는 서버(모델없음)는 아예 고르지 않는다
+            if (!tried.contains(i) && !isBlocked(i, now) && !modelMissing(i)) open.add(i);
         }
         if (!open.isEmpty()) {
-            return balanced ? pickLeastInFlight(open) : open.get(0);
+            // 우선순위: 정상(모름 포함) → 접속불가. 정상이 하나라도 있으면 접속불가로 알려진 서버는 뒤로 미룬다
+            List<Integer> healthy = open.stream().filter(i -> !unreachableState(i)).toList();
+            List<Integer> use = healthy.isEmpty() ? open : healthy;
+            return balanced ? pickLeastInFlight(use) : use.get(0);
         }
         if (!tried.isEmpty()) return -1;
-        int soonest = 0;
-        for (int i = 1; i < delegates.size(); i++) {
-            if (blockedUntil[i].get() - blockedUntil[soonest].get() < 0) soonest = i;
+        int soonest = -1;
+        for (int i = 0; i < delegates.size(); i++) {
+            if (modelMissing(i)) continue;
+            if (soonest < 0 || blockedUntil[i].get() - blockedUntil[soonest].get() < 0) soonest = i;
         }
-        return soonest;
+        return soonest < 0 ? 0 : soonest;
+    }
+
+    private boolean modelMissing(int idx) {
+        return delegates.get(idx) instanceof ServerStateAware a && a.serverState() == ServerModelResolver.State.MODEL_MISSING;
+    }
+
+    private boolean unreachableState(int idx) {
+        return delegates.get(idx) instanceof ServerStateAware a && a.serverState() == ServerModelResolver.State.UNREACHABLE;
+    }
+
+    private boolean allModelMissing() {
+        for (int i = 0; i < delegates.size(); i++) if (!modelMissing(i)) return false;
+        return true;
     }
 
     private boolean isBlocked(int idx, long now) {

@@ -346,6 +346,26 @@ class CrossEncoderRerankerTest {
     }
 
     @Test
+    @DisplayName("모델없음 서버로는 요청을 보내지 않는다 — 다른 서버가 있으면 그쪽으로, 전부 모델없음이면 오류")
+    void doesNotSendToAServerThatLacksTheModel() throws IOException {
+        String lacking = start(200, results("0", "1.0"));
+        String good = startExtra();
+        var reranker = new CrossEncoderReranker(props(lacking + ";" + good),
+                (java.util.function.Function<String, List<String>>) u -> u.equals(lacking)
+                        ? List.of("some-other-model") : List.of("bge-reranker-v2-m3"));
+
+        for (int i = 0; i < 3; i++) reranker.rerank("q", List.of(doc("a", "a")), 1);
+        assertThat(requests).as("모델이 없는 서버로는 가지 않는다").isEmpty();
+        assertThat(extraHits.get()).isEqualTo(3);
+
+        var allLacking = new CrossEncoderReranker(props(lacking),
+                (java.util.function.Function<String, List<String>>) u -> List.of("some-other-model"));
+        assertThatThrownBy(() -> allLacking.rerank("q", List.of(doc("a", "a")), 1))
+                .isInstanceOf(UnavailableException.class).hasMessageContaining("모델 목록에 없어");
+        assertThat(requests).isEmpty();
+    }
+
+    @Test
     @DisplayName("서버가 답한 오류(5xx)는 다음 주소로 넘기지 않는다 — 요청 모양 문제일 수 있다")
     void serverErrorIsNotFailedOver() throws IOException {
         String bad = start(500, "{\"error\":\"input too large\"}");

@@ -8,11 +8,12 @@ import org.springframework.ai.embedding.EmbeddingResponse;
 import java.util.function.Function;
 
 /**
- * 임베딩 서버 한 대 앞의 데코레이터 — 호출마다 {@link ServerModelResolver} 가 정한 모델명으로 실제 모델을 쓴다. 이름이 풀려
- * 바뀌면 그 이름으로 다시 만든다({@code factory}). 이름은 처음 한 번만 풀리므로 평소에는 같은 인스턴스를 그대로 쓴다.
- * 서버 하나당 하나라, 여러 주소는 이 위에서 {@link LoadBalancingEmbeddingModel} 이 나눈다.
+ * 임베딩 서버 한 대 앞의 데코레이터 — 호출마다 {@link ServerModelResolver} 가 정한 모델명으로 실제 모델을 쓴다(이름이 풀려
+ * 바뀌면 그 이름으로 다시 만든다). 서버에 설정한 모델이 없다고 알려져 있으면({@link ServerModelResolver.State#MODEL_MISSING})
+ * <b>요청을 보내지 않고</b> {@link ModelUnavailableException} 을 던진다. 서버 하나당 하나라, 여러 주소는 이 위에서
+ * {@link LoadBalancingEmbeddingModel} 이 나눈다(모델이 없는 서버는 고르지 않는다).
  */
-public class ModelResolvingEmbeddingModel implements EmbeddingModel {
+public class ModelResolvingEmbeddingModel implements EmbeddingModel, ServerStateAware {
 
     private final ServerModelResolver resolver;
     private final Function<String, EmbeddingModel> factory;
@@ -28,7 +29,16 @@ public class ModelResolvingEmbeddingModel implements EmbeddingModel {
         this.current = factory.apply(initialModel);
     }
 
+    @Override
+    public ServerModelResolver.State serverState() {
+        return resolver.state();
+    }
+
     private EmbeddingModel model() {
+        if (resolver.state() == ServerModelResolver.State.MODEL_MISSING) {
+            throw new ModelUnavailableException("embedding model '" + resolver.configuredModel() + "' is not available on "
+                    + resolver.label() + " (" + resolver.detail() + ") \u2014 the request was not sent");
+        }
         String name = resolver.modelName();
         if (name != null && !name.equals(builtFor)) {
             synchronized (this) {

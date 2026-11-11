@@ -126,8 +126,9 @@ public class CrossEncoderReranker {
             if (resolveModel) {
                 String modelsBase = endpointBase(url) + "/v1";
                 String key = cfg.apiKey().isBlank() ? "no-key" : cfg.apiKey();
-                resolver = new ServerModelResolver(url, cfg.model(), lister != null
-                        ? () -> lister.apply(url) : () -> LlmPing.listModelIds(modelsBase, key, 3, 5));
+                resolver = lister != null
+                        ? syncResolver(url, cfg.model(), () -> lister.apply(url))
+                        : new ServerModelResolver(url, cfg.model(), () -> LlmPing.listModelIds(modelsBase, key, 3, 5));
             }
             built.add(new Target(url, builder.build(), resolver));
         }
@@ -153,6 +154,11 @@ public class CrossEncoderReranker {
         if (candidates == null || candidates.isEmpty() || topK <= 0) return List.of();
         List<Target> order = candidateOrder();
         if (order.isEmpty()) {
+            Target missing = targets.stream().filter(CrossEncoderReranker::modelMissing).findFirst().orElse(null);
+            if (missing != null && targets.stream().allMatch(CrossEncoderReranker::modelMissing)) {
+                throw new UnavailableException("리랭커 모델 '" + missing.resolver.configuredModel() + "' 이(가) 서버의 모델 목록에 없어 요청을 보내지 않는다 ("
+                        + missing.label + ": " + missing.resolver.detail() + ")");
+            }
             throw new UnavailableException("리랭커를 잠시 건너뛴다(연결 실패 후 " + BLOCK_SECONDS + "초)");
         }
         boolean acquired = false;
@@ -202,17 +208,35 @@ public class CrossEncoderReranker {
         }
     }
 
+    /** 테스트용 — 목록 조회를 그 자리(호출 스레드)에서 끝내는 해석기. */
+    private static ServerModelResolver syncResolver(String url, String model, java.util.function.Supplier<List<String>> lister) {
+        ServerModelResolver r = ServerModelResolver.forTest(url, model, lister);
+        r.refreshAsync();
+        return r;
+    }
+
     /** 건너뛰기 창 안인가 — 0 은 "차단 없음"이라 시계 값이 음수여도 차단으로 읽지 않는다. */
     private static boolean blocked(Target t, long now) {
         long until = t.blockedUntil.get();
         return until != 0 && now - until < 0;
     }
 
+    private static boolean modelMissing(Target t) {
+        return t.resolver != null && t.resolver.state() == ServerModelResolver.State.MODEL_MISSING;
+    }
+
+    private static boolean unreachableState(Target t) {
+        return t.resolver != null && t.resolver.state() == ServerModelResolver.State.UNREACHABLE;
+    }
+
     /** 이번 호출이 시도할 서버 순서 — 건너뛰는 중이 아닌 서버를 진행 중 호출이 적은 순(같으면 돌아가며)으로. */
     private List<Target> candidateOrder() {
         long now = nanoClock.getAsLong();
         List<Target> open = new ArrayList<>();
-        for (Target t : targets) if (!blocked(t, now)) open.add(t);
+        // 모델없음으로 알려진 서버는 고르지 않는다. 우선순위는 정상(모름 포함) → 접속불가(목록을 못 읽은 서버)
+        for (Target t : targets) if (!blocked(t, now) && !modelMissing(t)) open.add(t);
+        List<Target> healthy = open.stream().filter(t -> !unreachableState(t)).toList();
+        if (!healthy.isEmpty() && healthy.size() < open.size()) open = new ArrayList<>(healthy);
         if (open.size() > 1) {
             int offset = Math.floorMod(roundRobin.getAndIncrement(), open.size());
             java.util.Collections.rotate(open, -offset);

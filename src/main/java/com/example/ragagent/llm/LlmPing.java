@@ -152,7 +152,9 @@ public final class LlmPing {
                     String id = entry.path("id").asText(null);
                     if (id != null) ids.add(id);
                 }
-                modelListed = model != null && !model.isBlank() && ModelNameResolver.resolve(model, ids).found();
+                ModelNameResolver.Resolution res = (model == null || model.isBlank()) ? null : ModelNameResolver.resolve(model, ids);
+                // 부분 일치면 있는 것이다 — 포함하는 id 가 여럿이어도(모호) 모델은 있다
+                modelListed = res != null && (res.found() || res.ambiguous());
             } else {
                 error = "models: unexpected body (no data[])";
             }
