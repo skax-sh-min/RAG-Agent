@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- §6.33 5단계 — /admin/agent-tools 로 지연 로딩되는 Tool 호출 추적 카드 본문. 읽기 전용. 이 프래그먼트에는 <script> 를 두지 않는다
+     (기간 선택은 hx-get 속성으로 처리하므로 페이지 레벨 스크립트가 필요 없다). -->
+<th:block th:fragment="panel">
+<div class="card-body p-0">
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small text-muted">
+        <span th:unless="${agentEnabled}" class="badge bg-warning-subtle text-warning-emphasis">Tool 선택 꺼짐 (app.agent.enabled=false) — 새 기록이 쌓이지 않는다</span>
+        <span>채팅의 Tool 선택(계획)과 실행을 센다. 질문 본문은 저장하지 않는다. 90일이 지난 기록은 기동 때 지운다.</span>
+        <select class="form-select form-select-sm ms-auto" style="max-width:110px;" name="days"
+                hx-get="/admin/agent-tools" hx-target="#agent-tools-body" hx-swap="innerHTML" hx-trigger="change">
+            <option th:each="d : ${allowedDays}" th:value="${d}" th:text="|최근 ${d}일|" th:selected="${d == days}">최근 14일</option>
+        </select>
+    </div>
+
+    <div th:if="${summary.plans == 0}" class="text-center text-muted py-4 small">
+        이 기간에 기록된 Tool 선택이 없다.
+    </div>
+
+    <div th:if="${summary.plans > 0}">
+        <div class="px-3 py-3 border-bottom">
+            <div class="row g-3 small text-center">
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">계획 호출</div>
+                    <div class="fs-5 fw-semibold" th:text="${summary.plans}">0</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">폴백 비율 <span class="text-muted" title="Tool 이 정해지지 않아 기존 검색으로 내려간 계획 호출의 비율">ⓘ</span></div>
+                    <div class="fs-5 fw-semibold" th:text="${#numbers.formatDecimal(summary.fallbackRatio() * 100, 1, 1)} + '%'">0%</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">계획 호출 지연 (평균 / 최대)</div>
+                    <div class="fs-5 fw-semibold"
+                         th:text="${summary.avgPlanMs != null ? summary.avgPlanMs + ' / ' + summary.maxPlanMs + ' ms' : '-'}">0</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">비계획 사유</div>
+                    <div class="small">
+                        없음 <b th:text="${summary.none}">0</b> ·
+                        읽지 못함 <b th:text="${summary.invalid}">0</b> ·
+                        거절 <b th:text="${summary.rejected}">0</b> ·
+                        실패 <b th:text="${summary.error}">0</b>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <table class="table table-sm mb-0 small align-middle">
+            <thead class="table-light">
+            <tr>
+                <th>Tool</th>
+                <th class="text-end">선택</th>
+                <th class="text-end">선택 비율</th>
+                <th class="text-end">실행</th>
+                <th class="text-end">성공률</th>
+                <th class="text-end">빈 결과</th>
+                <th class="text-end">실패</th>
+                <th class="text-end">실행 지연 (평균 / 최대)</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="t : ${summary.tools}">
+                <td><code th:text="${t.tool}">searchKnowledge</code></td>
+                <td class="text-end" th:text="${t.planned}">0</td>
+                <td class="text-end" th:text="${#numbers.formatDecimal(t.planned * 100.0 / summary.plans, 1, 1)} + '%'">0%</td>
+                <td class="text-end" th:text="${t.execs}">0</td>
+                <td class="text-end" th:text="${t.execs > 0 ? #numbers.formatDecimal(t.execOk * 100.0 / t.execs, 1, 1) + '%' : '-'}">-</td>
+                <td class="text-end" th:text="${t.execEmpty}">0</td>
+                <td class="text-end" th:classappend="${t.execError > 0} ? 'text-danger fw-semibold'" th:text="${t.execError}">0</td>
+                <td class="text-end" th:text="${t.avgExecMs != null ? t.avgExecMs + ' / ' + t.maxExecMs + ' ms' : '-'}">-</td>
+            </tr>
+            </tbody>
+        </table>
+        <div class="px-3 py-2 small text-muted border-top">
+            검색 Tool(<code>searchKnowledge</code>)은 실행 줄이 없다 — 기존 검색 경로로 이어진다. 선택 비율은 계획 호출 전체에 대한 값이라 비계획(없음 등)을 합치면 100% 가 된다.
+        </div>
+    </div>
+</div>
+</th:block>
+
+</body>
+</html>

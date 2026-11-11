@@ -6,7 +6,7 @@
 > 검색·리랭크·Tool 호출 수치는 2026-11-05에 로컬 모델과 DB 복사본으로 잰 일회성 실측이다(부록 A). 앱에 구현해 잰 값이 아니므로 구현 뒤 하네스로 다시 잰다.
 > 결정과 진행 상태는 [PLAN.md §6.33](PLAN.md) 이 추적한다.
 >
-> **구현 현황 (2026-11-10)**: Phase 0·1a·1b·2·3·4 구현됨(5 미착수). 이 문서는 **설계 시점의 서술**이라 일부는 구현과 다르다 — 같은 자리에 **「구현:」** 으로 표시했다. 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고 새 사이트(`AGENT_PLAN`)를 만들지 않고 `ThinkingSite.CONDENSE` 를 쓴다 ② `getChangeJob` Tool·`onToolCall`/SSE `tool`·`agent_tool_call` 저장은 **만들지 않았다**(작업 조회는 리포트 화면, 추적 패널은 Phase 5) ③ 유지보수 요청은 채팅에서 **되묻고 확정한 뒤에만** 시작하며 관리자 판정은 요청 스레드의 `ThreadContext.admin` 이다. 살아 있는 동작 명세는 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS.
+> **구현 현황 (2026-11-10)**: Phase 0·1a·1b·2·3·4 구현됨(5: 추적 패널·`agent_tool_call` 은 2026-11-11 구현, 2주 관측과 기본값 판단은 남음). 이 문서는 **설계 시점의 서술**이라 일부는 구현과 다르다 — 같은 자리에 **「구현:」** 으로 표시했다. 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고 새 사이트(`AGENT_PLAN`)를 만들지 않고 `ThinkingSite.CONDENSE` 를 쓴다 ② `getChangeJob` Tool·`onToolCall`/SSE `tool`·`agent_tool_call` 저장은 **만들지 않았다**(작업 조회는 리포트 화면, 추적 패널은 Phase 5) ③ 유지보수 요청은 채팅에서 **되묻고 확정한 뒤에만** 시작하며 관리자 판정은 요청 스레드의 `ThreadContext.admin` 이다. 살아 있는 동작 명세는 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS.
 
 ## Context
 

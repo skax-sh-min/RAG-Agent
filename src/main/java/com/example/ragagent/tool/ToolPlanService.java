@@ -1,5 +1,6 @@
 package com.example.ragagent.tool;
 
+import com.example.ragagent.repository.AgentToolCallRepository;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ThinkingControl;
@@ -93,6 +94,14 @@ public class ToolPlanService {
         this(llmRouter, catalog, messageSource, props, enabled, null);
     }
 
+    /** 관측 저장소 — 세터 주입(생성자가 여럿이다). 없으면 기록하지 않는다. */
+    private AgentToolCallRepository observations;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setObservations(AgentToolCallRepository observations) {
+        this.observations = observations;
+    }
+
     /** {@code app.agent.enabled}(기본 꺼짐) — 꺼져 있으면 이 단계는 LLM 을 부르지 않고 그래프도 새 경로를 타지 않는다. */
     public boolean enabled() {
         return enabled;
@@ -131,7 +140,7 @@ public class ToolPlanService {
                 return new Planned(new ToolPlan(ToolDispatchService.CHANGE_TOOL, args, true), 0, 0, false);
             }
         }
-        return plan(question, new ToolCaller(userId, admin, "chat"), locale);
+        return plan(question, new ToolCaller(userId, admin, "chat"), locale, threadId);
     }
 
     /**
@@ -139,7 +148,12 @@ public class ToolPlanService {
      * @return 항상 값이 있다. 고르지 않았거나 읽지 못했으면 {@link Planned#plan()} 이 {@code null}
      */
     public Planned plan(String question, ToolCaller caller, Locale locale) {
+        return plan(question, caller, locale, null);
+    }
+
+    private Planned plan(String question, ToolCaller caller, Locale locale, String threadId) {
         if (!enabled || question == null || question.isBlank()) return Planned.none();
+        long startedAt = System.nanoTime();
         try {
             List<ToolCallback> visible = visibleTools(caller);
             if (visible.size() <= 1) return Planned.none();   // 고를 것이 검색 하나뿐이면 물어볼 이유가 없다
@@ -152,18 +166,44 @@ public class ToolPlanService {
                     model -> model.call(new Prompt(
                             List.of(new SystemMessage(systemPrompt), new UserMessage(userMessage)), options())));
             ToolPlan plan = parse(result.text(), visible);
+            String outcome = outcomeOf(result.text(), plan);
+            String chosen = plan == null ? null : plan.toolName();
             if (plan != null && ToolDispatchService.IMPACT_TOOL.equals(plan.toolName()) && !asksAboutImpact(question)) {
                 // 수정 요청("A 를 B 로 바꿔줘")을 가장 가까운 Tool 로 받아 영향도 분석이 돌지 않게 한다 — 비관리자에게는 수정 Tool 이 안 보여 생기는 오선택이다.
                 log.info("[TOOL-PLAN] analyzeImpact 거절 — 질문에 영향을 묻는 표현이 없다");
                 plan = null;
+                outcome = AgentToolCallRepository.REJECTED;
             }
+            observe(threadId, caller, chosen, outcome, startedAt);
             log.info("[TOOL-PLAN] tool={} args={}", plan == null ? "-" : plan.toolName(), plan == null ? "-" : plan.argumentsJson());
             return new Planned(plan, result.inputTokens(), result.outputTokens(), true);
         } catch (Exception e) {
             // 턴을 실패시킬 이유가 아니다 — 소진·게이트 대기 초과·타임아웃이면 기존 RETRIEVAL 이 기존 방식으로 보고한다.
             if (Thread.currentThread().isInterrupted()) Thread.currentThread().interrupt();
             log.warn("[TOOL-PLAN] Tool 선택 실패 — 검색으로 진행한다: {}", e.getMessage());
+            observe(threadId, caller, null, AgentToolCallRepository.ERROR, startedAt);
             return Planned.none();
+        }
+    }
+
+    /** 계획 호출 한 번의 결과를 관측 테이블에 남긴다(세터로 주입된 저장소가 있을 때만 — 실패해도 턴에 영향이 없다). */
+    private void observe(String threadId, ToolCaller caller, String tool, String status, long startedAtNanos) {
+        if (observations == null) return;
+        observations.record(threadId, caller.userId(), AgentToolCallRepository.PLAN, tool, status, null,
+                (System.nanoTime() - startedAtNanos) / 1_000_000);
+    }
+
+    /** 모델의 답을 관측 상태로 가른다 — 고른 Tool 이 있으면 planned, 명시적 NONE 이면 none, 그 밖에(읽지 못함·모르는/보이지 않는 Tool·인자 불일치)는 invalid. */
+    static String outcomeOf(String response, ToolPlan plan) {
+        if (plan != null) return AgentToolCallRepository.PLANNED;
+        int a = response == null ? -1 : response.indexOf('{');
+        int b = response == null ? -1 : response.lastIndexOf('}');
+        if (a < 0 || b <= a) return AgentToolCallRepository.INVALID;
+        try {
+            String tool = MAPPER.readTree(response.substring(a, b + 1)).path("tool").asString("");
+            return tool.isBlank() || "NONE".equalsIgnoreCase(tool) ? AgentToolCallRepository.NO_TOOL : AgentToolCallRepository.INVALID;
+        } catch (RuntimeException e) {
+            return AgentToolCallRepository.INVALID;
         }
     }
 

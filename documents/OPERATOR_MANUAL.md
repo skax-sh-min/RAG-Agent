@@ -2052,6 +2052,7 @@ Rename-Item data/vector.db memory.db
 | `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | Flyway V4 |
 | `curated_submission` | 지식 제안 게시판 | Flyway V4 |
 | `chunk_report` | 청크 오류 신고 대기열(사유·코멘트 + 신고 시점 원문·질문 스냅샷, §6.12) | Flyway V4 |
+| `agent_tool_call` | 채팅 Tool 선택·실행 관측(분포·성공률·지연, 본문 없음, 90일 보존, §6.14) | Flyway V14 |
 | `change_job` | 영향도 분석·유지보수 작업(종류 `impact`·`maintenance`, 상태 `running`·`done`·`failed`·`interrupted`, 리포트 JSON, §6.14) | Flyway V12 |
 | `change_proposal` | 유지보수 수정안 검토 대기열(청크별 before/after·해시·맥락/키워드, 상태 `pending`·`approved`·`rejected`·`applied`·`stale`·`failed`, `md_status`). **행을 만드는 것은 코퍼스를 바꾸지 않는다** | Flyway V13 |
 | `settings_override` | `/settings` 핫 수정 오버라이드 | Flyway V4 |
@@ -2706,6 +2707,12 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - 적용 직전의 백업은 정기 백업과 **같은 폴더**(`{DATA_DIR}/db-backups`, 파일 이름 `memory-yyyyMMdd-HHmmss.db`)에 같은 보존 정책으로 쌓이고 사본마다 `quick_check` 를 거친다(§6.3.2). sqlite-vec 에서는 벡터까지 한 파일이라 곧 복구 지점이다. **변환 MD 는 DB 백업에 들어 있지 않고 `.bak` 도 남기지 않는다** — MD 를 되돌리려면 같은 치환을 반대로 한다(작업 리포트의 바꿀 말·새 말).
 - 재인덱싱은 청크 id 를 **모두 바꾸므로** 그때 대기 중이던 수정안은 `stale` 이 된다. 코퍼스를 재인덱싱한 직후에는 수정안을 새로 만든다. (참고: 오래된 코퍼스는 현재 청킹 설정과 달라 재인덱싱하면 청크 수가 크게 늘 수 있다 — 유지보수와 무관한 기존 동작.)
+
+**Tool 호출 추적 (`/admin` 하단 카드)**
+
+- 펼치면 최근 1·7·14·30·90일의 **계획 호출 수 · 폴백 비율 · 계획 지연**, Tool 별 **선택 수·선택 비율·실행 수·성공률·빈 결과·실패·실행 지연**을 보여 준다. 읽기 전용이고 질문 본문은 기록하지 않는다(90일이 지난 기록은 기동 때 지운다).
+- **폴백 비율** = 계획 호출 중 Tool 이 정해지지 않은 것(없음 · 읽지 못함 · 거절 · 실패)의 비율이다. 조용히 늘어도 알림이 없으니 이 숫자를 정기적으로 본다 — 켠 직후 2주를 관측해 폴백 비율과 턴 지연이 허용 범위인지 판단한 뒤에 기본값을 바꾼다(기본값 변경은 [AGENT_EVALUATION](AGENT_EVALUATION.md) 갱신 뒤에만). `AGENT_ENABLED=false` 면 새 기록이 쌓이지 않고 카드가 그 사실을 알린다.
+- 읽는 법: `읽지 못함` 이 크면 모델이 JSON 형식을 못 지키는 것(모델·서버 교체 신호), `거절` 이 크면 비관리자의 수정 요청이 영향도 분석으로 새고 있는 것(코드가 막았다), 한 Tool 의 `실패`·`빈 결과` 가 크면 그 Tool 의 입력(식별자 표기 등)을 본다. `searchKnowledge` 는 실행 줄이 없다(기존 검색 경로로 이어진다).
 
 **문제 해결**
 

@@ -422,7 +422,28 @@
         </div>
     </details>
 
+    <!-- §6.33 5단계 Tool 호출 추적 — 읽기 전용 관측 뷰. 같은 지연 로딩 패턴. -->
+    <details class="card mt-4" id="agent-tools-card"
+              hx-get="/admin/agent-tools" hx-trigger="toggle once"
+              hx-target="#agent-tools-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-diagram-3 me-2"></i>
+            <span class="fw-semibold small">Tool 호출 추적</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                선택 분포·성공률·지연·폴백 비율 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="agent-tools-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <style>
+        #agent-tools-card > summary::-webkit-details-marker { display: none; }
+        #agent-tools-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         #curated-qa-card > summary::-webkit-details-marker { display: none; }
         #curated-qa-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         #submission-card > summary::-webkit-details-marker { display: none; }

@@ -1,5 +1,6 @@
 package com.example.ragagent.tool;
 
+import com.example.ragagent.repository.AgentToolCallRepository;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
@@ -65,6 +66,20 @@ public class ToolDispatchService {
         this(catalog, null, null);
     }
 
+    /** 관측 저장소 — 세터 주입(생성자가 여럿이다). 없으면 기록하지 않는다. */
+    private AgentToolCallRepository observations;
+
+    @Autowired(required = false)
+    public void setObservations(AgentToolCallRepository observations) {
+        this.observations = observations;
+    }
+
+    private void observe(AgentState state, ToolPlan plan, String status, Integer resultSize, long startedAtNanos) {
+        if (observations == null) return;
+        observations.record(state.threadId(), state.userId(), AgentToolCallRepository.EXEC, plan.toolName(), status, resultSize,
+                (System.nanoTime() - startedAtNanos) / 1_000_000);
+    }
+
     /**
      * @return 성공이면 {@code retrievedDocs} 에 Tool 결과 문서 하나가 실리고 {@code sources} 는 빈 채 {@link AgentState#toolPlan()} 이 남는다. 실패면
      *         {@code toolPlan} 이 {@code null} 이고 나머지는 그대로다 — 호출자(그래프)는 그것으로 {@code RETRIEVAL} 로 갈라진다
@@ -72,17 +87,22 @@ public class ToolDispatchService {
     public AgentState execute(AgentState state) {
         ToolPlan plan = state.toolPlan();
         if (plan == null) return state;
+        long startedAt = System.nanoTime();
         // 호출자는 서버가 정한다 — 요청 스레드에서 구해 상태에 실린 관리자 여부(모델이 만든 인자·이름은 권한을 넓히지 못한다).
         ToolCaller caller = new ToolCaller(state.userId(), state.callerAdmin(), "chat");
         try {
             if (CHANGE_TOOL.equals(plan.toolName())) {
-                return changeRequest(state, plan, caller);
+                AgentState changed = changeRequest(state, plan, caller);
+                observe(state, plan, changed.toolPlan() == null ? AgentToolCallRepository.ERROR : AgentToolCallRepository.OK, null, startedAt);
+                return changed;
             }
             String result = catalog.call(plan.toolName(), plan.argumentsJson(), caller);
             if (result == null || result.isBlank()) {
                 log.info("[TOOL] 빈 결과 — 검색으로 진행한다 tool={} thread={}", plan.toolName(), state.threadId());
+                observe(state, plan, AgentToolCallRepository.EMPTY, 0, startedAt);
                 return state.toBuilder().toolPlan(null).build();
             }
+            observe(state, plan, AgentToolCallRepository.OK, result.length(), startedAt);
             if (IMPACT_TOOL.equals(plan.toolName())) {
                 return startedAnswer(state, result);
             }
@@ -97,6 +117,7 @@ public class ToolDispatchService {
                 throw new IllegalStateException("interrupted", e);   // 사용자 중단은 그대로 전파한다
             }
             log.warn("[TOOL] Tool 실행 실패 — 검색으로 진행한다 tool={} thread={}: {}", plan.toolName(), state.threadId(), e.getMessage());
+            observe(state, plan, AgentToolCallRepository.ERROR, null, startedAt);
             return state.toBuilder().toolPlan(null).build();
         }
     }
