@@ -103,6 +103,50 @@ public class ProviderConnectivity {
         }
     }
 
+    /** 프로바이더가 아닌 접속 대상(임베딩·리랭커)의 기록 키 — 프로바이더 이름과 겹치지 않게 접두사를 둔다. */
+    public static final String EMBEDDING_KEY = "aux:embedding";
+    public static final String RERANKER_KEY = "aux:reranker";
+
+    /** LLM 라우터 밖의 서버 하나 — 임베딩·리랭커. {@code baseUrl} 은 {@code /v1} 이 있어도 없어도 된다. */
+    public record Endpoint(String key, String baseUrl, String apiKey, String model) {}
+
+    /**
+     * 임베딩·리랭커 같은 라우터 밖 서버를 {@link #refresh} 와 같은 규칙(병렬 · 3초 재사용 · 잠금 하나)으로 확인한다.
+     * 주소가 빈 대상은 묻지 않는다(호출자가 "미설정" 으로 그린다).
+     */
+    public void refreshEndpoints(List<Endpoint> targets) {
+        if (targets == null) return;
+        List<Endpoint> asked = targets.stream().filter(t -> t.baseUrl() != null && !t.baseUrl().isBlank()).toList();
+        if (asked.isEmpty()) return;
+        refreshLock.lock();
+        try {
+            Instant now = clock.instant();
+            List<Endpoint> due = asked.stream().filter(t -> !isFresh(t.key(), now)).toList();
+            if (due.isEmpty()) return;
+            try (ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                var traced = MdcPropagation.propagating(exec);
+                CompletableFuture<?>[] futures = due.stream()
+                        .map(t -> CompletableFuture.runAsync(() -> results.put(t.key(), checkEndpoint(t)), traced))
+                        .toArray(CompletableFuture<?>[]::new);
+                CompletableFuture.allOf(futures).join();
+            }
+        } finally {
+            refreshLock.unlock();
+        }
+    }
+
+    private Result checkEndpoint(Endpoint t) {
+        try {
+            String root = t.baseUrl().strip().replaceAll("/+$", "");
+            if (root.endsWith("/v1")) root = root.substring(0, root.length() - 3).replaceAll("/+$", "");
+            String key = (t.apiKey() != null && !t.apiKey().isBlank()) ? t.apiKey() : "no-key";
+            LlmPing.Reach reach = LlmPing.reach(root + "/v1", key, t.model(), CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS);
+            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+        } catch (RuntimeException e) {
+            return new Result(false, null, null, LlmPing.describe(e), clock.instant());
+        }
+    }
+
     /**
      * 기록하지 않는 한 번의 확인 — {@code /settings} 에서 프로바이더 편집을 저장하기 전에 <b>새</b> 주소·모델을 묻는다
      * ({@code ProviderCatalog}). 결과를 표의 상태 칸 기록({@link #last})에 넣지 않는 이유: 그 칸은 지금 돌고 있는 설정의 상태이고,

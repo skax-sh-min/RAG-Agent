@@ -142,6 +142,7 @@ no-auth 모드의 방문자별 `userId`(`app.auth.guest-identity` = `shared`/`ip
 - **"닿는다"의 정의는 `LlmPing.reach()` 하나다**(모델 목록 API). 2xx JSON 이면 정상, HTTP 오류·연결 거부·타임아웃은 접속불가(사유는 말풍선). 연결 3초·읽기 5초.
 - **주소는 앱이 실제로 요청하는 주소와 같다** — `OpenAiClients.sdkBaseUrl()` 규칙과 `{apiBase}/v1/models`. 키도 프로바이더를 만들 때와 같은 값(LOCAL 이 비면 `no-key`). `ProviderConnectivityTest` 가 진짜 HTTP 서버로 고정한다.
 - 설정한 모델이 목록에 없어도 접속은 접속이다(`modelListed=false` 는 "정상" 말풍선에만 덧붙는다 — 목록을 다 나열하지 않는 게이트웨이의 오탐 방지. LOCAL 은 G3 가 이미 가른다).
+- **임베딩·리랭커 서버도 같은 기계로 묻는다**(`refreshEndpoints(Endpoint…)` — 키 `aux:embedding`·`aux:reranker`, 같은 결과 맵·`REUSE_WINDOW`·잠금). 라우터 밖이라 프로바이더 표에 행이 없어서 `/settings` LLM 라우팅 카드 하단 줄의 배지(`embed-status`·`rerank-status` oob)가 쓴다. 주소는 끝의 `/v1` 을 걷고 다시 붙여 `/v1/models` 를 만든다(`CrossEncoderReranker.endpointBase` 와 같은 규칙). 임베딩은 기본 주소만 묻고 `EMBED_ADDITIONAL_BASE_URLS` 는 묻지 않는다. 검색 중 리랭커의 30초 건너뛰기 상태(`isSkipping`)는 이 배지에 섞지 않는다(별개의 사실).
 - **페이지는 서버를 기다리지 않는다.** `GET /settings` 는 "확인 중"으로 그리고 표 조각 안의 숨은 요소(`hx-get="/settings/llm-status" hx-trigger="load" hx-swap="none"`)가 확인을 요청한다. 응답은 칸마다 `hx-swap-oob="true"` + id(`prov-status-N`)를 단 조각이라 **표 전체를 바꾸지 않는다**(바꾸면 그 사이 눌린 "컨텍스트 다시 탐지"의 결과 알림이 지워진다).
 - **게스트 개방 화면이 부르므로 두드리는 수단이 되면 안 된다.** `REUSE_WINDOW`(3초) 안의 결과는 다시 묻지 않고, 동시에 열린 화면은 `refresh()` 의 잠금(`ReentrantLock` — 가상 스레드에서 `synchronized` 로 네트워크 I/O 를 감싸면 캐리어가 고정된다) 하나로 한 번의 확인을 나눈다. 대상은 설정의 서버뿐이다. 여러 대는 가상 스레드로 병렬(죽은 서버의 타임아웃이 산 서버의 칸을 늦추지 않게).
 - `last()` 는 나이를 따지지 않는다(토글·재탐지 뒤 표 조각이 "확인 중"으로 되돌아가지 않게). 화면을 새로 열 때(`buildView()`)만 마지막 확인을 무시한다.
