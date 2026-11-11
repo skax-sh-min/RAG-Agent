@@ -400,8 +400,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 props.rerankerEnabled() ? props.rerankerSafe().model() : "-",
                 props.rerankerEnabled() ? String.join(" ; ", props.rerankerBaseUrls()) : "-",
                 // 프로바이더 표와 같이 화면을 열 때는 늘 "확인 중" 으로 시작하고 /settings/llm-status 가 채운다
-                pendingIfConfigured(!embeddingUrls().isEmpty()),
-                pendingIfConfigured(props.rerankerEnabled()));
+                endpointRows(ProviderConnectivity.EMBEDDING_KEY, embeddingUrls(), true),
+                endpointRows(ProviderConnectivity.RERANKER_KEY, props.rerankerBaseUrls(), true));
     }
 
     /**
@@ -505,30 +505,33 @@ public class SettingsService implements AppProperties.OverrideSource {
         return urls;
     }
 
-    /** 임베딩 서버의 마지막 접속 확인(상태 열과 같은 모양) — 주소가 없으면 미설정, 아직 안 물었으면 확인 중. */
-    public SettingsView.ProviderConnection embeddingConnection() {
-        return auxConnection(ProviderConnectivity.EMBEDDING_KEY, !embeddingUrls().isEmpty());
+    /** 임베딩 서버 주소별 마지막 접속 확인 — 주소가 없으면 미설정 한 줄, 아직 안 물었으면 확인 중. */
+    public List<SettingsView.EndpointRow> embeddingEndpoints() {
+        return endpointRows(ProviderConnectivity.EMBEDDING_KEY, embeddingUrls(), false);
     }
 
-    /** 리랭커 서버의 마지막 접속 확인 — 주소가 없으면(꺼짐) 미설정. */
-    public SettingsView.ProviderConnection rerankerConnection() {
-        return auxConnection(ProviderConnectivity.RERANKER_KEY, props.rerankerEnabled());
+    /** 리랭커 서버 주소별 마지막 접속 확인 — 주소가 없으면(꺼짐) 미설정 한 줄. */
+    public List<SettingsView.EndpointRow> rerankerEndpoints() {
+        return endpointRows(ProviderConnectivity.RERANKER_KEY, props.rerankerBaseUrls(), false);
     }
 
-    private static SettingsView.ProviderConnection pendingIfConfigured(boolean configured) {
-        return !configured
-                ? SettingsView.ProviderConnection.notConfigured() : SettingsView.ProviderConnection.pending();
+    /** @param pending {@code true} 면 마지막 확인을 무시하고 "확인 중" 으로 둔다(화면을 새로 열 때) */
+    private List<SettingsView.EndpointRow> endpointRows(String key, List<String> urls, boolean pending) {
+        if (urls == null || urls.isEmpty()) {
+            return List.of(new SettingsView.EndpointRow("-", SettingsView.ProviderConnection.notConfigured()));
+        }
+        List<SettingsView.EndpointRow> rows = new ArrayList<>();
+        for (String u : urls) {
+            SettingsView.ProviderConnection c = pending ? SettingsView.ProviderConnection.pending()
+                    : connectivity.lastEndpoint(key, u)
+                            .map(r -> r.reachable()
+                                    ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed())
+                                    : SettingsView.ProviderConnection.unreachable(r.error()))
+                            .orElseGet(SettingsView.ProviderConnection::pending);
+            rows.add(new SettingsView.EndpointRow(u, c));
+        }
+        return rows;
     }
-
-    private SettingsView.ProviderConnection auxConnection(String key, boolean configured) {
-        if (!configured) return SettingsView.ProviderConnection.notConfigured();
-        return connectivity.last(key)
-                .map(r -> r.reachable()
-                        ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed(), r.error())
-                        : SettingsView.ProviderConnection.unreachable(r.error()))
-                .orElseGet(SettingsView.ProviderConnection::pending);
-    }
-
 
     /**
      * 프로바이더 표의 "생각 제어" 열 — 실제 전송과 같은 값을 읽는다: 설정값은 {@code ProviderConfig}, 실제로 쓰는 값은
