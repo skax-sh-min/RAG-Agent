@@ -341,7 +341,7 @@
               th:text="#{settings.status.unreachable}">Unreachable</span>
         <span th:case="'OK'" class="badge bg-success"
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
-              th:title="#{settings.status.normal.hint(${conn.latencyMs})}"
+              th:title="${conn.error != null} ? ${#messages.msg('settings.status.normal.hint', conn.latencyMs) + ' — ' + #messages.msg('settings.status.partial.hint', conn.error)} : ${#messages.msg('settings.status.normal.hint', conn.latencyMs)}"
               th:text="#{llm.status.normal}">Normal</span>
     </th:block>
 </span>

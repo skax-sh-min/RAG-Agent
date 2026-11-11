@@ -142,6 +142,7 @@ no-auth 모드의 방문자별 `userId`(`app.auth.guest-identity` = `shared`/`ip
 - **"닿는다"의 정의는 `LlmPing.reach()` 하나다**(모델 목록 API). 2xx JSON 이면 정상, HTTP 오류·연결 거부·타임아웃은 접속불가(사유는 말풍선). 연결 3초·읽기 5초.
 - **주소는 앱이 실제로 요청하는 주소와 같다** — `OpenAiClients.sdkBaseUrl()` 규칙과 `{apiBase}/v1/models`. 키도 프로바이더를 만들 때와 같은 값(LOCAL 이 비면 `no-key`). `ProviderConnectivityTest` 가 진짜 HTTP 서버로 고정한다.
 - 설정한 모델이 목록에 없어도 접속은 접속이다(`modelListed=false` 는 "정상" 말풍선에만 덧붙는다 — 목록을 다 나열하지 않는 게이트웨이의 오탐 방지. LOCAL 은 G3 가 이미 가른다).
+- **주소 목록은 `;` 로 받는다**(`AppProperties.parseUrls` — 공백·빈 항목·같은 주소는 버리고 쉼표도 구분자로 받는다). 임베딩은 `embeddingSafe()` 가 첫 주소를 `baseUrl`, 나머지를 예전 `additionalBaseUrls` 자리에 채워 `EmbeddingBeanConfig`·`LoadBalancingEmbeddingModel` 이 그대로 쓴다(`EMBED_ADDITIONAL_BASE_URLS` 는 없앴다). 리랭커는 `rerankerBaseUrls()` 가 전부, `rerankerSafe().baseUrl()` 이 첫 주소다. **예전 변수 이름(`EMBED_BASE_URL`·`RERANK_BASE_URL`)은 새 이름이 없을 때 읽는다** — `EMBED_BASE_URL` 만 쓰던 배포가 조용히 `LOCAL_LLM_URL` 로 떨어지면 인덱싱·검색이 다른 임베딩 모델을 보게 되기 때문이다.
 - **임베딩·리랭커 서버도 같은 기계로 묻는다**(`refreshEndpoints(Endpoint…)` — 키 `aux:embedding`·`aux:reranker`, 같은 결과 맵·`REUSE_WINDOW`·잠금). 라우터 밖이라 프로바이더 표에 행이 없어서 `/settings` LLM 라우팅 카드 하단 줄의 배지(`embed-status`·`rerank-status` oob)가 쓴다. 주소는 끝의 `/v1` 을 걷고 다시 붙여 `/v1/models` 를 만든다(`CrossEncoderReranker.endpointBase` 와 같은 규칙). 임베딩은 기본 주소만 묻고 `EMBED_ADDITIONAL_BASE_URLS` 는 묻지 않는다. 검색 중 리랭커의 30초 건너뛰기 상태(`isSkipping`)는 이 배지에 섞지 않는다(별개의 사실).
 - **페이지는 서버를 기다리지 않는다.** `GET /settings` 는 "확인 중"으로 그리고 표 조각 안의 숨은 요소(`hx-get="/settings/llm-status" hx-trigger="load" hx-swap="none"`)가 확인을 요청한다. 응답은 칸마다 `hx-swap-oob="true"` + id(`prov-status-N`)를 단 조각이라 **표 전체를 바꾸지 않는다**(바꾸면 그 사이 눌린 "컨텍스트 다시 탐지"의 결과 알림이 지워진다).
 - **게스트 개방 화면이 부르므로 두드리는 수단이 되면 안 된다.** `REUSE_WINDOW`(3초) 안의 결과는 다시 묻지 않고, 동시에 열린 화면은 `refresh()` 의 잠금(`ReentrantLock` — 가상 스레드에서 `synchronized` 로 네트워크 I/O 를 감싸면 캐리어가 고정된다) 하나로 한 번의 확인을 나눈다. 대상은 설정의 서버뿐이다. 여러 대는 가상 스레드로 병렬(죽은 서버의 타임아웃이 산 서버의 칸을 늦추지 않게).
@@ -285,11 +286,11 @@ TaskType × RoutingMode 로 프로바이더를 고른다. `executeWithTracking()
 - 연결 타임아웃은 **메시지**로 가른다(`"Connect timed out"` ↔ `"Read timed out"`, 또는 `*ConnectTimeoutException` 클래스 이름). `LlmFailureClassificationTest` 가 고정한다 — 문구가 바뀌면 연결 타임아웃이 조용히 읽기 타임아웃으로 재분류돼 전환이 꺼진다. 블로킹의 읽기 타임아웃은 그대로다(느린 생성을 기다리다 끊은 서버를 막으면 연쇄로 소진된다).
 - `RoutedChatModel` = 호출마다 `executeGatedWithUsage`. 게이트·사용량·차단·전환을 라우터가 한다. 질의 확장은 `taskType()` 하나로 충분하다(`LlmProvider.supports()` 가 이미 사다리).
 
-**남은 한계**: ① **읽기 타임아웃** — 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝나고 차단·전환이 없다(느린 것과 멈춘 것을 구분할 수 없다). ② 임베딩은 라우터 밖이라 `LoadBalancingEmbeddingModel` 이 자기 목록 안에서만 전환한다 — 다른 서버를 `EMBED_ADDITIONAL_BASE_URLS` 에 적어야 하고, 안 적은 이중화는 기동 때 `[EMBED CONFIG]` 경고만 남긴다. ③ 동률이면 먼저 등록된 쪽이 이기므로 한가할 때는 매번 그쪽이 먼저 불린다(죽어 있으면 첫 실패 한 번이 30초 차단을 세운다).
+**남은 한계**: ① **읽기 타임아웃** — 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝나고 차단·전환이 없다(느린 것과 멈춘 것을 구분할 수 없다). ② 임베딩은 라우터 밖이라 `LoadBalancingEmbeddingModel` 이 자기 목록 안에서만 전환한다 — 다른 서버를 `EMBED_BASE_URLS` 에 `;` 로 적어야 하고, 안 적은 이중화는 기동 때 `[EMBED CONFIG]` 경고만 남긴다. ③ 동률이면 먼저 등록된 쪽이 이기므로 한가할 때는 매번 그쪽이 먼저 불린다(죽어 있으면 첫 실패 한 번이 30초 차단을 세운다).
 
 ### `llm/LoadBalancingEmbeddingModel.java`
 
-같은 임베딩 모델을 띄운 엔드포인트 여럿(`EMBED_BASE_URL` + `EMBED_ADDITIONAL_BASE_URLS`)에 least-in-flight 로 나누고, **닿지 못한** 엔드포인트는 30초 후보에서 빼며 같은 호출을 다음으로 다시 보낸다. 임베딩은 `LlmRouter` 밖이라 채팅이 넘어가도 RAG 턴이 질문 임베딩에서 실패했던 것의 수리다.
+같은 임베딩 모델을 띄운 엔드포인트 여럿(`EMBED_BASE_URLS` 의 `;` 목록)에 least-in-flight 로 나누고, **닿지 못한** 엔드포인트는 30초 후보에서 빼며 같은 호출을 다음으로 다시 보낸다. 임베딩은 `LlmRouter` 밖이라 채팅이 넘어가도 RAG 턴이 질문 임베딩에서 실패했던 것의 수리다.
 
 - **넘기는 것은 연결 계열뿐이다**(`LlmRouter.isConnectionFailure`). 5xx 까지 넘기면 안 된다 — 임베딩 서버의 5xx 는 흔히 **요청 모양**의 문제다(llama.cpp 는 배치보다 긴 입력을 500 `input is too large` 로 거절한다). 장애로 읽으면 다른 엔드포인트도 같은 이유로 거절해 **멀쩡한 서버를 차례로 30초씩 막고** 임베딩 전체가 선다. 읽기 타임아웃·인터럽트도 넘기지 않는다.
 - **전부 차단됐으면 이번 호출에서 아직 아무 곳도 안 불렀을 때만 가장 먼저 풀리는 하나를 한 번 부른다.** 안 부르면 전부 죽었다 돌아와도 30초를 기다리고, 전부 부르면 모두 죽은 배포가 호출마다 연결 타임아웃을 N 번 문다. 성공하면 그 자리에서 차단을 지운다.
@@ -468,7 +469,7 @@ SQLite DB 의 정기 백업. 결정 셋:
 - **설정은 임베딩과 같은 모양의 자기 절이다**(`app.reranker.*` — `base-url` · `api-key` · `model` · 타임아웃 둘 · `max-concurrent`; `.env.example` 에도 임베딩 절 바로 뒤에 "리랭커 모델" 절). `api-key` 는 선택이고 있으면 `Authorization: Bearer` 로 싣는다(`CrossEncoderRerankerTest.apiKeyIsSentAsBearerOnlyWhenConfigured`). 임베딩과 달리 `LOCAL_LLM_URL` 같은 폴백은 **없다** — 다른 서버·다른 모델이라 주소를 따로 적어야 하고 비면 꺼진다. 재검색 문턱·횟수(`SEARCH_RERANK_MIN_SCORE`·`SEARCH_MAX_ATTEMPTS`)도 같은 절에 모았다(키 이름은 그대로).
 - **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 (질의+문서)가 그 크기를 넘는 호출마다 **500**(`input (N tokens) is too large … increase the physical batch size`)이 나고, 건너뛰기 없이 매번 실패해 RRF 순서로 물러난다 — 2026-11-06 `-ub 512` 로 떠 있던 서버에서 호출 대부분이 그랬다. 기동 명령은 반드시 `-b 2048 -ub 2048` 이다.
 - **점수는 모델의 원점수다**(음수가 나온다, 실측 관련 +6.9 · 무관 −8.8~−10.6). 재검색 문턱(0.0)은 이 모델의 값이라 모델을 바꾸면 다시 잰다. 서버는 `results` 를 **입력 순서(index)**로 줄 수 있어(실제로 그랬다) 정렬은 우리 몫이고, 범위 밖 index·점수 없는 항목은 버린다.
-- **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URL` 을 안 주면 `${RERANK_BASE_URL:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
+- **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URLS` 을 안 주면 `${RERANK_BASE_URLS:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
 - **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
 - **`AppProperties` 에 컴포넌트가 하나 늘었다**(46개, `reranker`). 기존 호환 생성자(44개)는 새 컴포넌트에 `null` 을 넘기고, 45개 형태를 새로 두었다. 테스트에서 정식 생성자를 직접 부르면 인자 수를 하나만 틀려도 컴파일 오류가 난다.
 - 실제 서버 점검은 `CrossEncoderRerankerLiveTest`(기본 건너뜀, `-Drerank-live.url=…`)가 한다 — 단위 테스트의 응답 모양은 서버 버전이 바뀌면 낡는다.

@@ -185,6 +185,11 @@ public record SettingsView(
             return new ProviderConnection(State.OK, latencyMs, modelListed, null);
         }
 
+        /** 주소가 여럿인 서버(임베딩·리랭커)에서 일부만 닿은 경우 — {@code partialFailure} 는 안 닿은 주소와 사유. */
+        public static ProviderConnection reachable(Long latencyMs, Boolean modelListed, String partialFailure) {
+            return new ProviderConnection(State.OK, latencyMs, modelListed, partialFailure);
+        }
+
         public static ProviderConnection unreachable(String error) {
             return new ProviderConnection(State.UNREACHABLE, null, null, error);
         }

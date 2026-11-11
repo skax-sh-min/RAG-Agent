@@ -136,4 +136,30 @@ class AppPropertiesRerankTest {
             return values.get(key);
         }
     }
+
+    // ── 주소 목록(EMBED_BASE_URLS / RERANK_BASE_URLS = A;B;C) ────────────────────
+
+    @Test
+    @DisplayName("parseUrls — ; 로 나누고 공백·빈 항목·같은 주소는 버린다, 순서는 그대로")
+    void parseUrlsSplitsOnSemicolon() {
+        assertThat(AppProperties.parseUrls("http://a:1;http://b:2 ; ;http://c:3/"))
+                .containsExactly("http://a:1", "http://b:2", "http://c:3/");
+        assertThat(AppProperties.parseUrls("http://a:1;HTTP://A:1/")).as("대소문자·끝의 / 만 다른 같은 주소").containsExactly("http://a:1");
+        assertThat(AppProperties.parseUrls("http://a:1,http://b:2")).as("쉼표도 구분자로 받는다").hasSize(2);
+        assertThat(AppProperties.parseUrls("  ")).isEmpty();
+        assertThat(AppProperties.parseUrls(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("리랭커 — 주소 목록의 첫 주소가 baseUrl 이고 전부가 rerankerBaseUrls 다, 비면 꺼진다")
+    void rerankerUsesTheFirstAddressAndKeepsTheList() {
+        AppProperties p = props(7, new AppProperties.RerankerConfig("http://a:1;http://b:2", "m", 5, 15, 2, ""));
+        assertThat(p.rerankerSafe().baseUrl()).isEqualTo("http://a:1");
+        assertThat(p.rerankerBaseUrls()).containsExactly("http://a:1", "http://b:2");
+        assertThat(p.rerankerEnabled()).isTrue();
+
+        AppProperties off = props(7, new AppProperties.RerankerConfig("  ", "m", 5, 15, 2, ""));
+        assertThat(off.rerankerBaseUrls()).isEmpty();
+        assertThat(off.rerankerEnabled()).isFalse();
+    }
 }

@@ -107,8 +107,11 @@ public class ProviderConnectivity {
     public static final String EMBEDDING_KEY = "aux:embedding";
     public static final String RERANKER_KEY = "aux:reranker";
 
-    /** LLM 라우터 밖의 서버 하나 — 임베딩·리랭커. {@code baseUrl} 은 {@code /v1} 이 있어도 없어도 된다. */
-    public record Endpoint(String key, String baseUrl, String apiKey, String model) {}
+    /**
+     * LLM 라우터 밖의 서버 묶음 — 임베딩·리랭커. 주소는 같은 서버의 복제본 여럿일 수 있다({@code A;B;C}). 각 주소는
+     * {@code /v1} 이 있어도 없어도 된다.
+     */
+    public record Endpoint(String key, List<String> baseUrls, String apiKey, String model) {}
 
     /**
      * 임베딩·리랭커 같은 라우터 밖 서버를 {@link #refresh} 와 같은 규칙(병렬 · 3초 재사용 · 잠금 하나)으로 확인한다.
@@ -116,7 +119,7 @@ public class ProviderConnectivity {
      */
     public void refreshEndpoints(List<Endpoint> targets) {
         if (targets == null) return;
-        List<Endpoint> asked = targets.stream().filter(t -> t.baseUrl() != null && !t.baseUrl().isBlank()).toList();
+        List<Endpoint> asked = targets.stream().filter(t -> t.baseUrls() != null && !t.baseUrls().isEmpty()).toList();
         if (asked.isEmpty()) return;
         refreshLock.lock();
         try {
@@ -135,15 +138,46 @@ public class ProviderConnectivity {
         }
     }
 
+    /**
+     * 주소마다 모델 목록을 물어 한 결과로 합친다 — 하나라도 닿으면 닿는다(복제본 하나가 죽어도 서비스는 된다). 일부만 닿으면
+     * {@code error} 에 안 닿은 주소와 사유를 실어 화면이 말풍선으로 알린다(닿은 결과의 {@code error} 는 이 용도뿐이다).
+     * 모두 못 닿으면 사유를 주소별로 이어 붙인다. 주소는 병렬로 묻는다 — 죽은 주소의 연결 타임아웃이 산 주소를 늦추지 않게.
+     */
     private Result checkEndpoint(Endpoint t) {
+        List<String> urls = t.baseUrls();
+        String key = (t.apiKey() != null && !t.apiKey().isBlank()) ? t.apiKey() : "no-key";
+        List<LlmPing.Reach> reaches;
+        try (ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            var traced = MdcPropagation.propagating(exec);
+            List<CompletableFuture<LlmPing.Reach>> futures = urls.stream()
+                    .map(u -> CompletableFuture.supplyAsync(() -> probeOne(u, key, t.model()), traced))
+                    .toList();
+            reaches = futures.stream().map(CompletableFuture::join).toList();
+        }
+        List<String> failures = new java.util.ArrayList<>();
+        Long best = null;
+        Boolean listed = null;
+        for (int i = 0; i < reaches.size(); i++) {
+            LlmPing.Reach r = reaches.get(i);
+            if (r.reachable()) {
+                if (r.latencyMs() != null && (best == null || r.latencyMs() < best)) best = r.latencyMs();
+                if (r.modelListed() != null) listed = (listed == null) ? r.modelListed() : (listed && r.modelListed());
+            } else {
+                failures.add(urls.get(i) + " — " + r.error());
+            }
+        }
+        boolean anyReachable = failures.size() < reaches.size();
+        String note = failures.isEmpty() ? null : String.join(" · ", failures);
+        return new Result(anyReachable, best, listed, note, clock.instant());
+    }
+
+    private static LlmPing.Reach probeOne(String baseUrl, String apiKey, String model) {
         try {
-            String root = t.baseUrl().strip().replaceAll("/+$", "");
+            String root = baseUrl.strip().replaceAll("/+$", "");
             if (root.endsWith("/v1")) root = root.substring(0, root.length() - 3).replaceAll("/+$", "");
-            String key = (t.apiKey() != null && !t.apiKey().isBlank()) ? t.apiKey() : "no-key";
-            LlmPing.Reach reach = LlmPing.reach(root + "/v1", key, t.model(), CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS);
-            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+            return LlmPing.reach(root + "/v1", apiKey, model, CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS);
         } catch (RuntimeException e) {
-            return new Result(false, null, null, LlmPing.describe(e), clock.instant());
+            return new LlmPing.Reach(false, null, null, LlmPing.describe(e));
         }
     }
 

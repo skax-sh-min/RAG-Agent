@@ -393,15 +393,15 @@ public class SettingsService implements AppProperties.OverrideSource {
                 trimNum(llm.temperature()),   // general/RAG temperature — now the real effective value
                 Integer.toString(llm.maxTokens()),
                 nullToDash(props.embeddingSafe().model()),
-                nullToDash(props.embeddingSafe().baseUrl()),
+                embeddingUrls().isEmpty() ? "-" : String.join(" ; ", embeddingUrls()),
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
                 groups,
                 props.rerankerEnabled() ? props.rerankerSafe().model() : "-",
-                props.rerankerEnabled() ? props.rerankerSafe().baseUrl() : "-",
+                props.rerankerEnabled() ? String.join(" ; ", props.rerankerBaseUrls()) : "-",
                 // 프로바이더 표와 같이 화면을 열 때는 늘 "확인 중" 으로 시작하고 /settings/llm-status 가 채운다
-                pendingIfConfigured(props.embeddingSafe().baseUrl()),
-                pendingIfConfigured(props.rerankerSafe().baseUrl()));
+                pendingIfConfigured(!embeddingUrls().isEmpty()),
+                pendingIfConfigured(props.rerankerEnabled()));
     }
 
     /**
@@ -492,30 +492,39 @@ public class SettingsService implements AppProperties.OverrideSource {
         AppProperties.EmbeddingConfig e = props.embeddingSafe();
         AppProperties.RerankerConfig r = props.rerankerSafe();
         return List.of(
-                new ProviderConnectivity.Endpoint(ProviderConnectivity.EMBEDDING_KEY, e.baseUrl(), e.apiKey(), e.model()),
-                new ProviderConnectivity.Endpoint(ProviderConnectivity.RERANKER_KEY, r.baseUrl(), r.apiKey(), r.model()));
+                new ProviderConnectivity.Endpoint(ProviderConnectivity.EMBEDDING_KEY, embeddingUrls(), e.apiKey(), e.model()),
+                new ProviderConnectivity.Endpoint(ProviderConnectivity.RERANKER_KEY, props.rerankerBaseUrls(), r.apiKey(), r.model()));
+    }
+
+    /** 임베딩 서버 주소 전부(EMBED_BASE_URLS 의 {@code ;} 목록) — 주소가 없으면 빈 목록. */
+    private List<String> embeddingUrls() {
+        AppProperties.EmbeddingConfig e = props.embeddingSafe();
+        List<String> urls = new ArrayList<>();
+        if (e.baseUrl() != null && !e.baseUrl().isBlank()) urls.add(e.baseUrl());
+        if (e.additionalBaseUrls() != null) urls.addAll(e.additionalBaseUrls());
+        return urls;
     }
 
     /** 임베딩 서버의 마지막 접속 확인(상태 열과 같은 모양) — 주소가 없으면 미설정, 아직 안 물었으면 확인 중. */
     public SettingsView.ProviderConnection embeddingConnection() {
-        return auxConnection(ProviderConnectivity.EMBEDDING_KEY, props.embeddingSafe().baseUrl());
+        return auxConnection(ProviderConnectivity.EMBEDDING_KEY, !embeddingUrls().isEmpty());
     }
 
     /** 리랭커 서버의 마지막 접속 확인 — 주소가 없으면(꺼짐) 미설정. */
     public SettingsView.ProviderConnection rerankerConnection() {
-        return auxConnection(ProviderConnectivity.RERANKER_KEY, props.rerankerSafe().baseUrl());
+        return auxConnection(ProviderConnectivity.RERANKER_KEY, props.rerankerEnabled());
     }
 
-    private static SettingsView.ProviderConnection pendingIfConfigured(String baseUrl) {
-        return (baseUrl == null || baseUrl.isBlank())
+    private static SettingsView.ProviderConnection pendingIfConfigured(boolean configured) {
+        return !configured
                 ? SettingsView.ProviderConnection.notConfigured() : SettingsView.ProviderConnection.pending();
     }
 
-    private SettingsView.ProviderConnection auxConnection(String key, String baseUrl) {
-        if (baseUrl == null || baseUrl.isBlank()) return SettingsView.ProviderConnection.notConfigured();
+    private SettingsView.ProviderConnection auxConnection(String key, boolean configured) {
+        if (!configured) return SettingsView.ProviderConnection.notConfigured();
         return connectivity.last(key)
                 .map(r -> r.reachable()
-                        ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed())
+                        ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed(), r.error())
                         : SettingsView.ProviderConnection.unreachable(r.error()))
                 .orElseGet(SettingsView.ProviderConnection::pending);
     }

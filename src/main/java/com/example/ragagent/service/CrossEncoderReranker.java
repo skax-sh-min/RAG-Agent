@@ -23,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -70,12 +72,26 @@ public class CrossEncoderReranker {
         }
     }
 
-    private final RestClient client;
+    /** 리랭커 서버 하나 — 자기 클라이언트·진행 중 호출 수·건너뛰기 창을 가진다. */
+    private static final class Target {
+        final String label;
+        final RestClient client;
+        final AtomicInteger inFlight = new AtomicInteger();
+        /** 건너뛰기 창의 만료 시각({@code nanoClock} 기준). 0 = 건너뛰지 않음. */
+        final AtomicLong blockedUntil = new AtomicLong();
+
+        Target(String label, RestClient client) {
+            this.label = label;
+            this.client = client;
+        }
+    }
+
+    private final List<Target> targets;
+    private final AtomicInteger roundRobin = new AtomicInteger();
     private final String model;
     private final int timeoutSeconds;
     private final Semaphore permits;
     private final LongSupplier nanoClock;
-    private volatile long blockedUntilNanos = 0L;
 
     @Autowired
     public CrossEncoderReranker(AppProperties props) {
@@ -85,14 +101,19 @@ public class CrossEncoderReranker {
     /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. */
     CrossEncoderReranker(AppProperties props, LongSupplier nanoClock) {
         AppProperties.RerankerConfig cfg = props.rerankerSafe();
-        RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
-                .baseUrl(endpointBase(cfg.baseUrl()));
-        // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
-        if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
-        this.client = builder.build();
+        List<Target> built = new ArrayList<>();
+        for (String url : props.rerankerBaseUrls()) {
+            RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
+                    .baseUrl(endpointBase(url));
+            // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
+            if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
+            built.add(new Target(url, builder.build()));
+        }
+        this.targets = List.copyOf(built);
         this.model = cfg.model();
         this.timeoutSeconds = cfg.timeoutSeconds();
-        this.permits = new Semaphore(cfg.maxConcurrent(), true);
+        // 동시 호출 상한은 서버 한 대 기준 값이다 — 서버가 N 대면 N 배까지 동시에 나갈 수 있다.
+        this.permits = new Semaphore(cfg.maxConcurrent() * Math.max(1, targets.size()), true);
         this.nanoClock = nanoClock;
     }
 
@@ -100,11 +121,16 @@ public class CrossEncoderReranker {
      * {@code candidates} 를 {@code query} 와의 관련도로 다시 줄 세워 상위 {@code topK} 를 점수와 함께 돌려준다(점수 내림차순,
      * 같으면 입력 순서). 후보가 비어 있으면 서버를 부르지 않는다.
      *
+     * <p>서버가 여럿이면 진행 중 호출이 가장 적은 곳(같으면 돌아가며)으로 보내고, <b>연결 계열 실패</b>는 그 서버를
+     * {@value #BLOCK_SECONDS}초 건너뛰며 <b>같은 호출 안에서</b> 다음 서버로 다시 보낸다. 서버가 답한 오류·읽기 타임아웃은
+     * 넘기지 않는다(요청 모양 문제일 수 있다 — {@code LoadBalancingEmbeddingModel} 과 같은 판단).
+     *
      * @throws UnavailableException 서버에 닿지 못했거나 응답을 쓸 수 없을 때
      */
     public List<Ranked> rerank(String query, List<Document> candidates, int topK) {
         if (candidates == null || candidates.isEmpty() || topK <= 0) return List.of();
-        if (nanoClock.getAsLong() < blockedUntilNanos) {
+        List<Target> order = candidateOrder();
+        if (order.isEmpty()) {
             throw new UnavailableException("리랭커를 잠시 건너뛴다(연결 실패 후 " + BLOCK_SECONDS + "초)");
         }
         boolean acquired = false;
@@ -117,34 +143,65 @@ public class CrossEncoderReranker {
         if (!acquired) throw new UnavailableException("리랭커 동시 호출 자리를 " + timeoutSeconds + "초 안에 얻지 못했다");
         try {
             String body = requestBody(query, candidates);
-            String response = client.post().uri("/v1/rerank")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            return parse(response, candidates, topK);
-        } catch (UnavailableException e) {
-            throw e;
-        } catch (RestClientException e) {
-            if (LlmRouter.isConnectionFailure(e)) {
-                blockedUntilNanos = nanoClock.getAsLong() + TimeUnit.SECONDS.toNanos(BLOCK_SECONDS);
-                log.warn("[Reranker] 서버에 닿지 못했다 — {}초 건너뛴다: {}", BLOCK_SECONDS, e.getMessage());
-            } else {
-                log.warn("[Reranker] 호출 실패: {}", e.getMessage());
+            UnavailableException last = null;
+            for (Target t : order) {
+                t.inFlight.incrementAndGet();
+                try {
+                    String response = t.client.post().uri("/v1/rerank")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(body)
+                            .retrieve()
+                            .body(String.class);
+                    return parse(response, candidates, topK);
+                } catch (UnavailableException e) {
+                    throw e;
+                } catch (RestClientException e) {
+                    UnavailableException failure = new UnavailableException("리랭커 호출 실패: " + e.getMessage(), e);
+                    if (LlmRouter.isConnectionFailure(e)) {
+                        t.blockedUntil.set(nanoClock.getAsLong() + TimeUnit.SECONDS.toNanos(BLOCK_SECONDS));
+                        log.warn("[Reranker] 서버에 닿지 못했다 — {}초 건너뛴다 ({}): {}", BLOCK_SECONDS, t.label, e.getMessage());
+                        last = failure;   // 다음 서버로
+                    } else {
+                        log.warn("[Reranker] 호출 실패 ({}): {}", t.label, e.getMessage());
+                        throw failure;
+                    }
+                } catch (RuntimeException e) {
+                    // 요청을 만들다 난 예외 등 — 어느 쪽이든 호출자가 할 일은 같다(리랭크를 건너뛴다). 건너뛰기 창은 열지 않는다.
+                    log.warn("[Reranker] 예기치 않은 실패: {}", e.toString());
+                    throw new UnavailableException("리랭커 호출 중 예외: " + e, e);
+                } finally {
+                    t.inFlight.decrementAndGet();
+                }
             }
-            throw new UnavailableException("리랭커 호출 실패: " + e.getMessage(), e);
-        } catch (RuntimeException e) {
-            // 요청을 만들다 난 예외 등 — 어느 쪽이든 호출자가 할 일은 같다(리랭크를 건너뛴다). 건너뛰기 창은 열지 않는다.
-            log.warn("[Reranker] 예기치 않은 실패: {}", e.toString());
-            throw new UnavailableException("리랭커 호출 중 예외: " + e, e);
+            throw last != null ? last : new UnavailableException("리랭커 서버에 닿지 못했다");
         } finally {
             permits.release();
         }
     }
 
+    /** 건너뛰기 창 안인가 — 0 은 "차단 없음"이라 시계 값이 음수여도 차단으로 읽지 않는다. */
+    private static boolean blocked(Target t, long now) {
+        long until = t.blockedUntil.get();
+        return until != 0 && now - until < 0;
+    }
+
+    /** 이번 호출이 시도할 서버 순서 — 건너뛰는 중이 아닌 서버를 진행 중 호출이 적은 순(같으면 돌아가며)으로. */
+    private List<Target> candidateOrder() {
+        long now = nanoClock.getAsLong();
+        List<Target> open = new ArrayList<>();
+        for (Target t : targets) if (!blocked(t, now)) open.add(t);
+        if (open.size() > 1) {
+            int offset = Math.floorMod(roundRobin.getAndIncrement(), open.size());
+            java.util.Collections.rotate(open, -offset);
+            open.sort(Comparator.comparingInt(t -> t.inFlight.get()));   // 안정 정렬 — 동률은 회전 순서가 남는다
+        }
+        return open;
+    }
+
     /** 연결 계열 실패 뒤 건너뛰기 창 안인가 — {@code /settings} 의 상태 배지가 읽는다. */
     public boolean isSkipping() {
-        return nanoClock.getAsLong() < blockedUntilNanos;
+        long now = nanoClock.getAsLong();
+        return targets.stream().allMatch(t -> blocked(t, now));
     }
 
     /** 요청 본문 — 문서는 입력 순서 그대로이고 응답의 {@code index} 가 이 순서를 가리킨다. */

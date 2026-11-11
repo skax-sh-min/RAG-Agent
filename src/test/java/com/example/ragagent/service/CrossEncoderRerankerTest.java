@@ -261,4 +261,86 @@ class CrossEncoderRerankerTest {
 
         assertThat(maxSeen.get()).isEqualTo(2);
     }
+
+    // ── 주소 여럿(RERANK_BASE_URLS = A;B) ────────────────────────────────────────
+
+    private HttpServer extraServer;
+    private final AtomicInteger extraHits = new AtomicInteger();
+
+    private String startExtra() throws IOException {
+        extraServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        extraServer.createContext("/", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            extraHits.incrementAndGet();
+            byte[] out = results("0", "2.0").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, out.length);
+            try (var os = exchange.getResponseBody()) {
+                os.write(out);
+            }
+        });
+        extraServer.start();
+        return "http://127.0.0.1:" + extraServer.getAddress().getPort();
+    }
+
+    @AfterEach
+    void stopExtra() {
+        if (extraServer != null) extraServer.stop(0);
+    }
+
+    @Test
+    @DisplayName("주소가 여럿이면 앞 주소가 죽어 있어도 같은 호출 안에서 다음 주소로 넘어가고, 죽은 주소는 건너뛴다")
+    void failsOverToTheNextAddressWithinTheSameCall() throws IOException {
+        int deadPort;
+        try (ServerSocket s = new ServerSocket(0)) {
+            deadPort = s.getLocalPort();
+        }
+        String alive = startExtra();
+        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + deadPort + ";" + alive));
+
+        assertThat(reranker.rerank("q", List.of(doc("a", "a")), 1)).as("첫 주소가 닿지 않아도 성공").hasSize(1);
+        assertThat(extraHits.get()).isEqualTo(1);
+        assertThat(reranker.isSkipping()).as("한 주소만 막혔으니 전체가 건너뛰는 중은 아니다").isFalse();
+
+        // 막힌 주소는 부르지 않는다 — 다음 호출도 곧바로 살아 있는 주소로 간다
+        assertThat(reranker.rerank("q", List.of(doc("a", "a")), 1)).hasSize(1);
+        assertThat(extraHits.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("모든 주소가 닿지 않으면 UnavailableException 이고 전체가 건너뛰는 중이 된다")
+    void allAddressesDownIsUnavailable() throws IOException {
+        int a;
+        int b;
+        try (ServerSocket s1 = new ServerSocket(0); ServerSocket s2 = new ServerSocket(0)) {
+            a = s1.getLocalPort();
+            b = s2.getLocalPort();
+        }
+        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + a + ";http://127.0.0.1:" + b));
+        assertThatThrownBy(() -> reranker.rerank("q", List.of(doc("a", "a")), 1)).isInstanceOf(UnavailableException.class);
+        assertThat(reranker.isSkipping()).isTrue();
+    }
+
+    @Test
+    @DisplayName("살아 있는 주소가 둘이면 호출을 번갈아 나눠 보낸다")
+    void spreadsCallsAcrossLiveAddresses() throws IOException {
+        String one = start(200, results("0", "1.0"));
+        String two = startExtra();
+        var reranker = new CrossEncoderReranker(props(one + ";" + two));
+
+        for (int i = 0; i < 6; i++) reranker.rerank("q", List.of(doc("a", "a")), 1);
+
+        assertThat(requests.size()).as("첫 주소").isEqualTo(3);
+        assertThat(extraHits.get()).as("둘째 주소").isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("서버가 답한 오류(5xx)는 다음 주소로 넘기지 않는다 — 요청 모양 문제일 수 있다")
+    void serverErrorIsNotFailedOver() throws IOException {
+        String bad = start(500, "{\"error\":\"input too large\"}");
+        String good = startExtra();
+        var reranker = new CrossEncoderReranker(props(bad + ";" + good));
+
+        assertThatThrownBy(() -> reranker.rerank("q", List.of(doc("a", "a")), 1)).isInstanceOf(UnavailableException.class);
+        assertThat(extraHits.get()).isZero();
+    }
 }

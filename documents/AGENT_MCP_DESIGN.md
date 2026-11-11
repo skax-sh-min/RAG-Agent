@@ -494,7 +494,7 @@ llama-server -m bge-reranker-v2-m3-Q8_0.gguf -c 8192 -ngl 0 --host 127.0.0.1 --p
 ```
 
 ```properties
-app.reranker.base-url=${RERANK_BASE_URL:}
+app.reranker.base-url=${RERANK_BASE_URLS:${RERANK_BASE_URL:}}
 app.reranker.model=${RERANK_MODEL:bge-reranker-v2-m3}
 app.reranker.timeout-seconds=${RERANK_TIMEOUT_SECONDS:15}
 app.search-rerank-min-score=${SEARCH_RERANK_MIN_SCORE:0.0}
