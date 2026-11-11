@@ -88,6 +88,22 @@ public class SearchLoopService {
         }
     }
 
+    /** 첫 검색의 후보 뒤에 원문 검색의 후보를 (중복 없이) 붙인다. 원문 검색이 실패해도 첫 검색의 결과는 그대로다. */
+    private List<Document> unionWithRawPool(List<Document> pool, HybridSearchService.SearchRequest req, String raw) {
+        try {
+            HybridSearchService.SearchRequest rawReq = new HybridSearchService.SearchRequest(req.userId(), req.version(), raw, raw, raw,
+                    req.selectedTags(), req.excludedDocIds(), Optional.empty(), req.candidateK(), false);
+            List<Document> extra = hybrid.search(rawReq).candidates();
+            Map<String, Document> union = new LinkedHashMap<>();
+            for (Document d : pool) union.putIfAbsent(HybridSearchService.docKey(d), d);
+            for (Document d : extra) union.putIfAbsent(HybridSearchService.docKey(d), d);
+            return List.copyOf(union.values());
+        } catch (RuntimeException e) {
+            log.warn("[SEARCH-LOOP] 원문 후보 풀을 만들지 못했다 — 독립화된 검색어의 후보만 쓴다: {}", e.toString());
+            return pool;
+        }
+    }
+
     public Result run(Params p) {
         CrossEncoderReranker reranker = crossEncoder.orElseThrow(
                 () -> new IllegalStateException("교차 인코더 없이 검색 루프를 돌릴 수 없다"));
@@ -97,6 +113,11 @@ public class SearchLoopService {
         HybridSearchService.SearchRequest req = p.first();
         List<String> used = new ArrayList<>();
         used.add(req.searchQuestion());
+        // 첫 검색어가 독립화된 것이면(rawFallback != null) 첫 회차의 후보 풀에 사용자가 친 원문의 검색 결과를 합친다. 독립화는 맥락을 보태는 대신
+        // 단어를 바꿔 원문이 맞히던 청크를 놓치기도 한다(후속 질문 fu-20). 합친 풀은 독립화된 질문으로 한 번만 리랭크하므로 원문의 엉뚱한 후보는
+        // 점수에서 걸러진다. LLM 호출은 없다(검색 한 번 추가).
+        String rawPool = p.rawFallback() != null && !p.rawFallback().isBlank() && !p.rawFallback().strip().equals(req.searchQuestion())
+                ? p.rawFallback().strip() : null;
         // 청크 키 → 가장 높은 점수의 (문서, 점수). 삽입 순서 = 먼저 본 순서(같은 점수의 안정 정렬 기준).
         Map<String, CrossEncoderReranker.Ranked> merged = new LinkedHashMap<>();
         Map<String, RetrievalService.RrfMetrics> metrics = new HashMap<>();
@@ -116,7 +137,9 @@ public class SearchLoopService {
             try {
                 found = hybrid.search(req);
                 // 키워드 축으로만 찾힌 후보는 본문이 검색용 파생 텍스트다 — 리랭커가 그것을 읽지 않게 '리랭크 전에' 저장 원문으로 되돌린다.
-                candidates = hybrid.withStoredText(found.candidates());
+                List<Document> pool = found.candidates();
+                if (first && rawPool != null) pool = unionWithRawPool(pool, req, rawPool);
+                candidates = hybrid.withStoredText(pool);
                 if (first) {
                     firstCandidates = candidates;
                     metrics.putAll(found.metrics());

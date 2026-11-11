@@ -165,8 +165,8 @@ class SearchLoopServiceTest {
         verify(rewriter, never()).nextQuery(any(), any(), any(), any(), any(), any());
         verify(listener).onSearchRetry(2, 3);
         ArgumentCaptor<HybridSearchService.SearchRequest> cap = ArgumentCaptor.forClass(HybridSearchService.SearchRequest.class);
-        verify(hybrid, times(2)).search(cap.capture());
-        HybridSearchService.SearchRequest second = cap.getAllValues().get(1);
+        verify(hybrid, times(3)).search(cap.capture());   // 첫 회차(독립화) + 같은 회차의 원문 풀 + 원문 시험 회차
+        HybridSearchService.SearchRequest second = cap.getAllValues().get(2);
         assertThat(second.question()).isEqualTo("XA 타입이면?");
         assertThat(second.searchQuestion()).isEqualTo("XA 타입이면?");
         assertThat(second.keywordQuestion()).isEqualTo("XA 타입이면?");
@@ -184,7 +184,7 @@ class SearchLoopServiceTest {
         assertThat(r.attempts()).isEqualTo(3);
         assertThat(r.queries()).containsExactly("독립화", "원문", "새 표현");
         assertThat(r.rewriteCalls()).isEqualTo(1);
-        verify(hybrid, times(3)).search(any());
+        verify(hybrid, times(4)).search(any());   // 첫 회차의 원문 풀 검색 + 세 회차
     }
 
     @Test
@@ -195,7 +195,7 @@ class SearchLoopServiceTest {
         SearchLoopService.Result r = loop.run(condensedParams("독립화", "원문"));
 
         assertThat(r.attempts()).isEqualTo(1);
-        verify(hybrid, times(1)).search(any());
+        verify(hybrid, times(2)).search(any());   // 독립화 검색 + 원문 후보 풀(리랭크는 한 번)
     }
 
     @Test
@@ -223,7 +223,22 @@ class SearchLoopServiceTest {
         SearchLoopService.Result r = loop.run(p);
 
         assertThat(r.attempts()).isEqualTo(1);
-        verify(hybrid, times(1)).search(any());
+        verify(hybrid, times(2)).search(any());   // 원문 시험은 없지만 첫 회차의 원문 후보 풀은 합친다
+    }
+
+    @Test
+    @DisplayName("독립화한 질문의 첫 회차는 원문 검색의 후보도 풀에 합쳐 독립화된 질문으로 한 번만 리랭크한다 — 독립화가 놓친 청크를 원문이 건진다")
+    void firstRoundPoolsTheRawQuestionCandidatesAndRerankedOnce() {
+        scores(Map.of("독립화", new double[]{2.0}));
+
+        loop.run(condensedParams("독립화", "원문"));
+
+        ArgumentCaptor<List<Document>> pool = ArgumentCaptor.forClass(List.class);
+        verify(crossEncoder, times(1)).rerank(eq("독립화"), pool.capture(), eq(CUT));
+        ArgumentCaptor<HybridSearchService.SearchRequest> cap = ArgumentCaptor.forClass(HybridSearchService.SearchRequest.class);
+        verify(hybrid, times(2)).search(cap.capture());
+        assertThat(cap.getAllValues().get(1).searchQuestion()).isEqualTo("원문");
+        assertThat(cap.getAllValues().get(1).allowExpansion()).isFalse();
     }
 
     @Test
