@@ -19,6 +19,7 @@ class ModelServersStartupCheckTest {
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(e.isEmpty() ? null : e.get(0), null, "bge-m3",
                 null, 10, 120, true, 0, e.size() > 1 ? e.subList(1, e.size()) : List.of(), 1));
         when(props.rerankerBaseUrls()).thenReturn(AppProperties.parseUrls(rerankUrls));
+        when(props.rerankerSafe()).thenReturn(new AppProperties.RerankerConfig(rerankUrls, "bge-reranker-v2-m3", 5, 15, 2, ""));
         return props;
     }
 
@@ -58,12 +59,22 @@ class ModelServersStartupCheckTest {
     }
 
     @Test
-    @DisplayName("임베딩은 EMBED_MODEL 이 목록에 없으면 모델 경고, 리랭커는 모델명을 따지지 않는다")
-    void modelNameIsOnlyCheckedForEmbedding() {
+    @DisplayName("모델이 서버 목록에 없으면 임베딩도 리랭커도 모델 경고를 낸다 — 각자 자기 설정값(EMBED_MODEL · RERANK_MODEL)으로")
+    void warnsWhenTheModelIsNotListedForBoth() {
         var check = new ModelServersStartupCheck(props("http://a:1/v1", "http://r:2"),
                 (url, kind) -> new Result(true, 5L, false, null, Instant.now()));
 
-        assertThat(check.check()).singleElement().asString().contains("[EMBED STARTUP]", "does not list model 'bge-m3'");
+        List<String> w = check.check();
+        assertThat(w).hasSize(2);
+        assertThat(w.get(0)).contains("[EMBED STARTUP]", "does not list model 'bge-m3'");
+        assertThat(w.get(1)).contains("[RERANK STARTUP]", "does not list model 'bge-reranker-v2-m3'");
+    }
+
+    @Test
+    @DisplayName("모델이 목록에 있으면 아무 경고도 없다")
+    void noWarningWhenEverythingIsListed() {
+        var check = new ModelServersStartupCheck(props("http://a:1/v1", "http://r:2"), (url, kind) -> up());
+        assertThat(check.check()).isEmpty();
     }
 
     @Test

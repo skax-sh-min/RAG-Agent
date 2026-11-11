@@ -339,7 +339,12 @@
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
               th:title="#{settings.status.unreachable.hint(${conn.error ?: '-'})}"
               th:text="#{settings.status.unreachable}">Unreachable</span>
-        <span th:case="'OK'" class="badge bg-success"
+        <!--/* 서버는 응답하는데 설정한 모델(EMBED_MODEL · RERANK_MODEL)이 /v1/models 목록에 없으면 "모델없음" — 정상과 구별한다 */-->
+        <span th:case="'OK'" th:if="${conn.modelMissing}" class="badge bg-warning text-dark"
+              data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+              th:title="#{settings.status.aux-model-missing.hint(${conn.latencyMs})}"
+              th:text="#{settings.status.model-missing}">Model missing</span>
+        <span th:case="'OK'" th:unless="${conn.modelMissing}" class="badge bg-success"
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
               th:title="${#messages.msg('settings.status.normal.hint', conn.latencyMs)}"
               th:text="#{llm.status.normal}">Normal</span>

@@ -701,6 +701,23 @@ class SettingsControllerRenderTest {
                 ">정상<", ">접속불가<", "Connection refused");
     }
 
+    @Test
+    @DisplayName("GET /settings/llm-status — 서버는 응답하는데 설정한 모델이 목록에 없으면 정상이 아니라 '모델없음' 배지가 나온다")
+    void addressBadgeSaysModelMissingWhenTheModelIsNotListed() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of(
+                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true))));
+        when(settingsService.embeddingEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.reachable(7L, false))));
+        when(settingsService.rerankerEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://r1:1", SettingsView.ProviderConnection.reachable(9L, true))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains(">모델없음<");
+        assertThat(count(html, ">모델없음<")).as("모델이 없는 임베딩 한 곳만").isEqualTo(1);
+    }
+
     // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
 
     @Test

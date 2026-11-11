@@ -19,9 +19,10 @@ import java.util.function.BiFunction;
  * 일부만 죽어도 서비스는 되기 때문이다. 이 점검이 없으면 서버가 꺼진 채 기동해도 첫 질문·첫 인덱싱·첫 검색에서야 드러난다
  * (리랭커는 그 턴이 RRF 순서로 조용히 물러나 더 눈에 안 띈다).
  *
- * <p>임베딩은 설정한 모델({@code EMBED_MODEL})이 서버 목록에 없을 때도 경고한다. 리랭커는 모델명을 따지지 않는다 —
- * llama-server 는 요청의 {@code model} 을 무시하므로 목록의 이름(GGUF 파일명)과 {@code RERANK_MODEL} 이 달라도 정상이다.
- * 리랭커 주소가 없으면(= 꺼짐) 아무 말도 하지 않는다.
+ * <p>설정한 모델({@code EMBED_MODEL} · {@code RERANK_MODEL})이 서버의 모델 목록에 없을 때도 경고한다(정확히 같거나, 설정값을
+ * 포함하는 서버 id 가 하나뿐이면 있는 것으로 본다 — {@code ModelNameResolver}). llama-server 는 요청의 {@code model} 을
+ * 무시하므로 리랭커의 이 경고는 "호출이 실패한다"가 아니라 <b>설정 값과 서버가 가진 모델이 다르다</b>는 알림이다. 리랭커 주소가
+ * 없으면(= 꺼짐) 아무 말도 하지 않는다.
  *
  * <p>기동을 늦추지 않도록 {@link ApplicationReadyEvent} 뒤 가상 스레드에서 돌고, 어떤 실패도 던지지 않는다. 확인은
  * {@code /settings} 상태 배지와 같은 함수({@link ProviderConnectivity#checkEndpointNow})다.
@@ -69,7 +70,8 @@ public class ModelServersStartupCheck {
             if (cfg.additionalBaseUrls() != null) embedUrls.addAll(cfg.additionalBaseUrls());
             checkAll("EMBED STARTUP", "embedding", embedUrls, cfg.model(),
                     "RAG questions and indexing", warnings);
-            checkAll("RERANK STARTUP", "reranker", props.rerankerBaseUrls(), null,
+            checkAll("RERANK STARTUP", "reranker", props.rerankerBaseUrls(),
+                    props.rerankerSafe() == null ? null : props.rerankerSafe().model(),
                     "searches fall back to the plain RRF order (no reranking)", warnings);
         } catch (RuntimeException e) {
             log.debug("[STARTUP CHECK] skipped: {}", e.toString());
@@ -98,7 +100,7 @@ public class ModelServersStartupCheck {
                         + " are affected while it is down.");
             } else if (modelToList != null && Boolean.FALSE.equals(r.modelListed())) {
                 out.add("[" + tag + "] " + kind + " server " + url + " is up but does not list model '" + modelToList
-                        + "' \u2014 calls may fail (check the model name setting).");
+                        + "' \u2014 check the model name setting (the server lists a different model).");
             }
         }
         if (urls.size() > 1 && unreachable == urls.size()) {
