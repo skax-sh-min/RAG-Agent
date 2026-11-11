@@ -413,7 +413,7 @@ public record AppProperties(
      * ({@link AppProperties#effectiveRerankCandidates()} · {@link AppProperties#effectiveRerankTopK()}).
      */
     public record RerankerConfig(
-            String baseUrl,                // app.reranker.base-url / RERANK_BASE_URL — 비면 꺼짐. 뒤의 /v1 은 있어도 없어도 된다
+            String baseUrl,                // app.reranker.base-url / RERANK_BASE_URLS — 비면 꺼짐. `;` 로 여럿(A;B;C). 뒤의 /v1 은 있어도 없어도 된다
             String model,                  // app.reranker.model / RERANK_MODEL — 요청 본문의 model, 기본 bge-reranker-v2-m3
             Integer connectTimeoutSeconds, // app.reranker.connect-timeout-seconds, 기본 5
             Integer timeoutSeconds,        // app.reranker.timeout-seconds — 읽기 타임아웃(= 한 호출의 상한), 기본 15
@@ -969,12 +969,13 @@ public record AppProperties(
         int maxChunkChars = (embedding.maxChunkChars() != null && embedding.maxChunkChars() > 0)
                 ? embedding.maxChunkChars() : 0;
         // §6.21 E1/E2 — null-safe defaults: no extra endpoints, serial sub-batch embedding.
-        List<String> additionalBaseUrls = embedding.additionalBaseUrls() != null
-                ? embedding.additionalBaseUrls() : List.of();
+        // 주소는 EMBED_BASE_URLS 하나에 {@code ;} 로 여럿 적는다 — 첫 주소가 baseUrl, 나머지가 추가 엔드포인트다.
+        List<String> urls = parseUrls(embedding.baseUrl());
+        List<String> additionalBaseUrls = urls.size() > 1 ? List.copyOf(urls.subList(1, urls.size())) : List.of();
         int maxConcurrentBatches = (embedding.maxConcurrentBatches() != null && embedding.maxConcurrentBatches() > 1)
                 ? embedding.maxConcurrentBatches() : 1;
         return new EmbeddingConfig(
-                embedding.baseUrl(),
+                urls.isEmpty() ? embedding.baseUrl() : urls.get(0),
                 embedding.apiKey(),
                 embedding.model(),
                 embedding.dimensions(),
@@ -992,7 +993,8 @@ public record AppProperties(
      * 이 값은 빈이 만들어질 때 한 번 굳는다({@code CrossEncoderReranker}): 주소 유무가 곧 빈의 유무라 핫 편집 대상이 아니다.
      */
     public RerankerConfig rerankerSafe() {
-        String url = (reranker == null || reranker.baseUrl() == null) ? "" : reranker.baseUrl().strip();
+        List<String> urls = rerankerBaseUrls();
+        String url = urls.isEmpty() ? "" : urls.get(0);
         String model = (reranker == null || reranker.model() == null || reranker.model().isBlank())
                 ? RerankerConfig.DEFAULT_MODEL : reranker.model().strip();
         int connect = (reranker != null && reranker.connectTimeoutSeconds() != null && reranker.connectTimeoutSeconds() > 0)
@@ -1018,6 +1020,27 @@ public record AppProperties(
         Integer v = (o != null) ? o : searchMaxAttempts;
         int n = (v == null || v < 1) ? DEFAULT_SEARCH_MAX_ATTEMPTS : v;
         return Math.min(n, MAX_SEARCH_MAX_ATTEMPTS);
+    }
+
+    /** 리랭커 서버 주소 전부 — {@code app.reranker.base-urls}(RERANK_BASE_URLS)의 {@code ;} 구분 목록. 없으면 빈 목록(= 꺼짐). */
+    public List<String> rerankerBaseUrls() {
+        return parseUrls(reranker == null ? null : reranker.baseUrl());
+    }
+
+    /**
+     * {@code A;B;C} 형태의 주소 목록을 나눈다 — 공백·빈 항목은 버리고 같은 주소(끝의 {@code /} 무시)는 한 번만 센다. 쉼표도
+     * 구분자로 받는다(예전 목록 변수의 습관). 순서는 입력 그대로다(첫 주소가 먼저 쓰인다).
+     */
+    public static List<String> parseUrls(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        List<String> out = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String part : raw.split("[;,]")) {
+            String u = part.strip();
+            if (u.isEmpty()) continue;
+            if (seen.add(u.replaceAll("/+$", "").toLowerCase(java.util.Locale.ROOT))) out.add(u);
+        }
+        return List.copyOf(out);
     }
 
     /** 교차 인코더 리랭커를 쓰는가 — {@code app.reranker.base-url} 이 있는가. 켜면 검색이 후보 풀을 리랭크한다. */

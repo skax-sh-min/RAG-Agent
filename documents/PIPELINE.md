@@ -203,7 +203,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 |---|------|------|---------|
 | ① | AgentService (사전 병렬) | 질문 유형 분류 | 없음 |
 | ② | DIRECT_ANSWER | meta 직접 응답 | ✓ |
-| ③ | RETRIEVAL | 쿼리 다양화 (질문 길이 >= `search-multiquery-min-length`, **500자 이하**). 500자 초과 긴 질문은 확장 대신 `LongQuestionQuery` — 앞뒤 발췌 + 낱말(1단계), 2,000자 초과면 LLM 이 검색문·키워드를 추가(2단계). 상세 OPERATOR_MANUAL §6.13 | 없음 |
+| ③ | RETRIEVAL | 쿼리 다양화 (질문 길이 >= `search-multiquery-min-length`, **500자 이하**). 500자 초과 긴 질문은 확장 대신 `LongQuestionQuery` — 앞뒤 발췌 + 낱말(1단계), 1,000자 초과면 LLM 이 검색문·키워드를 추가(2단계). 상세 OPERATOR_MANUAL §6.13 | 없음 |
 | ③′ | AgentService (사전) | 질의 독립화 — 짧은 후속 질문을 자립적 검색어로 재작성(§10.12, 길이 < 임계값). ③과 **여집합**이라 둘이 함께 돌지 않는다 | ✓ |
 | ④ | ANSWER | 답변 생성 | ✓ |
 | ⑤ | ANSWER | 충분도(`sufficient`) + 근거(`grounded`) + 사유(`reason`) + 환경 의존 값 안내(`envNote`) **동시 평가** | ✓ |
@@ -449,7 +449,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
        partial row를 실제 chunk수/spring_doc_ids로 덮어씀)
 ```
 
-> **임베딩 병렬화(§6.21 E1~E3)**: 위 "임베딩 입력 구성 → 벡터 스토어 저장"의 임베딩 호출은 다중 엔드포인트 로드밸런싱(E1, `EMBED_ADDITIONAL_BASE_URLS` — 같은 모델을 N개 서버에 두고 least-in-flight 분산)과 서브배치 병렬 임베딩(E2, `EMBED_MAX_CONCURRENT_BATCHES`, 기본 1=직렬)으로 처리량을 확장할 수 있다(opt-in). Chroma는 임베딩만 병렬화 후 1회 upsert, sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1)이라 E2를 켜면 위 §10.9.3 스트리밍 메모리 상한을 속도와 맞바꾼다. 상세는 OPERATOR_MANUAL §3.2 "임베딩 병렬화".
+> **임베딩 병렬화(§6.21 E1~E3)**: 위 "임베딩 입력 구성 → 벡터 스토어 저장"의 임베딩 호출은 다중 엔드포인트 로드밸런싱(E1, `EMBED_BASE_URLS`(`;` 목록) — 같은 모델을 N개 서버에 두고 least-in-flight 분산)과 서브배치 병렬 임베딩(E2, `EMBED_MAX_CONCURRENT_BATCHES`, 기본 1=직렬)으로 처리량을 확장할 수 있다(opt-in). Chroma는 임베딩만 병렬화 후 1회 upsert, sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1)이라 E2를 켜면 위 §10.9.3 스트리밍 메모리 상한을 속도와 맞바꾼다. 상세는 OPERATOR_MANUAL §3.2 "임베딩 병렬화".
 
 ### 6.3. DOCX → MD → 임베딩 DB 저장 상세 (이미지 포함)
 

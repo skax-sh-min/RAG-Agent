@@ -45,7 +45,7 @@ services:
       - "127.0.0.1:8080:8080"
     # .env 를 통째로 컨테이너에 전달한다. 예전처럼 environment: 에 나열한 변수만 넘기면,
     # .env.example 에 문서화돼 있어도 여기 빠진 변수(LOCAL_FAST_LLM_URL, LOCAL_LLM_URL_2,
-    # EMBED_BASE_URL, AUTH_MANAGEMENT_ONLY, MIN_CHUNK_SIZE, SQLITE_VEC_DB_PATH, RRF/캐시 튜닝 등)는
+    # EMBED_BASE_URLS, AUTH_MANAGEMENT_ONLY, MIN_CHUNK_SIZE, SQLITE_VEC_DB_PATH, RRF/캐시 튜닝 등)는
     # Docker 배포에서 조용히 무시된다. 값의 기본값은 application.properties 가 이미 갖고 있으므로
     # 여기서 다시 적지 않는다(중복 기본값이 어긋나는 것이 기존 문제의 원인이었다).
     # required: false — .env 없이도 기동 가능(전부 application.properties 기본값으로 동작).

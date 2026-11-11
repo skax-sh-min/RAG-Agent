@@ -42,7 +42,7 @@ import java.util.Map;
  * 언급 수로만 보인다({@link Report#unjudged}) · 전수 조회 상한({@value #MENTION_LIMIT})을 넘으면 {@link Report#truncated} · 의미적으로만 연관된
  * (글자가 다른) 청크는 이 단계에서 찾지 않는다.
  *
- * <p>채팅에 양보한다 — 로컬 LLM 의 대화형 게이트가 비어 있을 때 호출을 보낸다({@code ClarifiedQuestionBackfill} 과 같은 신호). 한 사용자당 동시에 한
+ * <p>채팅에 양보한다 — 로컬 LLM 의 대화형 게이트가 비어 있을 때 호출을 보낸다(백그라운드 작업이 쓰는 같은 신호). 한 사용자당 동시에 한
  * 건만 돈다. 앱이 죽어 {@code running} 으로 남은 작업은 기동 때 {@code interrupted} 로 바뀐다({@link #markInterruptedAtStartup}).
  */
 @Service

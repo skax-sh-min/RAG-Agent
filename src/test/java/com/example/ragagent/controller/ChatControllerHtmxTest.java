@@ -586,9 +586,9 @@ class ChatControllerHtmxTest {
         // 사라지면 새로고침 뒤에는 원인을 짚을 방법이 아예 없다.
         assertThat(justSent).as("방금 보낸 응답에 재작성된 검색어가 없다").contains(condensed);
         assertThat(afterReload).as("새로고침 후 재작성된 검색어가 사라졌다").contains(condensed);
-        // 진단값이라 기본 숨김이고, ui.retrieval-metrics-enabled 가 켜졌을 때만 스크립트가 벗긴다.
-        assertThat(justSent).contains("condensed-question small text-muted mt-2 d-none");
-        assertThat(afterReload).contains("condensed-question small text-muted mt-2 d-none");
+        // 진단 설정(ui.retrieval-metrics-enabled)과 무관하게 항상 보인다 — 숨김 클래스가 붙지 않는다.
+        assertThat(justSent).contains("condensed-question small text-muted mt-2\"").doesNotContain("condensed-question small text-muted mt-2 d-none");
+        assertThat(afterReload).contains("condensed-question small text-muted mt-2\"").doesNotContain("condensed-question small text-muted mt-2 d-none");
     }
 
     @Test

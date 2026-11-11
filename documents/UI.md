@@ -185,7 +185,6 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
 | GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속). §6.25로 `userId`·`threadId` 필터가 추가됐다 — 둘은 **배타**라 `threadId`가 오면 서버가 `userId`를 떨군다(한 대화는 소유자가 한 명이므로 둘을 함께 들면 원인이 화면에 없는 빈 목록이 나온다) |
 | GET | `/admin/retrieval-metrics/turns/{turnId}/sources` | `fragments/admin-source-table :: standalone` | §6.25 — 한 턴의 출처별 진단 표. 대화 목록 패널의 드릴다운이 지연 로딩하며, 진단 패널의 **상세**와 같은 프래그먼트를 쓴다 |
-| GET · POST | `/admin/clarify-backfill` · `/admin/clarify-backfill/start` · `/admin/clarify-backfill/stop` | JSON `{"state","running","remaining","processed","clarified","keptOriginal","failed","startedAt","finishedAt","message"}` | 과거 질문 다듬기 일괄 처리(`ClarifyBackfillController` → `ClarifiedQuestionBackfill`, `AdminController` 와 별도 컨트롤러). 카드가 진행 중에는 2초마다 GET 을 다시 부르고, 페이지를 열 때 한 번 물어 진행 중이면 카드 머리에 "진행 중" 배지를 단다. 시작·멈춤은 감사 로그에 남는다 |
 | GET | `/admin/threads` | `fragments/admin-threads :: panel` | §6.25 — 전 사용자 대화 목록 지연 로딩. `userId`(소유자 필터)·`sort`(`RECENT`/`TURNS`/`REUSED`)·`offset`·`limit`. `sort`는 닫힌 enum으로 파싱된다(`ORDER BY`는 바인드 파라미터가 될 수 없어 알 수 없는 값은 `RECENT`로 떨어진다) |
 | GET | `/admin/threads/{threadId}/turns` | `fragments/admin-threads :: turns` | §6.25 — 그 대화의 턴 목록(드릴다운). **답변 전문은 실리지 않는다** — 응답 레코드에 `answer` 필드 자체가 없다 |
 | GET | `/admin/threads/{threadId}/delete-preview` | JSON | §6.25 — 삭제 확인 대화상자의 숫자(제목·소유자·턴 수·재사용됨·진단 수·큐레이션 수). 렌더된 행이 아니라 **클릭 시점**에 다시 읽는다 |
@@ -224,7 +223,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
 > - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
 
-> **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 과거 질문 다듬기 → 검색 진단 수치** 순이다(과거 질문 다듬기는 같은 대화 기록을 다루는 한 번 돌리면 끝나는 운영 도구라 대화 목록 바로 아래). 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
 > **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-지식-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
@@ -281,7 +280,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/settings` | `settings.html` | 화면 표시(채팅 글자 크기, 브라우저별 — §9.4) + LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
-| GET | `/settings/llm-status` | `fragments/settings-providers :: statuses` | 프로바이더 표의 **상태 칸**을 서버에 실제로 접속해 본 결과(모델 목록 API `GET {base}/v1/models`)로 채운다 — 칸마다 `hx-swap-oob` 로 같은 id(`prov-status-N`)를 바꿔 끼우는 조각들이다. `/settings` 가 "확인 중"으로 그려 두고 이 요청을 붙인다. `/settings` 와 같은 권한(게스트 개방 모드에서는 게스트도), 서버 여러 대를 병렬로 묻고 3초 안에 끝난 결과는 재사용한다. 같은 응답이 임베딩·리랭커 서버의 배지(`embed-status`·`rerank-status`)도 바꿔 끼운다 |
+| GET | `/settings/llm-status` | `fragments/settings-providers :: statuses` | 프로바이더 표의 **상태 칸**을 서버에 실제로 접속해 본 결과(모델 목록 API `GET {base}/v1/models`)로 채운다 — 칸마다 `hx-swap-oob` 로 같은 id(`prov-status-N`)를 바꿔 끼우는 조각들이다. `/settings` 가 "확인 중"으로 그려 두고 이 요청을 붙인다. `/settings` 와 같은 권한(게스트 개방 모드에서는 게스트도), 서버 여러 대를 병렬로 묻고 3초 안에 끝난 결과는 재사용한다. 같은 응답이 임베딩·리랭커 서버의 **주소별** 배지(`embed-status-N`·`rerank-status-N`)도 바꿔 끼운다 |
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
@@ -302,7 +301,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
   - **응용(C) 모드**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
   - **출력 상한 (max-tokens)** — 블로킹 호출의 출력 상한(`llm.max-tokens`, INT 8,000~64,000, step 500) — 단순한 출력 길이 손잡이가 아니다. 대화 이력 예산(×0.5) · MD 교정 섹션 크기 · 인덱싱 출력 예약 · 컨텍스트 입력 예산이 모두 여기서 파생되므로, 내리면 그 다섯이 함께 내려간다. 범위의 바닥이 0 이 아닌 이유가 그것이다.
   - **초과 시 제외 문서 수** — 컨텍스트 초과 재시도당 제외할 문서 수(`llm.shrink-step`, INT 1~10, 기본 **1**) — LLM 서버가 프롬프트를 컨텍스트 초과로 거절했을 때 재시도마다 덜어낼 문서 수(§6.26-9). 값이 클수록 왕복이 줄지만 버려지는 근거가 늘어난다; 재시도 상한이 5회라 **이 값 × 5** 가 도달 가능한 최대 축소폭이다.
-  - **프로바이더 표의 열 순서는 상태 → 활성화 → 생각 제어**(마지막은 관리자만)다. **상태**는 미설정 · 접속불가 · 정상 세 단계(+ 확인하는 동안의 "확인 중")다 — 미설정은 설정이 갖춰지지 않아(주소·키 없음) 서버가 만들어지지 않은 것이고, 나머지는 화면을 열 때 모델 목록 API 로 **실제로 접속해 본 결과**다. 페이지는 서버를 기다리지 않고 "확인 중"으로 먼저 그려진 뒤 `GET /settings/llm-status` 가 칸을 채운다(죽은 서버의 연결 타임아웃 3초가 페이지를 붙잡지 않게). 배지의 말풍선에 응답 시간 또는 접속하지 못한 사유가 있고, 서킷 브레이커가 건너뛰는 중이면 "차단 중"이 덧붙는다(접속 여부와 별개의 사실). 토글·재탐지 뒤의 표는 마지막 확인을 그대로 보여 준다. **카드 하단의 임베딩·리랭커 줄**(모델 · 엔드포인트 URL)에도 같은 3단계 배지가 줄 끝에 붙는다 — 두 서버는 LLM 라우터 밖이라 표에 행이 없고 이 줄이 유일한 확인 자리다(`{주소}/v1/models` 로 접속, 주소가 비면 미설정 · 리랭커는 `-`). 임베딩은 `EMBED_BASE_URL` 하나만 묻는다. **생각 제어**는 호출 지점별 생각 수준 설정이 이 프로바이더로 가는 요청에 실리는지를 **사용자 설정 적용 / 서버 설정 사용 / Unknown** 셋으로 말한다(필드 이름·방식·거부 기억은 말풍선).
+  - **프로바이더 표의 열 순서는 상태 → 활성화 → 생각 제어**(마지막은 관리자만)다. **상태**는 미설정 · 접속불가 · 정상 세 단계(+ 확인하는 동안의 "확인 중")다 — 미설정은 설정이 갖춰지지 않아(주소·키 없음) 서버가 만들어지지 않은 것이고, 나머지는 화면을 열 때 모델 목록 API 로 **실제로 접속해 본 결과**다. 페이지는 서버를 기다리지 않고 "확인 중"으로 먼저 그려진 뒤 `GET /settings/llm-status` 가 칸을 채운다(죽은 서버의 연결 타임아웃 3초가 페이지를 붙잡지 않게). 배지의 말풍선에 응답 시간 또는 접속하지 못한 사유가 있고, 서킷 브레이커가 건너뛰는 중이면 "차단 중"이 덧붙는다(접속 여부와 별개의 사실). 토글·재탐지 뒤의 표는 마지막 확인을 그대로 보여 준다. **카드 하단의 임베딩·리랭커 표**(`역할 · 모델 · 주소 · 기타` — 주소 칸이 가장 넓고 기타 칸이 가장 좁다)에서 **주소마다 한 줄**에 같은 3단계 배지가 붙는다(서버는 응답하는데 설정한 모델이 `/v1/models` 목록에 없으면 정상 대신 **모델없음**) — 두 서버는 LLM 라우터 밖이라 프로바이더 표에 행이 없고 이 표가 유일한 확인 자리다(`{주소}/v1/models` 로 접속, 주소가 비면 `-` + 미설정). 기타 칸에는 임베딩 차원.
   - **조회 전용 그룹의 "재기동 필요"는 그룹 제목 옆에 한 번**(검색 · 저장 용량 · 쿼리 임베딩 캐시) — 항목마다 붙이지 않는다. **생각(추론) 수준 카드는 접힌 채로 시작한다**(머리말을 눌러 펴고 닫으며, 펴 둔 상태는 [다시 계산]·창 재탐지로 카드가 갱신된 뒤에도 이 화면을 연 동안 유지된다).
   - **컨텍스트 다시 탐지** 버튼(LLM 라우팅 카드 **제목 줄 오른쪽 끝**, `isAdmin` 일 때만 렌더 — 프로바이더 표 조각 `#llm-providers` 밖에 둔다: 표는 토글·재탐지마다 통째로 바뀌므로 그 안에 두면 버튼도 매번 다시 그려진다) — 등록된 LOCAL 프로바이더에게 컨텍스트 창을 지금 다시 물어본다(§6.26 A5, `POST /admin/settings/context-window/reprobe` → 프로바이더 표 전체를 되돌려 `컨텍스트` 열이 제자리에서 갱신된다). 결과는 조각 안, 표 위에 프로바이더별 배지로 남고(**갱신됨** / **변화 없음** / **응답 없음 — 이전 값 유지** / **선언됨 — 탐지 안 함**, 그리고 창이 16K 미만이면 **16K 미만 — 지원 밖**), **"물어봤고 같았다"와 "안 물어봤다"를 반드시 구분해 보여야 한다** — 후자로 오해하면 버튼이 고장 난 것처럼 보인다. 출력 예약이 새 창과 어긋나면 재기동 안내가 함께 뜬다(그 값은 빈 생성 시점에 굳는다).
   - **저장 용량**(조회 전용) — 문서 저장 사용량(`documents`+`converted`+`images`, `documents/backup/` 제외)과 상한(`app.upload.max-total-size`). 상한은 재기동 필요이며 `/settings`에서 고칠 수 없다(배포 정책이고, 핫 키의 수치 타입이 GB 단위를 담지 못한다). 사용량을 함께 내는 이유는, 상한만 적혀 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이기 때문이다. 이 값은 30초 memoize된다 — `/settings`는 모든 인증 모드에서 게스트 개방이라 렌더가 곧 무제한 디렉터리 walk 트리거가 되어선 안 된다(업로드 검사 경로는 이 캐시를 쓰지 않고 매번 다시 잰다)
@@ -318,7 +317,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - **프로바이더 편집**(관리자, `ProviderCatalog`) — 제목 줄의 [로컬 프로바이더 추가]와 행마다 [편집]이 표 위(`#provider-editor`)에 폼을 연다. 폼: 우선순위 · 이름(새 프로바이더만) · role · type · 컨텍스트(자동 탐지가 안 될 때만 — 탐지값이 있거나 선언됐으면 칸이 잠긴다. 넣은 값은 나중에 탐지가 성공하면 덮이고, 실패하면 남는다) · 모델 · 접속 주소. **API 키 칸은 없다**(.env 로만) — 그래서 추가는 LOCAL 만 되고, 키 있는 프로바이더는 접속 주소의 호스트·포트를 바꿀 수 없다. **컨텍스트는 저장 즉시**, 나머지는 **재기동 뒤** 반영되며 그동안 이름 옆에 배지가 붙는다: `화면에서 고침`/`화면에서 추가`(출처) · `재기동 후 적용: 모델·접속 주소…` · `재기동 후 추가`(아직 돌지 않는 행 — 흐리게, 상태·활성화·생각 제어 칸이 비어 있다) · `재기동 후 삭제` · `기동 검증 실패`(지난 기동에서 화면 값으로 모델 검증에 실패해 설정 파일 값으로 떴다 — 사유는 말풍선). 화면에 남긴 것이 있으면 [되돌리기]가 보인다. 저장이 성공하면 표 조각 전체가 바뀌어 폼이 닫히고 위에 안내가 남는다.
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
-- LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드(LLM 자체 — `max-tokens`는 편집 가능해지면서 LLM 핫 그룹으로 옮겨졌고, 요약 칸에 남겨 두면 같은 값이 두 곳에 다른 조작 가능성으로 보인다), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
+- LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드(LLM 자체 — `max-tokens`는 편집 가능해지면서 LLM 핫 그룹으로 옮겨졌고, 요약 칸에 남겨 두면 같은 값이 두 곳에 다른 조작 가능성으로 보인다), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URLS` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
 
 ### 3.5-bis 지식 제안 게시판 (CuratedSubmissionController)
@@ -533,7 +532,7 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 ### 질문 글자 수 카운터 (긴 질문)
 
-입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 2,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
+입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 1,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
@@ -579,7 +578,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 검색어 재작성 안내 (§10.12)
 
-`ui.retrieval-metrics-enabled` 를 켜면, 짧은 후속 질문이 검색용으로 다시 쓰인 턴에 한 줄이 붙는다.
+짧은 후속 질문이 검색용으로 다시 쓰인 턴에는 **설정과 무관하게 항상** 한 줄이 붙는다(예전에는 `ui.retrieval-metrics-enabled` 를 켜야 보이는 진단값이었다 — 사용자가 실제로 검색에 쓰인 질문을 알 수 있게 바꿨다).
 
 ```
 🔍 검색에 사용된 질문: SSE 타임아웃 설정은 어디에 있어?
@@ -587,7 +586,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 **질문 버블에는 원문(`그거 어디야?`)이 그대로 남는다** — 답변 프롬프트의 `[현재 질문]` 도 원문이고, 재작성은 검색 축과 분류기만 쓰기 때문이다. 그래서 재작성이 빗나가면 사용자에게는 "나쁜 검색어"가 아니라 **"엉뚱한 답변"** 으로만 보이고, 이 줄이 없으면 원인을 짚을 방법이 없다.
 
-- 렌더러는 여기서도 **셋**이다(`message-assistant.html` · `chat.html` 의 기록 루프 · `chat-stream.js`). 서버 렌더 둘은 항상 마크업을 내고 `d-none` 을 스크립트가 벗기는 방식(출처 수치와 같은 규칙), 스트리밍은 SSE `done.condensedQuestion` 을 받아 켜져 있을 때만 그린다.
+- 렌더러는 여기서도 **셋**이다(`message-assistant.html` · `chat.html` 의 기록 루프 · `chat-stream.js`). 서버 렌더 둘과 스트리밍(SSE `done.condensedQuestion`) 모두 숨김 없이 그린다. 출처 수치(`source-metrics`)만 여전히 `ui.retrieval-metrics-enabled` 를 따른다.
 - **새로고침 후에도 남는다** — `VerificationSnapshot.condensedQuestion` 으로 `conversation_turns.verification` 에 함께 저장한다(`budgetNote` 와 같은 이유: 화면에 남은 것만으로는 판단할 수 없는 값이라 기록이 사라지면 진단이 끊긴다).
 - 재작성이 없었던 턴(대부분)에는 값 자체가 없어 줄도 없다.
 

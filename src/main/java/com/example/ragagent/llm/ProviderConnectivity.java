@@ -103,30 +103,54 @@ public class ProviderConnectivity {
         }
     }
 
-    /** 프로바이더가 아닌 접속 대상(임베딩·리랭커)의 기록 키 — 프로바이더 이름과 겹치지 않게 접두사를 둔다. */
+    /** 프로바이더가 아닌 접속 대상(임베딩·리랭커)의 기록 키 접두사 — 프로바이더 이름과 겹치지 않게 둔다. */
     public static final String EMBEDDING_KEY = "aux:embedding";
     public static final String RERANKER_KEY = "aux:reranker";
 
-    /** LLM 라우터 밖의 서버 하나 — 임베딩·리랭커. {@code baseUrl} 은 {@code /v1} 이 있어도 없어도 된다. */
-    public record Endpoint(String key, String baseUrl, String apiKey, String model) {}
+    /**
+     * LLM 라우터 밖의 서버 묶음 — 임베딩·리랭커. 주소는 같은 서버의 복제본 여럿일 수 있다({@code A;B;C}). 각 주소는
+     * {@code /v1} 이 있어도 없어도 된다. 결과는 <b>주소마다</b> 따로 기록된다({@link #lastEndpoint}).
+     */
+    public record Endpoint(String key, List<String> baseUrls, String apiKey, String model) {}
+
+    private static String endpointKey(String key, String url) {
+        return key + "|" + url.strip().replaceAll("/+$", "");
+    }
+
+    /** 한 주소의 마지막 확인 — 한 번도 안 물었으면 비어 있다. 나이를 따지지 않는다({@link #last} 와 같은 이유). */
+    public Optional<Result> lastEndpoint(String key, String url) {
+        return (key == null || url == null) ? Optional.empty() : Optional.ofNullable(results.get(endpointKey(key, url)));
+    }
 
     /**
-     * 임베딩·리랭커 같은 라우터 밖 서버를 {@link #refresh} 와 같은 규칙(병렬 · 3초 재사용 · 잠금 하나)으로 확인한다.
-     * 주소가 빈 대상은 묻지 않는다(호출자가 "미설정" 으로 그린다).
+     * 임베딩·리랭커 같은 라우터 밖 서버의 <b>주소마다</b> {@link #refresh} 와 같은 규칙(병렬 · 3초 재사용 · 잠금 하나)으로
+     * 확인한다. 주소가 빈 대상은 묻지 않는다(호출자가 "미설정" 으로 그린다). 죽은 주소의 연결 타임아웃이 산 주소를 늦추지
+     * 않게 주소는 병렬로 묻는다.
      */
     public void refreshEndpoints(List<Endpoint> targets) {
         if (targets == null) return;
-        List<Endpoint> asked = targets.stream().filter(t -> t.baseUrl() != null && !t.baseUrl().isBlank()).toList();
-        if (asked.isEmpty()) return;
+        record Task(String mapKey, String url, String apiKey, String model) {}
+        List<Task> all = new java.util.ArrayList<>();
+        for (Endpoint t : targets) {
+            if (t.baseUrls() == null) continue;
+            String key = (t.apiKey() != null && !t.apiKey().isBlank()) ? t.apiKey() : "no-key";
+            for (String u : t.baseUrls()) {
+                if (u != null && !u.isBlank()) all.add(new Task(endpointKey(t.key(), u), u, key, t.model()));
+            }
+        }
+        if (all.isEmpty()) return;
         refreshLock.lock();
         try {
             Instant now = clock.instant();
-            List<Endpoint> due = asked.stream().filter(t -> !isFresh(t.key(), now)).toList();
+            List<Task> due = all.stream().filter(t -> !isFresh(t.mapKey(), now)).toList();
             if (due.isEmpty()) return;
             try (ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 var traced = MdcPropagation.propagating(exec);
                 CompletableFuture<?>[] futures = due.stream()
-                        .map(t -> CompletableFuture.runAsync(() -> results.put(t.key(), checkEndpoint(t)), traced))
+                        .map(t -> CompletableFuture.runAsync(() -> {
+                            LlmPing.Reach r = probeOne(t.url(), t.apiKey(), t.model());
+                            results.put(t.mapKey(), new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), clock.instant()));
+                        }, traced))
                         .toArray(CompletableFuture<?>[]::new);
                 CompletableFuture.allOf(futures).join();
             }
@@ -135,15 +159,20 @@ public class ProviderConnectivity {
         }
     }
 
-    private Result checkEndpoint(Endpoint t) {
+    /** 기록하지 않는 한 번의 확인 — 기동 점검({@code ModelServersStartupCheck})이 쓴다. 주소의 {@code /v1} 은 있어도 없어도 된다. */
+    public static Result checkEndpointNow(String baseUrl, String apiKey, String model) {
+        String key = (apiKey != null && !apiKey.isBlank()) ? apiKey : "no-key";
+        LlmPing.Reach r = probeOne(baseUrl, key, model);
+        return new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), Instant.now());
+    }
+
+    private static LlmPing.Reach probeOne(String baseUrl, String apiKey, String model) {
         try {
-            String root = t.baseUrl().strip().replaceAll("/+$", "");
+            String root = baseUrl.strip().replaceAll("/+$", "");
             if (root.endsWith("/v1")) root = root.substring(0, root.length() - 3).replaceAll("/+$", "");
-            String key = (t.apiKey() != null && !t.apiKey().isBlank()) ? t.apiKey() : "no-key";
-            LlmPing.Reach reach = LlmPing.reach(root + "/v1", key, t.model(), CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS);
-            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+            return LlmPing.reach(root + "/v1", apiKey, model, CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS);
         } catch (RuntimeException e) {
-            return new Result(false, null, null, LlmPing.describe(e), clock.instant());
+            return new LlmPing.Reach(false, null, null, LlmPing.describe(e));
         }
     }
 

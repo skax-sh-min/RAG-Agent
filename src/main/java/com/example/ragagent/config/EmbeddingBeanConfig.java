@@ -31,7 +31,7 @@ public class EmbeddingBeanConfig {
         AppProperties.EmbeddingConfig cfg = props.embeddingSafe();
         if (cfg == null || cfg.baseUrl() == null || cfg.baseUrl().isBlank()) {
             throw new IllegalStateException(
-                    "app.embedding.base-url (EMBED_BASE_URL) is required but not configured");
+                    "app.embedding.base-url (EMBED_BASE_URLS) is required but not configured");
         }
         String model = cfg.model() != null ? cfg.model() : "text-embedding-ada-002";
 
@@ -72,7 +72,7 @@ public class EmbeddingBeanConfig {
      * 채팅은 로컬 서버 두 대로 이중화했는데 임베딩은 그중 한 대에만 걸려 있는 구성을 기동 때 알린다.
      *
      * <p>임베딩은 라우터 밖이라 채팅의 장애 전환을 받지 못한다 — 그 한 대가 죽으면 채팅 모델은 다른 서버로 넘어가도 RAG
-     * 턴은 질문 임베딩에서 실패한다. 기본값({@code EMBED_BASE_URL} 이 비면 {@code LOCAL_LLM_URL})이 정확히 그 모양이라
+     * 턴은 질문 임베딩에서 실패한다. 기본값({@code EMBED_BASE_URLS} 가 비면 {@code LOCAL_LLM_URL})이 정확히 그 모양이라
      * 이중화 배포가 모르는 채 빠지기 쉽다. {@code LOCAL_LLM_URL_2} 에서 엔드포인트를 <b>자동으로 만들지 않는</b> 이유는
      * 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없어서다(섞이면 인덱스가 깨진다) — 그래서 고치지 않고 알리기만 한다.
      * 임베딩이 따로 떨어진 서버를 쓰면 이중화와 무관하므로 말하지 않는다.
@@ -88,7 +88,7 @@ public class EmbeddingBeanConfig {
                 .ifPresent(p -> log.warn("""
                         [EMBED CONFIG] chat runs on {} replicated local servers, but embeddings use only {} (provider [{}]) — \
                         if that server goes down, RAG turns fail at the query embedding even though chat switches over.
-                          -> Set EMBED_ADDITIONAL_BASE_URLS to the other server(s), if they serve the same embedding model (EMBED_MODEL) at the same dimension.""",
+                          -> Add the other server(s) to EMBED_BASE_URLS (A;B), if they serve the same embedding model (EMBED_MODEL) at the same dimension.""",
                         1 + LocalReplicas.peersOf(p, providers).size(), embedUrl, p.name()));
     }
 
@@ -97,6 +97,18 @@ public class EmbeddingBeanConfig {
      *  reproduction of every embedding call, mirroring {@code LlmConfig}'s {@link
      *  com.example.ragagent.llm.LoggingChatModel} for chat calls. */
     private EmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
+        // 설정한 모델명이 서버 /v1/models 의 id 에 (대소문자 무시) 포함되면 그 id 로 요청한다 — 첫 호출 때 한 번 풀린다.
+        String apiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
+        String root = rawUrl.strip().replaceAll("/+$", "");
+        if (root.endsWith("/v1")) root = root.substring(0, root.length() - 3).replaceAll("/+$", "");
+        final String modelsBase = root + "/v1";
+        com.example.ragagent.llm.ServerModelResolver resolver = new com.example.ragagent.llm.ServerModelResolver(
+                rawUrl, model, () -> com.example.ragagent.llm.LlmPing.listModelIds(modelsBase, apiKey, 3, 5));
+        return new com.example.ragagent.llm.ModelResolvingEmbeddingModel(resolver,
+                name -> buildRawModelNamed(rawUrl, cfg, name), model);
+    }
+
+    private EmbeddingModel buildRawModelNamed(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
         String effectiveApiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
         // maxRetries=1 (i.e. one retry): the SDK default is 2, and a long retry chain on connection
         // failures (e.g. LM Studio not running) leaves the UI on "벡터 DB 저장 중..." for minutes. The

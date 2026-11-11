@@ -355,7 +355,7 @@ Phase 1a 의 첫 단계 — `RetrievalService` 에서 `HybridSearchService` 를 
 
 ### 7.5 교차 인코더 리랭커를 켠 결과 (2026-11-06, Phase 1a 연결 뒤)
 
-같은 env 구성·DB 복사본, `RERANK_BASE_URL` 지정, `llama-server --reranking -b 2048 -ub 2048`. 최종 컷은 5개(top-k 10 → 후보 20, 컷 5)라 아래 recall@10 은 사실상 **recall@5** 다. 리랭커 실패 0건.
+같은 env 구성·DB 복사본, `RERANK_BASE_URLS` 지정, `llama-server --reranking -b 2048 -ub 2048`. 최종 컷은 5개(top-k 10 → 후보 20, 컷 5)라 아래 recall@10 은 사실상 **recall@5** 다. 리랭커 실패 0건.
 
 | 실행 | 골든셋 recall (컷 5) | nDCG | 검색 중앙값 | 후속 raw | pipeline | concat | full | fused |
 |---|---|---|---|---|---|---|---|---|

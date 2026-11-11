@@ -660,6 +660,82 @@ class SettingsControllerRenderTest {
         assertThat(html).contains(">확인 중<", "hx-get=\"/settings/llm-status\"", "id=\"prov-status-0\"");
     }
 
+    @Test
+    @DisplayName("GET /settings — 임베딩·리랭커는 표로, 주소마다 한 줄과 자기 상태 배지가 붙는다(역할 · 모델명 · 주소 · 기타)")
+    void embeddingAndRerankerRenderAsATableWithPerAddressStatus() throws Exception {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(providerRow("local", true, false, SettingsView.ProviderConnection.pending())),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://e1:1/v1;http://e2:1/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot))),
+                "bge-reranker-v2-m3", "-",
+                List.of(new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.pending()),
+                        new SettingsView.EndpointRow("http://e2:1/v1", SettingsView.ProviderConnection.pending())),
+                List.of(new SettingsView.EndpointRow("-", SettingsView.ProviderConnection.notConfigured()))));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains(">역할<", ">모델명<", ">주소<", ">기타<", ">임베딩<", ">리랭커<",
+                "id=\"embed-status-0\"", "id=\"embed-status-1\"", "id=\"rerank-status-0\"", "bge-reranker-v2-m3");
+        assertThat(html).contains("http://e1:1/v1", "http://e2:1/v1");
+    }
+
+    @Test
+    @DisplayName("GET /settings/llm-status — 임베딩·리랭커 주소별 배지도 같은 응답이 id 로 바꿔 끼운다")
+    void statusEndpointAlsoCarriesTheAddressBadges() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of(
+                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true))));
+        when(settingsService.embeddingEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.reachable(7L, true)),
+                new SettingsView.EndpointRow("http://e2:1/v1", SettingsView.ProviderConnection.unreachable("Connection refused"))));
+        when(settingsService.rerankerEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://r1:1", SettingsView.ProviderConnection.reachable(9L, null))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("id=\"embed-status-0\"", "id=\"embed-status-1\"", "id=\"rerank-status-0\"",
+                ">정상<", ">접속불가<", "Connection refused");
+    }
+
+    @Test
+    @DisplayName("GET /settings/llm-status — 서버는 응답하는데 설정한 모델이 목록에 없으면 정상이 아니라 '모델없음' 배지가 나온다")
+    void addressBadgeSaysModelMissingWhenTheModelIsNotListed() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of(
+                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true))));
+        when(settingsService.embeddingEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.reachable(7L, false))));
+        when(settingsService.rerankerEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://r1:1", SettingsView.ProviderConnection.reachable(9L, true))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains(">모델없음<");
+        assertThat(count(html, ">모델없음<")).as("모델이 없는 임베딩 한 곳만").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("GET /settings/llm-status — 모델이 있는 주소의 '정상' 배지가 사라지지 않는다(주소마다 자기 배지가 한 개씩)")
+    void everyAddressKeepsItsOwnBadge() throws Exception {
+        when(settingsService.refreshProviderConnections()).thenReturn(List.of());
+        when(settingsService.embeddingEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://e1:1/v1", SettingsView.ProviderConnection.reachable(7L, false)),
+                new SettingsView.EndpointRow("http://e2:1/v1", SettingsView.ProviderConnection.unreachable("refused"))));
+        when(settingsService.rerankerEndpoints()).thenReturn(List.of(
+                new SettingsView.EndpointRow("http://r1:1", SettingsView.ProviderConnection.reachable(9L, true))));
+
+        String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertThat(count(html, ">모델없음<")).isEqualTo(1);
+        assertThat(count(html, ">접속불가<")).isEqualTo(1);
+        assertThat(count(html, ">정상<")).as("모델이 있는 리랭커 주소의 정상 배지").isEqualTo(1);
+    }
+
     // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
 
     @Test
@@ -680,7 +756,7 @@ class SettingsControllerRenderTest {
         assertThat(count(html, "재기동 필요")).as("그룹 제목 옆에 한 번 — 항목 옆·제목 문구·임베딩 차원 옆 어디에도 더 없다").isEqualTo(1);
         assertThat(html).contains("검색 (조회 전용)");
         assertThat(html.indexOf("검색 (조회 전용)")).isLessThan(html.indexOf("재기동 필요"));
-        assertThat(html).containsPattern("1024</span>\\s*</div>");   // 임베딩 차원 값 바로 뒤에 배지가 없다
+        assertThat(html).containsPattern("1024</span>\\s*</td>");   // 임베딩 차원 값 바로 뒤에 배지가 없다
 
         // note 가 없는 그룹에는 배지가 없다
         SettingsView without = new SettingsView(withNote.providers(), "COST_FIRST", "0.0", "6000", "bge-m3",

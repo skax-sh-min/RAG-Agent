@@ -150,9 +150,6 @@ public class PostAnswerService {
     /** 추가 질문 앞에 모델이 붙이는 목록 기호(1. / 1) / - / • / ·). */
     private static final Pattern LIST_MARKER = Pattern.compile("^(?:[-*•·]|\\d{1,2}[.)])\\s*");
 
-    /** 백필이 프롬프트 언어를 고르는 기준 — 질문에 한글 음절이 하나라도 있는가. */
-    private static final Pattern HANGUL = Pattern.compile("[가-힣]");
-
     /**
      * 화면에 보낼 결과 — {@code clarifiedQuestion} 은 원문과 다를 때만(버블에 둘째 줄을 붙일 때만) 있고,
      * {@code followUps} 는 비어 있을 수 있다.
@@ -291,17 +288,6 @@ public class PostAnswerService {
     Extras clarify(long turnId, String userId, String threadId, String question, String answer, Locale locale) {
         Clarified result = clarifyOnce(turnId, userId, threadId, question, answer, locale);
         return result.outcome() == Outcome.CLARIFIED ? new Extras(result.question(), List.of()) : Extras.NONE;
-    }
-
-    /**
-     * 과거 턴 하나를 다듬는다 — {@code /admin} 백필({@link ClarifiedQuestionBackfill})의 한 건. 라이브 경로의 한 줄
-     * 다듬기와 같은 호출·판정·저장이고, 재료(이전 질문)는 그 턴 <b>시점</b>의 것이다. 턴에는 로케일이 저장돼 있지
-     * 않아 질문에 한글이 있으면 한국어 프롬프트, 없으면 영어 프롬프트를 쓴다 — 프롬프트 언어를 질문과 맞추지
-     * 않으면 소형 모델은 프롬프트의 언어로 답한다(실측: 한국어 프롬프트에 영어 질문 → 한국어 문장).
-     */
-    Outcome backfill(long turnId, String userId, String threadId, String question, String answer) {
-        Locale locale = question != null && HANGUL.matcher(question).find() ? Locale.KOREAN : Locale.ENGLISH;
-        return clarifyOnce(turnId, userId, threadId, question, answer, locale).outcome();
     }
 
     /** 한 줄 다듬기 한 번의 결과 — 저장은 이미 끝났다(실패면 아무것도 저장하지 않았다). */

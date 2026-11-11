@@ -152,7 +152,9 @@ public final class LlmPing {
                     String id = entry.path("id").asText(null);
                     if (id != null) ids.add(id);
                 }
-                modelListed = model != null && !model.isBlank() && ModelNameResolver.resolve(model, ids).found();
+                ModelNameResolver.Resolution res = (model == null || model.isBlank()) ? null : ModelNameResolver.resolve(model, ids);
+                // 부분 일치면 있는 것이다 — 포함하는 id 가 여럿이어도(모호) 모델은 있다
+                modelListed = res != null && (res.found() || res.ambiguous());
             } else {
                 error = "models: unexpected body (no data[])";
             }
@@ -161,6 +163,29 @@ public final class LlmPing {
             error = "models: " + describe(e);
         }
         return new Reach(reachable, latencyMs, modelListed, error);
+    }
+
+    /**
+     * {@code {baseUrl}/models} 가 알려 주는 모델 id 목록 — 임베딩·리랭커가 설정한 이름을 서버 표기로 해석할 때
+     * ({@link ServerModelResolver}). 실패(연결·HTTP 오류·목록이 아닌 응답)는 예외로 던진다.
+     *
+     * @param baseUrl {@code .../v1} 까지의 주소(뒤쪽 슬래시는 무시한다)
+     */
+    public static List<String> listModelIds(String baseUrl, String apiKey, int connectTimeoutSeconds, int readTimeoutSeconds) {
+        String base = baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
+        JsonNode body = client(connectTimeoutSeconds, readTimeoutSeconds).get()
+                .uri(base + "/models")
+                .headers(h -> { if (apiKey != null) h.setBearerAuth(apiKey); })
+                .retrieve()
+                .body(JsonNode.class);
+        JsonNode data = body == null ? null : body.path("data");
+        if (data == null || !data.isArray()) throw new IllegalStateException("models: unexpected body (no data[])");
+        List<String> ids = new ArrayList<>();
+        for (JsonNode entry : data) {
+            String id = entry.path("id").asText(null);
+            if (id != null) ids.add(id);
+        }
+        return ids;
     }
 
     /** LM Studio {@code /api/v0/models} 의 {@code state} → llama.cpp {@code /health} 의 {@code status} → unknown. */

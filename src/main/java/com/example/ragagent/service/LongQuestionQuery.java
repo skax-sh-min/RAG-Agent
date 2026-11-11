@@ -33,7 +33,7 @@ public final class LongQuestionQuery {
     public static final int SHORT_LIMIT = 500;
 
     /** 이 길이를 넘으면 LLM 으로 검색문·키워드를 뽑는다(2단계). */
-    public static final int LLM_LIMIT = 2000;
+    public static final int LLM_LIMIT = 1000;
 
     /** 벡터 검색문(앞 + 뒤)의 앞부분·뒷부분 글자 수 — 합쳐 {@value #SHORT_LIMIT}자 안팎. */
     static final int HEAD_CHARS = 300;

@@ -19,8 +19,8 @@ public record SettingsView(
         List<SettingGroup> groups,
         String rerankerModel,
         String rerankerBaseUrl,
-        ProviderConnection embeddingConnection,  // 임베딩 서버의 마지막 접속 확인 — 프로바이더 표의 상태 열과 같은 모양(null = 그리지 않음)
-        ProviderConnection rerankerConnection    // 리랭커 서버 — 주소가 없으면 NOT_CONFIGURED
+        List<EndpointRow> embeddingEndpoints,   // 임베딩 서버의 주소별 접속 확인 — 주소가 없으면 "-" 한 줄(미설정)
+        List<EndpointRow> rerankerEndpoints     // 리랭커 서버의 주소별 접속 확인
 ) {
 
     /** 리랭커 필드가 없던 시절의 생성자 — 리랭커 줄은 꺼짐("-")으로 그려진다. */
@@ -28,8 +28,11 @@ public record SettingsView(
                         String embeddingModel, String embeddingBaseUrl, String embeddingDimensions,
                         String vectorStoreType, List<SettingGroup> groups) {
         this(providers, defaultRoutingMode, temperature, maxTokens, embeddingModel, embeddingBaseUrl,
-                embeddingDimensions, vectorStoreType, groups, "-", "-", null, null);
+                embeddingDimensions, vectorStoreType, groups, "-", "-", List.of(), List.of());
     }
+
+    /** 임베딩·리랭커 표의 주소 한 줄 — 주소와 그 주소의 마지막 접속 확인. */
+    public record EndpointRow(String url, ProviderConnection connection) {}
 
     /** 편집할 수 있는 항목이 하나라도 있는 그룹 — 화면에서 생각 수준 카드보다 앞에 온다. 순서는 {@link #groups()} 그대로. */
     public List<SettingGroup> editableGroups() {
@@ -183,6 +186,11 @@ public record SettingsView(
 
         public static ProviderConnection reachable(Long latencyMs, Boolean modelListed) {
             return new ProviderConnection(State.OK, latencyMs, modelListed, null);
+        }
+
+        /** 주소가 여럿인 서버(임베딩·리랭커)에서 일부만 닿은 경우 — {@code partialFailure} 는 안 닿은 주소와 사유. */
+        public static ProviderConnection reachable(Long latencyMs, Boolean modelListed, String partialFailure) {
+            return new ProviderConnection(State.OK, latencyMs, modelListed, partialFailure);
         }
 
         public static ProviderConnection unreachable(String error) {

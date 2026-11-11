@@ -97,7 +97,7 @@ class CrossEncoderRerankerTest {
     void ranksByScoreAndCutsToTopK() throws IOException {
         // 서버는 index 순으로 준다(실제 llama-server 가 그랬다) — 정렬은 우리 몫이다
         String url = start(200, results("0", "-6.7", "1", "3.2", "2", "0.4"));
-        var reranker = new CrossEncoderReranker(props(url));
+        var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
         List<Document> candidates = List.of(doc("a", "무관한 문서"), doc("b", "정답 문서"), doc("c", "곁다리 문서"));
 
         List<Ranked> out = reranker.rerank("정답이 어디 있나", candidates, 2);
@@ -110,9 +110,9 @@ class CrossEncoderRerankerTest {
     @DisplayName("API 키가 있으면 Authorization: Bearer 로 싣고, 없거나 공백이면 헤더를 싣지 않는다 — 임베딩의 api-key 와 같은 규칙")
     void apiKeyIsSentAsBearerOnlyWhenConfigured() throws IOException {
         String url = start(200, results("0", "1.0"));
-        new CrossEncoderReranker(propsWithKey(url, " secret-rerank-key ")).rerank("질문", List.of(doc("a", "문서")), 1);
-        new CrossEncoderReranker(propsWithKey(url, "   ")).rerank("질문", List.of(doc("a", "문서")), 1);
-        new CrossEncoderReranker(props(url)).rerank("질문", List.of(doc("a", "문서")), 1);
+        new CrossEncoderReranker(propsWithKey(url, " secret-rerank-key "), System::nanoTime).rerank("질문", List.of(doc("a", "문서")), 1);
+        new CrossEncoderReranker(propsWithKey(url, "   "), System::nanoTime).rerank("질문", List.of(doc("a", "문서")), 1);
+        new CrossEncoderReranker(props(url), System::nanoTime).rerank("질문", List.of(doc("a", "문서")), 1);
 
         assertThat(authHeaders).containsExactly("Bearer secret-rerank-key", "null", "null");
     }
@@ -121,7 +121,7 @@ class CrossEncoderRerankerTest {
     @DisplayName("요청 본문 — model · query · 입력 순서의 documents · top_n(전체), 경로는 /v1/rerank")
     void requestShape() throws IOException {
         String url = start(200, results("0", "1.0", "1", "0.5"));
-        var reranker = new CrossEncoderReranker(props(url));
+        var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
 
         reranker.rerank("  질문입니다  ", List.of(doc("a", "첫째"), doc("b", "둘째")), 1);
 
@@ -137,7 +137,7 @@ class CrossEncoderRerankerTest {
     @DisplayName("문서는 마크다운 장식을 걷고 길이를 자른다 — 한 쌍이 서버 배치에 들어가야 한다")
     void documentsAreNormalizedAndTruncated() throws IOException {
         String url = start(200, results("0", "1.0"));
-        var reranker = new CrossEncoderReranker(props(url));
+        var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
         String longText = "가".repeat(CrossEncoderReranker.MAX_DOC_CHARS + 500);
 
         reranker.rerank("q".repeat(CrossEncoderReranker.MAX_QUERY_CHARS + 100), List.of(doc("a", longText)), 1);
@@ -161,7 +161,7 @@ class CrossEncoderRerankerTest {
     @DisplayName("후보가 비면 서버를 부르지 않는다")
     void emptyCandidatesDoNotCallTheServer() throws IOException {
         String url = start(200, results("0", "1.0"));
-        var reranker = new CrossEncoderReranker(props(url));
+        var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
 
         assertThat(reranker.rerank("q", List.of(), 5)).isEmpty();
 
@@ -173,7 +173,7 @@ class CrossEncoderRerankerTest {
     void invalidEntriesAreSkipped() throws IOException {
         String url = start(200, "{\"results\":[{\"index\":9,\"relevance_score\":5.0},{\"index\":0},"
                 + "{\"index\":1,\"relevance_score\":2.0}]}");
-        var reranker = new CrossEncoderReranker(props(url));
+        var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
 
         List<Ranked> out = reranker.rerank("q", List.of(doc("a", "a"), doc("b", "b")), 5);
 
@@ -189,7 +189,7 @@ class CrossEncoderRerankerTest {
             if (server != null) server.stop(0);
             requests.clear();
             String url = start((Integer) bad[0], (String) bad[1]);
-            var reranker = new CrossEncoderReranker(props(url));
+            var reranker = new CrossEncoderReranker(props(url), System::nanoTime);
 
             assertThatThrownBy(() -> reranker.rerank("q", List.of(doc("a", "a")), 1))
                     .as("%s %s", bad[0], bad[1]).isInstanceOf(UnavailableException.class);
@@ -249,7 +249,7 @@ class CrossEncoderRerankerTest {
             }
         });
         server.start();
-        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + server.getAddress().getPort()));   // max-concurrent 2
+        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + server.getAddress().getPort()), System::nanoTime);   // max-concurrent 2
 
         try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             List<java.util.concurrent.Future<?>> fs = new java.util.ArrayList<>();
@@ -260,5 +260,119 @@ class CrossEncoderRerankerTest {
         }
 
         assertThat(maxSeen.get()).isEqualTo(2);
+    }
+
+    // ── 주소 여럿(RERANK_BASE_URLS = A;B) ────────────────────────────────────────
+
+    private HttpServer extraServer;
+    private final AtomicInteger extraHits = new AtomicInteger();
+
+    private String startExtra() throws IOException {
+        extraServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        extraServer.createContext("/", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            extraHits.incrementAndGet();
+            byte[] out = results("0", "2.0").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, out.length);
+            try (var os = exchange.getResponseBody()) {
+                os.write(out);
+            }
+        });
+        extraServer.start();
+        return "http://127.0.0.1:" + extraServer.getAddress().getPort();
+    }
+
+    @AfterEach
+    void stopExtra() {
+        if (extraServer != null) extraServer.stop(0);
+    }
+
+    @Test
+    @DisplayName("주소가 여럿이면 앞 주소가 죽어 있어도 같은 호출 안에서 다음 주소로 넘어가고, 죽은 주소는 건너뛴다")
+    void failsOverToTheNextAddressWithinTheSameCall() throws IOException {
+        int deadPort;
+        try (ServerSocket s = new ServerSocket(0)) {
+            deadPort = s.getLocalPort();
+        }
+        String alive = startExtra();
+        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + deadPort + ";" + alive), System::nanoTime);
+
+        assertThat(reranker.rerank("q", List.of(doc("a", "a")), 1)).as("첫 주소가 닿지 않아도 성공").hasSize(1);
+        assertThat(extraHits.get()).isEqualTo(1);
+        assertThat(reranker.isSkipping()).as("한 주소만 막혔으니 전체가 건너뛰는 중은 아니다").isFalse();
+
+        // 막힌 주소는 부르지 않는다 — 다음 호출도 곧바로 살아 있는 주소로 간다
+        assertThat(reranker.rerank("q", List.of(doc("a", "a")), 1)).hasSize(1);
+        assertThat(extraHits.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("모든 주소가 닿지 않으면 UnavailableException 이고 전체가 건너뛰는 중이 된다")
+    void allAddressesDownIsUnavailable() throws IOException {
+        int a;
+        int b;
+        try (ServerSocket s1 = new ServerSocket(0); ServerSocket s2 = new ServerSocket(0)) {
+            a = s1.getLocalPort();
+            b = s2.getLocalPort();
+        }
+        var reranker = new CrossEncoderReranker(props("http://127.0.0.1:" + a + ";http://127.0.0.1:" + b), System::nanoTime);
+        assertThatThrownBy(() -> reranker.rerank("q", List.of(doc("a", "a")), 1)).isInstanceOf(UnavailableException.class);
+        assertThat(reranker.isSkipping()).isTrue();
+    }
+
+    @Test
+    @DisplayName("살아 있는 주소가 둘이면 호출을 번갈아 나눠 보낸다")
+    void spreadsCallsAcrossLiveAddresses() throws IOException {
+        String one = start(200, results("0", "1.0"));
+        String two = startExtra();
+        var reranker = new CrossEncoderReranker(props(one + ";" + two), System::nanoTime);
+
+        for (int i = 0; i < 6; i++) reranker.rerank("q", List.of(doc("a", "a")), 1);
+
+        assertThat(requests.size()).as("첫 주소").isEqualTo(3);
+        assertThat(extraHits.get()).as("둘째 주소").isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("설정한 모델명이 서버 모델 목록의 id 에 (대소문자 무시) 포함되면 요청 본문의 model 에 그 id 를 싣는다")
+    void sendsTheServerModelIdWhenTheConfiguredNameIsPartOfIt() throws IOException {
+        String url = start(200, results("0", "1.0"));
+        var reranker = new CrossEncoderReranker(props(url),
+                (java.util.function.Function<String, List<String>>) u -> List.of("BGE-Reranker-V2-M3-Q8_0.gguf"));
+
+        reranker.rerank("q", List.of(doc("a", "a")), 1);
+
+        assertThat(requests.get(0).get("model").asText()).isEqualTo("BGE-Reranker-V2-M3-Q8_0.gguf");
+    }
+
+    @Test
+    @DisplayName("모델없음 서버로는 요청을 보내지 않는다 — 다른 서버가 있으면 그쪽으로, 전부 모델없음이면 오류")
+    void doesNotSendToAServerThatLacksTheModel() throws IOException {
+        String lacking = start(200, results("0", "1.0"));
+        String good = startExtra();
+        var reranker = new CrossEncoderReranker(props(lacking + ";" + good),
+                (java.util.function.Function<String, List<String>>) u -> u.equals(lacking)
+                        ? List.of("some-other-model") : List.of("bge-reranker-v2-m3"));
+
+        for (int i = 0; i < 3; i++) reranker.rerank("q", List.of(doc("a", "a")), 1);
+        assertThat(requests).as("모델이 없는 서버로는 가지 않는다").isEmpty();
+        assertThat(extraHits.get()).isEqualTo(3);
+
+        var allLacking = new CrossEncoderReranker(props(lacking),
+                (java.util.function.Function<String, List<String>>) u -> List.of("some-other-model"));
+        assertThatThrownBy(() -> allLacking.rerank("q", List.of(doc("a", "a")), 1))
+                .isInstanceOf(UnavailableException.class).hasMessageContaining("모델 목록에 없어");
+        assertThat(requests).isEmpty();
+    }
+
+    @Test
+    @DisplayName("서버가 답한 오류(5xx)는 다음 주소로 넘기지 않는다 — 요청 모양 문제일 수 있다")
+    void serverErrorIsNotFailedOver() throws IOException {
+        String bad = start(500, "{\"error\":\"input too large\"}");
+        String good = startExtra();
+        var reranker = new CrossEncoderReranker(props(bad + ";" + good), System::nanoTime);
+
+        assertThatThrownBy(() -> reranker.rerank("q", List.of(doc("a", "a")), 1)).isInstanceOf(UnavailableException.class);
+        assertThat(extraHits.get()).isZero();
     }
 }

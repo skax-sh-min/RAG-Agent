@@ -47,7 +47,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.10 [청크 분할 전략 (크기 기준 병합 / 소제목 최대 분할)](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할)
   - 6.11 [중복 질문 재사용 (추천·검증·무효화)](#611-중복-질문-재사용-추천검증무효화)
   - 6.12 [청크 오류 신고 처리 (사용자 신고 → 관리자 확인·수정)](#612-청크-오류-신고-처리-사용자-신고--관리자-확인수정)
-  - 6.13 [긴 질문의 검색 (500자 초과 · 2,000자 초과)](#613-긴-질문의-검색-500자-초과--2000자-초과)
+  - 6.13 [긴 질문의 검색 (500자 초과 · 1,000자 초과)](#613-긴-질문의-검색-500자-초과--2000자-초과)
   - 6.14 [채팅 Tool 선택 · 영향도 분석 · 문서 유지보수](#614-채팅-tool-선택--영향도-분석--문서-유지보수)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
@@ -190,7 +190,7 @@ copy .env.example .env
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
-| `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
+| `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URLS`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
 | `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(미설정 시 내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 — 서버 `/v1/models` 의 id 를 그대로 적거나, **다른 모델과 겹치지 않는 그 일부**만 적어도 된다(예: LM Studio 가 `google/gemma-4-e4b` 로 보고하면 `gemma-4-e4b`; 대소문자 무시). G3 가 기동 시 서버의 전체 id 로 해석해 요청에 싣는다(INFO 로그 `is part of server model '…'; using the server's id`) |
 | `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). **텍스트 3종은 사다리라 `TEXT`는 채팅 답변뿐 아니라 `LIGHT_TEXT`·`MICRO_TEXT` 잡무까지 함께 받는다** — "채팅 전용으로 한정"하는 값이 아니다(§5.6 type 값 표). 이미지를 뺀 텍스트 전용 모델도 `BOTH`로 두는 것이 권장 — Vision 호출 1회만 실패한 뒤 기억되어 이후 이미지 작업에서 제외되고 텍스트 작업은 영향을 받지 않는다. 이미지 설명 자체를 끄려면 `IMAGE_DESCRIPTION_ENABLED=false`를 쓴다 |
@@ -209,11 +209,10 @@ copy .env.example .env
 | `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b-2, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 모델·role·priority(4)가 동일한 gemma-4-31b 2대로(이름은 `gemma-4-31b-1`/`-2` 로 **반드시 달라야** 한다 — 세마포어·서킷브레이커·토글이 이름을 키로 쓴다), 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
 | `GEMINI_MODEL` | — | `gemini-3.5-flash-lite` | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 두 provider는 **기본값까지 같은 모델**(`gemini-3.5-flash-lite`)을 서로 다른 키(`GEMINI_API_KEY1`/`2`)로 부르는 로드밸런싱 쌍이라(둘 다 priority 2), 이 변수 하나로 둘을 함께 바꾼다. 서로 다른 모델을 쓰려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 — 그러면 같은 priority 안에서 두 모델이 least-in-flight 로 번갈아 뽑힌다 |
-| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
+| `EMBED_BASE_URLS` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. **`;` 로 여러 주소**를 적을 수 있다(`http://gpu-a:1234/v1;http://gpu-b:1234/v1` — §6.21 E1: 같은 모델·차원의 복제본에 least-in-flight 로드밸런싱 + **장애 전환**, 닿지 않는 주소는 30초 건너뛰고 같은 호출을 다음 주소로. **모두 `EMBED_MODEL` 을 같은 차원으로 서빙해야 함** — 섞이면 벡터 인덱스 손상. 상세는 아래 "임베딩 병렬화"). 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정. 예전 이름 `EMBED_BASE_URL`(단일 주소)도 이 변수가 없을 때는 읽는다 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
-| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본). 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱, 그리고 **장애 전환**(닿지 않는 엔드포인트는 30초 건너뛰고 같은 호출을 다음 엔드포인트로). **모두 `EMBED_MODEL`을 같은 차원으로 서빙해야 함** (섞이면 벡터 인덱스 손상). 상세는 아래 "임베딩 병렬화" |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정.<br>Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
@@ -244,7 +243,7 @@ copy .env.example .env
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
-| `RERANK_BASE_URL` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -b 2048 -ub 2048 …` — **`-ub 2048` 필수**: 기본 512 면 (질의+문서) 한 쌍이 512토큰을 넘는 호출이 500 으로 실패한다, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다. LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다. `/settings` LLM 라우팅 카드 하단의 리랭커 줄에 모델·주소와 접속 상태 배지가 보인다(§6.5) |
+| `RERANK_BASE_URLS` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소 — **`;` 로 여러 주소**를 적으면(같은 리랭커의 복제본) 호출을 진행 중인 호출이 가장 적은 주소로 나누고, 닿지 못한 주소는 30초 건너뛰며 같은 호출이 다음 주소로 간다(예전 이름 `RERANK_BASE_URL` 도 이 변수가 없을 때는 읽는다)(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -b 2048 -ub 2048 …` — **`-ub 2048` 필수**: 기본 512 면 (질의+문서) 한 쌍이 512토큰을 넘는 호출이 500 으로 실패한다, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다. LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다. `/settings` LLM 라우팅 카드 하단의 리랭커 줄에 모델·주소와 접속 상태 배지가 보인다(§6.5) |
 | `RERANK_API_KEY` | _(비어 있음)_ | 비밀 | 선택. 리랭커로 `Authorization: Bearer <키>` 를 보낸다(`llama-server --api-key`, 원격 리랭크 API). 임베딩의 `EMBED_API_KEY` 와 같은 역할이며 비면 헤더를 싣지 않는다 |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` (llama-server 는 무시한다) |
 | `RERANK_CONNECT_TIMEOUT_SECONDS` / `RERANK_TIMEOUT_SECONDS` / `RERANK_MAX_CONCURRENT` | `5` / `15` / `2` | 초 / 초 / 개 | 연결 타임아웃 / 한 호출의 읽기 타임아웃 / 동시에 나가는 호출 수 |
@@ -321,9 +320,9 @@ copy .env.example .env
 
 임베딩 처리량을 여러 엔드포인트·병렬 서브배치로 확장한다. 셋 다 **기본 비활성(회귀 0)**인 opt-in이다.
 
-- **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_ADDITIONAL_BASE_URLS`): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 콤마로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
+- **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_BASE_URLS` 에 `;` 로 나열): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 `A;B;C` 로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
   - **장애 전환**: 엔드포인트에 **닿지 못하면**(연결 거부·연결 타임아웃·DNS·경로 없음) 그 엔드포인트를 30초 후보에서 빼고 같은 호출을 다음 엔드포인트로 다시 보낸다(로그 `[EMBED-FAILOVER]`). 전부 막혔으면 가장 먼저 풀리는 하나만 한 번 시도한다 — 서버가 돌아오면 차단을 기다리지 않고 바로 낫는다. HTTP 5xx(예: llama.cpp 의 "input is too large")·읽기 타임아웃은 **넘기지 않는다** — 요청 자체의 문제라 다른 엔드포인트도 같은 이유로 거절하고, 넘기면 멀쩡한 서버를 차례로 막는다.
-  - **채팅 로컬 서버를 두 대(`LOCAL_LLM_URL_2`)로 이중화했다면 여기에도 다른 서버를 적을 것** — 임베딩은 LLM 라우터 밖이라 채팅의 장애 전환을 받지 못한다. `EMBED_BASE_URL` 이 비어 `LOCAL_LLM_URL` 로 떨어진 채 그 서버가 죽으면, 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 실패한다. 이 구성을 보면 기동 로그가 `[EMBED CONFIG]` 경고를 남긴다(앱이 `LOCAL_LLM_URL_2` 에서 자동으로 만들지 않는 이유: 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없다).
+  - **채팅 로컬 서버를 두 대(`LOCAL_LLM_URL_2`)로 이중화했다면 여기에도 다른 서버를 적을 것** — 임베딩은 LLM 라우터 밖이라 채팅의 장애 전환을 받지 못한다. `EMBED_BASE_URLS` 이 비어 `LOCAL_LLM_URL` 로 떨어진 채 그 서버가 죽으면, 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 실패한다. 이 구성을 보면 기동 로그가 `[EMBED CONFIG]` 경고를 남긴다(앱이 `LOCAL_LLM_URL_2` 에서 자동으로 만들지 않는 이유: 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없다).
 - **E2 — 병렬 서브배치 임베딩** (`EMBED_MAX_CONCURRENT_BATCHES`, 기본 1): 한 문서를 인덱싱할 때 토큰 단위 서브배치들을 동시에 임베딩한다. E1과 결합하면 **단일 대용량 문서**도 여러 엔드포인트를 동시에 채운다. 대략 `(엔드포인트 수 × 엔드포인트별 --parallel)`로 설정.
   - **chroma**: 임베딩만 병렬화하고 원래대로 마지막에 1회 upsert → 메모리 프로파일 불변, 저위험.
   - **sqlite-vec**: 병렬 임베딩 후 삽입은 직렬(SQLite `pool=1`). §10.9.3 스트리밍 삽입(서브배치 단위 메모리 상한)을 포기하고 문서 전체 임베딩을 잠깐 메모리에 들고 있게 되는 속도↔메모리 트레이드오프를 아는 상태에서만 켠다(임베딩 벡터는 청크당 수 KB라 실무 부담은 작음).
@@ -333,13 +332,12 @@ copy .env.example .env
 **설정 예 (임베딩 서버 2대)**:
 ```properties
 # 같은 nomic-embed 모델을 2대(다른 포트/장비)에 서빙
-app.embedding.base-url=http://gpu-a:1234/v1
-app.embedding.additional-base-urls=http://gpu-b:1234/v1
+app.embedding.base-url=http://gpu-a:1234/v1;http://gpu-b:1234/v1
 app.embedding.model=text-embedding-nomic-embed-text-v1.5
 # 단일 문서도 두 서버를 동시에 쓰도록 병렬 서브배치(2대 × 서버별 병렬 2 = 4)
 app.embedding.max-concurrent-batches=4
 ```
-환경변수로는 `EMBED_ADDITIONAL_BASE_URLS=http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
+환경변수로는 `EMBED_BASE_URLS=http://gpu-a:1234/v1;http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
 
 > **`INDEXING_MAX_LLM`과의 관계**: 둘 다 인덱싱 파이프라인의 동시성 제한이지만 서로 다른 단계·리소스를 게이팅하는 완전히 독립적인 세마포어라 직접적인 종속 관계는 없다. `INDEXING_MAX_LLM`(`app.indexing.max-concurrent-llm-calls`)은 키워드/컨텍스트 추출·MD 교정·TXT 구조화·Vision 이미지 설명 등 **채팅형 LLM 호출**을 제한하며, 소비자마다 자기 세마포어를 만들어 씀(공유 풀 아님). `EMBED_MAX_CONCURRENT_BATCHES`는 **임베딩** 서브배치 호출만 제한한다. 같은 문서를 인덱싱하는 동안 키워드 추출은 `INDEXING_MAX_LLM`만큼, 그 문서의 임베딩 서브배치는 `EMBED_MAX_CONCURRENT_BATCHES`만큼 각자 병렬로 동작하며, 서로 다른 백엔드 서버(LLM 서버 vs 임베딩 서버)를 겨냥하므로 한쪽 값이 다른 쪽 상한이나 동작에 영향을 주지 않는다. 튜닝도 각각 독립적으로: `INDEXING_MAX_LLM`은 LLM 서버의 `--parallel`에, `EMBED_MAX_CONCURRENT_BATCHES`는 `(임베딩 엔드포인트 수 × 엔드포인트별 병렬)`에 맞춘다.
 
@@ -436,13 +434,13 @@ LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
 LOCAL_LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
-# EMBED_BASE_URL, EMBED_API_KEY 미설정 시 LOCAL_LLM_URL/KEY 자동 사용
+# EMBED_BASE_URLS, EMBED_API_KEY 미설정 시 LOCAL_LLM_URL/KEY 자동 사용
 ```
 
 **OpenAI 전용 (로컬 LLM 없음)**:
 ```env
 OPENAI_API_KEY=sk-proj-...
-EMBED_BASE_URL=https://api.openai.com
+EMBED_BASE_URLS=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 # LOCAL_LLM_KEY를 비워도 LOCAL provider는 등록됩니다(로컬 엔드포인트는 키 불필요).
 # 로컬 LLM이 없으면 외부 우선 라우팅으로 LOCAL을 후순위에 두세요
@@ -1176,7 +1174,7 @@ export LOCAL_LLM_URL=http://127.0.0.1:8080/v1
 export LOCAL_LLM_MODEL=<채팅 모델명>
 
 # 임베딩 (별도 인스턴스)
-export EMBED_BASE_URL=http://127.0.0.1:8081/v1
+export EMBED_BASE_URLS=http://127.0.0.1:8081/v1
 export EMBED_MODEL=<임베딩 모델명>
 export EMBED_DIMENSIONS=768          # ★ sqlite-vec 필수: 임베딩 모델 실제 차원과 일치 (nomic=768, bge-m3=1024)
 
@@ -1398,7 +1396,7 @@ LLM 호출은 두 레이어가 담당합니다.
 
 | 레이어 | 용도 | 제어 방법 |
 |--------|------|----------|
-| `app.embedding.*` | 문서 인덱싱·벡터 검색 임베딩 | `EMBED_BASE_URL` / `EMBED_API_KEY` / `EMBED_MODEL` |
+| `app.embedding.*` | 문서 인덱싱·벡터 검색 임베딩 | `EMBED_BASE_URLS` / `EMBED_API_KEY` / `EMBED_MODEL` |
 | LlmRouter (providers) | 질의응답·분류·검증 LLM 호출 | `application.properties` providers 블록 |
 | Spring AI 전역 | auto-configured 빈 폴백 | `OPENAI_*` 환경변수 |
 
@@ -1528,7 +1526,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 
 `.env`:
 ```env
-EMBED_BASE_URL=http://localhost:1234/v1
+EMBED_BASE_URLS=http://localhost:1234/v1
 EMBED_MODEL=nomic-embed-text
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
@@ -1549,7 +1547,7 @@ app.llm.default-routing-mode=LOCAL_ONLY
 `.env`:
 ```env
 OPENAI_API_KEY=sk-proj-...
-EMBED_BASE_URL=https://api.openai.com
+EMBED_BASE_URLS=https://api.openai.com
 EMBED_API_KEY=sk-proj-...
 EMBED_MODEL=text-embedding-3-large
 # LOCAL_LLM_URL 은 설정하지 않는다 — 기본 providers 블록을 그대로 쓸 때 LOCAL 을 빼는 스위치는 URL 이다(G2)
@@ -1586,7 +1584,7 @@ COST_FIRST 흐름: `gpt-4o-mini(NORMAL)` → (429/오류 시) `gpt-4o(PREMIUM)`
 ```env
 OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
-EMBED_BASE_URL=https://api.openai.com
+EMBED_BASE_URLS=https://api.openai.com
 EMBED_API_KEY=sk-proj-...
 EMBED_MODEL=text-embedding-3-large
 # 로컬 LLM 없음 — 아래 providers 블록에 LOCAL 항목이 없고, 기본 블록을 쓴다면 LOCAL_LLM_URL 을 비워 둔다(G2)
@@ -1626,7 +1624,7 @@ COST_FIRST 흐름: `gemini-flash` → (429 시) `gpt-4o`
 ```env
 OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
-EMBED_BASE_URL=https://api.openai.com
+EMBED_BASE_URLS=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
@@ -1729,7 +1727,7 @@ app.llm.providers[1].concurrency=4
 - `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
 - 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
 - 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
-- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 기동 시에 한 대가 안 떠 있어도 앱은 뜹니다 — 그 서버는 30초 차단된 채 시작하고 요청은 살아 있는 쪽으로 갑니다(두 대 모두 안 닿으면 기동 실패, [§5.2 G3 의 복제본 예외](#프로바이더-활성화-게이트-llmconfig-g1g3) 참고). **임베딩은 이 라우팅 밖입니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URL`(비우면 `LOCAL_LLM_URL`)과 `EMBED_ADDITIONAL_BASE_URLS` 로만 갑니다. 두 서버가 같은 임베딩 모델을 띄우고 있다면 **다른 서버를 `EMBED_ADDITIONAL_BASE_URLS` 에도 적으세요** — 그 목록은 부하 분산과 함께 장애 전환(닿지 않는 엔드포인트를 30초 건너뜀)을 하므로, 그래야 한 대가 죽어도 RAG 질문이 검색 단계에서 실패하지 않습니다. 적지 않은 채 `LOCAL_LLM_URL` 쪽이 죽으면 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 오류가 납니다(기동 로그의 `[EMBED CONFIG]` 경고가 이 구성을 알려 줍니다).
+- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 기동 시에 한 대가 안 떠 있어도 앱은 뜹니다 — 그 서버는 30초 차단된 채 시작하고 요청은 살아 있는 쪽으로 갑니다(두 대 모두 안 닿으면 기동 실패, [§5.2 G3 의 복제본 예외](#프로바이더-활성화-게이트-llmconfig-g1g3) 참고). **임베딩은 이 라우팅 밖입니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URLS`(`;` 로 여러 주소, 비우면 `LOCAL_LLM_URL`)로만 갑니다. 두 서버가 같은 임베딩 모델을 띄우고 있다면 **다른 서버를 `EMBED_BASE_URLS` 에도 `;` 로 적으세요** — 그 목록은 부하 분산과 함께 장애 전환(닿지 않는 엔드포인트를 30초 건너뜀)을 하므로, 그래야 한 대가 죽어도 RAG 질문이 검색 단계에서 실패하지 않습니다. 적지 않은 채 `LOCAL_LLM_URL` 쪽이 죽으면 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 오류가 납니다(기동 로그의 `[EMBED CONFIG]` 경고가 이 구성을 알려 줍니다).
 
 COST_FIRST 흐름:
 ```
@@ -1897,7 +1895,7 @@ app.llm.providers[8].concurrency=4
 - `priority`가 다르면 부하와 무관하게 낮은 `priority`가 항상 우선합니다 — 로드밸런싱은 **동일 priority 그룹 내부에서만** 일어나고, 서로 다른 priority 간 자동 전환은 여전히 프로바이더 실패(§5.5 Circuit Breaker) 시에만 일어납니다.
 - 총 동시 처리량 = 등록 대수 × per-provider `concurrency`(예: LOCAL 2대 × 3 = 6).
 - `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
-- 임베딩 엔드포인트는 이 LLM 게이트와 별개의 `EmbeddingModel` 데코레이터 체인에서 따로 로드밸런싱됩니다(§6.21 E1, `LoadBalancingEmbeddingModel` — `EMBED_ADDITIONAL_BASE_URLS`). 설정은 [§3.2 "임베딩 병렬화"](#32-환경변수-전체-목록) 참고.
+- 임베딩 엔드포인트는 이 LLM 게이트와 별개의 `EmbeddingModel` 데코레이터 체인에서 따로 로드밸런싱됩니다(§6.21 E1, `LoadBalancingEmbeddingModel` — `EMBED_BASE_URLS` 의 `;` 목록). 설정은 [§3.2 "임베딩 병렬화"](#32-환경변수-전체-목록) 참고.
 
 **헤더 LLM 동시성 표시기**: 웹 UI 우측 상단에 `LLM: {사용중}/{용량}`으로 실시간 포화도를 보여줍니다(`GET /api/v1/llm/concurrency`, ~3초마다 폴링). `사용중` 값이 `용량`에 도달하면(완전 포화) 숫자가 굵은 빨간색으로 강조됩니다 — 위 429/`[BACKPRESSURE]` 로그를 매번 찾아보지 않아도 한눈에 확인할 수 있는 보조 지표입니다.
 - `role=LOCAL, priority=1`(주 응답용 로컬 티어 — MICRO_TEXT 전용 소형 오프로딩 모델은 제외) 프로바이더들의 `concurrency` 합계가 용량이고, 실제 게이트에서 점유 중인 슬롯 수가 사용중 값입니다.
@@ -2252,7 +2250,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 **프로바이더 표의 상태 열** — `/settings` 의 LLM 라우팅 표는 열 순서가 상태 → 활성화 → 생각 제어(관리자)이고, 상태는 **미설정 · 접속불가 · 정상** 세 가지입니다. 미설정은 주소나 키가 없어 서버가 만들어지지 않은 것(`LOCAL_LLM_URL_2` 를 비워 둔 `local-2` 같은)이고, 나머지는 화면을 열 때 서버의 모델 목록 API(`{base}/v1/models`)에 **실제로 접속해 본 결과**입니다 — 페이지는 서버를 기다리지 않고 "확인 중"으로 먼저 열린 뒤 몇 초 안에 칸이 채워집니다(꺼진 서버는 연결 타임아웃 3초 뒤 "접속불가"). 배지에 마우스를 올리면 응답 시간이나 접속하지 못한 사유(`Connection refused` · `HTTP 401` …)가 나옵니다. 서버가 응답하기만 하면 정상이므로, 설정한 모델이 서버 목록에 없는 것은 이 칸이 잡지 않고 말풍선에만 적힙니다. 서킷 브레이커가 그 프로바이더를 건너뛰는 중이면 상태 옆에 **차단 중** 배지가 따로 붙습니다(접속 여부와 별개 — 서버는 응답하는데 429/5xx 로 막혀 있을 수 있습니다). 짧은 시간(3초) 안의 새로 고침은 같은 결과를 재사용해 LLM 서버를 두드리지 않습니다.
 
-**임베딩·리랭커 서버의 상태** — 같은 카드 하단(라우팅 모드 아래)의 `임베딩 모델 · 엔드포인트 URL · 차원` 줄과 `리랭커 모델 · 엔드포인트 URL` 줄 끝에도 같은 상태 배지(**미설정 · 접속불가 · 정상**)가 붙습니다. 임베딩(`EMBED_BASE_URL`)과 리랭커(`RERANK_BASE_URL`)는 LLM 프로바이더가 아니라 라우터 밖이라 표에 행이 없고, 이 줄이 유일한 확인 자리입니다. 방식은 프로바이더와 같습니다 — 화면을 열면 "확인 중"으로 시작해 `{주소}/v1/models` 에 접속해 본 결과로 바뀌고(주소 끝의 `/v1` 은 있어도 없어도 됩니다), 연결 3초·읽기 5초 제한, 3초 안의 새로 고침은 결과를 재사용하며, 서킷 브레이커 등 검색 동작은 건드리지 않습니다. `RERANK_BASE_URL` 이 비면 리랭커 줄은 `-` 와 **미설정**(= 교차 인코더 꺼짐)이고, 임베딩은 `EMBED_BASE_URL` 하나만 확인합니다(`EMBED_ADDITIONAL_BASE_URLS` 의 추가 서버는 확인하지 않음). 서버가 `/v1/models` 를 제공하지 않으면 정상이어도 **접속불가** 로 보일 수 있습니다(llama-server 는 제공). 검색 중 리랭커 연결 실패로 건너뛰는 상태는 이 배지에 따로 나오지 않으니, 이 배지가 **접속불가** 면 리랭크가 RRF 순서로 물러나 있다고 보면 됩니다. `SEARCH_RERANK_ENABLED`(LLM 리랭크)는 교차 인코더와 별개이고, `RERANK_BASE_URL` 이 있으면 `/settings` 검색 카드에서 `false` 로 보이는 것이 정상입니다 — LLM 리랭크를 쓰려면 `RERANK_BASE_URL` 을 비우고 `SEARCH_RERANK_ENABLED=true` 로 재기동합니다(둘은 동시에 쓰이지 않습니다).
+**임베딩·리랭커 서버의 상태** — 같은 카드 하단(라우팅 모드 아래)에 `역할 · 모델 · 주소 · 기타` 표가 있고, **주소마다 한 줄**에 자기 접속 상태 배지(**미설정 · 접속불가 · 정상**)가 붙습니다(`;` 로 여러 주소를 적으면 줄이 여러 개, 접속불가 배지의 말풍선에 사유 · 서버는 응답하는데 설정한 모델이 `/v1/models` 목록에 없으면 정상 대신 노란 **모델없음** 배지). 기타 칸에는 임베딩 차원이 있습니다. 임베딩(`EMBED_BASE_URLS`)과 리랭커(`RERANK_BASE_URLS`)는 LLM 프로바이더가 아니라 라우터 밖이라 프로바이더 표에 행이 없고, 이 표가 유일한 확인 자리입니다. 방식은 프로바이더와 같습니다 — 화면을 열면 "확인 중"으로 시작해 `{주소}/v1/models` 에 접속해 본 결과로 바뀌고(주소 끝의 `/v1` 은 있어도 없어도 됩니다), 연결 3초·읽기 5초 제한, 3초 안의 새로 고침은 결과를 재사용하며, 서킷 브레이커 등 검색 동작은 건드리지 않습니다. `RERANK_BASE_URLS` 가 비면 리랭커 줄은 `-` 와 **미설정**(= 교차 인코더 꺼짐)입니다. 서버가 `/v1/models` 를 제공하지 않으면 정상이어도 **접속불가** 로 보일 수 있습니다(llama-server 는 제공). 검색 중 리랭커 연결 실패로 건너뛰는 상태는 이 배지에 따로 나오지 않습니다. **기동 때 임베딩·리랭커 서버가 꺼져 있으면 WARN 로그**(`[EMBED STARTUP]`·`[RERANK STARTUP] … is not reachable`)가 주소마다 남습니다 — 앱은 그대로 뜹니다. 설정한 모델(`EMBED_MODEL`·`RERANK_MODEL`)이 서버의 `/v1/models` 목록에 없을 때도 경고합니다(정확히 같거나, 설정값을 포함하는 서버 id 가 하나뿐이면 있는 것으로 봅니다). llama-server 는 요청의 모델명을 무시하므로 리랭커의 이 경고는 호출 실패가 아니라 "설정값과 서버가 가진 모델이 다르다"는 알림입니다 — 이름이 달라도 정상이면 `RERANK_MODEL` 을 서버 목록의 이름에 맞추세요. `RERANK_BASE_URLS` 가 비어 있으면 리랭커는 아무 말도 하지 않습니다. **모델명 해석**: 설정한 `EMBED_MODEL`·`RERANK_MODEL` 이 서버 `/v1/models` 의 id 에 (대소문자 무시) 부분 문자열로 들어 있으면 **요청 본문의 모델명에 그 서버 id 를 실습니다**(예: 설정 `bge-m3` → 서버 `text-embedding-bge-m3-q8_0`). **일치는 완전 일치가 아니라 부분 일치**입니다 — 정확히 같은 id 가 있으면 그것이 우선이고, 아니면 설정값을 포함하는 id 가 하나든 여럿이든 일치로 봅니다(여럿이면 가장 짧은 id). 조회는 **백그라운드**(기동 직후 한 번, 이후 요청이 들어올 때 간격이 지났으면)에서 하고 요청은 기다리지 않습니다. **서버별 상태에 따른 요청 규칙**: 정상(아직 모르면 포함) → 접속불가(목록을 못 읽음, 30초 뒤 재조회) 순으로 쓰고, **모델없음(어떤 id 에도 설정값이 포함되지 않음, 5분 뒤 재조회) 서버로는 요청을 보내지 않습니다** — 다른 주소가 있으면 그쪽으로, 모든 주소가 모델없음이면 임베딩은 `model … is not available … the request was not sent` 오류, 리랭커는 그 턴이 RRF 순서로 물러납니다(`리랭커 모델 … 서버의 모델 목록에 없어 요청을 보내지 않는다`). 서버에 모델을 올렸다면 최대 5분 안에 풀립니다(재기동하면 즉시). 주소마다 따로 풉니다. 따로 풉니다. `SEARCH_RERANK_ENABLED`(LLM 리랭크)는 교차 인코더와 별개이고, `RERANK_BASE_URLS` 가 있으면 `/settings` 검색 카드에서 `false` 로 보이는 것이 정상입니다 — LLM 리랭크를 쓰려면 `RERANK_BASE_URLS` 를 비우고 `SEARCH_RERANK_ENABLED=true` 로 재기동합니다(둘은 동시에 쓰이지 않습니다).
 
 **생각(추론) 수준 카드 (PLAN §6.29 ⑦, 관리자 전용 — 조회까지)** — `/settings` 의 인덱싱/청킹 카드 아래(조회 전용 카드들 위)에 호출 지점(21곳)별 표가 있습니다. 채팅 답변 / 응답 검증 / 질문 처리 / 답변 뒤 / 인덱싱 / 관리자 도구 여섯 묶음이고, 한 행이 한 호출 지점입니다. **수준을 고르기 전에** "이걸 고르면 이 호출에서 무엇이 얼마나 바뀌는가"가 숫자로 보입니다 — 값 → [기본값] → [저장] 은 다른 설정 항목과 같은 모양이고, 저장한 수준은 다음 호출부터 적용됩니다(재기동 불필요, 오버라이드는 재기동 뒤에도 유지).
 
@@ -2631,7 +2629,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - **감사 로그**: `chunk.report`(접수) · `chunk.report.resolve` · `chunk.report.reject`(닫은 건수 포함).
 - **저장 위치**: `chunk_report`(신고 내용 + 신고 시점 원문·질문 스냅샷) — 앱의 유일한 SQLite 파일입니다([§6.3.1](#631-sqlite-파일별-테이블-구성)). 문서나 대화가 지워져도 스냅샷은 남습니다 — 지워진 뒤에는 "무엇이 틀렸다는 것인지"를 그 복사본으로만 알 수 있기 때문입니다.
 
-### 6.13 긴 질문의 검색 (500자 초과 · 2,000자 초과)
+### 6.13 긴 질문의 검색 (500자 초과 · 1,000자 초과)
 
 긴 질문은 대개 "지시 한 줄 + 붙여넣은 본문(로그·코드)"입니다. 전문을 검색 축에 그대로 넣으면 벡터 하나에 뭉개져 의도가 흐려지고, 키워드(BM25) 식이 수천 개 항이 되며, 질의 확장은 전문을 변형 3개로 다시 쓰느라 출력이 질문만큼 커집니다. 그래서 **검색에만** 짧은 질의를 쓰고, **답변 프롬프트의 `[현재 질문]` 은 늘 전문**입니다(검색이 빗나가도 답변까지 틀어지지 않게 하는 격리 — 후속 질문 독립화와 같은 규칙).
 
@@ -2639,13 +2637,13 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 |---|---|---|---|---|
 | 500자 이하 | 질문 그대로 | 질문 그대로 | 평소대로(`SEARCH_MULTIQUERY_MIN_LENGTH` 이상이면) | 평소대로 |
 | **500자 초과 ~ 2,000자** (1단계) | 앞 300자 + 뒤 200자(가운데는 `…`) | 질문 전체에서 뽑은 낱말 상위 20개 | **건너뜀** | 없음 |
-| **2,000자 초과** (2단계) | **LLM 이 만든 검색문**(120자 안팎, 실패하면 1단계) | LLM 키워드(최대 12) ∪ 1단계 낱말, 30개까지 | **건너뜀** | 1회(약 10~15초, 아래) |
+| **1,000자 초과** (2단계) | **LLM 이 만든 검색문**(120자 안팎, 실패하면 1단계) | LLM 키워드(최대 12) ∪ 1단계 낱말, 30개까지 | **건너뜀** | 1회(약 10~15초, 아래) |
 
 - **1단계 낱말 고르기**: 앞·뒤 구간(지시가 있을 법한 곳)의 클래스명·오류 코드 같은 식별자형 낱말을 먼저, 이어서 앞·뒤의 나머지, 본문의 식별자형, 본문의 나머지 순입니다. 낱말은 질문에 나온 **그대로의 형태**로 쓰이고(작은 모델은 식별자를 바꿔 말하기 쉬워서), 3글자 미만·40자 초과·의문/기능어는 뺍니다 — 3글자 미만은 trigram 색인을 못 타서 코퍼스 전체 `LIKE` 스캔이 되기 때문입니다.
 - **2단계 LLM**: 후속 질문 독립화와 같은 호출 지점(`condense`, 소형 모델 계층 `MICRO_TEXT`, 생각 끔)과 같은 `SEARCH_MULTIQUERY_ENABLED` 스위치를 씁니다 — 스위치를 끄면 2단계만 꺼지고 1단계는 그대로입니다. 한 턴의 질의 전처리 LLM 호출이 최대 하나라는 규칙이 유지됩니다(긴 질문은 확장을, 짧은 질문은 독립화를 대신 돕니다). 이 노트북(생성 약 24~30 tok/s, prefill 약 550~800 tok/s)에서 1만 자 질문은 읽는 데 약 6~10초, 검색문·키워드를 쓰는 데 약 4~5초라 **답변 전에 10~15초가 더 붙습니다.** LLM 에 보내는 질문은 8,000자까지(넘으면 앞 5,000 + 뒤 3,000)입니다. 호출이 실패하면 예외 없이 1단계 결과로 검색합니다. 키워드가 **합집합**인 이유는 정확한 단어는 결정적 추출이 지키고 LLM 은 보태게 하려는 것입니다.
 - **한도**: `CHAT_MAX_QUESTION_CHARS`(기본 10,000, 500~100,000으로 눌림)와 **이 모델의 창에 들어가는 길이** 중 작은 쪽입니다. 프롬프트 축소 사다리(§6.30)는 문서·이력만 줄이고 **현재 질문은 줄이지 못해서**, 창이 작으면 질문 하나가 입력 예산을 넘습니다 — 그래서 대화를 만들기 전에 "이 모델에서는 약 N자까지"라고 알리며 거절합니다. 창 기준 상한 = 입력 예산(`창 − 출력 예약 − 창의 10%`) − 고정 몫 2,000토큰 − 문서 한 개(청크 크기; Direct 는 0)이고, 500자 이하·창을 모르는 프로바이더는 창을 따지지 않습니다. 검증 호출(질문 + 답변 전문 + 발췌)은 답변이 있어야 재므로 여기서 재지 않습니다 — 좁은 창에서는 검증 발췌가 첫 문서만 싣는 쪽으로 줄어듭니다.
 - **화면**: 입력창 아래에 글자 수(`현재 / 최대`)가 500자를 넘으면 나타나고, 상한을 넘으면 빨갛게 바뀝니다(전송을 막지는 않습니다 — 거절 문구는 서버가 줍니다).
-- **알아둘 것**: 긴 질문의 검색 질의는 "독립화된 질문"이 아니라서 `검색에 사용된 질문` 표시와 이력 제외 시의 "이전 대화에 비추어 다시 쓰면" 한 줄에는 나타나지 않습니다. 임계값 500/2,000자와 후보 개수(20/12/30)는 코드 상수(`LongQuestionQuery`)입니다. **긴 질문으로 검색 품질을 잰 골든셋은 아직 없습니다** — 효과는 수치로 검증되지 않았습니다.
+- **알아둘 것**: 긴 질문의 검색 질의는 "독립화된 질문"이 아니라서 `검색에 사용된 질문` 표시와 이력 제외 시의 "이전 대화에 비추어 다시 쓰면" 한 줄에는 나타나지 않습니다. 임계값 500/1,000자와 후보 개수(20/12/30)는 코드 상수(`LongQuestionQuery`)입니다. **긴 질문으로 검색 품질을 잰 골든셋은 아직 없습니다** — 효과는 수치로 검증되지 않았습니다.
 
 ---
 
@@ -2825,7 +2823,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 `/admin` 페이지 하단에 **큐레이션 Q&A** 카드가 있습니다 — 승인된 지식 제안(좋아요에서 온 것과 직접 쓴 것 모두)의 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다. 페이지당 20/50/100건 중 선택, 이전/다음으로 이동합니다.
 
-카드 순서는 **청크 오류 신고(§6.12) → 지식 제안 검토(§7.6) → 큐레이션 Q&A → 대화 목록(§7.9) → 과거 질문 다듬기(§7.10) → 검색 진단 수치(§7.7)**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
+카드 순서는 **청크 오류 신고(§6.12) → 지식 제안 검토(§7.6) → 큐레이션 Q&A → 대화 목록(§7.9) → 검색 진단 수치(§7.7)**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
 카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
@@ -2999,16 +2997,9 @@ A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 
 
 **검색 진단 수치와의 연결**: 행의 **진단** 버튼은 진단 패널을 그 대화로 좁혀 엽니다(진단이 0건이면 비활성). 반대로 진단 패널의 `대화` 열을 누르면 그 대화로 좁혀집니다. 상세의 턴별 **출처** 버튼은 진단 패널의 **상세**와 같은 표를 보여줍니다.
 
-### 7.10 과거 질문 다듬기 — 재사용 추천용 일괄 처리
+### 7.10 (제거됨) 과거 질문 다듬기
 
-답변 뒤 질문 다듬기(§6.13 설정 `llm.clarified-question-enabled`)는 그 기능이 생긴 **뒤의** 턴에만 돕니다. 그 전에 쌓인 대화는 질문 추천·재사용에서 여전히 원문으로만 맞고, "그거 어떻게 설정해?" 같은 지시어뿐인 질문은 추천에 뜨지 않습니다. `/admin` 의 **과거 질문 다듬기** 카드(대화 목록 바로 아래)가 그 턴들을 한 건씩 다듬습니다.
-
-- **대상**: 재사용 추천에 뜰 수 있는 턴 — 표준(N) 답변 · 문서 검색 · 활성 출처 있음 · 싫어요 아님 — 가운데 아직 다듬지 않은 것(`clarified_question` 이 NULL). 재사용으로 만든 턴은 원본을 다듬으면 그 값을 쓰므로 빠집니다. 카드의 **남은 턴**이 그 수입니다.
-- **한 턴에 LLM 한 번**, 최근 대화부터. 재료는 그 턴 **시점의** 이전 질문 셋과 답변 요약이고, 질문에 한글이 있으면 한국어 프롬프트, 없으면 영어 프롬프트로 묻습니다(턴에는 화면 언어가 저장돼 있지 않습니다). 생각(thinking)을 끄고 부르므로 llama.cpp + gemma-4-E2B 실측으로 턴당 약 1초입니다.
-- **채팅이 먼저입니다** — 매 호출 전에 로컬 LLM 의 대화형 게이트가 비어 있고 마지막으로 바빴던 때에서 2초가 지났는지 봅니다. 채팅 답변이 생성되는 동안 카드는 "채팅 답변 중 — 끝나기를 기다리는 중"으로 바뀌고, 프로바이더가 차단돼 있으면 풀릴 때까지 기다립니다.
-- **멈춤 / 다시 시작**: 멈춤을 누르면 지금 한 건을 끝낸 뒤 멈춥니다. 진행 상태를 따로 저장하지 않아도 다시 시작하면 **남은 것부터** 이어 갑니다(다듬은 턴은 대상에서 빠지므로). 호출이 실패한 턴은 NULL 로 남아 다음 실행에서 다시 시도합니다. 앱을 다시 띄우면 멈춘 상태로 시작합니다.
-- **스스로 멈추는 경우**: 질문 다듬기 설정이 꺼질 때(꺼진 채로는 시작하지 않습니다), LLM 호출이 연달아 5번 실패할 때(LLM 서버 상태를 확인한 뒤 다시 시작하십시오).
-- 사용량은 `/llm-usage` 의 `postanswer` 카드에 함께 잡히고, 시작·멈춤은 감사 로그(`admin.clarify-backfill.start`·`.stop`)에 남습니다. 엔드포인트는 `GET /admin/clarify-backfill`(상태) · `POST /admin/clarify-backfill/start` · `POST /admin/clarify-backfill/stop` 이며 `/admin/**` 이라 관리자 전용입니다.
+`/admin` 의 "과거 질문 다듬기" 일괄 처리(`/admin/clarify-backfill`)는 제거했습니다. 답변 뒤 질문 다듬기(§6.13 설정 `llm.clarified-question-enabled`)는 그대로 새 턴마다 돌고, 이전에 쌓인 턴은 원문으로만 추천·재사용에 맞습니다. 검색에 실제로 쓰인 질문은 답변 아래 "검색에 사용된 질문" 줄로 항상 보입니다.
 
 ---
 
@@ -3041,7 +3032,7 @@ curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 40
 
 ```bash
 # 임베딩 서버 확인
-curl ${EMBED_BASE_URL:-$LOCAL_LLM_URL}/models -H "Authorization: Bearer ${EMBED_API_KEY:-$LOCAL_LLM_KEY}"
+curl ${EMBED_BASE_URLS:-$LOCAL_LLM_URL}/models -H "Authorization: Bearer ${EMBED_API_KEY:-$LOCAL_LLM_KEY}"
 
 # LOCAL 프로바이더 확인 — 앱이 실제로 쓰는 base-url·모델 id 로, 세 단계를 따로 답한다 (아래 "로컬 LLM 생사 확인")
 curl -f http://localhost:8080/api/v1/llm/ping?deep=true

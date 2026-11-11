@@ -142,7 +142,8 @@ no-auth 모드의 방문자별 `userId`(`app.auth.guest-identity` = `shared`/`ip
 - **"닿는다"의 정의는 `LlmPing.reach()` 하나다**(모델 목록 API). 2xx JSON 이면 정상, HTTP 오류·연결 거부·타임아웃은 접속불가(사유는 말풍선). 연결 3초·읽기 5초.
 - **주소는 앱이 실제로 요청하는 주소와 같다** — `OpenAiClients.sdkBaseUrl()` 규칙과 `{apiBase}/v1/models`. 키도 프로바이더를 만들 때와 같은 값(LOCAL 이 비면 `no-key`). `ProviderConnectivityTest` 가 진짜 HTTP 서버로 고정한다.
 - 설정한 모델이 목록에 없어도 접속은 접속이다(`modelListed=false` 는 "정상" 말풍선에만 덧붙는다 — 목록을 다 나열하지 않는 게이트웨이의 오탐 방지. LOCAL 은 G3 가 이미 가른다).
-- **임베딩·리랭커 서버도 같은 기계로 묻는다**(`refreshEndpoints(Endpoint…)` — 키 `aux:embedding`·`aux:reranker`, 같은 결과 맵·`REUSE_WINDOW`·잠금). 라우터 밖이라 프로바이더 표에 행이 없어서 `/settings` LLM 라우팅 카드 하단 줄의 배지(`embed-status`·`rerank-status` oob)가 쓴다. 주소는 끝의 `/v1` 을 걷고 다시 붙여 `/v1/models` 를 만든다(`CrossEncoderReranker.endpointBase` 와 같은 규칙). 임베딩은 기본 주소만 묻고 `EMBED_ADDITIONAL_BASE_URLS` 는 묻지 않는다. 검색 중 리랭커의 30초 건너뛰기 상태(`isSkipping`)는 이 배지에 섞지 않는다(별개의 사실).
+- **주소 목록은 `;` 로 받는다**(`AppProperties.parseUrls` — 공백·빈 항목·같은 주소는 버리고 쉼표도 구분자로 받는다). 임베딩은 `embeddingSafe()` 가 첫 주소를 `baseUrl`, 나머지를 예전 `additionalBaseUrls` 자리에 채워 `EmbeddingBeanConfig`·`LoadBalancingEmbeddingModel` 이 그대로 쓴다(`EMBED_ADDITIONAL_BASE_URLS` 는 없앴다). 리랭커는 `rerankerBaseUrls()` 가 전부, `rerankerSafe().baseUrl()` 이 첫 주소다. **예전 변수 이름(`EMBED_BASE_URL`·`RERANK_BASE_URL`)은 새 이름이 없을 때 읽는다** — `EMBED_BASE_URL` 만 쓰던 배포가 조용히 `LOCAL_LLM_URL` 로 떨어지면 인덱싱·검색이 다른 임베딩 모델을 보게 되기 때문이다.
+- **임베딩·리랭커 서버도 같은 기계로 묻는다**(`refreshEndpoints(Endpoint…)` — **주소마다** `aux:embedding|주소`·`aux:reranker|주소` 로 따로 기록하고(`lastEndpoint`), 화면은 주소별 배지, 같은 결과 맵·`REUSE_WINDOW`·잠금). 라우터 밖이라 프로바이더 표에 행이 없어서 `/settings` LLM 라우팅 카드 하단 줄의 배지(`embed-status`·`rerank-status` oob)가 쓴다. 주소는 끝의 `/v1` 을 걷고 다시 붙여 `/v1/models` 를 만든다(`CrossEncoderReranker.endpointBase` 와 같은 규칙). 임베딩은 기본 주소만 묻고 `EMBED_ADDITIONAL_BASE_URLS` 는 묻지 않는다. 검색 중 리랭커의 30초 건너뛰기 상태(`isSkipping`)는 이 배지에 섞지 않는다(별개의 사실).
 - **페이지는 서버를 기다리지 않는다.** `GET /settings` 는 "확인 중"으로 그리고 표 조각 안의 숨은 요소(`hx-get="/settings/llm-status" hx-trigger="load" hx-swap="none"`)가 확인을 요청한다. 응답은 칸마다 `hx-swap-oob="true"` + id(`prov-status-N`)를 단 조각이라 **표 전체를 바꾸지 않는다**(바꾸면 그 사이 눌린 "컨텍스트 다시 탐지"의 결과 알림이 지워진다).
 - **게스트 개방 화면이 부르므로 두드리는 수단이 되면 안 된다.** `REUSE_WINDOW`(3초) 안의 결과는 다시 묻지 않고, 동시에 열린 화면은 `refresh()` 의 잠금(`ReentrantLock` — 가상 스레드에서 `synchronized` 로 네트워크 I/O 를 감싸면 캐리어가 고정된다) 하나로 한 번의 확인을 나눈다. 대상은 설정의 서버뿐이다. 여러 대는 가상 스레드로 병렬(죽은 서버의 타임아웃이 산 서버의 칸을 늦추지 않게).
 - `last()` 는 나이를 따지지 않는다(토글·재탐지 뒤 표 조각이 "확인 중"으로 되돌아가지 않게). 화면을 새로 열 때(`buildView()`)만 마지막 확인을 무시한다.
@@ -285,11 +286,11 @@ TaskType × RoutingMode 로 프로바이더를 고른다. `executeWithTracking()
 - 연결 타임아웃은 **메시지**로 가른다(`"Connect timed out"` ↔ `"Read timed out"`, 또는 `*ConnectTimeoutException` 클래스 이름). `LlmFailureClassificationTest` 가 고정한다 — 문구가 바뀌면 연결 타임아웃이 조용히 읽기 타임아웃으로 재분류돼 전환이 꺼진다. 블로킹의 읽기 타임아웃은 그대로다(느린 생성을 기다리다 끊은 서버를 막으면 연쇄로 소진된다).
 - `RoutedChatModel` = 호출마다 `executeGatedWithUsage`. 게이트·사용량·차단·전환을 라우터가 한다. 질의 확장은 `taskType()` 하나로 충분하다(`LlmProvider.supports()` 가 이미 사다리).
 
-**남은 한계**: ① **읽기 타임아웃** — 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝나고 차단·전환이 없다(느린 것과 멈춘 것을 구분할 수 없다). ② 임베딩은 라우터 밖이라 `LoadBalancingEmbeddingModel` 이 자기 목록 안에서만 전환한다 — 다른 서버를 `EMBED_ADDITIONAL_BASE_URLS` 에 적어야 하고, 안 적은 이중화는 기동 때 `[EMBED CONFIG]` 경고만 남긴다. ③ 동률이면 먼저 등록된 쪽이 이기므로 한가할 때는 매번 그쪽이 먼저 불린다(죽어 있으면 첫 실패 한 번이 30초 차단을 세운다).
+**남은 한계**: ① **읽기 타임아웃** — 연결은 받고 응답이 없는(멈춘) 서버는 `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류로 끝나고 차단·전환이 없다(느린 것과 멈춘 것을 구분할 수 없다). ② 임베딩은 라우터 밖이라 `LoadBalancingEmbeddingModel` 이 자기 목록 안에서만 전환한다 — 다른 서버를 `EMBED_BASE_URLS` 에 `;` 로 적어야 하고, 안 적은 이중화는 기동 때 `[EMBED CONFIG]` 경고만 남긴다. ③ 동률이면 먼저 등록된 쪽이 이기므로 한가할 때는 매번 그쪽이 먼저 불린다(죽어 있으면 첫 실패 한 번이 30초 차단을 세운다).
 
 ### `llm/LoadBalancingEmbeddingModel.java`
 
-같은 임베딩 모델을 띄운 엔드포인트 여럿(`EMBED_BASE_URL` + `EMBED_ADDITIONAL_BASE_URLS`)에 least-in-flight 로 나누고, **닿지 못한** 엔드포인트는 30초 후보에서 빼며 같은 호출을 다음으로 다시 보낸다. 임베딩은 `LlmRouter` 밖이라 채팅이 넘어가도 RAG 턴이 질문 임베딩에서 실패했던 것의 수리다.
+같은 임베딩 모델을 띄운 엔드포인트 여럿(`EMBED_BASE_URLS` 의 `;` 목록)에 least-in-flight 로 나누고, **닿지 못한** 엔드포인트는 30초 후보에서 빼며 같은 호출을 다음으로 다시 보낸다. 임베딩은 `LlmRouter` 밖이라 채팅이 넘어가도 RAG 턴이 질문 임베딩에서 실패했던 것의 수리다.
 
 - **넘기는 것은 연결 계열뿐이다**(`LlmRouter.isConnectionFailure`). 5xx 까지 넘기면 안 된다 — 임베딩 서버의 5xx 는 흔히 **요청 모양**의 문제다(llama.cpp 는 배치보다 긴 입력을 500 `input is too large` 로 거절한다). 장애로 읽으면 다른 엔드포인트도 같은 이유로 거절해 **멀쩡한 서버를 차례로 30초씩 막고** 임베딩 전체가 선다. 읽기 타임아웃·인터럽트도 넘기지 않는다.
 - **전부 차단됐으면 이번 호출에서 아직 아무 곳도 안 불렀을 때만 가장 먼저 풀리는 하나를 한 번 부른다.** 안 부르면 전부 죽었다 돌아와도 30초를 기다리고, 전부 부르면 모두 죽은 배포가 호출마다 연결 타임아웃을 N 번 문다. 성공하면 그 자리에서 차단을 지운다.
@@ -468,7 +469,7 @@ SQLite DB 의 정기 백업. 결정 셋:
 - **설정은 임베딩과 같은 모양의 자기 절이다**(`app.reranker.*` — `base-url` · `api-key` · `model` · 타임아웃 둘 · `max-concurrent`; `.env.example` 에도 임베딩 절 바로 뒤에 "리랭커 모델" 절). `api-key` 는 선택이고 있으면 `Authorization: Bearer` 로 싣는다(`CrossEncoderRerankerTest.apiKeyIsSentAsBearerOnlyWhenConfigured`). 임베딩과 달리 `LOCAL_LLM_URL` 같은 폴백은 **없다** — 다른 서버·다른 모델이라 주소를 따로 적어야 하고 비면 꺼진다. 재검색 문턱·횟수(`SEARCH_RERANK_MIN_SCORE`·`SEARCH_MAX_ATTEMPTS`)도 같은 절에 모았다(키 이름은 그대로).
 - **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 (질의+문서)가 그 크기를 넘는 호출마다 **500**(`input (N tokens) is too large … increase the physical batch size`)이 나고, 건너뛰기 없이 매번 실패해 RRF 순서로 물러난다 — 2026-11-06 `-ub 512` 로 떠 있던 서버에서 호출 대부분이 그랬다. 기동 명령은 반드시 `-b 2048 -ub 2048` 이다.
 - **점수는 모델의 원점수다**(음수가 나온다, 실측 관련 +6.9 · 무관 −8.8~−10.6). 재검색 문턱(0.0)은 이 모델의 값이라 모델을 바꾸면 다시 잰다. 서버는 `results` 를 **입력 순서(index)**로 줄 수 있어(실제로 그랬다) 정렬은 우리 몫이고, 범위 밖 index·점수 없는 항목은 버린다.
-- **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URL` 을 안 주면 `${RERANK_BASE_URL:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
+- **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URLS` 을 안 주면 `${RERANK_BASE_URLS:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
 - **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
 - **`AppProperties` 에 컴포넌트가 하나 늘었다**(46개, `reranker`). 기존 호환 생성자(44개)는 새 컴포넌트에 `null` 을 넘기고, 45개 형태를 새로 두었다. 테스트에서 정식 생성자를 직접 부르면 인자 수를 하나만 틀려도 컴파일 오류가 난다.
 - 실제 서버 점검은 `CrossEncoderRerankerLiveTest`(기본 건너뜀, `-Drerank-live.url=…`)가 한다 — 단위 테스트의 응답 모양은 서버 버전이 바뀌면 낡는다.
@@ -688,16 +689,7 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **대상은 설정 둘과 턴의 성격으로 갈린다**(`afterTurn()`). 추가 질문이 켜져 있으면 근거 있는 턴(출처가 있거나 Direct) 전부에서 **한 번의 호출로** 다듬은 질문과 추가 질문을 함께 받는다(S·C·Direct 의 다듬은 질문은 화면 표시용 — 재사용 후보 판정은 모드·출처 술어가 한다). 꺼져 있으면 재사용 후보(N·RAG·출처 있음)만 한 줄. RAG 인데 출처가 없는 턴(검색 0건 정형 답변·인사)은 둘 다 부르지 않는다. 화면의 둘째 줄은 원문과 다를 때만 붙고 그 판정은 `differs()` 하나다.
 - **추가 질문은 대화마다 마지막 답변의 것 한 벌만 DB 에 둔다(V8 `thread_follow_up`) — 전달은 기다림이다.** 행이 대화마다 하나인 이유는 화면이 가장 최근 답변 아래에만 보여 지난 제안은 읽는 곳이 없어서다. **제안을 만들지 않은 턴도 그 행을 지운다**(안 지우면 "마지막 답변의 것"이라는 행의 뜻이 깨진다). 저장은 `done.complete` **전에** 한다. 메모리에는 기다림(`Pending`, TTL 2분)만 있고 기다림이 없으면 `awaitExtras()` 가 DB 를 읽는다. 설정을 끄면 저장된 제안도 내주지 않는다. 개수(`llm.follow-up-questions-count`, 2~5)는 프롬프트의 `{count}` 와 `cleanFollowUps()` 상한이 같이 쓴다(하나만 바꾸면 모델이 다섯을 내도 셋만 보이거나 그 반대). 결과는 SSE 스트림이 닫힌 **뒤에** 나오므로 화면이 `done` 의 턴 id 로 `GET /ui/threads/{threadId}/turns/{turnId}/extras` 를 한 번 부르면 서버가 최대 25초 기다렸다 돌려준다(가상 스레드라 싸다). 지킬 것 셋: ① **기다림은 턴 저장 안에서 먼저 등록한다**(`done` 보다 앞 — 화면의 요청이 먼저 와도 놓치지 않는다) ② **소유자 확인은 등록 때 적어 둔 (사용자, 대화)로 하고** 남의 턴·없는 턴·끝나지 않은 턴·빈 결과를 전부 204 로 뭉갠다(구분해 주면 턴 id 를 훑어볼 이유가 생긴다) ③ **늦게 온 결과가 엉뚱한 답변 아래에 붙으면 안 된다**(화면은 새 질문을 보내는 순간 칩을 치우고 기다리던 요청을 `AbortController` 로 끊는다). 칩을 누르면 입력창에 넣을 뿐 보내지 않는다(고쳐서 보낼 수 있어야 한다).
 - **합친 호출은 JSON 이다**(`BeanOutputConverter` + `LenientJson`, 스키마는 사용자 메시지로 덧붙인다). 출처 발췌를 재료로 주면(`[SOURCES]`, 넷 × 150자) 발췌에만 있던 오류 코드·설정 이름이 추가 질문에 나온다 — 답변 요약만 주면 답변을 되묻는 질문이 많았다. 읽지 못하면 **아무것도 저장하지 않는다**(NULL → 다시 시도 가능; 그때 Spring AI 의 ERROR 한 줄은 정상). 추가 질문은 서버가 다시 정리한다(`cleanFollowUps()` — 기호·따옴표 제거, 지금·이전 질문과 같거나 겹치는 것·100자 넘는 것 버림, 잘라 쓰지 않는다: 입력창에 그대로 들어가 보내질 문장이다). 소형 모델이 "이미 답한 것을 다시 묻지 말 것"을 어기는 것은 프롬프트 밖에서 거를 확실한 규칙이 없어 남겨 둔다.
-- **재료(이전 질문)는 그 턴 시점의 것이다**(`MemoryRepository.findQuestionsBefore`). 현재 턴을 뺀 최근 턴을 쓰면 과거 턴을 다듬는 백필에서 그 턴 **뒤의** 질문이 재료가 된다. 두 경로가 같은 조회를 쓴다.
-
-### `service/ClarifiedQuestionBackfill.java`
-
-`/admin` 의 "과거 질문 다듬기" — 이 기능 이전에 쌓인 재사용 후보 턴(`clarified_question` NULL)을 최신순으로 한 건씩 다듬는다(턴마다 LLM 한 번, 호출·판정·저장은 `PostAnswerService.backfill()` — 라이브 경로와 같다). 대상 술어는 추천 SQL 의 재사용 술어와 같고(싫어요 아님 · 허용 모드 · Direct 아님 · 활성 출처) 재사용 턴은 뺀다(원본을 다듬으면 `CLARIFIED_COLUMN` 이 그 값으로 떨어진다).
-
-- **진행 상태를 저장하지 않는 것이 재개 방식이다.** 다듬은 턴은 값이 채워져 대상에서 빠지므로 다시 시작하면 남은 것만 집는다. 한 실행 안에서는 **id 커서로 내려간다**(`findClarifyBackfillTargets(beforeId, …)`) — "아직 NULL 인 것 중 최신"을 매번 물으면 실패해 NULL 로 남은 턴을 끝없이 다시 집는다. 진행 수치는 메모리에만 있다.
-- **채팅에 양보한다.** 배경 호출이라 확인 없이 돌면 사용자의 답변 생성과 서버를 나눠 쓴다. 매 호출 전 `LlmRouter.localTier1Concurrency()` 의 `inUse` 를 보고 마지막으로 바빴던 때에서 2초(`QUIET`)가 지나야 보낸다 — 지금 비어 있는 것만 보면 한 턴 안의 호출 사이 빈틈에 끼어든다. 차단된 프로바이더는 "꽉 참"으로 보고되므로 풀릴 때까지 기다린다.
-- 스스로 멈추는 경우: 멈춤 요청(지금 한 건은 끝까지), 질문 다듬기 설정 꺼짐(매 턴 다시 읽는다), LLM 호출 연속 5회 실패(그 턴들은 NULL 로 남는다).
-- **생성자가 둘이라 스프링용에 `@Autowired` 가 있다 — 빼면 앱이 뜨지 않는다.** 단위 테스트는 생성자를 직접 불러 전부 통과하고 전체 컨텍스트 테스트는 평소 건너뛰므로 놓친다. `ClarifiedQuestionBackfillTest.springCanConstructIt()` 가 스프링의 생성자 선택을 거쳐 만든다. 컨트롤러를 `AdminController` 와 따로 둔 것은 그쪽 생성자에 협력자를 얹으면 그 슬라이스 테스트 전부가 흔들려서다.
+- **재료(이전 질문)는 그 턴 시점의 것이다**(`MemoryRepository.findQuestionsBefore`). 현재 턴을 뺀 최근 턴을 쓰면 나중에 과거 턴을 다시 다듬는 경로가 생기면 그 턴 **뒤의** 질문이 재료가 된다. 두 경로가 같은 조회를 쓴다.
 
 ### `service/RetrievalEviction.java`
 
@@ -850,10 +842,10 @@ RAG 에서 검색이 비었을 때 문서 없는 프롬프트로 답변을 받�
 
 - **한도가 둘이고 둘 다 필요하다.** `app.chat.max-question-chars`(기본 10,000)는 배포가 정한 절대 상한이고, `QuestionLimit` 은 거기에 **서빙 모델의 창에 들어가는 길이**를 더해 작은 쪽을 쓴다 — 사다리는 현재 질문을 줄이지 못하는 고정비(`answerFixedCost`)라 창이 작으면 한도 안의 질문 하나가 입력 예산을 넘고, 그러면 문서를 하나도 못 싣거나 `RAG-LLM-003` 이다. 창 기준 상한 = 입력 예산 − 고정 몫 2,000토큰 − 문서 한 개(Direct 는 0). 500자 이하·창을 모르는 모델·계산 실패에는 **막지 않는다**(한도가 서비스를 거절하는 쪽으로 오작동하면 안 된다). 검증 호출(질문+답변+발췌)은 답변이 있어야 크기를 알 수 있어 여기서 재지 않는다. 일반 입력의 `MAX_QUESTION_LEN`(2,000)은 그대로이고 채팅 질문만 `validateChat()` 을 쓴다.
 - **`QuestionLimit` 은 세터 주입이다**(`@Autowired(required=false)` — `ChatController`·`AgentService`·`StreamingAgentService` 의 생성자가 여럿이라). 빈이 없으면 `validateChat()` 으로 되돌아간다. 세 진입점이 같은 함수를 부르지 않으면 한 곳만 옛 한도로 남는다(SSE 사전 검사를 빼먹으면 스트림이 열린 뒤에야 거절된다).
-- **검색 질의는 검색에만 쓴다.** 답변 프롬프트의 `[현재 질문]` 은 언제나 전문이다(재작성이 빗나가도 검색만 틀리게 하는 격리). 1단계(500자 초과, LLM 없음): 벡터 검색문 = 앞 300 + 뒤 200자, BM25 = 질문 전체에서 뽑은 낱말 상위 20개. 2단계(2,000자 초과): `QuestionCondenser.distill()` 의 LLM 검색문·키워드를 얹고 키워드는 합집합(정확한 단어는 결정적 추출이 지킨다).
+- **검색 질의는 검색에만 쓴다.** 답변 프롬프트의 `[현재 질문]` 은 언제나 전문이다(재작성이 빗나가도 검색만 틀리게 하는 격리). 1단계(500자 초과, LLM 없음): 벡터 검색문 = 앞 300 + 뒤 200자, BM25 = 질문 전체에서 뽑은 낱말 상위 20개. 2단계(1,000자 초과): `QuestionCondenser.distill()` 의 LLM 검색문·키워드를 얹고 키워드는 합집합(정확한 단어는 결정적 추출이 지킨다).
 - **낱말 고르기는 구간별 층이다**(`keywordTerms()`: ① 지시 구간(앞 300·뒤 200)의 식별자형 ② 지시 구간 나머지 ③ 본문 식별자형 ④ 본문 나머지, 같은 층에서는 빈도×길이). 점수 하나만 쓰면 붙여 넣은 로그의 반복 문구가 지시 속 식별자를 밀어낸다(`keywordTermsFavourInstructionRegion`).
 - **`wasCondensed()` 는 긴 질문 경로에서 거짓이다** — 이력과 무관한 검색용 요약을 "이전 대화에 비추어 다시 쓴 질문"이라 부르면 거짓이라 그 표시를 읽는 곳이 쓰지 않는다(`AgentState.usedLongQuestionQuery()` 가 따로 있다). `searchKeywords` 의 빈 문자열 = "추릴 낱말 없음", `null` = "이 경로가 아님". 한 턴의 질의 전처리 LLM 호출은 **최대 하나**여야 한다 — `shouldExpand()` 가 500자 초과에서 거짓인 이유다.
-- **측정하지 않았다.** 500/2,000자·20/12/30개·앞 300+뒤 200자는 설계 가정이다. 바꾸려면 검색 하네스에 긴 질문 세트를 먼저 더할 것.
+- **측정하지 않았다.** 500/1,000자·20/12/30개·앞 300+뒤 200자는 설계 가정이다. 바꾸려면 검색 하네스에 긴 질문 세트를 먼저 더할 것.
 
 ### `ingestion/MarkdownNoiseNormalizer.normalizeForPrompt()`
 

@@ -328,7 +328,7 @@
 <!-- ── 임베딩·리랭커 서버의 상태 배지 — LLM 라우팅 카드 푸터. 프로바이더 표의 상태 칸과 같은 3단계 + 확인 중 ──────
      id 는 호출부가 정한다('embed-status'/'rerank-status') — GET /settings/llm-status 응답(oob=true)이 같은 id 로 바꿔 끼운다. -->
 <span th:fragment="auxStatus(id, conn, oob)" th:if="${conn != null}" th:id="${id}"
-      th:attr="hx-swap-oob=${oob} ? 'true'" class="text-nowrap ms-1">
+      th:attr="hx-swap-oob=${oob} ? 'true'" class="text-nowrap ms-2">
     <th:block th:switch="${conn.state.name()}">
         <span th:case="'NOT_CONFIGURED'" class="badge bg-secondary" th:text="#{settings.status.not-configured}">Not configured</span>
         <span th:case="'CHECKING'" class="badge bg-light text-dark border">
@@ -339,10 +339,13 @@
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
               th:title="#{settings.status.unreachable.hint(${conn.error ?: '-'})}"
               th:text="#{settings.status.unreachable}">Unreachable</span>
-        <span th:case="'OK'" class="badge bg-success"
+        <!--/* 서버는 응답하는데 설정한 모델(EMBED_MODEL · RERANK_MODEL)이 /v1/models 목록에 없으면 "모델없음" — 정상과 구별한다.
+             OK 칸은 span 하나로 둔다: th:case 가 붙은 두 span 에 th:if/th:unless 를 나눠 달면 첫 span 이 th:case 를 소비해
+             "정상" 배지가 통째로 사라진다. */-->
+        <span th:case="'OK'" class="badge" th:classappend="${conn.modelMissing} ? 'bg-warning text-dark' : 'bg-success'"
               data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
-              th:title="#{settings.status.normal.hint(${conn.latencyMs})}"
-              th:text="#{llm.status.normal}">Normal</span>
+              th:title="${conn.modelMissing} ? ${#messages.msg('settings.status.aux-model-missing.hint', conn.latencyMs)} : ${#messages.msg('settings.status.normal.hint', conn.latencyMs)}"
+              th:text="${conn.modelMissing} ? #{settings.status.model-missing} : #{llm.status.normal}">Normal</span>
     </th:block>
 </span>
 
@@ -351,8 +354,12 @@
     <th:block th:each="p, iter : ${providers}">
         <span th:replace="~{::status(${p}, ${iter.index}, true)}"></span>
     </th:block>
-    <span th:replace="~{::auxStatus('embed-status', ${embeddingConnection}, true)}"></span>
-    <span th:replace="~{::auxStatus('rerank-status', ${rerankerConnection}, true)}"></span>
+    <th:block th:each="e, iter : ${embeddingEndpoints}">
+        <span th:replace="~{::auxStatus('embed-status-' + ${iter.index}, ${e.connection}, true)}"></span>
+    </th:block>
+    <th:block th:each="e, iter : ${rerankerEndpoints}">
+        <span th:replace="~{::auxStatus('rerank-status-' + ${iter.index}, ${e.connection}, true)}"></span>
+    </th:block>
 </th:block>
 
 </body>

@@ -3,7 +3,9 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.HttpClientTimeouts;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
+import com.example.ragagent.llm.LlmPing;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ServerModelResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -23,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -70,29 +74,69 @@ public class CrossEncoderReranker {
         }
     }
 
-    private final RestClient client;
+    /** 리랭커 서버 하나 — 자기 클라이언트·진행 중 호출 수·건너뛰기 창을 가진다. */
+    private static final class Target {
+        final String label;
+        final RestClient client;
+        final AtomicInteger inFlight = new AtomicInteger();
+        /** 건너뛰기 창의 만료 시각({@code nanoClock} 기준). 0 = 건너뛰지 않음. */
+        final AtomicLong blockedUntil = new AtomicLong();
+        /** 요청에 실을 모델명을 정한다 — 설정한 이름이 서버 목록의 id 에 포함되면 그 id. {@code null} = 풀지 않는다(설정 그대로). */
+        final ServerModelResolver resolver;
+
+        Target(String label, RestClient client, ServerModelResolver resolver) {
+            this.label = label;
+            this.client = client;
+            this.resolver = resolver;
+        }
+    }
+
+    private final List<Target> targets;
+    private final AtomicInteger roundRobin = new AtomicInteger();
     private final String model;
     private final int timeoutSeconds;
     private final Semaphore permits;
     private final LongSupplier nanoClock;
-    private volatile long blockedUntilNanos = 0L;
 
     @Autowired
     public CrossEncoderReranker(AppProperties props) {
-        this(props, System::nanoTime);
+        this(props, System::nanoTime, true, null);
     }
 
-    /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. */
+    /** 테스트용 — 시계를 바꿔 끼워 건너뛰기 창을 기다리지 않고 본다. 모델명은 풀지 않는다(서버로 목록 요청이 나가지 않는다). */
     CrossEncoderReranker(AppProperties props, LongSupplier nanoClock) {
+        this(props, nanoClock, false, null);
+    }
+
+    /** 테스트용 — 모델 목록을 묻는 함수(주소 → id 목록)를 바꿔 끼워 모델명 해석을 본다. */
+    CrossEncoderReranker(AppProperties props, java.util.function.Function<String, List<String>> lister) {
+        this(props, System::nanoTime, true, lister);
+    }
+
+    private CrossEncoderReranker(AppProperties props, LongSupplier nanoClock, boolean resolveModel,
+                                 java.util.function.Function<String, List<String>> lister) {
         AppProperties.RerankerConfig cfg = props.rerankerSafe();
-        RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
-                .baseUrl(endpointBase(cfg.baseUrl()));
-        // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
-        if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
-        this.client = builder.build();
+        List<Target> built = new ArrayList<>();
+        for (String url : props.rerankerBaseUrls()) {
+            RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(cfg.connectTimeoutSeconds(), cfg.timeoutSeconds())
+                    .baseUrl(endpointBase(url));
+            // 선택 — 키가 걸린 서버(llama-server --api-key, 원격 리랭크 API)용. 임베딩의 app.embedding.api-key 와 같은 규칙: 비면 헤더를 싣지 않는다.
+            if (!cfg.apiKey().isBlank()) builder.defaultHeader("Authorization", "Bearer " + cfg.apiKey());
+            ServerModelResolver resolver = null;
+            if (resolveModel) {
+                String modelsBase = endpointBase(url) + "/v1";
+                String key = cfg.apiKey().isBlank() ? "no-key" : cfg.apiKey();
+                resolver = lister != null
+                        ? syncResolver(url, cfg.model(), () -> lister.apply(url))
+                        : new ServerModelResolver(url, cfg.model(), () -> LlmPing.listModelIds(modelsBase, key, 3, 5));
+            }
+            built.add(new Target(url, builder.build(), resolver));
+        }
+        this.targets = List.copyOf(built);
         this.model = cfg.model();
         this.timeoutSeconds = cfg.timeoutSeconds();
-        this.permits = new Semaphore(cfg.maxConcurrent(), true);
+        // 동시 호출 상한은 서버 한 대 기준 값이다 — 서버가 N 대면 N 배까지 동시에 나갈 수 있다.
+        this.permits = new Semaphore(cfg.maxConcurrent() * Math.max(1, targets.size()), true);
         this.nanoClock = nanoClock;
     }
 
@@ -100,11 +144,21 @@ public class CrossEncoderReranker {
      * {@code candidates} 를 {@code query} 와의 관련도로 다시 줄 세워 상위 {@code topK} 를 점수와 함께 돌려준다(점수 내림차순,
      * 같으면 입력 순서). 후보가 비어 있으면 서버를 부르지 않는다.
      *
+     * <p>서버가 여럿이면 진행 중 호출이 가장 적은 곳(같으면 돌아가며)으로 보내고, <b>연결 계열 실패</b>는 그 서버를
+     * {@value #BLOCK_SECONDS}초 건너뛰며 <b>같은 호출 안에서</b> 다음 서버로 다시 보낸다. 서버가 답한 오류·읽기 타임아웃은
+     * 넘기지 않는다(요청 모양 문제일 수 있다 — {@code LoadBalancingEmbeddingModel} 과 같은 판단).
+     *
      * @throws UnavailableException 서버에 닿지 못했거나 응답을 쓸 수 없을 때
      */
     public List<Ranked> rerank(String query, List<Document> candidates, int topK) {
         if (candidates == null || candidates.isEmpty() || topK <= 0) return List.of();
-        if (nanoClock.getAsLong() < blockedUntilNanos) {
+        List<Target> order = candidateOrder();
+        if (order.isEmpty()) {
+            Target missing = targets.stream().filter(CrossEncoderReranker::modelMissing).findFirst().orElse(null);
+            if (missing != null && targets.stream().allMatch(CrossEncoderReranker::modelMissing)) {
+                throw new UnavailableException("리랭커 모델 '" + missing.resolver.configuredModel() + "' 이(가) 서버의 모델 목록에 없어 요청을 보내지 않는다 ("
+                        + missing.label + ": " + missing.resolver.detail() + ")");
+            }
             throw new UnavailableException("리랭커를 잠시 건너뛴다(연결 실패 후 " + BLOCK_SECONDS + "초)");
         }
         boolean acquired = false;
@@ -116,43 +170,97 @@ public class CrossEncoderReranker {
         }
         if (!acquired) throw new UnavailableException("리랭커 동시 호출 자리를 " + timeoutSeconds + "초 안에 얻지 못했다");
         try {
-            String body = requestBody(query, candidates);
-            String response = client.post().uri("/v1/rerank")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            return parse(response, candidates, topK);
-        } catch (UnavailableException e) {
-            throw e;
-        } catch (RestClientException e) {
-            if (LlmRouter.isConnectionFailure(e)) {
-                blockedUntilNanos = nanoClock.getAsLong() + TimeUnit.SECONDS.toNanos(BLOCK_SECONDS);
-                log.warn("[Reranker] 서버에 닿지 못했다 — {}초 건너뛴다: {}", BLOCK_SECONDS, e.getMessage());
-            } else {
-                log.warn("[Reranker] 호출 실패: {}", e.getMessage());
+            UnavailableException last = null;
+            for (Target t : order) {
+                t.inFlight.incrementAndGet();
+                try {
+                    // 이 서버가 아는 이름으로 — 첫 호출 때 한 번 /v1/models 로 풀린다(못 풀면 설정한 이름 그대로)
+                    String body = requestBody(query, candidates, t.resolver == null ? model : t.resolver.modelName());
+                    String response = t.client.post().uri("/v1/rerank")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(body)
+                            .retrieve()
+                            .body(String.class);
+                    return parse(response, candidates, topK);
+                } catch (UnavailableException e) {
+                    throw e;
+                } catch (RestClientException e) {
+                    UnavailableException failure = new UnavailableException("리랭커 호출 실패: " + e.getMessage(), e);
+                    if (LlmRouter.isConnectionFailure(e)) {
+                        t.blockedUntil.set(nanoClock.getAsLong() + TimeUnit.SECONDS.toNanos(BLOCK_SECONDS));
+                        log.warn("[Reranker] 서버에 닿지 못했다 — {}초 건너뛴다 ({}): {}", BLOCK_SECONDS, t.label, e.getMessage());
+                        last = failure;   // 다음 서버로
+                    } else {
+                        log.warn("[Reranker] 호출 실패 ({}): {}", t.label, e.getMessage());
+                        throw failure;
+                    }
+                } catch (RuntimeException e) {
+                    // 요청을 만들다 난 예외 등 — 어느 쪽이든 호출자가 할 일은 같다(리랭크를 건너뛴다). 건너뛰기 창은 열지 않는다.
+                    log.warn("[Reranker] 예기치 않은 실패: {}", e.toString());
+                    throw new UnavailableException("리랭커 호출 중 예외: " + e, e);
+                } finally {
+                    t.inFlight.decrementAndGet();
+                }
             }
-            throw new UnavailableException("리랭커 호출 실패: " + e.getMessage(), e);
-        } catch (RuntimeException e) {
-            // 요청을 만들다 난 예외 등 — 어느 쪽이든 호출자가 할 일은 같다(리랭크를 건너뛴다). 건너뛰기 창은 열지 않는다.
-            log.warn("[Reranker] 예기치 않은 실패: {}", e.toString());
-            throw new UnavailableException("리랭커 호출 중 예외: " + e, e);
+            throw last != null ? last : new UnavailableException("리랭커 서버에 닿지 못했다");
         } finally {
             permits.release();
         }
     }
 
+    /** 테스트용 — 목록 조회를 그 자리(호출 스레드)에서 끝내는 해석기. */
+    private static ServerModelResolver syncResolver(String url, String model, java.util.function.Supplier<List<String>> lister) {
+        ServerModelResolver r = ServerModelResolver.forTest(url, model, lister);
+        r.refreshAsync();
+        return r;
+    }
+
+    /** 건너뛰기 창 안인가 — 0 은 "차단 없음"이라 시계 값이 음수여도 차단으로 읽지 않는다. */
+    private static boolean blocked(Target t, long now) {
+        long until = t.blockedUntil.get();
+        return until != 0 && now - until < 0;
+    }
+
+    private static boolean modelMissing(Target t) {
+        return t.resolver != null && t.resolver.state() == ServerModelResolver.State.MODEL_MISSING;
+    }
+
+    private static boolean unreachableState(Target t) {
+        return t.resolver != null && t.resolver.state() == ServerModelResolver.State.UNREACHABLE;
+    }
+
+    /** 이번 호출이 시도할 서버 순서 — 건너뛰는 중이 아닌 서버를 진행 중 호출이 적은 순(같으면 돌아가며)으로. */
+    private List<Target> candidateOrder() {
+        long now = nanoClock.getAsLong();
+        List<Target> open = new ArrayList<>();
+        // 모델없음으로 알려진 서버는 고르지 않는다. 우선순위는 정상(모름 포함) → 접속불가(목록을 못 읽은 서버)
+        for (Target t : targets) if (!blocked(t, now) && !modelMissing(t)) open.add(t);
+        List<Target> healthy = open.stream().filter(t -> !unreachableState(t)).toList();
+        if (!healthy.isEmpty() && healthy.size() < open.size()) open = new ArrayList<>(healthy);
+        if (open.size() > 1) {
+            int offset = Math.floorMod(roundRobin.getAndIncrement(), open.size());
+            java.util.Collections.rotate(open, -offset);
+            open.sort(Comparator.comparingInt(t -> t.inFlight.get()));   // 안정 정렬 — 동률은 회전 순서가 남는다
+        }
+        return open;
+    }
+
     /** 연결 계열 실패 뒤 건너뛰기 창 안인가 — {@code /settings} 의 상태 배지가 읽는다. */
     public boolean isSkipping() {
-        return nanoClock.getAsLong() < blockedUntilNanos;
+        long now = nanoClock.getAsLong();
+        return targets.stream().allMatch(t -> blocked(t, now));
     }
 
     /** 요청 본문 — 문서는 입력 순서 그대로이고 응답의 {@code index} 가 이 순서를 가리킨다. */
     String requestBody(String query, List<Document> candidates) {
+        return requestBody(query, candidates, model);
+    }
+
+    String requestBody(String query, List<Document> candidates, String modelName) {
         List<String> docs = new ArrayList<>(candidates.size());
         for (Document d : candidates) docs.add(textFor(d));
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", model);
+        body.put("model", modelName);
         body.put("query", truncate(query == null ? "" : query.strip(), MAX_QUERY_CHARS));
         body.put("documents", docs);
         body.put("top_n", docs.size());   // 자르기는 이쪽이 한다 — 서버의 top_n 해석에 기대지 않는다
