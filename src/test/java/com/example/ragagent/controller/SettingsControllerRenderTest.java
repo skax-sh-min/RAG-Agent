@@ -661,7 +661,7 @@ class SettingsControllerRenderTest {
     }
 
     @Test
-    @DisplayName("GET /settings — 임베딩·리랭커는 표로, 주소마다 한 줄과 자기 상태 배지가 붙는다(타입 · 모델명 · 주소 · 기타)")
+    @DisplayName("GET /settings — 임베딩·리랭커는 표로, 주소마다 한 줄과 자기 상태 배지가 붙는다(역할 · 모델명 · 주소 · 기타)")
     void embeddingAndRerankerRenderAsATableWithPerAddressStatus() throws Exception {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
                 "number", true, false, null, 1.0, 1000.0, 1.0);
@@ -678,7 +678,7 @@ class SettingsControllerRenderTest {
         String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains(">타입<", ">모델명<", ">주소<", ">기타<", ">임베딩<", ">리랭커<",
+        assertThat(html).contains(">역할<", ">모델명<", ">주소<", ">기타<", ">임베딩<", ">리랭커<",
                 "id=\"embed-status-0\"", "id=\"embed-status-1\"", "id=\"rerank-status-0\"", "bge-reranker-v2-m3");
         assertThat(html).contains("http://e1:1/v1", "http://e2:1/v1");
     }

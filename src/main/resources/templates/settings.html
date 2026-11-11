@@ -130,6 +130,49 @@
         </div>
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
+            <!--/* 임베딩·리랭커 — LLM 라우터 밖의 서버. 위 프로바이더 표와 같은 모양(table-sm · 연한 머리글 · 같은 글자 크기)으로
+                 바로 아래에 둔다. 주소가 여럿이면(A;B) 주소마다 한 줄에 접속 상태 배지가 붙고, 배지는 GET /settings/llm-status 가
+                 id(embed-status-N · rerank-status-N)로 채운다. 주소 칸을 넓게, 기타 칸을 좁게. */-->
+            <div class="table-responsive border-top">
+                <table class="table table-sm mb-0 align-middle" style="table-layout: fixed; min-width: 720px;">
+                    <colgroup>
+                        <col style="width: 9%"/><col style="width: 20%"/><col style="width: 53%"/><col style="width: 18%"/>
+                    </colgroup>
+                    <thead class="table-light">
+                    <tr>
+                        <th class="ps-3 text-center" th:text="#{settings.endpoint.col.type}">Role</th>
+                        <th th:text="#{settings.endpoint.col.model}">Model</th>
+                        <th th:text="#{settings.endpoint.col.address}">Address</th>
+                        <th class="pe-3" th:text="#{settings.endpoint.col.extra}">Extra</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <td class="ps-3 text-center" th:text="#{settings.endpoint.type.embedding}">Embedding</td>
+                        <td class="text-break" th:text="${settings.embeddingModel}">bge-m3</td>
+                        <td>
+                            <div th:each="e, iter : ${settings.embeddingEndpoints}" class="text-break">
+                                <span th:text="${e.url}">http://localhost:1234/v1</span>
+                                <span th:replace="~{fragments/settings-providers :: auxStatus('embed-status-' + ${iter.index}, ${e.connection}, false)}"></span>
+                            </div>
+                        </td>
+                        <td class="pe-3"><span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
+                            <span th:text="${settings.embeddingDimensions}">1024</span></td>
+                    </tr>
+                    <tr>
+                        <td class="ps-3 text-center" th:text="#{settings.endpoint.type.reranker}">Reranker</td>
+                        <td class="text-break" th:text="${settings.rerankerModel}">bge-reranker-v2-m3</td>
+                        <td>
+                            <div th:each="e, iter : ${settings.rerankerEndpoints}" class="text-break">
+                                <span th:text="${e.url}">http://localhost:28095</span>
+                                <span th:replace="~{fragments/settings-providers :: auxStatus('rerank-status-' + ${iter.index}, ${e.connection}, false)}"></span>
+                            </div>
+                        </td>
+                        <td class="pe-3"></td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
         <div class="card-footer small">
             <div class="row g-2">
@@ -137,49 +180,6 @@
                     <span class="text-secondary" th:text="#{settings.item.default-routing-mode}">Routing mode</span>:
                     <span class="font-monospace" th:text="${settings.defaultRoutingMode}">COST_FIRST</span>
                 </div>
-            </div>
-            <hr class="my-2"/>
-            <!--/* 임베딩·리랭커 — LLM 라우터 밖의 서버. 주소가 여럿이면(A;B) 주소마다 한 줄에 접속 상태 배지가 붙는다.
-                 주소 칸을 넓게, 기타 칸을 좁게. 배지는 GET /settings/llm-status 가 id(embed-status-N · rerank-status-N)로 채운다. */-->
-            <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0 small" style="table-layout: fixed; min-width: 640px;">
-                    <colgroup>
-                        <col style="width: 9%"/><col style="width: 20%"/><col style="width: 53%"/><col style="width: 18%"/>
-                    </colgroup>
-                    <thead>
-                    <tr class="text-secondary">
-                        <th th:text="#{settings.endpoint.col.type}">Type</th>
-                        <th th:text="#{settings.endpoint.col.model}">Model</th>
-                        <th th:text="#{settings.endpoint.col.address}">Address</th>
-                        <th th:text="#{settings.endpoint.col.extra}">Extra</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <tr>
-                        <td th:text="#{settings.endpoint.type.embedding}">Embedding</td>
-                        <td class="font-monospace text-break" th:text="${settings.embeddingModel}">bge-m3</td>
-                        <td>
-                            <div th:each="e, iter : ${settings.embeddingEndpoints}" class="text-break">
-                                <span class="font-monospace" th:text="${e.url}">http://localhost:1234/v1</span>
-                                <span th:replace="~{fragments/settings-providers :: auxStatus('embed-status-' + ${iter.index}, ${e.connection}, false)}"></span>
-                            </div>
-                        </td>
-                        <td><span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
-                            <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span></td>
-                    </tr>
-                    <tr>
-                        <td th:text="#{settings.endpoint.type.reranker}">Reranker</td>
-                        <td class="font-monospace text-break" th:text="${settings.rerankerModel}">bge-reranker-v2-m3</td>
-                        <td>
-                            <div th:each="e, iter : ${settings.rerankerEndpoints}" class="text-break">
-                                <span class="font-monospace" th:text="${e.url}">http://localhost:28095</span>
-                                <span th:replace="~{fragments/settings-providers :: auxStatus('rerank-status-' + ${iter.index}, ${e.connection}, false)}"></span>
-                            </div>
-                        </td>
-                        <td></td>
-                    </tr>
-                    </tbody>
-                </table>
             </div>
         </div>
     </div>
