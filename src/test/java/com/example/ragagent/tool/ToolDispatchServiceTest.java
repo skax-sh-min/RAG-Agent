@@ -265,4 +265,28 @@ class ToolDispatchServiceTest {
         verify(changeWorkflow, org.mockito.Mockito.never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(),
                 org.mockito.ArgumentMatchers.anyBoolean(), any());
     }
+
+    // ── 관측(§6.33 5단계) ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("실행 성공은 ok 와 결과 크기로, 모르는 Tool 은 error 로 남는다 — 계획이 없으면 아무것도 남기지 않는다")
+    void observesExecutions() {
+        com.example.ragagent.repository.AgentToolCallRepository repo = org.mockito.Mockito.mock(com.example.ragagent.repository.AgentToolCallRepository.class);
+        dispatch.setObservations(repo);
+
+        dispatch.execute(stateWith(new ToolPlan("generateDiff", "{\"before\":\"a\\nb\",\"after\":\"a\\nc\"}")));
+        org.mockito.Mockito.verify(repo).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("exec"), org.mockito.ArgumentMatchers.eq("generateDiff"),
+                org.mockito.ArgumentMatchers.eq("ok"), org.mockito.ArgumentMatchers.argThat(n -> n != null && n > 0),
+                org.mockito.ArgumentMatchers.anyLong());
+
+        dispatch.execute(stateWith(new ToolPlan("noSuchTool", "{}")));
+        org.mockito.Mockito.verify(repo).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("exec"), org.mockito.ArgumentMatchers.eq("noSuchTool"),
+                org.mockito.ArgumentMatchers.eq("error"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyLong());
+
+        org.mockito.Mockito.clearInvocations(repo);
+        dispatch.execute(stateWith(null));
+        org.mockito.Mockito.verifyNoInteractions(repo);
+    }
 }

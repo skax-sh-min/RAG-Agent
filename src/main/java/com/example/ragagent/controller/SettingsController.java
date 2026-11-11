@@ -102,6 +102,8 @@ public class SettingsController {
     @GetMapping("/settings/llm-status")
     public String providerStatus(Model model) {
         model.addAttribute("providers", settingsService.refreshProviderConnections());
+        model.addAttribute("embeddingConnection", settingsService.embeddingConnection());
+        model.addAttribute("rerankerConnection", settingsService.rerankerConnection());
         return "fragments/settings-providers :: statuses";
     }
 

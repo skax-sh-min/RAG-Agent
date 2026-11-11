@@ -325,11 +325,34 @@
             onclick="document.getElementById('provider-editor').innerHTML = ''"></button>
 </div>
 
+<!-- ── 임베딩·리랭커 서버의 상태 배지 — LLM 라우팅 카드 푸터. 프로바이더 표의 상태 칸과 같은 3단계 + 확인 중 ──────
+     id 는 호출부가 정한다('embed-status'/'rerank-status') — GET /settings/llm-status 응답(oob=true)이 같은 id 로 바꿔 끼운다. -->
+<span th:fragment="auxStatus(id, conn, oob)" th:if="${conn != null}" th:id="${id}"
+      th:attr="hx-swap-oob=${oob} ? 'true'" class="text-nowrap ms-1">
+    <th:block th:switch="${conn.state.name()}">
+        <span th:case="'NOT_CONFIGURED'" class="badge bg-secondary" th:text="#{settings.status.not-configured}">Not configured</span>
+        <span th:case="'CHECKING'" class="badge bg-light text-dark border">
+            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span><span
+                  th:text="#{settings.status.checking}">Checking</span>
+        </span>
+        <span th:case="'UNREACHABLE'" class="badge bg-danger"
+              data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+              th:title="#{settings.status.unreachable.hint(${conn.error ?: '-'})}"
+              th:text="#{settings.status.unreachable}">Unreachable</span>
+        <span th:case="'OK'" class="badge bg-success"
+              data-bs-toggle="tooltip" data-bs-trigger="hover" data-bs-custom-class="tooltip-wide"
+              th:title="#{settings.status.normal.hint(${conn.latencyMs})}"
+              th:text="#{llm.status.normal}">Normal</span>
+    </th:block>
+</span>
+
 <!-- ── GET /settings/llm-status 의 응답 — 표의 상태 칸 전부를 한 번에 바꿔 끼운다 ──────────────────── -->
 <th:block th:fragment="statuses(providers)">
     <th:block th:each="p, iter : ${providers}">
         <span th:replace="~{::status(${p}, ${iter.index}, true)}"></span>
     </th:block>
+    <span th:replace="~{::auxStatus('embed-status', ${embeddingConnection}, true)}"></span>
+    <span th:replace="~{::auxStatus('rerank-status', ${rerankerConnection}, true)}"></span>
 </th:block>
 
 </body>

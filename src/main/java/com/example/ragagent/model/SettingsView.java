@@ -16,8 +16,20 @@ public record SettingsView(
         String embeddingBaseUrl,
         String embeddingDimensions,
         String vectorStoreType,
-        List<SettingGroup> groups
+        List<SettingGroup> groups,
+        String rerankerModel,
+        String rerankerBaseUrl,
+        ProviderConnection embeddingConnection,  // 임베딩 서버의 마지막 접속 확인 — 프로바이더 표의 상태 열과 같은 모양(null = 그리지 않음)
+        ProviderConnection rerankerConnection    // 리랭커 서버 — 주소가 없으면 NOT_CONFIGURED
 ) {
+
+    /** 리랭커 필드가 없던 시절의 생성자 — 리랭커 줄은 꺼짐("-")으로 그려진다. */
+    public SettingsView(List<ProviderRow> providers, String defaultRoutingMode, String temperature, String maxTokens,
+                        String embeddingModel, String embeddingBaseUrl, String embeddingDimensions,
+                        String vectorStoreType, List<SettingGroup> groups) {
+        this(providers, defaultRoutingMode, temperature, maxTokens, embeddingModel, embeddingBaseUrl,
+                embeddingDimensions, vectorStoreType, groups, "-", "-", null, null);
+    }
 
     /** 편집할 수 있는 항목이 하나라도 있는 그룹 — 화면에서 생각 수준 카드보다 앞에 온다. 순서는 {@link #groups()} 그대로. */
     public List<SettingGroup> editableGroups() {

@@ -1,7 +1,7 @@
 # 데이터베이스 · 벡터 저장소 레퍼런스
 
 > **개발자용 레퍼런스입니다.** SQLite 테이블·컬럼·인덱스, 테이블 사이의 관계, 그리고 벡터 저장소(sqlite-vec / Chroma)가 청크를 어떻게 담는지를 정리합니다.
-> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.3.1](OPERATOR_MANUAL.md#631-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 [PLAN §13](PLAN.md#13-db-스키마-변경-요약), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
+> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.3.1](OPERATOR_MANUAL.md#631-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 아래 [§2.1](#21-운영-테이블의-스키마는-flyway-에만-있다--검색-색인은-예외), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
 >
 > **기준**: 2026-09-29, 실제 `data/memory.db`(sqlite-vec 배포)의 `PRAGMA table_info`와 코드의 DDL을 대조해 작성했습니다. 스키마의 **정본은 코드**입니다(§2.1) — 이 문서와 코드가 다르면 코드가 맞고, 이 문서를 고쳐야 합니다(§9).
 
@@ -32,6 +32,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `image_descriptions` | 이미지 하나의 Vision 설명(캐시) | 대화 | Flyway V1 / `SqliteMemoryRepository` |
 | `thread_follow_up` | 대화 하나의 마지막 답변 아래 추가 질문 | 대화 | Flyway V8 / `SqliteMemoryRepository` |
 | `change_proposal` | 유지보수 수정안 검토 대기열(§6.33 4b) — 청크별 before/after·해시·맥락/키워드, 상태(`pending`·`approved`·`rejected`·`applied`·`stale`·`failed`). **행을 만드는 것은 코퍼스를 바꾸지 않는다** (묶는 키: 작업(`job_id`)) | 변경 작업 | Flyway V13 / `ChangeProposalRepository` |
+| `agent_tool_call` | 채팅 Tool 선택(계획)·실행의 관측 한 줄(§6.33 5단계) — 분포·성공률·지연만, 질문 본문·인자는 저장하지 않는다 (묶는 키: 없음 — 배포 전체 집계) | 관측 | Flyway V14 / `AgentToolCallRepository` |
 | `change_job` | 영향도 분석 작업(§6.33 4a) — 상태(`running`·`done`·`failed`·`interrupted`)와 리포트 JSON. 코퍼스에는 쓰지 않는다 (묶는 키: 요청자(`requested_by`)) | 변경 작업 | Flyway V12 / `ChangeJobRepository` |
 | `doc_registry` | 인덱싱된 문서 하나 | 문서 | Flyway V4 / `DocRegistry` |
 | `curated_qa` | 큐레이션 Q&A 한 건 (벡터는 N개) | 큐레이션 | Flyway V4 / `CuratedQaRepository` |
@@ -57,12 +58,12 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b) · `V14__agent_tool_call.sql`(`agent_tool_call`, PLAN §6.33 5단계). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
 - Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 옛 런타임 DDL로 만들어진 파일을 버전 3으로 baseline한 뒤 V4 부터 적용합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
-- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V9)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
+- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V14)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
 
 ### 2.2 외래 키가 없다
 
@@ -333,6 +334,23 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 > 중복 방지 키에 `thread_id`가 들어가는 이유: 공유 게스트 전략에서는 모든 방문자의 사용자 id가 같아서, (청크, 신고자)로만 막으면 청크당 한 명만 신고할 수 있게 됩니다. 처리된 신고는 재신고를 막지 않습니다(부분 인덱스).
 
 ---
+
+### 5.4b `agent_tool_call` — Tool 선택·실행 관측 한 줄 (V14)
+
+`/admin` 의 "Tool 호출 추적" 패널이 읽는 **읽기 전용 관측**이다([OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md)). 기록 실패는 턴을 실패시키지 않는다. **인자·질문 본문은 담지 않는다** — 분포와 지연이면 되고, 사용자가 무엇을 물었는지의 두 번째 사본을 아무도 지키지 않는 곳에 만들지 않으려는 것이다.
+
+| 컬럼 | 타입 | 제약·기본값 | 의미 |
+|---|---|---|---|
+| `id` | INTEGER | PK, AUTOINCREMENT | |
+| `thread_id`, `user_id` | TEXT | | 대화·사용자(계획 호출에서 알 수 있는 만큼) |
+| `phase` | TEXT | NOT NULL | `plan`(Tool 선택 LLM 호출) / `exec`(`TOOL` 노드가 실행한 Tool) |
+| `tool_name` | TEXT | NOT NULL | 고른 Tool. 고르지 않았거나 쓸 수 없는 답이면 `NONE` |
+| `status` | TEXT | NOT NULL | plan: `planned`(Tool 선택) · `none`(명시적 NONE) · `invalid`(읽지 못함·모르는/보이지 않는 Tool·인자 불일치) · `rejected`(영향을 묻는 표현이 없어 코드가 `analyzeImpact` 를 거절) · `error`(호출 실패). exec: `ok` · `empty`(빈 결과 → 검색으로) · `error` |
+| `result_size` | INTEGER | | exec 만 — Tool 결과의 글자 수 |
+| `duration_ms` | INTEGER | | 계획 호출·Tool 실행의 걸린 시간 |
+| `created_at` | TEXT | NOT NULL | UTC. **90일이 지난 행은 기동 때 지운다** |
+
+인덱스: `idx_agent_tool_call_created(created_at)`
 
 ### 5.5 `change_job` — 영향도 분석·유지보수 작업 한 건 (V12)
 

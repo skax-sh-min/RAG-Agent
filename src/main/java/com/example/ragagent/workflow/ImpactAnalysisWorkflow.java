@@ -165,6 +165,15 @@ public class ImpactAnalysisWorkflow {
         List<Document> toJudge = chunks.size() > MAX_JUDGED ? chunks.subList(0, MAX_JUDGED) : chunks;
         List<Finding> findings = new ArrayList<>();
         for (Document chunk : toJudge) {
+            if (!hasStandaloneOccurrence(chunk.getText(), term)) {
+                // 다른 숫자·식별자의 일부로만 나온다(예: 8080 ↔ req-80801234) — 모델에 묻지 않고 영향 없음으로 남긴다. 사유는 리포트에 보인다.
+                Map<String, Object> m = chunk.getMetadata();
+                String docId = String.valueOf(m.getOrDefault(MetaKey.DOC_ID, ""));
+                findings.add(new Finding(docId, String.valueOf(m.getOrDefault(MetaKey.FILENAME, docId)), chunk.getId(),
+                        String.valueOf(m.getOrDefault(MetaKey.PAGE_OR_SLIDE, "")), VERDICT_NOT_IMPACTED,
+                        "다른 식별자·숫자의 일부로만 나온다(단어 경계 밖)", ""));
+                continue;
+            }
             awaitChatQuiet();
             findings.add(judge(term, changeNote, chunk, locale));
         }
@@ -219,6 +228,29 @@ public class ImpactAnalysisWorkflow {
         } catch (RuntimeException e) {
             return new Finding(docId, file, chunkId, page, VERDICT_ERROR, "판정을 읽지 못했다", "");
         }
+    }
+
+    /**
+     * 대상이 단어 경계에서 한 번이라도 나오는가. 대상의 첫/끝 글자가 ASCII 영숫자·밑줄이면 그 바깥 이웃이 ASCII 영숫자·밑줄일 때는
+     * 더 긴 식별자의 일부라 센 것이 아니다(한글 조사가 붙는 {@code 8080포트} 는 경계다). 대소문자는 가리지 않는다 — 전수 조회와 같다.
+     */
+    static boolean hasStandaloneOccurrence(String text, String term) {
+        if (text == null || term == null || term.isEmpty()) return false;
+        String hay = text.toLowerCase(Locale.ROOT);
+        String needle = term.toLowerCase(Locale.ROOT);
+        boolean wordStart = isAsciiWord(needle.charAt(0));
+        boolean wordEnd = isAsciiWord(needle.charAt(needle.length() - 1));
+        for (int i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + 1)) {
+            int end = i + needle.length();
+            if (wordStart && i > 0 && isAsciiWord(hay.charAt(i - 1))) continue;
+            if (wordEnd && end < hay.length() && isAsciiWord(hay.charAt(end))) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isAsciiWord(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
     }
 
     private static String normalize(String s) {

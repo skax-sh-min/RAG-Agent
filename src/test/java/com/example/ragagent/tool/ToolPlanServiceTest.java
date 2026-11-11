@@ -326,4 +326,63 @@ class ToolPlanServiceTest {
         assertThat(off.planFor(false, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN).plan()).isNull();
         assertThat(pending.isPending("root", "t1")).isTrue();
     }
+
+    // ── 관측(§6.33 5단계) ─────────────────────────────────────────────────
+
+    private static com.example.ragagent.repository.AgentToolCallRepository observed(ToolPlanService svc) {
+        com.example.ragagent.repository.AgentToolCallRepository repo = mock(com.example.ragagent.repository.AgentToolCallRepository.class);
+        svc.setObservations(repo);
+        return repo;
+    }
+
+    @Test
+    @DisplayName("고른 Tool 은 planned 로, 명시적 NONE 은 none 으로, 읽지 못한 답은 invalid 로 남는다")
+    void observesPlanOutcomes() {
+        ToolPlanService planned = service(routerReturning("{\"tool\":\"queryCatalog\",\"arguments\":{\"name\":\"documents.list\"}}", ArgumentCaptor.forClass(Prompt.class)), true);
+        com.example.ragagent.repository.AgentToolCallRepository r1 = observed(planned);
+        planned.planFor(false, ResponseMode.N, "문서 몇 개?", "u1", false, "t1", Locale.KOREAN);
+        org.mockito.Mockito.verify(r1).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("plan"), org.mockito.ArgumentMatchers.eq("queryCatalog"),
+                org.mockito.ArgumentMatchers.eq("planned"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyLong());
+
+        ToolPlanService none = service(routerReturning("{\"tool\":\"NONE\"}", ArgumentCaptor.forClass(Prompt.class)), true);
+        com.example.ragagent.repository.AgentToolCallRepository r2 = observed(none);
+        none.planFor(false, ResponseMode.N, "안녕", "u1", false, "t1", Locale.KOREAN);
+        org.mockito.Mockito.verify(r2).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("plan"), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq("none"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyLong());
+
+        ToolPlanService garbage = service(routerReturning("모르겠어요", ArgumentCaptor.forClass(Prompt.class)), true);
+        com.example.ragagent.repository.AgentToolCallRepository r3 = observed(garbage);
+        garbage.planFor(false, ResponseMode.N, "음", "u1", false, "t1", Locale.KOREAN);
+        org.mockito.Mockito.verify(r3).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("plan"), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq("invalid"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("LLM 호출이 던지면 error 로 남고 턴은 실패하지 않는다 · 저장소가 던져도 계획은 그대로")
+    void observesErrorsAndSurvivesARecordingFailure() {
+        LlmRouter failing = mock(LlmRouter.class);
+        when(failing.executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any()))
+                .thenThrow(new IllegalStateException("provider down"));
+        ToolPlanService svc = service(failing, true);
+        com.example.ragagent.repository.AgentToolCallRepository repo = observed(svc);
+
+        assertThat(svc.planFor(false, ResponseMode.N, "문서 몇 개?", "u1", false, "t1", Locale.KOREAN).plan()).isNull();
+        org.mockito.Mockito.verify(repo).record(org.mockito.ArgumentMatchers.eq("t1"), org.mockito.ArgumentMatchers.eq("u1"),
+                org.mockito.ArgumentMatchers.eq("plan"), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq("error"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("outcomeOf — 계획이 있으면 planned, NONE/빈 Tool 은 none, 읽지 못하거나 모르는 Tool 은 invalid")
+    void outcomeClassification() {
+        assertThat(ToolPlanService.outcomeOf("{\"tool\":\"x\"}", new ToolPlan("x", "{}"))).isEqualTo("planned");
+        assertThat(ToolPlanService.outcomeOf("{\"tool\":\"NONE\"}", null)).isEqualTo("none");
+        assertThat(ToolPlanService.outcomeOf("{\"tool\":\"\"}", null)).isEqualTo("none");
+        assertThat(ToolPlanService.outcomeOf("{\"tool\":\"ghost\"}", null)).isEqualTo("invalid");
+        assertThat(ToolPlanService.outcomeOf("text only", null)).isEqualTo("invalid");
+        assertThat(ToolPlanService.outcomeOf(null, null)).isEqualTo("invalid");
+    }
 }

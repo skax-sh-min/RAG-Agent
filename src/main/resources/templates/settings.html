@@ -147,10 +147,22 @@
                 <div class="col-12 col-md-4">
                     <span class="text-secondary" th:text="#{settings.item.embedding-base-url}">Embedding endpoint URL</span>:
                     <span class="font-monospace" th:text="${settings.embeddingBaseUrl}">http://localhost:1234/v1</span>
+                    <span th:replace="~{fragments/settings-providers :: auxStatus('embed-status', ${settings.embeddingConnection}, false)}"></span>
                 </div>
                 <div class="col-6 col-md-4">
                     <span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
                     <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
+                </div>
+            </div>
+            <div class="row g-2 mt-1">
+                <div class="col-6 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.reranker-model}">Reranker model</span>:
+                    <span class="font-monospace" th:text="${settings.rerankerModel}">bge-reranker-v2-m3</span>
+                </div>
+                <div class="col-12 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.reranker-base-url}">Reranker endpoint URL</span>:
+                    <span class="font-monospace" th:text="${settings.rerankerBaseUrl}">http://localhost:28095</span>
+                    <span th:replace="~{fragments/settings-providers :: auxStatus('rerank-status', ${settings.rerankerConnection}, false)}"></span>
                 </div>
             </div>
         </div>

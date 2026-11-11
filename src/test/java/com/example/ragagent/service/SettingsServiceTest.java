@@ -607,7 +607,7 @@ class SettingsServiceTest {
                 .filter(item -> item.note() != null))
                 .as("항목 옆에는 리랭커 상태 배지 말고 붙이지 않는다")
                 .allSatisfy(item -> {
-                    assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
+                    assertThat(item.label()).isIn("settings.item.rerank-candidates","settings.item.rerank-top-k");
                     assertThat(item.note()).startsWith("settings.note.reranker-");
                 });
     }
