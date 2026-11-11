@@ -1,7 +1,7 @@
 # 데이터베이스 · 벡터 저장소 레퍼런스
 
 > **개발자용 레퍼런스입니다.** SQLite 테이블·컬럼·인덱스, 테이블 사이의 관계, 그리고 벡터 저장소(sqlite-vec / Chroma)가 청크를 어떻게 담는지를 정리합니다.
-> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.3.1](OPERATOR_MANUAL.md#631-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 [PLAN §13](PLAN.md#13-db-스키마-변경-요약), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
+> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.3.1](OPERATOR_MANUAL.md#631-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 아래 [§2.1](#21-운영-테이블의-스키마는-flyway-에만-있다--검색-색인은-예외), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
 >
 > **기준**: 2026-09-29, 실제 `data/memory.db`(sqlite-vec 배포)의 `PRAGMA table_info`와 코드의 DDL을 대조해 작성했습니다. 스키마의 **정본은 코드**입니다(§2.1) — 이 문서와 코드가 다르면 코드가 맞고, 이 문서를 고쳐야 합니다(§9).
 
@@ -63,7 +63,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
 - Flyway는 `spring.flyway.baseline-version=3`입니다 — 이력 없이 옛 런타임 DDL로 만들어진 파일을 버전 3으로 baseline한 뒤 V4 부터 적용합니다(이유: [PITFALLS § 벡터 스토어 백엔드와 vec/FTS DataSource](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)).
-- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`, [PLAN §13](PLAN.md#13-db-스키마-변경-요약)) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V9)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
+- **새 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가합니다**(`src/main/resources/db/migration/`) — V4 뒤로는 모든 DB 가 한 모양이라 평범한 `ALTER TABLE … ADD COLUMN` 이면 됩니다. 적용된 마이그레이션(V1–V14)은 고치지 않습니다. 그리고 이 문서의 표도 함께 고칩니다.
 
 ### 2.2 외래 키가 없다
 
