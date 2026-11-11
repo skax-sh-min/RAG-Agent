@@ -159,7 +159,7 @@ public class ProviderConnectivity {
         }
     }
 
-    /** 기록하지 않는 한 번의 확인 — 기동 점검({@code EmbeddingStartupCheck})이 쓴다. 주소의 {@code /v1} 은 있어도 없어도 된다. */
+    /** 기록하지 않는 한 번의 확인 — 기동 점검({@code ModelServersStartupCheck})이 쓴다. 주소의 {@code /v1} 은 있어도 없어도 된다. */
     public static Result checkEndpointNow(String baseUrl, String apiKey, String model) {
         String key = (apiKey != null && !apiKey.isBlank()) ? apiKey : "no-key";
         LlmPing.Reach r = probeOne(baseUrl, key, model);
