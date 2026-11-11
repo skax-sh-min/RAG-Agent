@@ -579,7 +579,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 검색어 재작성 안내 (§10.12)
 
-`ui.retrieval-metrics-enabled` 를 켜면, 짧은 후속 질문이 검색용으로 다시 쓰인 턴에 한 줄이 붙는다.
+짧은 후속 질문이 검색용으로 다시 쓰인 턴에는 **설정과 무관하게 항상** 한 줄이 붙는다(예전에는 `ui.retrieval-metrics-enabled` 를 켜야 보이는 진단값이었다 — 사용자가 실제로 검색에 쓰인 질문을 알 수 있게 바꿨다).
 
 ```
 🔍 검색에 사용된 질문: SSE 타임아웃 설정은 어디에 있어?
@@ -587,7 +587,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 **질문 버블에는 원문(`그거 어디야?`)이 그대로 남는다** — 답변 프롬프트의 `[현재 질문]` 도 원문이고, 재작성은 검색 축과 분류기만 쓰기 때문이다. 그래서 재작성이 빗나가면 사용자에게는 "나쁜 검색어"가 아니라 **"엉뚱한 답변"** 으로만 보이고, 이 줄이 없으면 원인을 짚을 방법이 없다.
 
-- 렌더러는 여기서도 **셋**이다(`message-assistant.html` · `chat.html` 의 기록 루프 · `chat-stream.js`). 서버 렌더 둘은 항상 마크업을 내고 `d-none` 을 스크립트가 벗기는 방식(출처 수치와 같은 규칙), 스트리밍은 SSE `done.condensedQuestion` 을 받아 켜져 있을 때만 그린다.
+- 렌더러는 여기서도 **셋**이다(`message-assistant.html` · `chat.html` 의 기록 루프 · `chat-stream.js`). 서버 렌더 둘과 스트리밍(SSE `done.condensedQuestion`) 모두 숨김 없이 그린다. 출처 수치(`source-metrics`)만 여전히 `ui.retrieval-metrics-enabled` 를 따른다.
 - **새로고침 후에도 남는다** — `VerificationSnapshot.condensedQuestion` 으로 `conversation_turns.verification` 에 함께 저장한다(`budgetNote` 와 같은 이유: 화면에 남은 것만으로는 판단할 수 없는 값이라 기록이 사라지면 진단이 끊긴다).
 - 재작성이 없었던 턴(대부분)에는 값 자체가 없어 줄도 없다.
 
