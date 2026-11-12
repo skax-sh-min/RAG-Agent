@@ -329,7 +329,7 @@ public class LlmRouter {
      */
     public String executeWithTracking(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                       Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false).text();
+        return tracked(taskType, mode, usageLabelPrefix, call, false).text();
     }
 
     /**
@@ -347,7 +347,19 @@ public class LlmRouter {
 
     public String executeGated(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true).text();
+        return tracked(taskType, mode, usageLabelPrefix, call, true).text();
+    }
+
+    /**
+     * 블로킹 호출 세 진입점의 공통 몸통 — 응답을 기다리는 동안을 {@link InFlightBlockingCalls} 에 알린다. SSE 유휴 워치독이
+     * 이벤트 없이 도는 블로킹 호출(분류·확장·검증)을 "멈춤"으로 오인해 워커를 끊지 않게 하려는 것이다(§6.29 열린 항목 e).
+     * 게이트 대기도 포함한다 — 그 대기는 {@code permit-wait-timeout} 이 따로 끊는다.
+     */
+    private LlmResult tracked(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
+                              Function<ChatModel, ChatResponse> call, boolean gated) {
+        try (InFlightBlockingCalls.Token ignored = InFlightBlockingCalls.enter()) {
+            return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), gated);
+        }
     }
 
     /** Answer text plus the real input/output token usage read from the LLM response's metadata. */
@@ -361,7 +373,7 @@ public class LlmRouter {
      */
     public LlmResult executeGatedWithUsage(TaskType taskType, RoutingMode mode,
                                            Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), null, call, new HashSet<>(), true);
+        return tracked(taskType, mode, null, call, true);
     }
 
     /**

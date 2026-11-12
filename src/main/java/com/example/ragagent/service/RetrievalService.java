@@ -159,13 +159,10 @@ public class RetrievalService {
         // that the answer prompt does not balloon the way the old ×(retryCount+1) candidate
         // escalation would. Gated by the same app.search-retry-escalate flag — turning escalation
         // off must switch off the whole behavior, not half of it.
-        // §6.24 Step 2-c — 응답 모드의 검색 부스트. 재시도 증가분과 '더해진다': 재시도는 "이번
-        // 시도에 근거가 모자랐다"는 사후 신호이고, 부스트는 "이 모드는 원래 재료가 더 필요하다"는
-        // 사전 성질이라 서로를 대체하지 않는다. 오늘은 모든 모드가 0이다 — 이 값을 실제로 올리면
-        // AnswerService.MAX_EVAL_EXCERPT_CHARS 를 먼저 손봐야 하고(§6.24 Step 4-c), 그러지 않으면
-        // 하위 순위 문서가 검증 대상에서 빠지면서 "그 문서에만 있는 값을 정확히 인용한 답변이
-        // grounded=false 판정을 받는" 오탐이 되살아난다.
-        int modeBoost = Math.max(0, state.responseMode().retrievalBoost());
+        // §6.24 Step 2-c·4-c — 응답 모드의 검색 부스트(아래 modeBoostFor). 재시도 증가분과 '더해진다': 재시도는 "이번
+        // 시도에 근거가 모자랐다"는 사후 신호이고, 부스트는 "이 모드는 원래 재료가 더 필요하다"는 사전 성질이라 서로를
+        // 대체하지 않는다. 지금은 C 만 0 보다 크다. 하위 문서가 검증 대상에서 빠지면 "그 문서에만 있는 값을 정확히 인용한
+        // 답변이 grounded=false 판정을 받는" 오탐이 되살아나므로, 부스트는 창을 알 때 검증 발췌 예산 안에서만 들어간다.
         // 재시도당 +1 은 그대로 두되, 컨텍스트에 여유가 있을 때만 늘린다. 늘리는 쪽이 기존 동작이라
         // 창을 모르면 늘린다 — 이 앱의 "창을 모르면 아무것도 하지 않는다"는 추측으로 '줄이지'
         // 말라는 뜻이고, 여기서 줄이는 쪽이 동작 변경이다.
@@ -179,9 +176,12 @@ public class RetrievalService {
         // 교차 인코더가 동작하면 최종 컷의 기준은 search-top-k 가 아니라 파생 컷 max(5, ⌈top-k÷2⌉)이다(5개만 답변에 싣는다).
         // 재시도 증가분과 모드·이력 부스트는 그 위에 그대로 더한다 — 재시도가 문서를 늘리는 기존 동작을 지킨다.
         int cutBase = crossEncoder.isPresent() ? props.effectiveRerankTopK() : defaultTopK;
-        int baseTopK = cutBase + extraDocs + modeBoost;
-        int historyBoost = historyBoostFor(state, baseTopK);
-        int effectiveTopK = baseTopK + historyBoost;
+        // baseTopK 는 어떤 부스트에도 줄지 않는 기본 컷이다(재시도 증가분까지). 모드·이력 부스트는 그 위에 얹혀 검색 뒤
+        // 검증 발췌 예산에 맞춰 꼬리부터 덜어진다 — 기본 컷은 부스트를 켜지 않은 턴과 같은 문서를 늘 싣는다.
+        int baseTopK = cutBase + extraDocs;
+        int modeBoost = modeBoostFor(state, baseTopK);
+        int historyBoost = historyBoostFor(state, baseTopK + modeBoost);
+        int effectiveTopK = baseTopK + modeBoost + historyBoost;
         List<Document> unique;
         boolean storedTextRestored = false;
         // 검색 루프(§6.33)가 쓴 재료 — 루프가 돌지 않았으면 NaN/0.
@@ -238,9 +238,10 @@ public class RetrievalService {
                     // 리랭커를 쓸 수 없다 — 리랭크를 건너뛰고 RRF 순서로 자른다. 컷은 리랭커가 없을 때의 기준(search-top-k)으로
                     // 되돌린다: 후보 풀은 이미 search-top-k × 2 로 넉넉히 가져왔으니 앞쪽만 쓰면 된다. 재검색은 하지 않는다.
                     log.warn("[RETRIEVAL] 교차 인코더를 쓸 수 없어 RRF 순서로 물러난다");
-                    baseTopK = defaultTopK + extraDocs + modeBoost;
-                    historyBoost = historyBoostFor(state, baseTopK);
-                    effectiveTopK = baseTopK + historyBoost;
+                    baseTopK = defaultTopK + extraDocs;
+                    modeBoost = modeBoostFor(state, baseTopK);
+                    historyBoost = historyBoostFor(state, baseTopK + modeBoost);
+                    effectiveTopK = baseTopK + modeBoost + historyBoost;
                     unique = lr.candidates().subList(0, Math.min(effectiveTopK, lr.candidates().size()));
                 } else {
                     unique = lr.docs();
@@ -276,16 +277,19 @@ public class RetrievalService {
         if (!storedTextRestored) unique = withStoredText(unique);
         // §6.31 — 부스트로 들어온 문서가 검증 발췌에 다 들어가는지는 실제 문서 크기로 잰다(검색 전에는 알 수 없다). 넘치면
         // 꼬리(= 부스트분)부터 덜어 낸다. 기본 컷(baseTopK)은 건드리지 않는다 — 켜지 않은 턴과 같은 문서는 늘 실린다.
-        int appliedBoost = Math.max(0, Math.min(historyBoost, unique.size() - baseTopK));
+        // 모드 부스트가 앞(순위가 높은 쪽)이고 이력 부스트가 그 뒤다 — 덜어낼 때는 이력 부스트가 먼저 빠진다.
+        int appliedBoost = Math.max(0, Math.min(modeBoost + historyBoost, unique.size() - baseTopK));
         if (appliedBoost > 0) {
             int fits = historyBoostThatFits(state, unique, baseTopK, appliedBoost, listener != GraphListener.NOOP);
             if (fits < appliedBoost) {
-                log.info("[RETRIEVAL] 이력 제외 부스트 {}→{} — 검증 발췌 예산에 맞춰 줄였다 thread={}",
-                        appliedBoost, fits, state.threadId());
+                log.info("[RETRIEVAL] 부스트(모드 {} + 이력 {}) {}→{} — 검증 발췌 예산에 맞춰 줄였다 thread={}",
+                        modeBoost, historyBoost, appliedBoost, fits, state.threadId());
                 unique = unique.subList(0, baseTopK + fits);
             }
             appliedBoost = fits;
         }
+        // AgentState.historyBoost 는 이력 제외 몫만 나른다(AnswerService 가 이 수만큼 검증 쪽 사정을 본다).
+        int appliedHistoryBoost = Math.max(0, appliedBoost - Math.min(modeBoost, appliedBoost));
 
         // § 표시 이름 — one batch lookup for the whole turn's retrieved chunks instead of one
         // query per chunk; formatSource() falls back to the real filename for any docId absent
@@ -383,7 +387,7 @@ public class RetrievalService {
                 .retrievalWarnings(warnings)
                 .imageRefs(imageRefs)
                 .needsRetry(false)
-                .historyBoost(appliedBoost);
+                .historyBoost(appliedHistoryBoost);
         // 새 검색어를 쓴 LLM 호출도 이 턴의 호출 수·토큰에 잡는다(토큰은 한 번에 더하고 나머지 호출은 0 으로 센다).
         for (int i = 0; i < loopRewriteCalls; i++) {
             out.accumulateTokens(i == 0 ? loopInputTokens : 0, i == 0 ? loopOutputTokens : 0);
@@ -408,6 +412,28 @@ public class RetrievalService {
         int chunkSize = props.chunkSizeSafe();
         if (chunkSize <= 0) return 0;
         int boost = MemoryService.conversationChars(props.llmSafe().maxTokens()) / chunkSize;
+        int excerptRoom = AnswerService.MAX_EVAL_EXCERPT_CHARS / chunkSize - baseTopK;
+        return Math.max(0, Math.min(boost, excerptRoom));
+    }
+
+    /**
+     * §6.24 4-c — 응답 모드의 검색 부스트({@link ResponseMode#retrievalBoost()}). 이력 제외 부스트와 달리 <b>교환이 없다</b>: 이력을 빼고
+     * 그 자리에 문서를 넣는 것이 아니라 문서만 더해지므로 답변·검증 프롬프트가 그만큼 커진다. 그래서 두 가지를 지킨다.
+     * <ul>
+     *   <li><b>창을 모르면 0</b> — 이력 부스트는 "창을 모르면 그대로 둔다"(교환이라 최악 크기가 같다)지만 이쪽은 추측 없이 프롬프트를
+     *       키우는 동작이라, 이 앱의 "모르면 아무것도 하지 않는다"가 여기서는 부스트를 안 하는 쪽이다.</li>
+     *   <li>{@code (기본 컷 + 부스트) × chunk-size} 가 검증 발췌의 글자 상한({@code AnswerService.MAX_EVAL_EXCERPT_CHARS})을 넘지 않게 —
+     *       검색 뒤에는 창을 알므로 실제 문서 크기로 다시 잰다({@link #historyBoostThatFits}).</li>
+     * </ul>
+     */
+    private int modeBoostFor(AgentState state, int baseTopK) {
+        int boost = Math.max(0, state.responseMode().retrievalBoost());
+        if (boost == 0) return 0;
+        ThinkingSite evalSite = state.responseMode().evalThinkingSite();
+        String evalProvider = llmRouter.findProviderName(evalSite.taskType(), evalSite.routingMode(state.routingMode()));
+        if (contextWindows.tokensOrZero(evalProvider) <= 0) return 0;
+        int chunkSize = props.chunkSizeSafe();
+        if (chunkSize <= 0) return 0;
         int excerptRoom = AnswerService.MAX_EVAL_EXCERPT_CHARS / chunkSize - baseTopK;
         return Math.max(0, Math.min(boost, excerptRoom));
     }

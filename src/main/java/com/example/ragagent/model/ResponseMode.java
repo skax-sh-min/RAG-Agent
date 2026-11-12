@@ -93,14 +93,18 @@ public enum ResponseMode {
      * 됐다. §10.11 이 그 경로를 없애 사람이 편집하고 관리자가 승인하게 만들었으므로, C 답변도 다른
      * 제안과 같은 심사를 받는다. 되먹임을 막는 것은 모드 제외가 아니라 그 심사다.
      *
-     * <p>{@link #retrievalBoost()}는 0으로 시작한다. 실사용 topK가 이미 10~12라 +4는 근거가 약하고,
-     * 컨텍스트 압박이 실질적 위험이다(topK 12 + 출력 예약이면 이미 33,000~35,000토큰 — LM Studio류는
-     * 초과분을 <b>앞에서부터</b> 조용히 잘라내므로 환각 금지 조항이 먼저 사라진다). 이 값을 실제로
-     * 0보다 올리려면 {@code AnswerService.MAX_EVAL_EXCERPT_CHARS} 상향이 선행돼야 한다(§6.24 Step 4-c).
+     * <p>{@link #retrievalBoost()}는 <b>+3</b>이다(§6.24 Step 4-c, 2026-11-12). 0으로 시작했던 이유는 실사용 topK가 이미 10~12라
+     * +4는 근거가 약하고 컨텍스트 압박이 위험해서였다(LM Studio류는 초과분을 <b>앞에서부터</b> 조용히 잘라내므로 환각 금지
+     * 조항이 먼저 사라진다). 두 전제가 바뀌었다: ① 교차 인코더가 동작하면 최종 컷이 topK가 아니라 파생 컷
+     * {@code max(5, ⌈topK÷2⌉)} = <b>5개</b>라 "재료로 쓰는" 이 모드에 문서가 가장 적게 실린다 ② 검증 발췌 상한이 글자 상수가 아니라
+     * 창에서 파생된다. 그래서 값을 올리는 것만으로는 안전하지 않았고, 부스트가 <b>창을 알 때 검증 발췌 예산 안에서만</b> 들어가게
+     * 했다({@code RetrievalService.modeBoostFor} — 창을 모르면 0, 검색 뒤에는 실제 문서 크기로 꼬리부터 덜어낸다). 32K 창에서는
+     * 교차 인코더가 있으면 5+3=8개가 다 들어가고, 16K 이하에서는 부스트가 저절로 0이 된다. N·S는 그대로 0이다 — 답변 품질을 재지 않은
+     * 채로 기본 동작을 바꾸지 않는다(C 도 품질 측정은 하지 않았다 — PLAN §6.24 4-c).
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, true, false, true, true, false, true, true,
+      3, true, false, true, true, false, true, true,
       ThinkingSite.ANSWER_RAG_C, null);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */

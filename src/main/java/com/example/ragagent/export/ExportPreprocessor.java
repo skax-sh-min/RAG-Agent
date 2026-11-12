@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * only ever existed to carry structure through the pipeline, and optionally adds hierarchical
  * heading numbers plus a table of contents.
  *
- * <p>Marker handling (see USER_MANUAL §2.3 for the operator-facing summary):
+ * <p>Marker handling (see ADMIN_MANUAL §3.1 for the operator-facing summary):
  * <ul>
  *   <li>{@code [이미지: images/{id}/f.png]} → delegated to the caller's {@code imageRewriter}, since
  *       each format embeds images differently (MD links them, DOCX embeds bytes, TXT names them);</li>

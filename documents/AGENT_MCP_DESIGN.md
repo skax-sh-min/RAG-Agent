@@ -32,7 +32,7 @@
 | 재검색 주도 | 코드가 리랭커 점수로 판단, LLM은 새 검색어만 생성. 최대 3회 |
 | 적용 범위 | 새 응답 모드 없이 S/N/C 공통 검색 경로에 적용. `/settings` 로 끌 수 있고 C 모드는 그대로 둔다 |
 | 리랭커 | 교차 인코더(`bge-reranker-v2-m3`)를 `llama-server --reranking` 으로 운영 |
-| 리랭크 후보 수·최종 컷 | `search-top-k` 하나만 편집한다. 후보 수 = `search-top-k × 2`, 최종 컷 = `max(5, ⌈search-top-k ÷ 2⌉)` 로 파생하고 `/settings` 에서 조회 전용으로 보인다(§4.3, 2026-11-06) |
+| 리랭크 후보 수·최종 컷 | `search-top-k` 하나만 편집한다. 후보 수 = `search-top-k × 2`, 최종 컷 = `max(5, ⌈search-top-k × 2/3⌉)` 로 파생하고 `/settings` 에서 조회 전용으로 보인다(§4.3, 2026-11-06) |
 
 **선결 결함 (Phase 0에서 먼저 처리).** 블로킹 LLM 호출의 요청 본문에 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나갔다. 2026-11-06 요청 본문으로 확인했고 `ModelPinningChatModel` 로 고쳤다. 자세한 내용은 §2.4.
 
@@ -514,7 +514,7 @@ app.search-max-attempts=${SEARCH_MAX_ATTEMPTS:3}
 | 값 | 식 | 기본(`search-top-k`=10) |
 |---|---|---|
 | 리랭크 후보 수 (`effectiveRerankCandidates()`) | `search-top-k × 2` | 20 |
-| 리랭크 최종 컷 (`effectiveRerankTopK()`) | `max(5, ⌈search-top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 | 5 |
+| 리랭크 최종 컷 (`effectiveRerankTopK()`) | `max(5, ⌈search-top-k × 2/3⌉)`, 후보 수를 넘지 않는다 | 7 |
 | 리랭커 없음·장애 | `search-top-k` 그대로 | 10 |
 
 | `search-top-k` | 1 | 2 | 4 | 10 | 11 | 20 | 50 (설정 상한) |
@@ -524,7 +524,7 @@ app.search-max-attempts=${SEARCH_MAX_ATTEMPTS:3}
 
 - 두 값은 `AppProperties` 의 파생 메서드다. 프로퍼티, 환경변수, `SettingsKeys`·`SEARCH_HOT_SPECS` 항목이 없다. `search-top-k` 를 핫 편집하면 다음 검색부터 함께 바뀐다(매 호출 다시 계산하고 필드에 캐시하지 않는다). 하나만 열어 두므로 후보 수가 최종 컷보다 작은 조합 같은 어긋난 설정이 만들어질 수 없다.
 - `/settings` 검색 튜닝 카드의 `search-top-k` 바로 아래에 **조회 전용 항목 둘**(후보 수, 최종 컷)을 둔다. `SettingsService.searchHotItems()` 가 `readOnly(...)` 로 만들고, 값은 위 두 메서드가 돌려주는 것이라 다음 검색이 쓰는 값과 같다(`effectiveValue()` 와 같은 원칙). 키가 없는 `editable=false` 항목은 `settings-item.html` 이 입력칸 없이 값만 그리므로 템플릿 변경은 필요 없고, 편집 카드 안에 놓았을 때 모양은 구현 때 화면으로 확인한다.
-- 라벨 `settings.item.rerank-candidates`, `settings.item.rerank-top-k` 와 풍선 설명 `settings.desc.*` 를 한/영 번들에 둔다. 설명에 식(`search-top-k × 2`, `max(5, search-top-k ÷ 2)`)을 보인다. 리랭커가 꺼져 있으면(`app.reranker.base-url` 이 비었거나 연결 실패) 항목 옆 배지로 "리랭커 꺼짐 — 적용되지 않음" 을 알린다. 값은 항상 보인다.
+- 라벨 `settings.item.rerank-candidates`, `settings.item.rerank-top-k` 와 풍선 설명 `settings.desc.*` 를 한/영 번들에 둔다. 설명에 식(`search-top-k × 2`, `max(5, search-top-k × 2/3)`)을 보인다. 리랭커가 꺼져 있으면(`app.reranker.base-url` 이 비었거나 연결 실패) 항목 옆 배지로 "리랭커 꺼짐 — 적용되지 않음" 을 알린다. 값은 항상 보인다.
 - 기본값 10에서 20 / 5는 부록 A의 실측 구성과 같다. 다른 `search-top-k` 에서의 recall은 측정하지 않았다.
 - **위험.** 후보 수가 `search-top-k` 를 따라 커진다. 20개에 약 3초(CPU)를 선형으로 가정하면 상한(50)에서는 후보 100개에 약 15초다(미측정). 상한을 두지 않았다. 필요하면 측정한 뒤 후보 수 상한을 더한다.
 
@@ -635,7 +635,7 @@ flowchart TD
 | 항목 | 내용 |
 |---|---|
 | 후보 수 | `search-top-k × 2`(기본 20, §4.3). 15개는 후속 질문이 0.67에 머물렀다. 요청 범위(12~20)의 위쪽이다 |
-| 최종 컷 | `max(5, ⌈search-top-k ÷ 2⌉)`(기본 5, §4.3), 후보 수를 넘지 않는다. 기본값에서는 후보의 1/4이다 |
+| 최종 컷 | `max(5, ⌈search-top-k × 2/3⌉)`(기본 7, §4.3), 후보 수를 넘지 않는다. 기본값에서는 후보의 35%다. 처음 설계(÷ 2 → 기본 5, 후보의 1/4)는 문서 수가 너무 작아 2/3 로 올렸다(2026-11-12) |
 | 최대 횟수 | `app.search-max-attempts=3`. 첫 검색을 포함한다 |
 | 재검색 조건 | 리랭커 1위 점수가 `app.search-rerank-min-score`(0.0) 미만. 실측에서 답을 못 찾은 5건을 모두 잡았고 불필요한 재검색은 6건이었다 |
 | 새 검색어 | 입력은 질문, 앞 질문, 지금까지 쓴 검색어, 상위 3개 발췌(160자). 출력은 `{"nextQuery": "..."}`. 사이트는 `SEARCH_REWRITE`, 호출은 `QuestionCondenser.distill()` 과 같은 블로킹 경로, 대화의 라우팅 모드를 따른다 |

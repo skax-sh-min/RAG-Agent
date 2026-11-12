@@ -1065,7 +1065,7 @@ public record AppProperties(
     }
 
     /**
-     * 리랭크 뒤의 최종 컷 = {@code max(5, ⌈search-top-k ÷ 2⌉)}, 후보 수를 넘지 않는다. 리랭커가 동작할 때 답변·검증 프롬프트에
+     * 리랭크 뒤의 최종 컷 = {@code max(5, ⌈search-top-k × 2/3⌉)}, 후보 수를 넘지 않는다. 리랭커가 동작할 때 답변·검증 프롬프트에
      * 들어가는 문서 수의 기준이다. 리랭커가 없거나 죽었을 때는 쓰이지 않고 {@code search-top-k} 가 최종 컷이다.
      */
     public int effectiveRerankTopK() {
@@ -1077,8 +1077,8 @@ public record AppProperties(
     }
 
     static int rerankTopK(int topK) {
-        int half = (Math.max(1, topK) + 1) / 2;
-        return Math.min(rerankCandidates(topK), Math.max(RERANK_MIN_TOP_K, half));
+        int twoThirds = (Math.max(1, topK) * 2 + 2) / 3;   // ⌈top-k × 2/3⌉
+        return Math.min(rerankCandidates(topK), Math.max(RERANK_MIN_TOP_K, twoThirds));
     }
 
     public RateLimitConfig rateLimitSafe() {

@@ -42,6 +42,15 @@ public class SqliteMemoryRepository implements MemoryRepository {
      */
     private static final String REUSE_SOURCE_JOIN =
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id ";
+    /**
+     * 프롬프트에 싣는 과거 질문 — 긴 질문(1,000자 초과)은 {@code history_question}(LLM 검색문, V15)이 있으면 그것으로 갈음한다.
+     * <b>프롬프트로 가는 조회({@code getHistory}·{@code getRecentTurns})만</b> 이것을 쓴다 — 화면용 {@code getTurns}/{@code getTurn} 은
+     * 늘 원문이다. 머리표는 모델이 요약을 사용자의 말 그대로로 읽지 않게 한다(NULL 과의 {@code ||} 는 NULL 이라 원문으로 떨어진다).
+     */
+    static final String LONG_QUESTION_DIGEST_PREFIX = "[긴 질문 요약] ";
+    private static final String PROMPT_QUESTION =
+            "COALESCE('" + LONG_QUESTION_DIGEST_PREFIX + "' || NULLIF(t.history_question, ''), t.question)";
+
     // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
     private final int fetchLimit;
 
@@ -80,7 +89,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // 이 경로는 가져온 것을 그대로 싣기 때문에 LIMIT 이 곧 프롬프트에 들어가는 양이다.
         // 요약 경로의 [Recent] 와 같은 상한을 쓴다(둘이 갈라지면 요약 캐시 유무에 따라 맥락이 달라진다).
         List<String> rows = jdbc.query(
-            "SELECT t.question AS question, t.response_mode AS response_mode, " +
+            "SELECT " + PROMPT_QUESTION + " AS question, t.response_mode AS response_mode, " +
             "COALESCE(t.direct_mode, 0) AS direct_mode, " +
             "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
             "FROM conversation_turns t " +
@@ -243,7 +252,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // chronological order — bounds LLM-facing callers (summarization) to a constant-size input
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
-            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "SELECT t.id, " + PROMPT_QUESTION + " AS question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
             "COALESCE(t.direct_mode, 0) AS direct_mode, COALESCE(t.exclude_history, 0) AS exclude_history " +
             "FROM conversation_turns t " +
@@ -388,6 +397,18 @@ public class SqliteMemoryRepository implements MemoryRepository {
         if (clarifiedQuestion == null || clarifiedQuestion.isBlank()) return;
         jdbc.update("UPDATE conversation_turns SET clarified_question = ? WHERE id = ?",
                 clarifiedQuestion, turnId);
+    }
+
+    @Override
+    public void markClarifiedQuestionTried(long turnId) {
+        jdbc.update("UPDATE conversation_turns SET clarified_question = '' WHERE id = ? AND clarified_question IS NULL",
+                turnId);
+    }
+
+    @Override
+    public void saveHistoryQuestion(long turnId, String historyQuestion) {
+        if (historyQuestion == null || historyQuestion.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET history_question = ? WHERE id = ?", historyQuestion.strip(), turnId);
     }
 
     @Override

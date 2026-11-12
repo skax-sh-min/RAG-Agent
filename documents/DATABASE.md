@@ -1,7 +1,7 @@
 # 데이터베이스 · 벡터 저장소 레퍼런스
 
 > **개발자용 레퍼런스입니다.** SQLite 테이블·컬럼·인덱스, 테이블 사이의 관계, 그리고 벡터 저장소(sqlite-vec / Chroma)가 청크를 어떻게 담는지를 정리합니다.
-> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.3.1](OPERATOR_MANUAL.md#631-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 아래 [§2.1](#21-운영-테이블의-스키마는-flyway-에만-있다--검색-색인은-예외), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
+> 운영자가 알아야 할 것(파일 위치·백업·옛 `vector.db` 이름 정리)은 [OPERATOR_MANUAL §6.2.1](OPERATOR_MANUAL.md#621-sqlite-파일별-테이블-구성), 스키마를 바꾸는 규약은 아래 [§2.1](#21-운영-테이블의-스키마는-flyway-에만-있다--검색-색인은-예외), 각 규칙이 왜 그런지는 [PITFALLS](PITFALLS.md)에 있습니다.
 >
 > **기준**: 2026-09-29, 실제 `data/memory.db`(sqlite-vec 배포)의 `PRAGMA table_info`와 코드의 DDL을 대조해 작성했습니다. 스키마의 **정본은 코드**입니다(§2.1) — 이 문서와 코드가 다르면 코드가 맞고, 이 문서를 고쳐야 합니다(§9).
 
@@ -25,7 +25,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 | 테이블 | 한 행 = | 분류 | 스키마 / 쓰는 곳 |
 |---|---|---|---|
-| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4·V6 / `SqliteMemoryRepository` |
+| `conversation_turns` | 질문·답변 한 턴 | 대화 | Flyway V1·V4·V6·V15 / `SqliteMemoryRepository` |
 | `thread_meta` | 대화 하나 | 대화 | Flyway V1·V3 / `ThreadMetaRepository` |
 | `turn_source_ref` | 한 턴의 출처 청크 하나 | 대화 | Flyway V4 / `QuestionReuseRepository` |
 | `turn_image_ref` | 한 턴의 답변 썸네일 하나 | 대화 | Flyway V4 / `SqliteMemoryRepository` |
@@ -58,7 +58,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b) · `V14__agent_tool_call.sql`(`agent_tool_call`, PLAN §6.33 5단계). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b) · `V14__agent_tool_call.sql`(`agent_tool_call`, PLAN §6.33 5단계) · `V15__history_question.sql`(`conversation_turns.history_question` + 옛 `clarified_question` 의 원문 사본을 빈 문자열로). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
@@ -157,9 +157,10 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `reused_from_turn_id` | INTEGER | | 재사용 턴이면 원본 턴 id. 재사용 턴은 원본의 모드·`direct_mode`·`selected_tags`·`exclude_history`를 복사해 저장합니다 |
 | `direct_mode` | INTEGER | NOT NULL, 0 | 1 = Direct 턴 (검색 없음) |
 | `exclude_history` | INTEGER | NOT NULL, 0 | (V11) 1 = 이 턴의 RAG 답변이 이전 대화를 보지 않았다 — 사용자가 "이력 제외"를 켰다(PLAN §6.31). 요청값이 아니라 그래프 결과(`result.excludeHistory()`)라 Direct 턴·`meta` 로 판정된 턴은 늘 0 입니다. 켠 턴에만 저장 직후 UPDATE 로 적습니다(`markHistoryExcluded`). 질문 버블의 `이력 제외` 표시가 읽고, 재사용 후보는 원본 행의 값을 씁니다. 이 턴도 다음 턴들의 이력에는 평소처럼 실립니다 |
+| `history_question` | TEXT | | (V15) 긴 질문(공백 제외 **1,000자 초과**)의 **LLM 검색문**(`QuestionCondenser.distill`, 300자 이하) — `question` 은 사용자가 쓴 그대로 두고, **프롬프트로 가는 조회**(`getHistory`·`getRecentTurns` — 이력·요약·독립화 재료)만 `[긴 질문 요약] ` 머리표와 함께 원문 대신 싣는다. 화면·재사용·재생(`getTurns`/`getTurn`)·이 턴의 `[현재 질문]` 은 늘 원문. NULL = 대체할 것이 없다(긴 질문이 아님 · LLM 단계가 꺼졌거나 실패 — 결정적 앞뒤 발췌는 요약이 아니라 잘린 원문이라 저장하지 않는다 · 이 기능 이전의 턴). 재사용 턴에는 복사하지 않는다 |
 | `retrieval_metrics` | TEXT | | 출처별 검색 진단 JSON 배열 — `label`, `preview`, `chunk_id`, `doc_id`, `page_or_slide`, `similarity`, `retrieval_share`, `axis_ranks`, `answer_share`, `stale`, `prompt_excluded`. `/admin` 검색 진단 패널이 읽습니다 |
 | `verification` | TEXT | | 답변 검증 스냅샷 JSON — `grounded`, `generative`, `evalReason`, `envNote`, `inventedSymbols`, `budgetNote`, `condensedQuestion`, `empty`. 다시 연 대화의 검증 배지 재료입니다. NULL = 검증 기록 없음(컬럼 이전 턴, meta·Direct·`S` 턴) |
-| `clarified_question` | TEXT | | (V6) 답변 뒤에 다듬은 질문 — 이 대화를 모르는 사람도 읽을 수 있고 그 답변이 다룬 범위를 말하는 한 문장(`PostAnswerService`). 질문 추천·재사용이 이 문장으로 맞추고 보여 주며, 대화 화면은 원문과 다를 때 원문 아래 `(…)` 줄로 보여 줍니다. `question`(원문)은 덮어쓰지 않습니다. 값: 다듬은 질문 / 원문과 같은 값(시도했고 원문으로 충분했거나 결과를 버렸다) / NULL(아직 안 함·대상 아님·호출 실패·빈 응답·읽을 수 없는 응답 — 다시 시도할 수 있다). 대상은 재사용 후보 턴(N·RAG·출처 있음)이고, 답변 아래 추가 질문(`llm.follow-up-questions-enabled`)이 켜져 있으면 같은 호출로 S·C·Direct 턴에도 적힌다 — 그 값은 화면 표시용일 뿐 재사용 후보 판정(모드·출처 술어)을 바꾸지 않는다. 재사용 턴은 고른 문장을 질문과 이 칸에 함께 적습니다. 이 기능 이전의 턴(NULL)은 채우지 않는다(원문으로만 맞는다). 추가 질문은 이 테이블이 아니라 `thread_follow_up`(§4.6)에 대화마다 마지막 답변의 것만 둔다 |
+| `clarified_question` | TEXT | | (V6) 답변 뒤에 다듬은 질문 — 이 대화를 모르는 사람도 읽을 수 있고 그 답변이 다룬 범위를 말하는 한 문장(`PostAnswerService`). 질문 추천·재사용이 이 문장으로 맞추고 보여 주며, 대화 화면은 원문과 다를 때 원문 아래 `(…)` 줄로 보여 줍니다. `question`(원문)은 덮어쓰지 않습니다. 값: 다듬은 질문 / **빈 문자열**(시도했고 원문으로 충분했거나 결과를 버렸다 — V15 이전에는 원문 사본을 저장했으나 아무도 읽지 않아 비웠다, 긴 질문이면 최대 10,000자였다) / NULL(아직 안 함·대상 아님·호출 실패·빈 응답·읽을 수 없는 응답 — 다시 시도할 수 있다). 대상은 재사용 후보 턴(N·RAG·출처 있음)이고, 답변 아래 추가 질문(`llm.follow-up-questions-enabled`)이 켜져 있으면 같은 호출로 S·C·Direct 턴에도 적힌다 — 그 값은 화면 표시용일 뿐 재사용 후보 판정(모드·출처 술어)을 바꾸지 않는다. 재사용 턴은 고른 문장이 질문이므로 이 칸은 "시도함"(빈 문자열)만 적습니다. 이 기능 이전의 턴(NULL)은 채우지 않는다(원문으로만 맞는다). 추가 질문은 이 테이블이 아니라 `thread_follow_up`(§4.6)에 대화마다 마지막 답변의 것만 둔다 |
 
 인덱스: `idx_thread_id(thread_id)`, `idx_turns_user_thread(user_id, thread_id)`, `idx_turns_reused_from(reused_from_turn_id)`
 
@@ -337,7 +338,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 5.4b `agent_tool_call` — Tool 선택·실행 관측 한 줄 (V14)
 
-`/admin` 의 "Tool 호출 추적" 패널이 읽는 **읽기 전용 관측**이다([OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md)). 기록 실패는 턴을 실패시키지 않는다. **인자·질문 본문은 담지 않는다** — 분포와 지연이면 되고, 사용자가 무엇을 물었는지의 두 번째 사본을 아무도 지키지 않는 곳에 만들지 않으려는 것이다.
+`/admin` 의 "Tool 호출 추적" 패널이 읽는 **읽기 전용 관측**이다([ADMIN_MANUAL §10.1](ADMIN_MANUAL.md)). 기록 실패는 턴을 실패시키지 않는다. **인자·질문 본문은 담지 않는다** — 분포와 지연이면 되고, 사용자가 무엇을 물었는지의 두 번째 사본을 아무도 지키지 않는 곳에 만들지 않으려는 것이다.
 
 | 컬럼 | 타입 | 제약·기본값 | 의미 |
 |---|---|---|---|
@@ -354,7 +355,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 5.5 `change_job` — 영향도 분석·유지보수 작업 한 건 (V12)
 
-**코퍼스에 쓰지 않습니다** — 작업 기록과 리포트일 뿐입니다(§6.33 4a·4b, [OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md)).
+**코퍼스에 쓰지 않습니다** — 작업 기록과 리포트일 뿐입니다(§6.33 4a·4b, [ADMIN_MANUAL §10.1](ADMIN_MANUAL.md)).
 
 | 컬럼 | 타입 | 제약·기본값 | 의미 |
 |---|---|---|---|

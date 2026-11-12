@@ -220,12 +220,12 @@ public class DataSourceConfig {
     private void warnLegacyPath(Path dbPath) {
         log.warn("[DB] app.vectorstore.sqlite-vec.db-path(SQLITE_VEC_DB_PATH) 는 더 이상 벡터 전용 파일이 아니다 — "
                 + "이 경로가 앱의 유일한 DB 파일이다: {} (분리 스위치를 켠 배포는 모든 테이블이 원래 여기 있었다). "
-                + "새 배포는 이 값을 비워 {DATA_DIR}/memory.db 하나를 쓴다 — 이름 정리 절차는 OPERATOR_MANUAL §6.3.1", dbPath);
+                + "새 배포는 이 값을 비워 {DATA_DIR}/memory.db 하나를 쓴다 — 이름 정리 절차는 OPERATOR_MANUAL §6.2.1", dbPath);
         Path leftover = defaultDbPath(dataDir);
         if (Files.exists(leftover)) {
             log.warn("[DB] 쓰지 않는 파일: {} — 예전 분리 구성이 만든 것으로 이제 아무도 열지 않는다. 스위치를 처음부터 "
                     + "켰다면 빈 테이블과 Flyway 이력뿐이지만, 도중에 켰다면 켜기 전의 데이터가 들어 있을 수 있다. "
-                    + "확인한 뒤 정리할 것(OPERATOR_MANUAL §6.3.1)", leftover);
+                    + "확인한 뒤 정리할 것(OPERATOR_MANUAL §6.2.1)", leftover);
         }
     }
 

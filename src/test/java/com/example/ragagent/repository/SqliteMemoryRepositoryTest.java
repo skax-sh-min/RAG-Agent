@@ -92,6 +92,46 @@ class SqliteMemoryRepositoryTest {
                 .extracting(MemoryRepository.Turn::question).isEqualTo("그거 어떻게 설정해?");
     }
 
+    @Test
+    @DisplayName("다듬기 '시도함' 표시는 사본이 아니라 빈 문자열이고, NULL(아직 안 함)과 구분되며 이미 있는 문장은 덮지 않는다")
+    void markClarifiedQuestionTried_isAnEmptyMarkerThatNeverOverwrites() {
+        long tried = repo.addTurn(UID, "t1", "그 포트 뭐야?", "A", null, 0, 0, 0, null, 0, "N", null);
+        long clarified = repo.addTurn(UID, "t1", "Q2", "A", null, 0, 0, 0, null, 0, "N", null);
+        long untouched = repo.addTurn(UID, "t1", "Q3", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveClarifiedQuestion(clarified, "MCI 연동 포트는 무엇인가요?");
+
+        repo.markClarifiedQuestionTried(tried);
+        repo.markClarifiedQuestionTried(clarified);
+
+        assertThat(repo.findClarifiedQuestionsByTurnIds(List.of(tried, clarified, untouched)))
+                .containsEntry(tried, "")                                         // 시도함 — 원문 사본을 저장하지 않는다
+                .containsEntry(clarified, "MCI 연동 포트는 무엇인가요?")           // 이미 있는 문장은 그대로
+                .doesNotContainKey(untouched);                                    // NULL = 아직 안 함
+    }
+
+    @Test
+    @DisplayName("긴 질문의 LLM 검색문(V15)은 프롬프트로 가는 조회(getHistory·getRecentTurns)만 머리표와 함께 대신 싣고, 화면용 조회는 원문")
+    void historyQuestionReplacesTheOriginalOnlyInPromptFacingReads() {
+        String longQuestion = "붙여 넣은 로그입니다. ".repeat(500);
+        long long1 = repo.addTurn(UID, "t1", longQuestion, "답1", null, 0, 0, 0, null, 0, "N", null);
+        long plain = repo.addTurn(UID, "t1", "짧은 질문", "답2", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveHistoryQuestion(long1, "  MCI 타임아웃 오류 원인  ");
+        repo.saveHistoryQuestion(plain, "  ");   // 빈 값은 저장하지 않는다
+
+        List<MemoryRepository.Turn> recent = repo.getRecentTurns(UID, "t1");
+        assertThat(recent.get(0).question())
+                .isEqualTo(SqliteMemoryRepository.LONG_QUESTION_DIGEST_PREFIX + "MCI 타임아웃 오류 원인");
+        assertThat(recent.get(1).question()).isEqualTo("짧은 질문");
+
+        String history = repo.getHistory(UID, "t1", 100_000, false);
+        assertThat(history).contains("Q: " + SqliteMemoryRepository.LONG_QUESTION_DIGEST_PREFIX + "MCI 타임아웃 오류 원인")
+                .doesNotContain("붙여 넣은 로그입니다.");
+
+        // 화면·재사용·재생 경로는 사용자가 쓴 그대로
+        assertThat(repo.getTurns(UID, "t1").get(0).question()).isEqualTo(longQuestion);
+        assertThat(repo.getTurn(UID, "t1", long1)).get().extracting(MemoryRepository.Turn::question).isEqualTo(longQuestion);
+    }
+
     /**
      * 다듬기의 재료는 그 턴 <b>시점</b>의 이전 질문이다 — 대화 중간의 턴을 다듬는 백필에서 {@code getRecentTurns} 를
      * 쓰면 그 턴 뒤에 나온 질문이 재료로 들어간다.

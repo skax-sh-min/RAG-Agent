@@ -654,7 +654,7 @@ class SettingsServiceTest {
                 .filter(g -> g.id().equals("search_hot")).flatMap(g -> g.items().stream())
                 .filter(i -> i.label().equals("settings.item.rerank-candidates")
                         || i.label().equals("settings.item.rerank-top-k")).toList();
-        assertThat(derived).extracting(SettingsView.SettingItem::value).containsExactly("40", "10");
+        assertThat(derived).extracting(SettingsView.SettingItem::value).containsExactly("40", "14");
         assertThat(derived).allMatch(i -> i.note() == null);
     }
 

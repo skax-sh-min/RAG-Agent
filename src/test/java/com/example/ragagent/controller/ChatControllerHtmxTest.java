@@ -804,9 +804,8 @@ class ChatControllerHtmxTest {
                 org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
                 any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), eq(42L));
         verify(threadMetaService).generateTitleAsync(any(), eq("t-new"), eq("latest"), eq("sqlite 연결 설정 방법"));
-        // 재사용 턴의 질문은 이미 다듬은 문장이다 — 같은 값을 다듬은 질문으로도 적어 한 줄로 보이게 하고,
-        // 이 턴을 다시 다듬으려는 시도(백필)를 막는다.
-        verify(memoryService).saveClarifiedQuestion(99L, "sqlite 연결 설정 방법");
+        // 재사용 턴의 질문은 이미 다듬은 문장이다 — 사본을 한 번 더 저장하지 않고 "시도함" 표시만 남긴다.
+        verify(memoryService).markClarifiedQuestionTried(99L);
     }
 
     @Test

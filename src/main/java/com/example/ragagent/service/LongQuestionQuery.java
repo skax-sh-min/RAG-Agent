@@ -63,6 +63,16 @@ public final class LongQuestionQuery {
     }
 
     /**
+     * 이후 턴의 이력이 원문 대신 싣을 <b>LLM 이 만든</b> 검색문 — 없으면 {@code null}. 2단계(1,000자 초과) 질문이고 검색문이 1단계의
+     * 결정적 앞뒤 발췌({@link #headTail})와 다를 때만이다: LLM 호출이 꺼졌거나 실패하면 검색문은 그 발췌 그대로인데, 그것은 요약이 아니라
+     * 잘린 원문이라(앞 300 + 뒤 200자 — 중간 내용이 사라진다) 이력의 대체물로 쓰지 않는다.
+     */
+    public static String distilledOrNull(String question, String searchQuestion) {
+        if (!needsLlm(question) || searchQuestion == null || searchQuestion.isBlank()) return null;
+        return searchQuestion.strip().equals(headTail(question).strip()) ? null : searchQuestion.strip();
+    }
+
+    /**
      * 벡터 검색문(1단계) — 공백을 한 칸으로 접은 질문의 앞 {@value #HEAD_CHARS}자 + 뒤 {@value #TAIL_CHARS}자.
      * 중간을 자른 자리는 {@code " … "} 로 표시한다. 낱말 중간에서 자르지 않도록 경계를 가까운 공백으로 당긴다.
      * {@link #SHORT_LIMIT} 이하면 질문 그대로(공백만 접는다).

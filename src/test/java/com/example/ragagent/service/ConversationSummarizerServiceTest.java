@@ -348,6 +348,50 @@ class ConversationSummarizerServiceTest {
     }
 
     @Test
+    @DisplayName("precompute — 앞쪽 턴의 긴 질문은 500자로 잘려, 뒤 턴의 요약을 밀어내지 않는다 (모든 턴이 '## 요약' 인 경로)")
+    void precompute_longPastQuestion_isCappedAndDoesNotCrowdOutLaterSummaries() {
+        // 요약 대상은 turn1·2 — turn1 의 질문이 요약 예산(2,000자)보다 길다. 자르지 않으면 앞에서부터 남기는 truncate 가
+        // turn1 질문만 남기고 turn2 의 요약을 통째로 버린다.
+        String longQuestion = "나".repeat(5_000) + "꼬리질문";
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, longQuestion, ragAnswer("첫 답변 한 줄 요약", "첫 본문"), null),
+                turn(2, "질문2", ragAnswer("둘째 답변 한 줄 요약", "둘째 본문"), null),
+                turn(3, "질문3", ragAnswer("셋째 답변 한 줄 요약", "셋째 본문"), null),
+                turn(4, "질문4", ragAnswer("넷째 답변 한 줄 요약", "넷째 본문"), null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        String context = service.buildContext(UID, TID);
+        String summaryBlock = context.substring(0, context.indexOf("[Recent]"));
+        assertThat(summaryBlock)
+                .contains("나".repeat(HistoryPolicy.PAST_QUESTION_CAP) + HistoryPolicy.QUESTION_CAP_MARK)
+                .doesNotContain("나".repeat(HistoryPolicy.PAST_QUESTION_CAP + 1))
+                .doesNotContain("꼬리질문")
+                .contains("둘째 답변 한 줄 요약");   // 뒤 턴의 요약이 살아남는다
+    }
+
+    @Test
+    @DisplayName("precompute — LLM 없이 조립하는 경로도 긴 과거 질문을 500자로 자르고, 500자 이하 질문은 그대로 둔다")
+    void precompute_withoutMicroTextOffloadProvider_capsLongPastQuestionButKeepsShortOnes() {
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
+        String atCap = "다".repeat(HistoryPolicy.PAST_QUESTION_CAP);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "라".repeat(3_000) + "꼬리질문", "요약 섹션이 없는 Direct 답변", null),
+                turn(2, atCap, ragAnswer("둘째 답변 요약", "둘째 본문"), null),
+                turn(3, "질문3", ragAnswer("셋째 답변 요약", "셋째 본문"), null),
+                turn(4, "질문4", ragAnswer("넷째 답변 요약", "넷째 본문"), null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        String context = service.buildContext(UID, TID);
+        String summaryBlock = context.substring(0, context.indexOf("[Recent]"));
+        assertThat(summaryBlock)
+                .doesNotContain("꼬리질문")
+                .contains(atCap + "\nA: 둘째 답변 요약")      // 상한과 같은 길이는 자르지 않는다(표시도 없다)
+                .doesNotContain(atCap + HistoryPolicy.QUESTION_CAP_MARK);
+    }
+
+    @Test
     @DisplayName("precompute — LOCAL_FAST 가 없어도 '## 요약' 기반 요약은 그대로 동작한다")
     void precompute_withoutMicroTextOffloadProvider_stillUsesSummarySections() {
         when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);

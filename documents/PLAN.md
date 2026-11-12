@@ -44,10 +44,10 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.33 Agent·MCP 전환** 마무리 | 🟡 0~5단계 구현·종단 확인 완료. **남은 것**: `AGENT_ENABLED=true` 로 켠 실사용 2주 관측(폴백 비율·턴 지연) → 기본값 판단 · 백업에서 되돌리기 리허설 · 실제 질문 로그로의 Tool 선택 재측정 · MCP Inspector·Claude Code 연결 확인 · 영향도 실모델 실측의 가짜 인용 검증. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
-| 2 | 운영 준비 잔여 — Caddy 인증서 만료 모니터링 | 미착수. (SQLite 정기 백업은 2026-10-13 완료 — 앱 안의 `DatabaseBackupService`, 담지 않는 것은 문서 파일·Chroma 벡터, OPERATOR_MANUAL §6.3.2) |
-| 3 | 질문 한도 10,000자의 열린 전제 둘 | ③ 이력 속 긴 과거 질문이 요약을 다 차지함(`buildSummaryInput`) · ④ Direct 경로의 축소 재시도 없음 — §6.30 연관 작업·§6.32 열린 항목 |
-| 4 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리기 전에 확인할 것은 `MAX_EVAL_EXCERPT_CHARS` 상수가 아니라 **대상 프로바이더의 실제 창**이다(검증 발췌 상한이 창에서 파생된다 — `evalExcerptTokenBudget`) |
-| 5 | §6.29 열린 항목 — 측정 못 한 사이트 넷(`SUMMARY`·`IMAGE_DESCRIBE`·`MD_CORRECT_VISION` 등) · 유휴 워치독이 블로킹 호출을 보지 못함 | §6.29 열린 항목 참고 |
+| 2 | 운영 준비 잔여 — Caddy 인증서 만료 모니터링 | 미착수. (SQLite 정기 백업은 2026-10-13 완료 — 앱 안의 `DatabaseBackupService`, 담지 않는 것은 문서 파일·Chroma 벡터, OPERATOR_MANUAL §6.2.2) |
+| ~~3~~ | ~~질문 한도 10,000자의 열린 전제 둘~~ | ✅ 2026-11-12 둘 다 완료 — ③ 요약 입력의 과거 질문 500자 상한(`buildSummaryInput`) · ④ Direct 경로의 축소 재시도(`DirectAnswerService.withHistoryShrink`). §6.30 연관 작업·§6.32 |
+| ~~4~~ | ~~§6.24 `4-c` — 검색 부스트 상향~~ | ✅ 2026-11-12 — **C 만 +3**, 창을 알 때 검증 발췌 예산 안에서만(`RetrievalService.modeBoostFor`). 대상 서버 실제 창 32,768 확인(llama.cpp `/props` `n_ctx`, 슬롯 4개가 각각 32,768). **남은 것**: C 답변 품질 전후 비교는 재지 않았다(자동 채점 기준이 없다) · 64K 이상 창과 N 모드 부스트는 미측정 |
+| ~~5~~ | ~~§6.29 열린 항목 — 측정 못 한 사이트 · 유휴 워치독의 블로킹 호출~~ | ✅ 2026-11-12 둘 다 해소 — 워치독은 `InFlightBlockingCalls`, 측정은 셋을 재서 모두 끔이 맞았다(THINKING_EVALUATION §3.8). §6.29 에 남은 것은 (b)(c)(g)(h)(i) |
 | 6 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 7 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 
@@ -154,7 +154,7 @@ Caddy 리버스 프록시(자동 TLS, 보안 헤더, `forward-headers-strategy=f
 - **6.4 감사 로그** — SQLite 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`(`data/audit/audit.log` NDJSON, 일별 + 10MB 분할, gzip, 7일, 100MB 상한, `app.audit.enabled`). 이벤트 목록의 단일 출처는 OPERATOR_MANUAL §3.3.
 - **6.5~6.7 사용량 표시** — 임베딩은 `TrackingEmbeddingModel` 이 채팅과 분리 기록(2026-09-30 이름을 모델명 없는 `embed` 하나로, 옛 행은 Flyway V5 가 합침) · 키 없는 프로바이더는 이력이 없으면 숨김(`usedProviders()`) · 설정에서 사라진 프로바이더의 기록은 `type=ORPHAN` 으로 노출하고 `DELETE /admin/llm-usage/{provider:.+}` 로 삭제.
 - **6.8 피드백** — 👍/👎(`conversation_turns.feedback`). `DISLIKE` 턴은 `getHistory()` 에서 하드 제외, `LIKE` 는 §10.10~10.11 에서 지식 제안 폼을 여는 신호로만 쓰인다(Direct 턴의 재사용 자격으로 읽던 규칙은 근거 청크가 없어 2026-09-21 제거).
-- **6.9 요약 선계산** — 입력 시작 시 `ConversationSummarizerService` 가 이전 대화를 미리 요약(스레드별 LRU 3개, TTL 15초; 없으면 `getHistory()` 로 폴백). RAG 답변은 이미 `## 요약` 이 있어 그것을 쓰고 LLM 재요약을 생략하며, 요약 섹션이 없는 답변(Direct/meta)만 소형 모델(`MICRO_TEXT`)이 등록됐을 때 1회 요약한다(부가 기능이 답변용 로컬 모델의 슬롯을 잠식하지 않게). 소형 미설정이면 그 답변만 `UNSUMMARIZED_ANSWER_CAP`(300자)로 자른다 — 앞에서부터 자르는 `truncate()` 라 앞쪽의 긴 Direct 답변 하나가 최신 턴을 밀어내기 때문.
+- **6.9 요약 선계산** — 입력 시작 시 `ConversationSummarizerService` 가 이전 대화를 미리 요약(스레드별 LRU 3개, TTL 15초; 없으면 `getHistory()` 로 폴백). RAG 답변은 이미 `## 요약` 이 있어 그것을 쓰고 LLM 재요약을 생략하며, 요약 섹션이 없는 답변(Direct/meta)만 소형 모델(`MICRO_TEXT`)이 등록됐을 때 1회 요약한다(부가 기능이 답변용 로컬 모델의 슬롯을 잠식하지 않게). 소형 미설정이면 그 답변만 `UNSUMMARIZED_ANSWER_CAP`(300자)로 자른다 — 앞에서부터 자르는 `truncate()` 라 앞쪽의 긴 Direct 답변 하나가 최신 턴을 밀어내기 때문. **같은 이유로 과거 질문도 모든 경로에서 500자로 자른다**(그리고 1,000자 초과 질문은 LLM 검색문을 `conversation_turns.history_question`(V15)에 저장해 이후 턴의 이력이 원문 대신 싣는다 — 2026-11-12, PITFALLS `LongQuestionQuery`; `clarified_question` 은 원문 사본 대신 빈 문자열 "시도함" 표시)(`buildSummaryInput`, `HistoryPolicy.PAST_QUESTION_CAP` — 질문 한도가 10,000자라 긴 질문 하나가 요약 예산을 다 먹었다, 2026-11-12; 질문 전문은 `[Recent]` 에서 본다).
 - **6.10 백그라운드 사용량** — 채팅 외 호출(요약·키워드·서식교정·TXT→MD·제목)을 `BackgroundUsage` 접두사로 분리 기록, `/llm-usage` 에 `type=BACKGROUND` 카드.
 - **6.11 컨텍스트 예산** — `MemoryService.maxConversationChars()`(`max(1000, LLM_MAX_TOKENS × 0.5)`)를 단일 진실 원천으로 통일하고 하드코딩 5개를 `app.memory.*`/`app.summary.*` 로 외부화.
 
@@ -241,7 +241,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 > **결정 근거와 틀렸던 지점** → [PITFALLS.md](PITFALLS.md#624-응답-모드-재설계--snc-l-제거--모드별-전용-시스템-프롬프트--완료-2026-08-24--설계-확정-2026-08-22-분량-지침settings-배선-보강-2026-08-23-완료-후-보정-2026-08-25)
 
-길이 축(S/M/L)에 "문서를 **재료로** 코드·설정을 생성"이라는 **다른 축**(근거 엄격도)을 얹으려다 **M 과 L 이 구분되지 않음**을 확인하고 재설계했다. 이유는 튜닝이 아니라 구조다 — 채팅의 유일한 전송 경로인 스트리밍에는 `maxTokens` 가 붙지 않고, `RetrievalService` 가 모드를 몰라 두 모드의 재료(topK)가 같으며, "약 N자" 문구는 모델을 움직이지 못했다(실측 M 3,047자 / L 3,187자). L 제거·M→N 개명 후 모드마다 **시스템 프롬프트를 통째로** 주고 응용 모드 **C** 를 신설했다. Phase 0~4 완료, `4-c`(검색 부스트 상향)만 미착수. 동작 명세는 CLAUDE.md Response mode 항목과 PIPELINE §3.1.
+길이 축(S/M/L)에 "문서를 **재료로** 코드·설정을 생성"이라는 **다른 축**(근거 엄격도)을 얹으려다 **M 과 L 이 구분되지 않음**을 확인하고 재설계했다. 이유는 튜닝이 아니라 구조다 — 채팅의 유일한 전송 경로인 스트리밍에는 `maxTokens` 가 붙지 않고, `RetrievalService` 가 모드를 몰라 두 모드의 재료(topK)가 같으며, "약 N자" 문구는 모델을 움직이지 못했다(실측 M 3,047자 / L 3,187자). L 제거·M→N 개명 후 모드마다 **시스템 프롬프트를 통째로** 주고 응용 모드 **C** 를 신설했다. Phase 0~4 완료 — `4-c`(검색 부스트 상향)는 2026-11-12 에 C 만 +3 으로(창을 알 때 검증 발췌 예산 안에서만, 품질 전후 비교는 못 했다). 동작 명세는 CLAUDE.md Response mode 항목과 PIPELINE §3.1.
 
 ---
 
@@ -322,7 +322,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 **단계 — ✅ 전부 완료**: 1 골격·출하값·관측 · 2 블로킹 호출부 배선 + 라우팅의 단일 출처(`ThinkingSiteConventionTest`) · 3 스트리밍 `AnswerStreamer`(**채팅 스트리밍의 축소 재시도가 실서버에서 한 번도 발동하지 않았던 것**을 `LlmErrorText` 로 고침) · 4 `ThinkingBudget`(Direct 블로킹 경로의 이력 안전망이 스트리밍 예약을 빼던 어긋남도 고침) · 5 `/settings` 미리보기 · 6 실측 → 출하값.
 
-**열린 항목**: (a) 요청 단위 생각 토큰 예산은 **구현하지 않기로 결정**(10-12 측정: 예산 256·512·1,024 에서 걸러야 할 답 19건 중 0·2·5건 — 줄인 만큼 검증의 탐지가 사라진다, [§3.7](THINKING_EVALUATION.md). 다시 열 신호는 수준을 올린 배포에서 `finish=length` 로 빈 검증·답변이 관측될 때, 용도는 안전 상한) · (b) `SUBMISSION_ENRICH` 를 `KEYWORD_CONTEXT` 에서 분리할지 · (c) 응답 모드별 수준을 메시지마다 고르게 할지 — 하지 않는 쪽이 기본 · (d) 출력 상한을 정하지 않던 호출부 — **10-12 해소**(분류·리랭크·제목·이미지 둘은 자기 상한 2,048, 요약은 `max-summary-chars` + 1,024; 남은 것은 프롬프트를 스스로 만드는 질의 확장 하나, PITFALLS "짧은 호출의 출력 상한") · (e) **유휴 워치독은 블로킹 호출을 보지 못한다** — 분류·확장·검증은 리스너 이벤트 없이 도는 블로킹 호출이라 생각을 켜고 `app.sse-idle-timeout-seconds` 를 크게 낮춘 배포에서 끊긴다(기본 300초에서는 문제없다). 고칠 방향은 블로킹 호출 진행 중을 활동으로 보거나 인터럽트로 끊긴 호출을 차단에서 빼는 것 · (f) 측정 못 한 넷(`SUMMARY`·`IMAGE_DESCRIBE`·`MD_CORRECT_VISION` 등)은 소형 모델 계층·비전 모델이 있는 배포에서 재고 · (g) 더 큰 모델·원격 추론 모델에서 하네스를 다시 돌려 출하값과 상수 재확인 · (h) 카드의 "⚠ 타임아웃 넘음"은 읽기 타임아웃만 본다 · (i) 카드의 작은 한계 — 저장하면 펼친 [자세히] 가 접히고, 라우팅 모드별 줄은 저장된 수준으로만 계산한다.
+**열린 항목**: (a) 요청 단위 생각 토큰 예산은 **구현하지 않기로 결정**(10-12 측정: 예산 256·512·1,024 에서 걸러야 할 답 19건 중 0·2·5건 — 줄인 만큼 검증의 탐지가 사라진다, [§3.7](THINKING_EVALUATION.md). 다시 열 신호는 수준을 올린 배포에서 `finish=length` 로 빈 검증·답변이 관측될 때, 용도는 안전 상한) · (b) `SUBMISSION_ENRICH` 를 `KEYWORD_CONTEXT` 에서 분리할지 · (c) 응답 모드별 수준을 메시지마다 고르게 할지 — 하지 않는 쪽이 기본 · (d) 출력 상한을 정하지 않던 호출부 — **10-12 해소**(분류·리랭크·제목·이미지 둘은 자기 상한 2,048, 요약은 `max-summary-chars` + 1,024; 남은 것은 프롬프트를 스스로 만드는 질의 확장 하나, PITFALLS "짧은 호출의 출력 상한") · (e) ~~유휴 워치독은 블로킹 호출을 보지 못한다~~ — **2026-11-12 해소**: `LlmRouter` 의 블로킹 진입점 셋(`executeWithTracking`·`executeGated`·`executeGatedWithUsage`)이 응답을 기다리는 동안 `InFlightBlockingCalls`(MDC `traceId` 키 카운터)에 알리고 워치독이 그것을 활동으로 본다. 진짜 멈춘 호출은 HTTP 읽기 타임아웃이 끊어 호출이 끝나고, 그 순간 유휴 시계가 다시 흐른다 ([PITFALLS](PITFALLS.md#서비스-유휴-워치독과-블로킹-llm-호출-629-e)) · (f) ~~측정 못 한 넷~~ — **2026-11-12 셋을 쟀다**(`SUMMARY`·`IMAGE_DESCRIBE`·`MD_CORRECT_VISION`, `IMAGE_TYPE` 은 사이트가 없어졌다): 요약은 낮게에서 7건 전부 생각이 예약을 다 써 **빈 요약**, 이미지 둘은 나아지지 않는데 8~9배 느려 출하값(끔)이 맞았다 — 값은 바뀌지 않았다([§3.8](THINKING_EVALUATION.md#38-소형-모델-계층--비전--측정하지-못했던-셋-2026-11-12)). 이미지 설명을 낮게로 올릴 근거는 검색 recall 비교가 필요하다 · (g) 더 큰 모델·원격 추론 모델에서 하네스를 다시 돌려 출하값과 상수 재확인 · (h) 카드의 "⚠ 타임아웃 넘음"은 읽기 타임아웃만 본다 · (i) 카드의 작은 한계 — 저장하면 펼친 [자세히] 가 접히고, 라우팅 모드별 줄은 저장된 수준으로만 계산한다.
 
 ---
 
@@ -344,7 +344,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 **대가(요약).** 2턴 이상 전에 붙인 재료는 좁은 창에서 칸 1 에서 잘린다 · 칸 4 요약은 세부를 잃는다 · 되돌려 채우기는 독립 질문에도 이력을 다시 싣는다 · 독립화가 빗나가면 칸 5 가 틀린 지시어 풀이를 싣는다(`[질문]` 원문은 그대로).
 
-**연관 작업 — 질문 한도(같은 분석에서 나옴).** 한도는 5,000자가 아니라 **10,000자**로 올랐다(§6.32): ① 상수 분리(채팅 전용 상수 + 창 기준 한도 `QuestionLimit`)와 ② 질문 임베딩 상한(500자 초과는 앞 300 + 뒤 200자)은 해결. **아직 열려 있다**: ③ 이력 속 과거 질문(요약 입력 `buildSummaryInput()` 의 질문 캡 — 앞쪽 턴의 긴 질문 하나가 요약 전부를 차지한다) · ④ Direct 경로의 축소 재시도(사전 예산이 빗나가면 곧바로 `RAG-LLM-003`). 예산 영향: 16K 창에서 한글 5,000자 질문은 답변 문서 1개(이 사다리로 2개)·검증 발췌 2개 — 검증이 줄어든 발췌로 판정해 "판정 없음"이 는다. 32K 이상이면 문서 10개 전부가 들어간다.
+**연관 작업 — 질문 한도(같은 분석에서 나옴).** 한도는 5,000자가 아니라 **10,000자**로 올랐다(§6.32): ① 상수 분리(채팅 전용 상수 + 창 기준 한도 `QuestionLimit`)와 ② 질문 임베딩 상한(500자 초과는 앞 300 + 뒤 200자)은 해결. **열려 있던 둘은 2026-11-12 에 닫혔다**: ③ 이력 속 과거 질문 — `buildSummaryInput()` 이 질문을 모든 경로에서 500자로 자른다(앞쪽 턴의 긴 질문 하나가 요약 전부를 차지해 최신 턴의 요약을 밀어냈다 — 완성된 요약을 앞에서부터 자르는 `truncate()` 때문). ④ Direct 경로의 축소 재시도는 **2026-11-12 해결** — 사전 예산이 빗나가 서버가 거절하면 이력 사다리(과거 질문 500자 → 직전 1턴 → 이력 전부, 앞 걸음과 같아지는 칸은 건너뜀)로 다시 보낸다(블로킹·스트리밍 모두, 스트리밍은 토큰이 나간 뒤에는 안 한다). 예산 영향: 16K 창에서 한글 5,000자 질문은 답변 문서 1개(이 사다리로 2개)·검증 발췌 2개 — 검증이 줄어든 발췌로 판정해 "판정 없음"이 는다. 32K 이상이면 문서 10개 전부가 들어간다.
 
 ### 6.31 이력 제외 체크박스 — 이전 대화 대신 문서를 더 (RAG 답변) ✅ 완료 2026-10-27 (설계 2026-10-23)
 
@@ -367,7 +367,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 **③ 그림** — 설명 프롬프트를 `VisionDescriptionService.CAPTION_PROMPT` 하나(`형식: 한두 문장`, 일반 서술 금지)로 단일화하고 출력은 `cleanCaption()` 을 지난다(옛 프롬프트는 소형 모델이 어느 이미지에나 맞는 문장을 쓰게 했다 — 코퍼스 설명 10개 중 8개). **청크 편집의 그림 관리**: 그림의 자리는 본문 속 `[이미지: …]` 마커라 추가·교체·삭제는 **텍스트 변환**이고, 규칙은 서버의 순수 클래스 `ChunkImageEditor`(JS 테스트 하네스가 없다)에 있으며 **서버가 저장하지 않는다**(저장은 청크 「저장」 하나). 올린 파일은 `images/chunks/`(`images/submissions/` 는 `sweepOrphans` 가 24시간 뒤 지운다). 화면 정리(`/settings` 화면 표시 카드·`/admin` 배치·컨텍스트 창 미탐지 문구 — 앱에는 모를 때 쓰는 기본 창이 없어 숫자를 지어 보이지 않는다)도 같은 날이다.
 
 **열린 항목**
-- **이력 속 긴 질문**: `buildSummaryInput()` 이 앞 2,000자만 남기므로 10,000자 질문 하나가 요약을 다 차지한다(§6.30 연관 작업 ③) · Direct 경로의 축소 재시도 없음(④).
+- ~~**이력 속 긴 질문**(③)~~ · ~~Direct 경로의 축소 재시도 없음(④)~~ — 둘 다 2026-11-12 해결(과거 질문 500자 상한 · 이력 사다리 재시도).
 - **긴 질문 검색 품질은 측정하지 않았다** — 골든셋이 없다. 500/1,000자 경계·낱말 20개·앞 300+뒤 200자는 설계 가정이다.
 - **이미지 유형 분류기는 제거했다**(2026-11-04) — 다섯 유형이 같은 프롬프트를 가리켜 분류가 설명을 바꾸지 못하는데 이미지당 호출을 한 번 더 냈다. `ImageTypeClassifier`·`ThinkingSite.IMAGE_TYPE` 등을 코드째 걷어냈고 `image_descriptions.image_type` 컬럼만 남았다([IMAGE_PROCESS.md §13](IMAGE_PROCESS.md)).
 - 새 설명 프롬프트의 실제 출력 품질과, 이미 인덱싱된 문서의 옛 설명(재인덱싱·「설명 생성」을 해야 바뀐다) · 청크 편집에서 마커를 지워도 `images/chunks/` 파일은 남는다(고아 정리 없음).
@@ -380,7 +380,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 | 항목 | 결정 | 근거 |
 |---|---|---|
-| 검색 | 후보 `search-top-k × 2`(기본 20) → 교차 인코더 재순위화 → 상위 `max(5, ⌈top-k ÷ 2⌉)`(기본 5). 편집하는 설정은 `search-top-k` 하나이고 나머지 둘은 `/settings` 에서 조회 전용 | 일회성 측정에서 골든셋 recall 0.96 → 1.00, 후속 질문 0.67 → 0.76, LLM 에 넣는 청크는 절반 |
+| 검색 | 후보 `search-top-k × 2`(기본 20) → 교차 인코더 재순위화 → 상위 `max(5, ⌈top-k × 2/3⌉)`(기본 7). 편집하는 설정은 `search-top-k` 하나이고 나머지 둘은 `/settings` 에서 조회 전용 | 일회성 측정에서 골든셋 recall 0.96 → 1.00, 후속 질문 0.67 → 0.76, LLM 에 넣는 청크는 절반 |
 | 재검색 | 리랭커 1위 점수가 0 미만이면 LLM 이 새 검색어를 만들어 다시 찾는다. 최대 3회 | 후속 질문 recall 0.90. 로컬 모델은 재검색을 스스로 결정하지 못했고(무관한 결과 12건 중 0건), 충분 여부 판단도 치우쳤다 |
 | 적용 범위 | 새 응답 모드 없이 S/N/C 공통 경로. `/settings` 로 끈다 | 추가 비용이 작고 재검색은 필요한 턴에서만 돈다. C 는 근거 엄격도 축이라 바꾸면 응용 기능이 사라진다 |
 | 리랭커 | `llama-server --reranking` + `bge-reranker-v2-m3` | 후보 20개에 약 3초(CPU)이고 점수를 준다. 기존 LLM 리랭커는 p50 15.7초에 점수가 없다 |
@@ -403,7 +403,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 | 4 | 영향도·유지보수 워크플로(`change_job`·`change_proposal`·`/admin` 대기열) | ✅ 2026-11-10 구현·종단 확인 — 아래 요약. 영향도 판정 실측(11-11): 심은 언급 회수 24/24, 지나가는 언급의 오탐은 단어 경계 가드로 6/15 → 0/5 |
 | 5 | Tool 호출 추적 패널(`agent_tool_call` V14 · `/admin` "Tool 호출 추적") · 매뉴얼 · 단계적 전환 | 🟡 패널·관측 테이블·매뉴얼 구현 2026-11-11(실화면 확인) — **남은 것: 실사용 2주 관측 · 기본값 판단 · 백업에서 되돌리기 리허설** |
 
-**4단계 요약 (2026-11-10 구현 · 세부는 CLAUDE.md 표 · [PITFALLS.md](PITFALLS.md) · 매뉴얼 [OPERATOR §6.14](OPERATOR_MANUAL.md))**
+**4단계 요약 (2026-11-10 구현 · 세부는 CLAUDE.md 표 · [PITFALLS.md](PITFALLS.md) · 매뉴얼 [ADMIN §10.1](ADMIN_MANUAL.md))**
 
 - **4a 영향도**: Flyway V12 `change_job` · `findMentions`(전수 조회, 3글자 미만은 `tooShort`) · `ImpactAnalysisWorkflow`(저장 원문 → 청크별 LLM 판정 → **인용 검증은 코드** — 근거가 본문에 없으면 `unverified`; 상한 40 · 사용자당 동시 1건 · 채팅에 양보 · 기동 시 `interrupted`) · `analyzeImpact` Tool(PUBLIC, 시작만) · 리포트 `/ui/impact-jobs/{id}`(요청자·관리자만).
 - **4b 유지보수**: Flyway V13 `change_proposal` · `MaintenanceWorkflow`(결정적 치환 — 본문 + `chunk_context`·`excerpt_keywords` + 불변식 검사: 이미지·페이지 마커, 코드 펜스) · `/admin/change-jobs`(Diff 검토 · **문서 단위 승인·거절**) · `requestDocumentChange` Tool(ADMIN). 수정안을 만드는 것은 코퍼스를 바꾸지 않는다(쓰는 곳은 승인 뒤 `ChangeApplyService` 하나).
@@ -472,7 +472,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 - **Step 5.1~5.8** — `VectorStoreProvider` 추상화(Chroma 무행위 리팩토링) · sqlite-vec 확장 로딩(`DataSourceConfig`, `SqliteVecVerifier`) · 스키마 초기화(`SqliteVecSchemaInitializer`, 차원 미설정 시 fail-fast) · `SqliteVecVectorStoreProvider`(upsert 미지원이라 add = DELETE 후 INSERT) · 조건부 빈 스위치 · 설정 외부화(`.env`·compose profiles) · 데이터 이전(백엔드 전환은 항상 재인덱싱 — 원본 보존·무손실) · `/admin` 백엔드 공통 상태 카드와 청크 브라우징 패리티.
 - **Step 5.9 태그 기반 검색 스코프** — 업로드 다중 태그 + 채팅의 태그 선택으로 **엄격 AND 필터**(Chroma·sqlite-vec·하이브리드 공통). provider 가 배열 포함 연산자를 지원하지 않아 `RetrievalService` 가 융합 직후 Java post-filter 로 걸고 결과 부족에 대비해 `candidateK` 를 선제 확대한다(`app.search-tag-candidate-multiplier`). 태그의 **권위 있는 출처는 `doc_registry.tags`** 다(Key Constraints 참고).
-- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** `SQLITE_VEC_DB_PATH` 로 벡터/FTS 를 별도 `vector.db` 로 분리하려 했으나 **한 번도 실효된 적이 없다** — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인) `memory.db` 는 Flyway 만 닿는 빈 파일이었다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보였다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(데이터가 전부 거기 있으므로 이전 불필요). 이력 없는 옛 파일은 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 절차는 OPERATOR_MANUAL §6.3.1, 재개 신호는 부록 결정표.
+- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** `SQLITE_VEC_DB_PATH` 로 벡터/FTS 를 별도 `vector.db` 로 분리하려 했으나 **한 번도 실효된 적이 없다** — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인) `memory.db` 는 Flyway 만 닿는 빈 파일이었다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보였다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(데이터가 전부 거기 있으므로 이전 불필요). 이력 없는 옛 파일은 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 절차는 OPERATOR_MANUAL §6.2.1, 재개 신호는 부록 결정표.
 
 ---
 
@@ -536,7 +536,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ### 10.10 좋아요 기반 큐레이션 Q&A 지식화 ✅ 완료 (유입 경로는 §10.11 로 대체됨)
 
-좋아요한 답변을 `curated_qa` 로 스냅샷 → 예약 네임스페이스 `"curated"` 에 임베딩 → **가중 RRF 축**으로 융합 → 관리자(`/admin`)가 편집·삭제. §10.5 에서 제외한 "시맨틱 응답 캐시"의 **인간 검수 가능 버전**이다 — verbatim 반환이 아니라 검색 축의 근거로만 주입하므로 stale 위험·무효화 복잡도가 낮다. 구현은 CLAUDE.md `CuratedQaService`/`CuratedQaRepository`, 운영은 [OPERATOR_MANUAL §6.7·§7.5](OPERATOR_MANUAL.md), UI 는 [UI.md](UI.md).
+좋아요한 답변을 `curated_qa` 로 스냅샷 → 예약 네임스페이스 `"curated"` 에 임베딩 → **가중 RRF 축**으로 융합 → 관리자(`/admin`)가 편집·삭제. §10.5 에서 제외한 "시맨틱 응답 캐시"의 **인간 검수 가능 버전**이다 — verbatim 반환이 아니라 검색 축의 근거로만 주입하므로 stale 위험·무효화 복잡도가 낮다. 구현은 CLAUDE.md `CuratedQaService`/`CuratedQaRepository`, 운영은 [ADMIN_MANUAL §5.1·§5.2](ADMIN_MANUAL.md), UI 는 [UI.md](UI.md).
 
 **확정된 정책**: 가시성 = 전체 공유, 답변은 **LLM 근거로 주입**(오답 증폭 방지) · 편집은 §10.11 에서 바뀌었다(본인은 **지식 제안 페이지**에서만, 관리자는 `/admin` 에서 전부) · **대화 삭제 시 큐레이션도 함께 회수**(§6.25 — 최초 정책은 반대였다; 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 더 혼란스럽고 턴 삭제는 처음부터 회수하고 있었다. `CuratedQaService.onThreadDeleted()` 를 사용자·관리자 경로가 함께 부르고 `origin='manual'` 제안은 제외) · **문서 삭제와는 연동 없음**.
 

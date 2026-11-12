@@ -268,6 +268,12 @@ public class ConversationSummarizerService {
     private record SummaryInput(String text, boolean fullyPreSummarized) {}
 
     /**
+     * <b>질문은 모든 경로에서 {@link HistoryPolicy#PAST_QUESTION_CAP}자로 자른다</b>(§6.30 칸 1 과 같은 상한). 채팅 질문 한도가
+     * 10,000자라 앞쪽 턴의 긴 질문(붙여 넣은 로그 등) 하나가 입력을 다 차지했고, {@link #truncate} 는 완성된 요약을 <b>앞에서부터</b>
+     * {@code maxSummaryChars} 만큼만 남기므로 그 질문 하나가 요약 예산을 다 먹어 가장 최근 턴을 밀어냈다(LLM 이 없는 조립
+     * 경로·모든 턴이 {@code ## 요약} 을 가진 경로는 이 입력이 곧 요약이다). LLM 경로도 같은 입력을 받아 입력이 작아진다.
+     * 직전 턴들은 요약이 아니라 {@code [Recent]} 에 원문으로 실리므로 질문 전문은 거기서 보인다.
+     *
      * @param rawAnswerCap when &gt; 0, an answer with no "## 요약" section is cut to this many
      *        chars. Used only by the no-LLM assembly path — {@link #truncate} caps the finished
      *        summary from the <em>front</em>, so one long Direct-mode answer early in the thread
@@ -287,7 +293,7 @@ public class ConversationSummarizerService {
             } else {
                 rendered = ownSummary;
             }
-            sb.append("Q: ").append(t.question())
+            sb.append("Q: ").append(HistoryPolicy.capQuestion(t.question(), HistoryPolicy.PAST_QUESTION_CAP))
               .append("\nA: ").append(rendered)
               .append("\n\n");
         }

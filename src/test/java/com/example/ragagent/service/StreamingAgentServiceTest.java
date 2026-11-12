@@ -526,6 +526,60 @@ class StreamingAgentServiceTest {
         verify(emitter, never()).completeWithError(any());
     }
 
+    @org.junit.jupiter.api.parallel.ResourceLock("global-state")   // MDC(traceId)를 쓴다 — 다른 클래스의 Logback 재초기화가 지울 수 있다
+    @Test
+    @DisplayName("idle watchdog — 블로킹 LLM 호출(분류·확장·검증)이 응답을 기다리는 동안은 이벤트가 없어도 끊지 않는다 (§6.29 e)")
+    void run_blockingCallInFlight_isNotIdle() {
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
+        org.slf4j.MDC.put(com.example.ragagent.llm.InFlightBlockingCalls.TRACE_ID_KEY, "t-watch-blocking");
+        try {
+            when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+                try (var ignored = com.example.ragagent.llm.InFlightBlockingCalls.enter()) {
+                    advanceMs(5_000);   // 유휴 창(600ms)의 8배 — 이벤트는 하나도 없다
+                    letWatchdogTick();  // 워치독이 표본을 뽑아도 호출 중이라 끊지 않는다
+                }
+                return resultState("답변");
+            });
+
+            service.run("u1", form(false, null), emitter);
+
+            assertThat(Thread.currentThread().isInterrupted())
+                    .as("응답을 기다리는 블로킹 호출을 멈춤으로 오인하면 안 된다").isFalse();
+            verify(emitter).complete();
+            verify(emitter, never()).completeWithError(any());
+        } finally {
+            org.slf4j.MDC.clear();
+        }
+    }
+
+    @org.junit.jupiter.api.parallel.ResourceLock("global-state")   // MDC(traceId)를 쓴다 — 다른 클래스의 Logback 재초기화가 지울 수 있다
+    @Test
+    @DisplayName("idle watchdog — 블로킹 호출이 끝난 뒤에는 유휴 시계가 다시 흘러 멈춘 턴을 여전히 끊는다 (§6.29 e)")
+    void run_afterTheBlockingCallEnds_theIdleClockRunsAgain() {
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
+        org.slf4j.MDC.put(com.example.ragagent.llm.InFlightBlockingCalls.TRACE_ID_KEY, "t-watch-after");
+        try {
+            when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+                try (var ignored = com.example.ragagent.llm.InFlightBlockingCalls.enter()) {
+                    advanceMs(5_000);
+                    letWatchdogTick();   // 호출 중 — 활동으로 갱신된다
+                }
+                advanceMs(5_000);        // 호출이 끝난 뒤 아무 신호 없이 또 유휴 창의 8배
+                awaitWatchdogInterrupt();
+                return resultState("답변");
+            });
+
+            service.run("u1", form(false, null), emitter);
+
+            assertThat(Thread.currentThread().isInterrupted())
+                    .as("호출이 끝난 뒤의 침묵은 여전히 유휴다").isTrue();
+            Thread.interrupted();
+            verify(emitter).completeWithError(any(InterruptedException.class));
+        } finally {
+            org.slf4j.MDC.clear();
+        }
+    }
+
     /** 보낸 SSE 이벤트를 와이어 텍스트로 — {@code event:stage\ndata:{...}} 꼴. */
     private List<String> sentEvents() throws java.io.IOException {
         ArgumentCaptor<SseEmitter.SseEventBuilder> captor = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);

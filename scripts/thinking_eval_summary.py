@@ -166,6 +166,23 @@ if rows:
         if r['case'] == 'TOTAL':
             print(f"  TOTAL {r['level']}: 청크 {r['chunks']} · {r['ms']} ms · 호출 {r['calls']} · 출력 {r['outTok']} tok · 잘림 {r['trunc']} · 생각관측 {r['thinkSeen']}")
 
+rows = load('summary')
+if rows:
+    short_call_table('summary')
+    for lv, rs in by(rows, lambda r: r['level']).items():
+        kept = sum(r['keysKept'] for r in rs)
+        keys = sum(r['keys'] for r in rs)
+        print(f"  {lv:>4} 요약 자 {dist([r['outChars'] for r in rs])} | 입력 자 {f(mean([r['inChars'] for r in rs]), 0)}"
+              f" | 사실 표지 유지 {kept}/{keys} ({f(100 * kept / max(1, keys), 0)}%) | 빈 요약 {sum(1 for r in rs if r['outChars'] == 0)}/{len(rs)}")
+
+for sec in ('imgdesc', 'mdvision'):
+    rows = load(sec)
+    if rows:
+        short_call_table(sec)
+        for lv, rs in by(rows, lambda r: r['level']).items():
+            print(f"  {lv:>4} 설명 자 {dist([r['outChars'] for r in rs])} | 빈 설명 {sum(1 for r in rs if r['empty'])}/{len(rs)}"
+                  f" | 실패 자리표시자 {sum(1 for r in rs if r['placeholder'])}/{len(rs)}")
+
 for sec in ('md', 'txt'):
     rows = load(sec)
     if rows:
