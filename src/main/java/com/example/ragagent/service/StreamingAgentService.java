@@ -8,6 +8,7 @@ import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.AsyncExceptions;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.InFlightBlockingCalls;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatForm;
@@ -211,6 +212,7 @@ public class StreamingAgentService {
         // so this IS the thread to interrupt when the pipeline goes idle too long.
         Thread worker = Thread.currentThread();
         AtomicLong lastActivityNanos = new AtomicLong(nanoTimeSource.getAsLong());
+        String traceId = org.slf4j.MDC.get(InFlightBlockingCalls.TRACE_ID_KEY);   // 워치독(스케줄러 스레드)이 이 턴의 블로킹 호출을 묻는 키
         long idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(props.sseIdleTimeoutMs());
         // Resets any stale flag a prior turn on this same thread might have left set — the registry
         // is keyed by threadId, not per-turn, so a fresh begin() here is what makes a leftover skip
@@ -229,6 +231,12 @@ public class StreamingAgentService {
         // shorter-than-default idle timeout is still detected promptly.
         long checkIntervalMs = Math.max(100, props.sseIdleTimeoutMs() / 6);
         ScheduledFuture<?> idleWatchdog = heartbeatScheduler.scheduleWithFixedDelay(() -> {
+            // §6.29 열린 항목 e — 분류·확장·검증은 이벤트 없이 도는 블로킹 호출이다. 응답을 기다리는 중이면 활동으로 본다
+            // (진짜 멈춘 호출은 HTTP 읽기 타임아웃이 끊어 호출이 끝나고, 그 순간부터 유휴 시계가 다시 흐른다).
+            if (InFlightBlockingCalls.active(traceId)) {
+                lastActivityNanos.set(nanoTimeSource.getAsLong());
+                return;
+            }
             long idleNanos = nanoTimeSource.getAsLong() - lastActivityNanos.get();
             if (idleNanos > idleTimeoutNanos) {
                 log.warn("[TIMEOUT:SSE_IDLE] thread={} idleMs={} (app.sse-idle-timeout-seconds={}s)",
