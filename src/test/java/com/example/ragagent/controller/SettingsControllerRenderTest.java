@@ -58,6 +58,7 @@ class SettingsControllerRenderTest {
     @MockitoBean SettingsService settingsService;
     @MockitoBean com.example.ragagent.service.ThinkingPreviewService thinkingPreview;   // §6.29 — 생각 수준 카드
     @MockitoBean com.example.ragagent.service.ProviderCatalog providerCatalog;          // 프로바이더 편집
+    @MockitoBean com.example.ragagent.service.AboutService aboutService;                // 맨 아래 「정보」 카드
     @MockitoBean AppProperties props;               // GlobalModelAdvice + SecurityConfig
     @MockitoBean ThreadContextResolver threadContextResolver; // WebMvcConfig
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel; // WebConfig.chatClient()
@@ -483,6 +484,55 @@ class SettingsControllerRenderTest {
         String forGuest = mvc.perform(get("/settings").with(user(guest)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(forGuest).doesNotContain("thinking-card").doesNotContain("/admin/settings/thinking");
+    }
+
+    private void stubMinimalView() {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)))));
+    }
+
+    @Test
+    @DisplayName("GET /settings — 맨 아래 정보 카드: 버전·빌드 시각·라이선스는 누구나, 실행 환경(Java·Spring Boot)은 관리자에게만")
+    void aboutCardShowsVersionToEveryoneAndRuntimeOnlyToAdmins() throws Exception {
+        stubMinimalView();
+        when(aboutService.info()).thenReturn(new com.example.ragagent.model.AboutInfo("RAG Agent", "0.5.5-SNAPSHOT",
+                java.time.Instant.parse("2026-11-12T07:30:00Z"), "Apache License 2.0",
+                "https://www.apache.org/licenses/LICENSE-2.0", "Copyright 2026 The RAG Agent Authors", "21.0.5", "4.1.2"));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String forAdmin = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forAdmin).contains("id=\"about-card\"", "0.5.5-SNAPSHOT", "Apache License 2.0",
+                "https://www.apache.org/licenses/LICENSE-2.0", "Copyright 2026 The RAG Agent Authors");
+        // 빌드 시각은 UTC 순간으로 내보내고 브라우저가 보는 사람의 시간대로 바꾼다(<time class="utc-time">)
+        assertThat(forAdmin).contains("datetime=\"2026-11-12T07:30:00Z\"", "utc-time");
+        assertThat(forAdmin).contains(">버전<", ">빌드 일시<", ">라이선스<");
+        assertThat(forAdmin).contains("Java <span>21.0.5</span>", "Spring Boot <span>4.1.2</span>");
+
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        AppUserDetails guest = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+        String forGuest = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(guest)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forGuest).contains("0.5.5-SNAPSHOT", "Apache License 2.0");
+        assertThat(forGuest).doesNotContain("21.0.5", "4.1.2", ">실행 환경<");
+    }
+
+    @Test
+    @DisplayName("GET /settings — 빌드 정보 없이 뜬 개발 실행은 버전 칸이 비는 대신 '개발 빌드'라고 말한다")
+    void aboutCardSaysDevelopmentBuildWithoutBuildInfo() throws Exception {
+        stubMinimalView();
+        when(aboutService.info()).thenReturn(new com.example.ragagent.model.AboutInfo("RAG Agent", null, null,
+                "Apache License 2.0", "https://www.apache.org/licenses/LICENSE-2.0", "Copyright 2026 The RAG Agent Authors",
+                "21.0.5", "4.1.2"));
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(html).contains("개발 빌드 (빌드 정보 없음)").doesNotContain("utc-time\" datetime=\"null");
     }
 
     @Test

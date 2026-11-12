@@ -2,10 +2,12 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.ThinkingSite;
+import com.example.ragagent.service.AboutService;
 import com.example.ragagent.service.ProviderCatalog;
 import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.ThinkingPreviewService;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,9 +48,18 @@ public class SettingsController {
         this.providerCatalog = providerCatalog;
     }
 
+    /** 맨 아래 「정보」 카드의 값. 세터 주입 — 이 컨트롤러의 생성자를 테스트가 직접 부르므로 생성자에 더하지 않았다(없으면 카드가 없다). */
+    private AboutService aboutService;
+
+    @Autowired(required = false)
+    void setAboutService(AboutService aboutService) {
+        this.aboutService = aboutService;
+    }
+
     @GetMapping("/settings")
     public String settingsPage(Model model) {
         model.addAttribute("settings", settingsService.buildView());
+        if (aboutService != null) model.addAttribute("about", aboutService.info());
         return "settings";
     }
 

@@ -210,6 +210,45 @@
         <div th:replace="~{fragments/settings-group :: group(${group})}"></div>
     </th:block>
 
+    <!-- ── 정보 — 버전 · 빌드 시각 · 라이선스. 누구나 본다. 실행 환경(Java · Spring Boot)은 관리자에게만 ── -->
+    <div th:if="${about != null}" id="about-card" class="card mb-4">
+        <div class="card-header fw-semibold">
+            <i class="bi bi-info-circle me-1"></i><span th:text="#{settings.about.title}">About</span>
+        </div>
+        <div class="card-body py-2">
+            <dl class="row mb-0 small">
+                <dt class="col-sm-3" th:text="#{settings.about.app}">Application</dt>
+                <dd class="col-sm-9" th:text="${about.name}">RAG Agent</dd>
+
+                <dt class="col-sm-3" th:text="#{settings.about.version}">Version</dt>
+                <dd class="col-sm-9">
+                    <span th:if="${!about.devBuild()}" th:text="${about.version}">0.0.0</span>
+                    <span th:if="${about.devBuild()}" class="text-secondary" th:text="#{settings.about.dev-build}">Development build</span>
+                </dd>
+
+                <dt class="col-sm-3" th:text="#{settings.about.build-time}">Build time</dt>
+                <dd class="col-sm-9">
+                    <span th:if="${about.buildTime != null}"
+                          th:utext="${about.buildTimeElement()}">2026-01-01 00:00 UTC</span>
+                    <span th:if="${about.buildTime == null}" class="text-secondary">-</span>
+                </dd>
+
+                <dt class="col-sm-3" th:text="#{settings.about.license}">License</dt>
+                <dd class="col-sm-9">
+                    <a th:href="${about.licenseUrl}" th:text="${about.licenseName}" target="_blank" rel="noopener noreferrer">Apache License 2.0</a>
+                </dd>
+
+                <dt class="col-sm-3" th:text="#{settings.about.copyright}">Copyright</dt>
+                <dd class="col-sm-9" th:text="${about.copyright}">Copyright</dd>
+
+                <th:block th:if="${isAdmin}">
+                    <dt class="col-sm-3" th:text="#{settings.about.runtime}">Runtime</dt>
+                    <dd class="col-sm-9 mb-0">Java <span th:text="${about.javaVersion}">21</span> · Spring Boot <span th:text="${about.bootVersion}">4</span></dd>
+                </th:block>
+            </dl>
+        </div>
+    </div>
+
 <!-- 화면 표시 — 고르는 즉시 적용하고 이 브라우저에 저장한다. 쓰는 함수(getChatFontSize/setChatFontSize)는 base.html 의
      스크립트에 있는데 그 블록이 이 콘텐츠보다 뒤에 오므로 DOMContentLoaded 에서 시작한다. -->
 <script>
