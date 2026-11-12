@@ -510,7 +510,10 @@ class SettingsControllerRenderTest {
                 "https://www.apache.org/licenses/LICENSE-2.0", "Copyright 2026 The RAG Agent Authors");
         // 빌드 시각은 UTC 순간으로 내보내고 브라우저가 보는 사람의 시간대로 바꾼다(<time class="utc-time">)
         assertThat(forAdmin).contains("datetime=\"2026-11-12T07:30:00Z\"", "utc-time");
-        assertThat(forAdmin).contains(">버전<", ">빌드 일시<", ">라이선스<");
+        assertThat(forAdmin).contains(">애플리케이션 버전<", ">빌드 일시<", ">라이선스<", ">저작권<");
+        // 애플리케이션 이름과 버전은 한 칸 — 「애플리케이션 버전 : RAG Agent 0.5.5-SNAPSHOT」, 네 항목은 2 x 2(col-md-6)
+        assertThat(forAdmin.replaceAll("<[^>]+>", "").replaceAll("\\s+", " ")).contains("애플리케이션 버전 : RAG Agent 0.5.5-SNAPSHOT");
+        assertThat(forAdmin.substring(forAdmin.indexOf("id=\"about-card\"")).split("col-md-6", -1).length - 1).isEqualTo(4);
         assertThat(forAdmin).contains("Java <span>21.0.5</span>", "Spring Boot <span>4.1.2</span>");
 
         when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));

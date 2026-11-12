@@ -13,7 +13,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>rag-agent</artifactId>
-    <version>0.5.5-SNAPSHOT</version>
+    <version>0.5.6-SNAPSHOT</version>
     <name>rag-agent</name>
     <description>RAG Multi-Agent System with Spring AI (converted from Python/LangGraph)</description>
 
