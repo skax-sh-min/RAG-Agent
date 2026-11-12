@@ -116,9 +116,10 @@ class ResponseModeTest {
             assertThat(mode.allowsDirect()).as("%s.allowsDirect", mode).isTrue();
             assertThat(mode.directSystemPromptKey()).as("%s.directSystemPromptKey", mode).isNotNull();
         }
-        // 부스트를 0보다 올리려면 MAX_EVAL_EXCERPT_CHARS 상향이 선행돼야 한다(§6.24 Step 4-c) —
-        // 이 단언이 깨지면 그 선행 조건을 먼저 확인하라는 뜻이다.
-        for (ResponseMode mode : ResponseMode.values()) {
+        // 부스트는 C(재료로 쓰는 모드)만 0보다 크다(§6.24 Step 4-c). 이 값은 RetrievalService.modeBoostFor 가 창을 알 때
+        // 검증 발췌 예산 안에서만 적용한다 — 값을 올릴 때는 RetrievalModeBoostTest 의 창 시나리오도 함께 본다.
+        assertThat(ResponseMode.C.retrievalBoost()).isEqualTo(3);
+        for (ResponseMode mode : List.of(ResponseMode.S, ResponseMode.N)) {
             assertThat(mode.retrievalBoost()).as("%s.retrievalBoost", mode).isZero();
         }
     }
