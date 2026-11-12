@@ -22,10 +22,10 @@ class AppPropertiesRerankTest {
     }
 
     @Test
-    @DisplayName("후보 수 = top-k × 2, 최종 컷 = max(5, ⌈top-k ÷ 2⌉) 이고 후보 수를 넘지 않는다 — 설계서 §4.3 표")
+    @DisplayName("후보 수 = top-k × 2, 최종 컷 = max(5, ⌈top-k × 2/3⌉) 이고 후보 수를 넘지 않는다 — 설계서 §4.3 표")
     void derivedValuesFollowTheTable() {
         // {search-top-k, 후보 수, 최종 컷}
-        int[][] table = {{1, 2, 2}, {2, 4, 4}, {3, 6, 5}, {4, 8, 5}, {10, 20, 5}, {11, 22, 6}, {20, 40, 10}, {50, 100, 25}};
+        int[][] table = {{1, 2, 2}, {2, 4, 4}, {3, 6, 5}, {4, 8, 5}, {10, 20, 7}, {11, 22, 8}, {20, 40, 14}, {50, 100, 34}};
         for (int[] row : table) {
             AppProperties p = props(row[0], null);
             assertThat(p.effectiveRerankCandidates()).as("top-k %d 후보 수", row[0]).isEqualTo(row[1]);
@@ -57,7 +57,7 @@ class AppPropertiesRerankTest {
         AppProperties.bindOverrides(new TestOverrides(Map.of(SettingsKeys.SEARCH_TOP_K, "16")));
         try {
             assertThat(p.effectiveRerankCandidates()).isEqualTo(32);
-            assertThat(p.effectiveRerankTopK()).isEqualTo(8);
+            assertThat(p.effectiveRerankTopK()).isEqualTo(11);
         } finally {
             AppProperties.bindOverrides(null);
         }

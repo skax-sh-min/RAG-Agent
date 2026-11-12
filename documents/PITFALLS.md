@@ -476,7 +476,7 @@ Direct 도 사전 예산(`withFittedHistory`)이 **추정 위에 서 있고 창�
 - **입력 크기.** 서버는 (질의 + 문서) 한 쌍이 `-ub 2048` 토큰 안에 들어가야 한다. 한글은 글자당 1토큰에 가까워 문서는 1,800자, 질의는 400자로 자른다. 서버를 더 작은 `-ub` 로 띄우면 (질의+문서)가 그 크기를 넘는 호출마다 **500**(`input (N tokens) is too large … increase the physical batch size`)이 나고, 건너뛰기 없이 매번 실패해 RRF 순서로 물러난다 — 2026-11-06 `-ub 512` 로 떠 있던 서버에서 호출 대부분이 그랬다. 기동 명령은 반드시 `-b 2048 -ub 2048` 이다.
 - **점수는 모델의 원점수다**(음수가 나온다, 실측 관련 +6.9 · 무관 −8.8~−10.6). 재검색 문턱(0.0)은 이 모델의 값이라 모델을 바꾸면 다시 잰다. 서버는 `results` 를 **입력 순서(index)**로 줄 수 있어(실제로 그랬다) 정렬은 우리 몫이고, 범위 밖 index·점수 없는 항목은 버린다.
 - **빈 조건은 SpEL 이다**(`@ConditionalOnExpression("!'${app.reranker.base-url:}'.isBlank()")`). `RERANK_BASE_URLS` 을 안 주면 `${RERANK_BASE_URLS:}` 가 빈 문자열이 되는데, 속성이 "있다"는 것만 보는 `@ConditionalOnProperty` 는 그것을 켜짐으로 읽는다. `CrossEncoderRerankerBeanConditionTest` 가 미설정 · 빈 문자열 · 공백 · 주소 있음을 고정한다.
-- **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k ÷ 2⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
+- **후보 수와 최종 컷은 설정이 아니다.** `search-top-k` 하나에서 파생한다(후보 = ×2, 최종 컷 = `max(5, ⌈top-k × 2/3⌉)`, 후보 수를 넘지 않는다 — `AppPropertiesRerankTest` 가 설계서 §4.3 표를 고정). `search-top-k` 를 핫 편집하면 다음 검색부터 따라 바뀐다.
 - **`AppProperties` 에 컴포넌트가 하나 늘었다**(46개, `reranker`). 기존 호환 생성자(44개)는 새 컴포넌트에 `null` 을 넘기고, 45개 형태를 새로 두었다. 테스트에서 정식 생성자를 직접 부르면 인자 수를 하나만 틀려도 컴파일 오류가 난다.
 - 실제 서버 점검은 `CrossEncoderRerankerLiveTest`(기본 건너뜀, `-Drerank-live.url=…`)가 한다 — 단위 테스트의 응답 모양은 서버 버전이 바뀌면 낡는다.
 

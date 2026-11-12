@@ -212,7 +212,7 @@ C는 문서 밖 내용을 만들어내는 것이 목적이라, 기존 `grounded`
 | ⑧ | AgentService (사전 병렬, `AGENT_ENABLED` · N 모드 RAG 만) | **Tool 계획** — 프롬프트 JSON `{"tool":…,"arguments":…}` 한 번. 호출 지점은 `ThinkingSite.CONDENSE`(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 · `MICRO_TEXT`). 꺼져 있으면 호출도 노드도 없다 | 호출 수만 `accumulateTokens` |
 | ⑨ | RETRIEVAL (검색 루프) | 재검색의 **새 검색어 한 줄**(`SearchQueryRewriter`, 사이트 `CONDENSE`) — 교차 인코더 리랭커가 있고 1위 점수가 `search-rerank-min-score` 미만일 때만, **턴의 첫 RETRIEVAL 에서만** 최대 `search-max-attempts` 번(§6.33 1a) | ✓ |
 
-> **검색 루프(§6.33 1a)**: 교차 인코더(`CrossEncoderReranker` — `LlmRouter` 밖, 전용 서버)가 있으면 RETRIEVAL 이 후보 `search-top-k × 2` 를 점수로 재순위해 최종 컷(`max(5, ⌈top-k ÷ 2⌉)`)만 싣고 LLM 리랭킹(`RerankerService`)·질의 확장은 건너뛴다. 1위 점수가 문턱 미만이면 ⑨ 로 새 검색어를 만들어 다시 찾고(판단은 코드, LLM 은 검색어만) 회차를 청크별 점수 최댓값으로 합친다. 리랭커가 없거나 장애면 RRF 순서 그대로(위 RETRIEVAL 행). 검증 실패(`grounded=false`) 재시도에서는 재검색 루프가 다시 돌지 않는다.
+> **검색 루프(§6.33 1a)**: 교차 인코더(`CrossEncoderReranker` — `LlmRouter` 밖, 전용 서버)가 있으면 RETRIEVAL 이 후보 `search-top-k × 2` 를 점수로 재순위해 최종 컷(`max(5, ⌈top-k × 2/3⌉)`)만 싣고 LLM 리랭킹(`RerankerService`)·질의 확장은 건너뛴다. 1위 점수가 문턱 미만이면 ⑨ 로 새 검색어를 만들어 다시 찾고(판단은 코드, LLM 은 검색어만) 회차를 청크별 점수 최댓값으로 합친다. 리랭커가 없거나 장애면 RRF 순서 그대로(위 RETRIEVAL 행). 검증 실패(`grounded=false`) 재시도에서는 재검색 루프가 다시 돌지 않는다.
 >
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
 > ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.  
