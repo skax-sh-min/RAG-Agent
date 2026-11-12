@@ -78,6 +78,11 @@ final class TurnPersistence {
 
         // §6.31 — 요청이 아니라 결과에서 읽는다(응답 모드와 같은 규칙): meta 로 판정돼 이력으로 답한 턴은 그래프가 껐다.
         if (result.excludeHistory()) memoryService.markHistoryExcluded(turnId);
+        // 긴 질문(1,000자 초과)의 LLM 검색문 — 이후 턴의 이력이 원문 대신 싣는다. 이 턴의 [현재 질문]·화면·재사용은 원문(question) 그대로.
+        if (result.usedLongQuestionQuery()) {
+            memoryService.saveHistoryQuestion(turnId,
+                    LongQuestionQuery.distilledOrNull(turn.question(), result.searchQuestion()));
+        }
         memoryService.saveTurnImageRefs(turnId, turn.userId(), turn.threadId(), result.imageRefs());
         memoryService.saveRetrievalMetrics(turnId, result.sources());
         memoryService.saveVerification(turnId, new VerificationSnapshot(

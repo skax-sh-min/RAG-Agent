@@ -66,6 +66,47 @@ class TurnPersistenceTest {
                 .toBuilder().answer("답변입니다.").responseMode(mode).build();
     }
 
+    private static TurnPersistence.Turn turnAsking(String question) {
+        return new TurnPersistence.Turn("u1", "t1", question, List.of(), false, Locale.KOREAN,
+                "2026-09-08 10:00:00", 1_234L);
+    }
+
+    @Test
+    @DisplayName("긴 질문(1,000자 초과)의 LLM 검색문은 이력용으로 저장된다 — 원문(question)은 그대로 기록")
+    void save_longQuestion_storesTheLlmSearchSentenceForTheHistory() {
+        String longQuestion = "로그를 붙여 넣는다. ".repeat(150);
+        AgentState result = answered(ResponseMode.N).toBuilder()
+                .searchQuestion("MCI 연동 타임아웃 오류 원인").searchKeywords("MCI 타임아웃").build();
+
+        persistence.save(turnAsking(longQuestion), result);
+
+        verify(memoryService).saveHistoryQuestion(42L, "MCI 연동 타임아웃 오류 원인");
+        ArgumentCaptor<String> recorded = ArgumentCaptor.forClass(String.class);
+        verify(memoryService).addTurn(anyString(), anyString(), recorded.capture(), anyString(), anyString(),
+                anyInt(), anyInt(), anyInt(), any(), anyInt(), anyString(), any(), anyBoolean());
+        assertThat(recorded.getValue()).isEqualTo(longQuestion);
+    }
+
+    @Test
+    @DisplayName("LLM 이 못 돌아 검색문이 결정적 앞뒤 발췌이면 저장하지 않는다 — 요약이 아니라 잘린 원문이다")
+    void save_longQuestion_withoutLlmDigest_storesNothing() {
+        String longQuestion = "로그를 붙여 넣는다. ".repeat(150);
+        AgentState result = answered(ResponseMode.N).toBuilder()
+                .searchQuestion(LongQuestionQuery.headTail(longQuestion)).searchKeywords("로그").build();
+
+        persistence.save(turnAsking(longQuestion), result);
+
+        verify(memoryService).saveHistoryQuestion(42L, null);   // null 은 저장소가 무시한다(NULL = 원문을 싣는다)
+    }
+
+    @Test
+    @DisplayName("긴 질문 경로를 타지 않은 턴은 이력 대체문을 건드리지 않는다")
+    void save_ordinaryTurn_doesNotTouchTheHistoryQuestion() {
+        persistence.save(turn(), answered(ResponseMode.N));
+
+        verify(memoryService, never()).saveHistoryQuestion(anyLong(), any());
+    }
+
     @Test
     @DisplayName("일곱 가지가 이 순서로 저장된다 — 기록 → 이미지 → 진단 → 검증 → 재사용 출처 → 요약 → 질문 다듬기")
     void save_writesTheSevenThingsInOrder() {

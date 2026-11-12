@@ -195,6 +195,19 @@ public interface MemoryRepository {
     void saveClarifiedQuestion(long turnId, String clarifiedQuestion);
 
     /**
+     * 다듬기를 <b>시도했고 원문으로 충분했다</b>고 적는다 — {@code clarified_question} 에 빈 문자열(V15). 예전에는 원문을 그대로 한 번 더
+     * 저장했는데(긴 질문이면 최대 10,000자 사본), 아무도 그 사본을 읽지 않았다. NULL("아직 안 함·호출 실패 — 다시 시도할 수 있다")과 구분되는
+     * 것만 필요하다. 이미 다듬은 문장이 있으면 건드리지 않는다.
+     */
+    void markClarifiedQuestionTried(long turnId);
+
+    /**
+     * 긴 질문(1,000자 초과)의 LLM 검색문을 저장한다({@code history_question}, V15) — 이후 턴의 이력이 원문 대신 이것을 싣는다. 빈 값은
+     * 저장하지 않는다(NULL = 대체할 것이 없다). {@code saveVerification} 과 같은 사후 UPDATE 다.
+     */
+    void saveHistoryQuestion(long turnId, String historyQuestion);
+
+    /**
      * 대화 기록 화면이 질문 아래 줄을 되살리는 데 쓰는 조회 — 값이 있는 턴만 담긴다
      * ({@code findVerificationsByTurnIds} 와 같은 형태, 같은 이유로 {@code Turn} 레코드에 싣지 않는다).
      */

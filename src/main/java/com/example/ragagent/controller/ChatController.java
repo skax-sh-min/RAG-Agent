@@ -448,9 +448,9 @@ public class ChatController {
             lookup.question(), "",
             askedAt, 0, 0, 0,
             "db-reuse", 0, responseMode, lookup.selectedTags(), lookup.directMode(), lookup.sourceTurnId());
-        // 새 턴의 질문은 이미 다듬은 문장이다(QuestionReuseService.reuseLookup) — 같은 값을 다듬은 질문으로도
-        // 적어 두면 화면엔 한 줄로 보이고, 이 턴을 다시 다듬으려는 시도(백필)도 생기지 않는다.
-        memoryService.saveClarifiedQuestion(savedTurnId, lookup.question());
+        // 새 턴의 질문은 이미 다듬은 문장이다(QuestionReuseService.reuseLookup) — 다시 다듬을 것이 없다는 표시만 남긴다
+        // (같은 문장을 한 번 더 저장하지 않는다 — 화면엔 한 줄로 보이고, 다시 다듬으려는 시도도 생기지 않는다).
+        memoryService.markClarifiedQuestionTried(savedTurnId);
         // §6.31 — 원본 답변이 이력 없이 만들어졌으면 그 사실도 복사한다(모드·검색 축·태그와 같은 규칙 — 버블 표시가 원본과 같게).
         if (lookup.excludeHistory()) memoryService.markHistoryExcluded(savedTurnId);
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);

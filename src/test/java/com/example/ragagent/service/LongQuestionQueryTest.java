@@ -88,4 +88,20 @@ class LongQuestionQueryTest {
         assertThat(LongQuestionQuery.joinTerms(List.of("aaa", "bbb"))).isEqualTo("aaa bbb");
         assertThat(LongQuestionQuery.joinTerms(List.of())).isNull();
     }
+
+    @Test
+    @DisplayName("이력 대체문 — LLM 이 만든 검색문만 쓴다. 결정적 앞뒤 발췌·짧은 질문은 null")
+    void distilledOrNullOnlyAcceptsTheLlmSentence() {
+        String longQuestion = "붙여 넣은 로그입니다. ".repeat(120);   // 1,000자 초과
+
+        assertThat(LongQuestionQuery.distilledOrNull(longQuestion, "  MCI 타임아웃 원인  ")).isEqualTo("MCI 타임아웃 원인");
+        // LLM 이 꺼졌거나 실패하면 검색문은 1단계 발췌 그대로다 — 잘린 원문이지 요약이 아니다
+        assertThat(LongQuestionQuery.distilledOrNull(longQuestion, LongQuestionQuery.headTail(longQuestion))).isNull();
+        assertThat(LongQuestionQuery.distilledOrNull(longQuestion, " ")).isNull();
+        assertThat(LongQuestionQuery.distilledOrNull(longQuestion, null)).isNull();
+        // 1,000자 이하는 LLM 단계 대상이 아니다(500~1,000자는 결정적 발췌뿐)
+        String mid = "가나다라마 ".repeat(150);
+        assertThat(LongQuestionQuery.needsLlm(mid)).isFalse();
+        assertThat(LongQuestionQuery.distilledOrNull(mid, "아무 검색문")).isNull();
+    }
 }

@@ -289,6 +289,24 @@ public class MemoryService {
         }
     }
 
+    /** 다듬기를 시도했고 원문으로 충분했다 — 사본을 저장하지 않고 빈 문자열로만 적는다(V15). 실패는 삼킨다. */
+    public void markClarifiedQuestionTried(long turnId) {
+        try {
+            repository.markClarifiedQuestionTried(turnId);
+        } catch (Exception e) {
+            log.warn("[CLARIFY] 다듬기 시도 표시 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
+    /** 긴 질문의 LLM 검색문(V15) — 이후 턴의 이력이 원문 대신 싣는다. 표시·이력 보조 값이라 실패는 삼킨다. */
+    public void saveHistoryQuestion(long turnId, String historyQuestion) {
+        try {
+            repository.saveHistoryQuestion(turnId, historyQuestion);
+        } catch (Exception e) {
+            log.warn("[HISTORY-QUESTION] 긴 질문 요약 저장 실패 turnId={} — 이력은 원문을 싣는다: {}", turnId, e.toString());
+        }
+    }
+
     /**
      * 답변 아래 추가 질문을 저장한다(대화마다 마지막 답변의 것만 — {@link MemoryRepository#saveFollowUps}).
      * 다듬은 질문과 같이 실패해도 삼킨다 — 없어도 되는 제안이다.

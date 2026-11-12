@@ -80,7 +80,7 @@ import java.util.regex.Pattern;
  * 화면의 요청이 호출보다 먼저 와도 결과를 놓치지 않는다. 기다림이 없으면(지났거나 재시작했다) 저장된 것을 읽는다.
  * 결과는 그 턴을 만든 사용자·대화에만 내준다.
  *
- * <p><b>저장값의 뜻.</b> 다듬은 질문 · 원문 그대로(원문으로 충분했거나 결과를 버렸다 — "시도함") · NULL
+ * <p><b>저장값의 뜻.</b> 다듬은 질문 · 빈 문자열(원문으로 충분했거나 결과를 버렸다 — "시도함". 원문 사본은 저장하지 않는다, V15) · NULL
  * (호출이 실패했거나 본문이 빈·읽을 수 없는 응답이 왔다 — 나중에 다시 시도할 수 있다. 빈 응답을 "시도함"으로
  * 적으면 출력 예산을 추론에 다 쓴 모델이 모든 턴을 다시는 시도하지 않을 턴으로 만든다). 결과를 버리는 경우는
  * 셋이다: 한 줄이 아니거나 {@link #MAX_CLARIFIED_CHARS} 를 넘을 때, 내용어가 하나도 없을 때, 그리고
@@ -382,7 +382,9 @@ public class PostAnswerService {
     /** 다듬은 질문을 판정해 저장한다 — 받아들였으면 그 문장(= 원문과 다르다), 아니면 원문을 "시도함"으로 적고 null. */
     private String saveClarified(long turnId, String question, String candidate, String material, String raw) {
         String clarified = accept(question, candidate, material);
-        memoryService.saveClarifiedQuestion(turnId, clarified != null ? clarified : question.strip());
+        // 받아들이지 않았으면 원문의 사본이 아니라 "시도함" 표시(빈 문자열)만 남긴다 — 사본은 아무도 읽지 않았고 긴 질문이면 최대 10,000자였다.
+        if (clarified != null) memoryService.saveClarifiedQuestion(turnId, clarified);
+        else memoryService.markClarifiedQuestionTried(turnId);
         if (clarified != null) {
             log.info("[CLARIFY] 질문 다듬음 turnId={} 원문=[{}] 다듬은 질문=[{}]", turnId, question, clarified);
         } else {
