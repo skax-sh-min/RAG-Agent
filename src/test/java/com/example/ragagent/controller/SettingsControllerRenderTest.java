@@ -678,7 +678,7 @@ class SettingsControllerRenderTest {
         String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains(">역할<", ">모델명<", ">주소<", ">기타<", ">임베딩<", ">리랭커<",
+        assertThat(html).contains(">역할<", ">모델<", ">주소<", ">기타<", ">임베딩<", ">리랭커<",
                 "id=\"embed-status-0\"", "id=\"embed-status-1\"", "id=\"rerank-status-0\"", "bge-reranker-v2-m3");
         assertThat(html).contains("http://e1:1/v1", "http://e2:1/v1");
     }

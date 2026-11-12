@@ -248,7 +248,7 @@ public class DirectAnswerService {
      * 줄이는 것은 이력뿐이다(질문·시스템 프롬프트는 못 줄이고 Direct 에는 문서가 없다) — 걸음은 {@link #historyShrinkSteps}.
      *
      * @param canRetry   재시도해도 되는 상황인가 — 스트리밍은 토큰이 하나라도 나갔으면 안 된다
-     * @param onOverflow 초과를 볼 때마다(재시도 여부와 무관) — 스트리밍은 여기서 창 재탐지를 건다
+     * @param onOverflow 초과 뒤 <b>다시 보낼 때마다</b> — 스트리밍은 여기서 창 재탐지를 건다(끝내 던지는 초과는 {@code StreamFailover} 가 잰다 — 둘 다 재면 한 번의 초과가 두 번 잰다)
      */
     private <T> Shrunk<T> withHistoryShrink(AgentState state, java.util.function.BooleanSupplier canRetry,
                                             Runnable onOverflow, java.util.function.Function<AgentState, T> call) {
@@ -259,10 +259,10 @@ public class DirectAnswerService {
                 return new Shrunk<>(call.apply(current), current);
             } catch (RuntimeException e) {
                 if (!AnswerService.isContextOverflow(e)) throw e;
-                onOverflow.run();
-                if (!canRetry.getAsBoolean()) throw e;
+                if (!canRetry.getAsBoolean()) throw e;      // 재시도 못 하는 초과는 예외가 StreamFailover 로 올라가 거기서 창을 다시 잰다
                 if (steps == null) steps = historyShrinkSteps(state.conversationHistory());
                 if (level >= steps.size()) throw e;
+                onOverflow.run();                            // 다시 보내는 초과만 여기서 — 마지막 초과는 위와 같이 StreamFailover 가 잰다
                 String next = steps.get(level);
                 log.warn("[SHRINK] DIRECT 컨텍스트 초과 — 이력을 한 걸음 더 줄여 다시 시도한다 thread={} 시도 {}/{} 이력 {}→{}자. "
                          + "사전 예산은 토큰 추정 위에 서 있어 여기까지 오는 일 자체는 정상이지만, 잦다면 프로바이더의 컨텍스트를 확인하십시오.",
