@@ -44,7 +44,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.33 Agent·MCP 전환** 마무리 | 🟡 0~5단계 구현·종단 확인 완료. **남은 것**: `AGENT_ENABLED=true` 로 켠 실사용 2주 관측(폴백 비율·턴 지연) → 기본값 판단 · 백업에서 되돌리기 리허설 · 실제 질문 로그로의 Tool 선택 재측정 · MCP Inspector·Claude Code 연결 확인 · 영향도 실모델 실측의 가짜 인용 검증. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
-| 2 | 운영 준비 잔여 — Caddy 인증서 만료 모니터링 | 미착수. (SQLite 정기 백업은 2026-10-13 완료 — 앱 안의 `DatabaseBackupService`, 담지 않는 것은 문서 파일·Chroma 벡터, OPERATOR_MANUAL §6.3.2) |
+| 2 | 운영 준비 잔여 — Caddy 인증서 만료 모니터링 | 미착수. (SQLite 정기 백업은 2026-10-13 완료 — 앱 안의 `DatabaseBackupService`, 담지 않는 것은 문서 파일·Chroma 벡터, OPERATOR_MANUAL §6.2.2) |
 | ~~3~~ | ~~질문 한도 10,000자의 열린 전제 둘~~ | ✅ 2026-11-12 둘 다 완료 — ③ 요약 입력의 과거 질문 500자 상한(`buildSummaryInput`) · ④ Direct 경로의 축소 재시도(`DirectAnswerService.withHistoryShrink`). §6.30 연관 작업·§6.32 |
 | ~~4~~ | ~~§6.24 `4-c` — 검색 부스트 상향~~ | ✅ 2026-11-12 — **C 만 +3**, 창을 알 때 검증 발췌 예산 안에서만(`RetrievalService.modeBoostFor`). 대상 서버 실제 창 32,768 확인(llama.cpp `/props` `n_ctx`, 슬롯 4개가 각각 32,768). **남은 것**: C 답변 품질 전후 비교는 재지 않았다(자동 채점 기준이 없다) · 64K 이상 창과 N 모드 부스트는 미측정 |
 | ~~5~~ | ~~§6.29 열린 항목 — 측정 못 한 사이트 · 유휴 워치독의 블로킹 호출~~ | ✅ 2026-11-12 둘 다 해소 — 워치독은 `InFlightBlockingCalls`, 측정은 셋을 재서 모두 끔이 맞았다(THINKING_EVALUATION §3.8). §6.29 에 남은 것은 (b)(c)(g)(h)(i) |
@@ -403,7 +403,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 | 4 | 영향도·유지보수 워크플로(`change_job`·`change_proposal`·`/admin` 대기열) | ✅ 2026-11-10 구현·종단 확인 — 아래 요약. 영향도 판정 실측(11-11): 심은 언급 회수 24/24, 지나가는 언급의 오탐은 단어 경계 가드로 6/15 → 0/5 |
 | 5 | Tool 호출 추적 패널(`agent_tool_call` V14 · `/admin` "Tool 호출 추적") · 매뉴얼 · 단계적 전환 | 🟡 패널·관측 테이블·매뉴얼 구현 2026-11-11(실화면 확인) — **남은 것: 실사용 2주 관측 · 기본값 판단 · 백업에서 되돌리기 리허설** |
 
-**4단계 요약 (2026-11-10 구현 · 세부는 CLAUDE.md 표 · [PITFALLS.md](PITFALLS.md) · 매뉴얼 [OPERATOR §6.14](OPERATOR_MANUAL.md))**
+**4단계 요약 (2026-11-10 구현 · 세부는 CLAUDE.md 표 · [PITFALLS.md](PITFALLS.md) · 매뉴얼 [ADMIN §10.1](ADMIN_MANUAL.md))**
 
 - **4a 영향도**: Flyway V12 `change_job` · `findMentions`(전수 조회, 3글자 미만은 `tooShort`) · `ImpactAnalysisWorkflow`(저장 원문 → 청크별 LLM 판정 → **인용 검증은 코드** — 근거가 본문에 없으면 `unverified`; 상한 40 · 사용자당 동시 1건 · 채팅에 양보 · 기동 시 `interrupted`) · `analyzeImpact` Tool(PUBLIC, 시작만) · 리포트 `/ui/impact-jobs/{id}`(요청자·관리자만).
 - **4b 유지보수**: Flyway V13 `change_proposal` · `MaintenanceWorkflow`(결정적 치환 — 본문 + `chunk_context`·`excerpt_keywords` + 불변식 검사: 이미지·페이지 마커, 코드 펜스) · `/admin/change-jobs`(Diff 검토 · **문서 단위 승인·거절**) · `requestDocumentChange` Tool(ADMIN). 수정안을 만드는 것은 코퍼스를 바꾸지 않는다(쓰는 곳은 승인 뒤 `ChangeApplyService` 하나).
@@ -472,7 +472,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 - **Step 5.1~5.8** — `VectorStoreProvider` 추상화(Chroma 무행위 리팩토링) · sqlite-vec 확장 로딩(`DataSourceConfig`, `SqliteVecVerifier`) · 스키마 초기화(`SqliteVecSchemaInitializer`, 차원 미설정 시 fail-fast) · `SqliteVecVectorStoreProvider`(upsert 미지원이라 add = DELETE 후 INSERT) · 조건부 빈 스위치 · 설정 외부화(`.env`·compose profiles) · 데이터 이전(백엔드 전환은 항상 재인덱싱 — 원본 보존·무손실) · `/admin` 백엔드 공통 상태 카드와 청크 브라우징 패리티.
 - **Step 5.9 태그 기반 검색 스코프** — 업로드 다중 태그 + 채팅의 태그 선택으로 **엄격 AND 필터**(Chroma·sqlite-vec·하이브리드 공통). provider 가 배열 포함 연산자를 지원하지 않아 `RetrievalService` 가 융합 직후 Java post-filter 로 걸고 결과 부족에 대비해 `candidateK` 를 선제 확대한다(`app.search-tag-candidate-multiplier`). 태그의 **권위 있는 출처는 `doc_registry.tags`** 다(Key Constraints 참고).
-- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** `SQLITE_VEC_DB_PATH` 로 벡터/FTS 를 별도 `vector.db` 로 분리하려 했으나 **한 번도 실효된 적이 없다** — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인) `memory.db` 는 Flyway 만 닿는 빈 파일이었다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보였다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(데이터가 전부 거기 있으므로 이전 불필요). 이력 없는 옛 파일은 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 절차는 OPERATOR_MANUAL §6.3.1, 재개 신호는 부록 결정표.
+- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** `SQLITE_VEC_DB_PATH` 로 벡터/FTS 를 별도 `vector.db` 로 분리하려 했으나 **한 번도 실효된 적이 없다** — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인) `memory.db` 는 Flyway 만 닿는 빈 파일이었다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보였다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(데이터가 전부 거기 있으므로 이전 불필요). 이력 없는 옛 파일은 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 절차는 OPERATOR_MANUAL §6.2.1, 재개 신호는 부록 결정표.
 
 ---
 
@@ -536,7 +536,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ### 10.10 좋아요 기반 큐레이션 Q&A 지식화 ✅ 완료 (유입 경로는 §10.11 로 대체됨)
 
-좋아요한 답변을 `curated_qa` 로 스냅샷 → 예약 네임스페이스 `"curated"` 에 임베딩 → **가중 RRF 축**으로 융합 → 관리자(`/admin`)가 편집·삭제. §10.5 에서 제외한 "시맨틱 응답 캐시"의 **인간 검수 가능 버전**이다 — verbatim 반환이 아니라 검색 축의 근거로만 주입하므로 stale 위험·무효화 복잡도가 낮다. 구현은 CLAUDE.md `CuratedQaService`/`CuratedQaRepository`, 운영은 [OPERATOR_MANUAL §6.7·§7.5](OPERATOR_MANUAL.md), UI 는 [UI.md](UI.md).
+좋아요한 답변을 `curated_qa` 로 스냅샷 → 예약 네임스페이스 `"curated"` 에 임베딩 → **가중 RRF 축**으로 융합 → 관리자(`/admin`)가 편집·삭제. §10.5 에서 제외한 "시맨틱 응답 캐시"의 **인간 검수 가능 버전**이다 — verbatim 반환이 아니라 검색 축의 근거로만 주입하므로 stale 위험·무효화 복잡도가 낮다. 구현은 CLAUDE.md `CuratedQaService`/`CuratedQaRepository`, 운영은 [ADMIN_MANUAL §5.1·§5.2](ADMIN_MANUAL.md), UI 는 [UI.md](UI.md).
 
 **확정된 정책**: 가시성 = 전체 공유, 답변은 **LLM 근거로 주입**(오답 증폭 방지) · 편집은 §10.11 에서 바뀌었다(본인은 **지식 제안 페이지**에서만, 관리자는 `/admin` 에서 전부) · **대화 삭제 시 큐레이션도 함께 회수**(§6.25 — 최초 정책은 반대였다; 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 더 혼란스럽고 턴 삭제는 처음부터 회수하고 있었다. `CuratedQaService.onThreadDeleted()` 를 사용자·관리자 경로가 함께 부르고 `origin='manual'` 제안은 제외) · **문서 삭제와는 연동 없음**.
 

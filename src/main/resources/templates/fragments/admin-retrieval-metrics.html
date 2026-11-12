@@ -10,7 +10,7 @@
 <div class="card-body p-0">
     <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small text-muted">
         전체 <span class="badge bg-secondary" th:text="${metricsTotal}">0</span>턴
-        <span class="ms-2">검색 튜닝용 읽기 전용 뷰 — 값의 의미는 운영자 매뉴얼 §6.5 참고</span>
+        <span class="ms-2">검색 튜닝용 읽기 전용 뷰 — 값의 의미는 관리자 매뉴얼 §2 참고</span>
         <select class="form-select form-select-sm ms-auto" style="max-width:100px;"
                 onchange="applyMetricsLimitFilter(this)">
             <option value="20"  th:selected="${limit == 20}">20건</option>

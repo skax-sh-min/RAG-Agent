@@ -103,7 +103,7 @@ src/main/resources/
 | GET | `/ui/documents/progress/{taskId}/status` | JSON (`IndexingProgressEvent`) | 1회성 상태 조회 — SSE를 새로 열지 않고도 마지막 상태(`buffers`에 있으면 그 이벤트, 워커만 등록돼 있으면 `running`, 둘 다 없으면 `unknown`)를 즉시 확인 |
 | POST | `/ui/documents/progress/{taskId}/cancel` | `204` | 진행 중인 업로드/인덱싱 취소(워커 `interrupt()`, §6.16.1) — 관리자 게이트 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
-| GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [OPERATOR_MANUAL.md §6.8](OPERATOR_MANUAL.md#68-문서-내보내기) 참고) — 관리자 전용 |
+| GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [ADMIN_MANUAL.md §3.3](ADMIN_MANUAL.md#33-문서-내보내기) 참고) — 관리자 전용 |
 | GET / PATCH | `/ui/documents/{docId}/tags/edit`·`/tags/view`·`/tags` | 프래그먼트 | 문서 태그 인라인 편집(편집 폼 / 보기 / 저장 — `doc_registry.tags`·벡터 메타·`chunk_fts.doc_tags` 세 곳을 함께 갱신). 편집·저장은 관리자 게이트, 보기는 게스트 개방 |
 | GET / PATCH | `/ui/documents/{docId}/display-name/edit`·`/display-name/view`·`/display-name` | 프래그먼트 | 표시 이름(별칭) 인라인 편집 — 파일명은 그대로 두고 화면 라벨만 바꾼다(`DocumentInfo.displayLabel()`) |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
@@ -173,7 +173,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/chunks` | `fragments/admin-chunks :: table` | 컬렉션(또는 버전)·docId별 청크 페이지네이션 |
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) — 메타데이터는 `excerpt_keywords`·`chunk_context` 두 키만 저장본 위에 병합(`AdminService.mergeEditableMeta()`), 큐레이션 청크는 그 둘도 거부 |
-| POST | `/admin/chunks/{chunkId}/reindex` | `200` / `404` | **이 청크만 재인덱싱** — body `{"regenerateKeywords": true\|false}`. id 보존 upsert + FTS 재색인; 큐레이션 청크는 서버가 `doc_type`으로 갈라 `CuratedQaService.reembedRow()`(행 단위)로 보낸다(OPERATOR_MANUAL §7.2-bis) |
+| POST | `/admin/chunks/{chunkId}/reindex` | `200` / `404` | **이 청크만 재인덱싱** — body `{"regenerateKeywords": true\|false}`. id 보존 upsert + FTS 재색인; 큐레이션 청크는 서버가 `doc_type`으로 갈라 `CuratedQaService.reembedRow()`(행 단위)로 보낸다(ADMIN_MANUAL §4.5) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
 | POST | `/admin/chunk-images` (multipart `file`) · `/admin/chunk-images/markers` · `/admin/chunk-images/edit` | JSON `{"path","url"}` · `[{"index","path","url","exists","unconvertible","described","description"}]` · `{"text","markers","warning"}` | 청크 편집 패널의 **「이미지」 패널**(그림 추가·교체·삭제·설명 생성, `AdminChunkImageController` → `ChunkImageService`/`ChunkImageEditor`). 업로드는 `images/chunks/{해시}.ext` 에 저장하고 경로만 돌려준다; `markers`·`edit`(`action` = `insert`/`replace`/`remove`/`describe`)은 **본문 텍스트를 받아 바뀐 본문을 돌려줄 뿐 저장하지 않는다** — 저장은 청크의 「저장」 하나(규칙을 JS 가 아니라 서버에 둔 이유: JS 테스트 하네스가 없다). 전부 `/admin/**` 라 `ROLE_ADMIN` 전용 |
 | POST | `/admin/registry/reconcile-chunks` | JSON `{"checked","fixed"}` | 문서 레지스트리의 청크 수를 벡터 스토어 실측으로 다시 세어 맞춘다(문서 레지스트리 카드의 **청크 수 재계산** 버튼, 완료 후 `location.reload()`) |
@@ -201,9 +201,9 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/chunk-reports/chunks/{chunkId}/resolve` | `200 {"closed":N}` / `409`(열린 신고 없음) | 「처리 완료」 — 그 청크의 열린 신고를 전부 닫는다(청크 자체는 건드리지 않음). 감사 `chunk.report.resolve` |
 | POST | `/admin/chunk-reports/chunks/{chunkId}/reject` | `200 {"closed":N}` / `409` | 「반려」 — body `{"reason"}` 필수. 감사 `chunk.report.reject` |
 
-> 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
+> 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.1](OPERATOR_MANUAL.md) 참고.
 >
-> **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle once"` → `GET /admin/curated`) 승인된 큐레이션 항목을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 저자에게는 같은 사실이 `/curated/submissions`의 자기 제안 옆 경고로 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시) — §10.11 이 채팅 쪽 배지를 없앤 뒤로 그 자리가 여기다. 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
+> **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle once"` → `GET /admin/curated`) 승인된 큐레이션 항목을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 저자에게는 같은 사실이 `/curated/submissions`의 자기 제안 옆 경고로 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시) — §10.11 이 채팅 쪽 배지를 없앤 뒤로 그 자리가 여기다. 상세는 [ADMIN_MANUAL.md §5.2](ADMIN_MANUAL.md#52-큐레이션-qa-관리-1010) 참고.
 
 > **검색 진단 수치 카드**(`/admin` 최하단, 3단계): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle once"` → `GET /admin/retrieval-metrics`). 턴 한 줄에 **시각·질문·대화·사용자·응답모드·최고 유사도·사용/검색 개수**를 보여주고, **상세**를 누르면 그 턴의 출처별 4개 수치(유사도·검색기여·축별 순위·응답참여)가 펼쳐진다 — 그 표는 대화 목록 패널과 공유하는 `fragments/admin-source-table`이다. 채팅의 배지는 그 순간만 보이므로, `SEARCH_RRF_KEYWORD_WEIGHT`·`SEARCH_SIMILARITY_THRESHOLD` 같은 값을 조정하려면 **여러 턴에 걸친 경향**을 봐야 한다는 것이 이 패널의 존재 이유다.
 > - **사용/검색** 열(`3/8`)이 이 패널에서 가장 볼 만한 수치다 — 검색된 출처의 절반 이상이 답변에 반영되지 않으면 ⚠가 붙는다(topK 과다 또는 프롬프트 문제 의심).
@@ -219,13 +219,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - `진단` 열은 검색이 실제로 돈 턴 수다. 턴 수와 크게 벌어지면(⚠) 재사용·Direct 위주의 대화라는 뜻이다.
 > - 상단 요약 스트립은 **배포 전체 기준**이라 아래 목록을 걸러도 움직이지 않는다. 여기 `소속 대화 없는 턴 N건`이 뜨면 `thread_meta` 행 없이 남은 턴이 있다는 뜻 — 목록 쿼리가 구조적으로 볼 수 없는 상태라 숫자로만 알린다(`/admin/registry/reconcile-chunks`와 같은 성격의 정합성 표시).
 > - `app.auth.guest-identity=shared`(기본)이면 전 방문자가 하나의 게스트 id를 공유해 목록이 사용자 한 명으로 뭉친다 — "한 명이 썼다"로 오독하지 않도록 패널이 그 이유를 배너로 밝힌다.
-> - **상세**는 그 대화의 턴 목록(시각·질문·모드·경로·피드백)을 지연 로딩한다. `경로` 배지가 `재사용`/`Direct`/`검색`으로 이 턴이 무엇을 했는지 알려주고, `검색`인 턴에만 **출처** 버튼이 붙어 진단 패널과 같은 표를 편다. **원문** 버튼은 질문·답변 전문을 오프캔버스로 여는데, 그 호출이 `admin.thread.read` 감사를 남긴다(목록 자체에는 답변이 실리지 않는다 — [OPERATOR_MANUAL.md §7.9](OPERATOR_MANUAL.md#79-대화-목록--전-사용자-대화-조회삭제-625) 참고).
+> - **상세**는 그 대화의 턴 목록(시각·질문·모드·경로·피드백)을 지연 로딩한다. `경로` 배지가 `재사용`/`Direct`/`검색`으로 이 턴이 무엇을 했는지 알려주고, `검색`인 턴에만 **출처** 버튼이 붙어 진단 패널과 같은 표를 편다. **원문** 버튼은 질문·답변 전문을 오프캔버스로 여는데, 그 호출이 `admin.thread.read` 감사를 남긴다(목록 자체에는 답변이 실리지 않는다 — [ADMIN_MANUAL.md §4.8](ADMIN_MANUAL.md#48-대화-목록--전-사용자-대화-조회삭제-625) 참고).
 > - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
 > - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
 
 > **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
-> **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-지식-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
+> **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([ADMIN_MANUAL.md §6.2](ADMIN_MANUAL.md#62-지식-제안-검토-61) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
 > **`pending-count`가 `/api/v1/**`이 아닌 이유**: 관리 전용 인증 모드(§6.17)에서 `/api/v1/**`은 CSRF 예외 + 게스트 개방이라 거기 두면 검토 대기 건수가 누구에게나 노출된다. `/admin/**` 아래 두면 `ROLE_ADMIN` 게이트를 그대로 상속한다.
 >
@@ -237,7 +237,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **청크 필터/페이지네이션 JS는 `admin.html`(페이지 레벨)에 있다, `fragments/admin-chunks.html`이 아니라**: 예전엔 프래그먼트 자체의 `<script>`에 `applyDocFilter`/`applyLimitFilter`/`loadChunks`를 정의했는데, `loadChunks()`가 다음 페이지 응답을 `#chunk-panel.innerHTML = html`로 삽입한다 — 브라우저는 `innerHTML` 대입으로 들어온 `<script>`를 실행하지 않으므로, 문서 레지스트리의 **청크 보기**(`loadChunksByDoc()`, 이것도 plain `innerHTML`)로 패널에 먼저 진입하면 이 함수들이 아예 정의되지 않아 다음 버튼·페이지당 건수 변경이 조용히 무반응이었다(컬렉션(버전) 목록 버튼의 `hx-swap`은 스크립트를 실행하므로 그 경로로 먼저 들어오면 우연히 동작했다 — 진입 경로에 따라 동작 여부가 갈리는 버그). 지금은 세 함수 모두 상시 로드되는 `admin.html` 스크립트에 있어 진입 경로와 무관하게 항상 정의돼 있고, 현재 컬렉션 값은 Thymeleaf 인라인 JS 대신 청크 카드 루트의 `data-collection` 속성에서 읽는다(`currentChunkCollection()`) — DOM 속성은 삽입 방식과 무관하게 항상 반영되기 때문. 큐레이션 Q&A 패널의 `loadCurated()`/`applyCuratedLimitFilter()`도 같은 이유로 처음부터 `admin.html`에 둔다.
 >
-> **재인덱싱 사전 점검**(`AdminController.reindexFromMd()`, `force=false`일 때): 작업을 시작하기 전에 읽기 전용으로 (a) 저장된 MD의 코드 펜스 결함(`RagService.checkReindexFenceHealth()` → `MarkdownCorrectionService.findFenceProblems()`, 줄 번호·종류·설명)과 (b) `/admin`에서 손으로 편집한 청크 수(`MetaKey.EDITED_AT`, `AdminService.countEditedChunks()`)를 확인하고, 하나라도 있으면 409 로 돌려준다 — `admin.html`의 `reindexFromMd()`는 1차 요청을 `force` 없이 보내고, 409면 `formatReindexWarnings()`(펜스 문제는 최대 10건 나열)로 `confirm()` 한 번을 띄운 뒤 [확인]이면 `force=true`로 재요청한다(`postReindex(docId, force)`). 두 경고를 한 대화상자에 합치는 이유는 연달아 두 번 물으면 확인을 습관적으로 누르게 되기 때문. 서버 동작은 [OPERATOR_MANUAL.md §7.2](OPERATOR_MANUAL.md#72-md-재인덱싱-흐름) 참고.
+> **재인덱싱 사전 점검**(`AdminController.reindexFromMd()`, `force=false`일 때): 작업을 시작하기 전에 읽기 전용으로 (a) 저장된 MD의 코드 펜스 결함(`RagService.checkReindexFenceHealth()` → `MarkdownCorrectionService.findFenceProblems()`, 줄 번호·종류·설명)과 (b) `/admin`에서 손으로 편집한 청크 수(`MetaKey.EDITED_AT`, `AdminService.countEditedChunks()`)를 확인하고, 하나라도 있으면 409 로 돌려준다 — `admin.html`의 `reindexFromMd()`는 1차 요청을 `force` 없이 보내고, 409면 `formatReindexWarnings()`(펜스 문제는 최대 10건 나열)로 `confirm()` 한 번을 띄운 뒤 [확인]이면 `force=true`로 재요청한다(`postReindex(docId, force)`). 두 경고를 한 대화상자에 합치는 이유는 연달아 두 번 물으면 확인을 습관적으로 누르게 되기 때문. 서버 동작은 [ADMIN_MANUAL.md §4.4](ADMIN_MANUAL.md#44-md-재인덱싱-흐름) 참고.
 >
 > **재인덱싱 시 수행 작업**(`DocumentIndexer.reindexFromMd()`) — 챕터 번호 재계산뿐 아니라 전체 파이프라인을 다시 돈다: 존재하지 않는 이미지 참조(`[이미지: ...]`) 제거 → 소제목 번호 재계산(PPTX 제외) → 마크다운 후처리(`MarkdownCorrectionService.postProcess()` — 빈 줄 정리·`[DOCUMENT]` 마커/내용 없는 `-` 제거·펜스·표 앞뒤 빈 줄 보장, LLM 미사용) → 전체 재청킹 → 태그 보존 → LLM 키워드+컨텍스트 재추출(§10.1) → 재임베딩 및 벡터 스토어 저장 → FTS 재인덱싱 → 기존 청크 삭제(신규 저장 이후, 실패 시 기존 데이터 보존). 즉 원본 MD가 수정된 이후 상태를 기준으로 사실상 전체를 다시 인덱싱한다.
 >
@@ -258,7 +258,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **청크 편집의 메타데이터(JSON)는 읽기 전용이다** — 접힌 `<details>` 안에서 조회만 된다. 여기 있는 키는 전부 인덱싱 시점에 파생되는 값이고, 손으로 고칠 의도가 있는 둘(키워드·요약)은 전용 필드로 빠져 있다. 편집을 없앤 이유는 [PITFALLS](PITFALLS.md#청크-편집의-메타데이터json-는-읽기-전용이다) 참고 — 저장이 조용히 무효가 되거나, 바로 아래 '이 청크만 재인덱싱'과 짝지으면 청크가 고아가 된다.
 >
-> **'이 청크만 재인덱싱'은 큐레이션 청크에서 다른 경로로 간다.** 이 표에는 승인된 지식 제안도 함께 나오는데(`docId` 없이 컬렉션 전체를 훑는다), 그 축의 검색 텍스트는 `제목 + 본문`이고 제목은 벡터 메타데이터에 없다 — 문서 청크용 경로로 보내면 그 청크만 조용히 제목을 잃는다. 서버가 `doc_type` 을 보고 `CuratedQaService.reembedRow()` 로 갈라 보내며, 단위는 청크가 아니라 **행 하나**다(OPERATOR_MANUAL §7.2-bis).
+> **'이 청크만 재인덱싱'은 큐레이션 청크에서 다른 경로로 간다.** 이 표에는 승인된 지식 제안도 함께 나오는데(`docId` 없이 컬렉션 전체를 훑는다), 그 축의 검색 텍스트는 `제목 + 본문`이고 제목은 벡터 메타데이터에 없다 — 문서 청크용 경로로 보내면 그 청크만 조용히 제목을 잃는다. 서버가 `doc_type` 을 보고 `CuratedQaService.reembedRow()` 로 갈라 보내며, 단위는 청크가 아니라 **행 하나**다(ADMIN_MANUAL §4.5).
 >
 > **읽기 전용은 화면 규칙이 아니라 서버 규칙이다.** 화면은 저장 시 열 때 받은 맵을 그대로 되돌려 보내지만, `AdminService.updateChunk()` 는 그 맵에서 `excerpt_keywords`·`chunk_context`(= 위 전용 필드 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 그래서 요청 본문에 임의의 키를 넣어도 저장되지 않고, 반대로 화면이 보내지 않는 키도 편집으로 사라지지 않는다.
 
@@ -318,7 +318,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드(LLM 자체 — `max-tokens`는 편집 가능해지면서 LLM 핫 그룹으로 옮겨졌고, 요약 칸에 남겨 두면 같은 값이 두 곳에 다른 조작 가능성으로 보인다), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URLS` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
-- 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
+- 상세는 [ADMIN_MANUAL.md §2](ADMIN_MANUAL.md#2-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
 
 ### 3.5-bis 지식 제안 게시판 (CuratedSubmissionController)
 
@@ -356,7 +356,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ### 3.5-ter 영향도 분석 리포트 · 문서 유지보수 (ImpactJobController · AdminChangeController, §6.33)
 
-> 채팅이 Tool 을 골라야(`AGENT_ENABLED`, 기본 꺼짐) 영향도 분석으로 들어오고, 유지보수는 관리자만 쓴다. 동작·한도·복구는 [OPERATOR_MANUAL §6.14](OPERATOR_MANUAL.md), 사용법은 [USER_MANUAL §2.8·2.9](USER_MANUAL.md).
+> 채팅이 Tool 을 골라야(`AGENT_ENABLED`, 기본 꺼짐) 영향도 분석으로 들어오고, 유지보수는 관리자만 쓴다. 동작·한도·복구는 [ADMIN_MANUAL §10.1](ADMIN_MANUAL.md), 사용법은 [USER_MANUAL §2.8 · ADMIN_MANUAL §10.2](USER_MANUAL.md).
 
 | Method | Path | 응답 | 설명 |
 |---|---|---|---|
@@ -532,7 +532,7 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 ### 질문 글자 수 카운터 (긴 질문)
 
-입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 1,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([OPERATOR_MANUAL §6.13](OPERATOR_MANUAL.md)).
+입력창 오른쪽 아래의 `#question-counter` (`현재 / 최대`)는 질문이 **500자를 넘을 때만** 보이고(`LongQuestionQuery.SHORT_LIMIT` — 짧은 질문에는 군더더기라 숨긴다) 최대를 넘으면 붉게 바뀐다. 최대는 서버 설정 `app.chat.max-question-chars`(기본 10,000, `/chat` 이 `maxQuestionChars` 모델 속성으로 내려준다)이고, 실제로 받는 상한은 거기에 **서빙 모델의 창에 들어가는 길이**(`QuestionLimit`)를 더해 둘 중 작은 쪽이다 — 창이 작으면 서버가 "이 모델에서는 약 N자까지"로 거절한다(화면의 최대 숫자는 설정값이라 그보다 클 수 있다). 마우스를 올리면 뜨는 풍선(`chat.input.counter.title`)이 500자 초과는 앞뒤 발췌+핵심 낱말로, 1,000자 초과는 LLM 이 만든 검색문으로 검색하고 답변에는 질문 전문이 쓰인다는 것을 알려 준다([ADMIN_MANUAL §9](ADMIN_MANUAL.md)).
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
@@ -640,7 +640,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 
 **인용 신호(`usedDocs`)**: 평가 LLM 호출(⑤)이 이미 답변과 모든 발췌를 함께 들고 있으므로, "실제로 근거로 쓴 `[Dn]` 번호"를 같은 호출에서 함께 받는다(**추가 왕복 0회**). 발췌 블록에 `[D1]`, `[D2]` … 번호가 붙는 이유가 이것이다. 이 값은 **후보를 좁히기만 하고 몫을 만들어내지는 않는다** — 모델이 인용한 문서라도 답변이 그 내용을 닮지 않았으면 몫은 0이다. 범위 밖 번호는 무시하고, 목록이 비면 전체 문서가 후보가 된다(`method`: `citation+lexical` / `lexical` / `none`).
 
-> ⚠️ **이 값은 추정이지 측정이 아니다.** 진짜 인과적 기여도는 청크를 하나씩 빼고 답변을 다시 생성해야(leave-one-out) 알 수 있고, 그건 턴당 LLM 호출이 topK배라 오프라인 평가 하네스(OPERATOR_MANUAL §6.6) 영역이다. 또한 `responseMode=S`는 평가 호출 자체가 없어 인용 신호 없이 어휘 기반으로만 계산된다.
+> ⚠️ **이 값은 추정이지 측정이 아니다.** 진짜 인과적 기여도는 청크를 하나씩 빼고 답변을 다시 생성해야(leave-one-out) 알 수 있고, 그건 턴당 LLM 호출이 topK배라 오프라인 평가 하네스(OPERATOR_MANUAL §6.4) 영역이다. 또한 `responseMode=S`는 평가 호출 자체가 없어 인용 신호 없이 어휘 기반으로만 계산된다.
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 
@@ -672,8 +672,8 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 
 - **`S`(간단히) 모드 답변은 좋아요 버튼이 비활성으로 렌더된다**(`ResponseMode.S.allowsSubmission() = false`) — 사유가 툴팁에 붙는다. 이전에 눌린 `LIKE` 기록이 남아 있어도 강조하지 않는다: 그 좋아요는 아무것도 만든 적이 없으므로 기여 중인 것처럼 칠하는 것이 여기서 고치려는 거짓말이다. 싫어요는 모드와 무관하게 동작한다.
 - 자기 제안의 수정·철회는 `/curated/submissions`에서 한다 — 목록의 각 항목에 수정·철회 버튼이 있고, 수정은 `/admin` 검토 오프캔버스와 같은 컴포넌트를 쓴다.
-- 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
-- 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
+- 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [ADMIN_MANUAL.md §5.2](ADMIN_MANUAL.md#52-큐레이션-qa-관리-1010) 참고.
+- 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [ADMIN_MANUAL.md §5.1](ADMIN_MANUAL.md#51-큐레이션-qa-공유-지식-축-1010--1011) 참고.
 
 **큐레이션 태그 스코프**: 좋아요로 연 제안 폼에는 **그 질문이 검색된 태그 스코프**(입력 바의 태그 칩 선택값)가 미리 채워지고, 승인 시 그 값이 `curated_qa.tags`로 들어간다 — 그 태그로 좁혀 얻은 답변이므로 이후 같은 스코프 검색에서 살아남아야 하기 때문(저자와 관리자가 등록 전에 고칠 수 있다). `RetrievalService.filterByTags()`가 벡터·키워드·큐레이션이 합쳐진 후보 풀 **전체**에 걸리므로, 태그 메타데이터가 없던 이전에는 사용자가 태그 칩을 하나라도 켜는 순간 좋아요한 답변이 전부 결과에서 빠졌다. 태그 없이(= `All` 칩) 물은 질문은 스코프가 비어 승계되고, **스코프를 알 수 없는 큐레이션 항목은 어느 스코프에도 속하지 않는 대신 모든 스코프를 통과**한다(문서 청크는 엄격 AND 그대로 — 태그 없는 문서는 여전히 탈락). 사용자 제안(§3.5-bis)의 태그도 같은 컬럼·같은 판정을 쓴다.
 
