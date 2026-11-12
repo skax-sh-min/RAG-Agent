@@ -5,6 +5,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.ingestion.ChunkSplitter;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.KeywordExtractor;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.ThinkingLevel;
@@ -13,8 +14,10 @@ import com.example.ragagent.llm.ThinkingSite;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.repository.DbTimestamp;
+import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.AnswerService;
 import com.example.ragagent.service.ClassifierService;
+import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQuestionSuggester;
 import com.example.ragagent.service.DirectAnswerService;
 import com.example.ragagent.service.GraphListener;
@@ -26,6 +29,7 @@ import com.example.ragagent.service.RetrievalService;
 import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.TextToMarkdownService;
 import com.example.ragagent.service.ThreadMetaService;
+import com.example.ragagent.service.VisionDescriptionService;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -82,7 +86,7 @@ import java.util.stream.Collectors;
  * <pre>
  * mvn test -Dtest=ThinkingLevelEvaluationTest -Dthinking-eval.enabled=true \
  *     -Dthinking-eval.data-dir=C:/scratch/eval-data \
- *     [-Dthinking-eval.sections=classify,condense,retrieval,rerank,answer,answerS,answerC,evalacc,post,title,curated,direct,directS,keyword,md,txt] \
+ *     [-Dthinking-eval.sections=classify,condense,retrieval,rerank,answer,answerS,answerC,evalacc,post,title,curated,direct,directS,keyword,md,txt,summary,imgdesc,mdvision] \
  *     [-Dthinking-eval.n=26] [-Dthinking-eval.stride=2] [-Dthinking-eval.answer-combos=2] \
  *     [-Dthinking-eval.rerank=true] [-Dthinking-eval.out=target/thinking-eval] \
  *     [-Dthinking-eval.reasoning-budgets=256,512,1024] [-Dthinking-eval.upstream=http://127.0.0.1:1234/v1]
@@ -993,5 +997,138 @@ class ThinkingLevelEvaluationTest {
             r.putAll(sampleFields(t.samples()));
             emit("txt", r);
         }
+    }
+
+    // ═══ 측정하지 못했던 셋 — 대화 요약 · 이미지 설명 · MD 교정 비전 패스 (PLAN §6.29 열린 항목 f) ═══════════════
+    // 요약은 소형 모델 계층(LOCAL_FAST_LLM_URL — 환경변수로 넘긴다)이, 이미지 둘은 비전이 되는 로컬 서버가 있어야 돈다.
+
+    @Autowired ConversationSummarizerService summarizer;
+    @Autowired VisionDescriptionService vision;
+
+    /** 스크래치 DB 의 실제 대화에서 {@code ## 요약} 을 걷어 낸 턴 묶음 — 요약 호출이 LLM 을 타게 하려면 모든 턴이 요약 절을 가지면 안 된다. */
+    private record SummaryCase(String id, List<MemoryRepository.Turn> turns) {}
+
+    private List<SummaryCase> summaryCases() throws Exception {
+        String dir = System.getProperty("thinking-eval.data-dir");
+        Map<String, List<String[]>> threads = new java.util.LinkedHashMap<>();
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + Path.of(dir, "memory.db"));
+             java.sql.Statement st = c.createStatement();
+             java.sql.ResultSet rs = st.executeQuery(
+                     "SELECT thread_id, question, answer FROM conversation_turns WHERE answer IS NOT NULL ORDER BY thread_id, id")) {
+            while (rs.next()) {
+                threads.computeIfAbsent(rs.getString(1), k -> new ArrayList<>())
+                        .add(new String[] {rs.getString(2), rs.getString(3)});
+            }
+        }
+        List<SummaryCase> cases = new ArrayList<>();
+        for (Map.Entry<String, List<String[]>> e : threads.entrySet()) {
+            List<String[]> qa = e.getValue();
+            if (qa.size() < 3) continue;
+            List<String[]> window = qa.subList(Math.max(0, qa.size() - 6), qa.size());   // 요약이 실제로 보는 최근 턴 묶음
+            List<MemoryRepository.Turn> turns = new ArrayList<>();
+            long id = 1;
+            for (String[] t : window) {
+                String stripped = CuratedTextUtils.stripSummarySection(t[1]);
+                turns.add(new MemoryRepository.Turn(id++, t[0], stripped, "2026-01-01 00:00:00", "2026-01-01 00:00:01",
+                        0, 0, 0, "local", 1, null, "N", "", false));
+            }
+            cases.add(new SummaryCase(e.getKey().substring(0, 8), turns));
+        }
+        return cases.stream().limit(limit).toList();
+    }
+
+    private static final Pattern KEY_TOKEN = Pattern.compile("`([^`\\n]{3,40})`|\\b(\\d{3,})\\b");
+
+    /** 답변에서 사실 표지 — 백틱 식별자와 세 자리 이상 숫자. 요약이 이것을 얼마나 남기는지가 품질의 대리 지표다. */
+    private static List<String> keyTokens(List<MemoryRepository.Turn> turns) {
+        java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>();
+        for (MemoryRepository.Turn t : turns) {
+            Matcher m = KEY_TOKEN.matcher(t.answer());
+            while (m.find()) keys.add((m.group(1) != null ? m.group(1) : m.group(2)).replaceAll("\\s+", ""));
+        }
+        return keys.stream().limit(30).toList();
+    }
+
+    @Test
+    @Order(83)
+    void conversationSummary() throws Exception {
+        if (!on("summary")) return;
+        int index = 0;
+        for (SummaryCase sc : summaryCases()) {
+            int inChars = sc.turns().stream().mapToInt(t -> t.question().length() + t.answer().length()).sum();
+            List<String> keys = keyTokens(sc.turns());
+            for (ThinkingLevel level : order(index++, ThinkingLevel.OFF, ThinkingLevel.LOW)) {
+                use(ThinkingSite.SUMMARY, level);
+                Timed<String> t = timed(ThinkingSite.SUMMARY,
+                        () -> ReflectionTestUtils.invokeMethod(summarizer, "summarize", sc.turns(), "te-sum-" + sc.id() + "-" + level.value(), Locale.KOREAN));
+                String summary = t.value() == null ? "" : t.value();
+                String flat = summary.replaceAll("\\s+", "");
+                Map<String, Object> r = row("summary", sc.id(), ThinkingSite.SUMMARY, level);
+                r.put("turns", sc.turns().size());
+                r.put("inChars", inChars);
+                r.put("outChars", summary.length());
+                r.put("ms", t.ms());
+                r.put("keys", keys.size());
+                r.put("keysKept", keys.stream().filter(flat::contains).count());
+                r.put("summary", summary.length() > 700 ? summary.substring(0, 700) + "…" : summary);
+                r.putAll(sampleFields(t.samples()));
+                emit("summary", r);
+            }
+        }
+    }
+
+    /** {@code data/images} 의 실제 이미지 — 문서마다 고르게, {@code -Dthinking-eval.images}(기본 8)장까지. */
+    private List<Path> sampleImages() throws IOException {
+        Path root = Path.of(System.getProperty("thinking-eval.images-dir", "data/images"));
+        if (!Files.isDirectory(root)) return List.of();
+        List<Path> all;
+        try (var walk = Files.walk(root)) {
+            all = walk.filter(p -> p.toString().toLowerCase().endsWith(".png")).sorted().toList();
+        }
+        int want = Math.min(all.size(), Integer.getInteger("thinking-eval.images", 8));
+        List<Path> picked = new ArrayList<>();
+        for (int i = 0; i < want; i++) picked.add(all.get((int) ((long) i * all.size() / want)));
+        return picked;
+    }
+
+    private void describeImages(String section, ThinkingSite site, java.util.function.Function<Path, String> call) throws IOException {
+        int index = 0;
+        for (Path image : sampleImages()) {
+            for (ThinkingLevel level : order(index, ThinkingLevel.OFF, ThinkingLevel.LOW)) {
+                use(site, level);
+                Timed<String> t = timed(site, () -> call.apply(image));
+                String caption = t.value() == null ? "" : t.value();
+                Map<String, Object> r = row(section, image.getParent().getFileName() + "/" + image.getFileName(), site, level);
+                r.put("ms", t.ms());
+                r.put("outChars", caption.length());
+                r.put("empty", caption.isBlank());
+                r.put("placeholder", VisionDescriptionService.isPlaceholder(caption));
+                r.put("caption", caption.length() > 300 ? caption.substring(0, 300) + "…" : caption);
+                r.putAll(sampleFields(t.samples()));
+                emit(section, r);
+            }
+            index++;
+        }
+    }
+
+    @Test
+    @Order(84)
+    void imageDescription() throws IOException {
+        if (!on("imgdesc")) return;
+        describeImages("imgdesc", ThinkingSite.IMAGE_DESCRIBE, image -> {
+            try {
+                return vision.describe(Files.readAllBytes(image), "image/png");
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+    }
+
+    @Test
+    @Order(85)
+    void markdownCorrectionVision() throws IOException {
+        if (!on("mdvision")) return;
+        describeImages("mdvision", ThinkingSite.MD_CORRECT_VISION,
+                image -> ReflectionTestUtils.invokeMethod(mdCorrection, "describeImage", image));
     }
 }
