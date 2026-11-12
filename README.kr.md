@@ -199,7 +199,7 @@ container system stop
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 — 플래그 하나로 두 축: 후보 풀 `round(topK × (1 + 0.5 × 재검색횟수))`(상한 `×3`) **및** 최종 컷 `topK + 재검색횟수`(검증 호출에 여유가 있을 때만 적용). 후보 풀만 키우면 같은 topK 자리를 놓고 경쟁하는 문서만 바뀌어, 컷 바로 뒤의 근거는 매 시도 계속 밖에 머문다. 재시도는 직전 컷에서 **근거로 쓰이지 않은 하위 청크를 최대 1/3 밀어내기도** 하므로, 후보 풀을 예전처럼 2배로 키울 필요가 없어졌다 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 후보 풀 크기 — `topK × N` |
-| `RERANK_BASE_URLS` | _(비면 꺼짐)_ | URL(들) | 교차 인코더 리랭커 서버, 복제본은 `;` 로 여럿(least-in-flight, 닿지 못한 주소는 30초 건너뜀, 예전 `RERANK_BASE_URL` 도 읽음) (`llama-server --reranking`, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K ÷ 2⌉)` (파생값, `/settings` 조회 전용). LLM 리랭킹을 대신한다 |
+| `RERANK_BASE_URLS` | _(비면 꺼짐)_ | URL(들) | 교차 인코더 리랭커 서버, 복제본은 `;` 로 여럿(least-in-flight, 닿지 못한 주소는 30초 건너뜀, 예전 `RERANK_BASE_URL` 도 읽음) (`llama-server --reranking`, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K × 2/3⌉)` (파생값, `/settings` 조회 전용 — 기본 10 이면 후보 20 · 컷 7). LLM 리랭킹을 대신한다 |
 | `RERANK_API_KEY` | _(비어 있음)_ | 비밀 | 선택. 리랭커로 `Authorization: Bearer <키>` 를 보낸다(임베딩의 `EMBED_API_KEY` 와 같은 역할). 비면 헤더를 싣지 않는다 |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` |
 | `RERANK_TIMEOUT_SECONDS` | `15` | 초 | 재순위 한 번의 읽기 타임아웃 (`RERANK_CONNECT_TIMEOUT_SECONDS` 5, `RERANK_MAX_CONCURRENT` 2) |
