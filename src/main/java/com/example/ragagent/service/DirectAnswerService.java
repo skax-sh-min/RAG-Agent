@@ -69,15 +69,21 @@ public class DirectAnswerService {
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
-        String userPrompt = buildUserPrompt(state);
 
         // §6.18 — Direct(meta) answers use their own temperature (hot-editable via /settings), read
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
         int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
         ThinkingSite site = site(state);
-        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(state.routingMode()),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens, site)));
+        // 사전 예산이 빗나가 서버가 컨텍스트 초과로 거절하면 이력을 한 걸음 더 줄여 다시 보낸다(블로킹은 라우터가 초과를
+        // LlmContextOverflowException 으로 바꿔 던진다). 줄인 이력이 실제로 나간 값이라 상태도 그것으로 이어 간다.
+        Shrunk<LlmRouter.LlmResult> attempt = withHistoryShrink(state, () -> true, () -> { }, s -> {
+            String userPrompt = buildUserPrompt(s);
+            return llmRouter.executeGatedWithUsage(site.taskType(), site.routingMode(s.routingMode()),
+                    model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens, site)));
+        });
+        state = attempt.state();
+        LlmRouter.LlmResult result = attempt.value();
         String rawAnswer = result.text();
         String normalized = rawAnswer == null ? null : enforceSummaryOnly(rawAnswer, state.responseMode());
         String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
@@ -96,6 +102,7 @@ public class DirectAnswerService {
 
         double directTemp = props.llmSafe().directTemperature();
         final AgentState fitted = state;   // 위에서 state 를 다시 대입했으므로 람다는 이쪽을 본다
+        AgentState[] sentState = {fitted}; // 축소 재시도가 돌면 마지막으로 보낸 시도의 상태가 남는다
 
         StringBuilder full = new StringBuilder();
         AtomicBoolean emitted = new AtomicBoolean();
@@ -103,11 +110,17 @@ public class DirectAnswerService {
         // 다음 프로바이더로 다시 연다(StreamFailover). 분류가 없는 Direct 턴은 앞단의 블로킹 호출이 대신 차단해 주지도 못한다.
         LlmProvider provider = StreamFailover.run(llmRouter, site(fitted).taskType(),
                 site(fitted).routingMode(fitted.routingMode()), emitted::get, p -> {
-                    callOrStream(p, fitted, systemPrompt, directTemp,
-                            t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
+                    // 토큰이 하나라도 나갔으면 다시 보내지 않는다 — 화면에 앞부분이 두 번 찍힌다(AnswerService 와 같은 규칙).
+                    // 초과는 시도마다 창을 다시 잴 근거다: 여기서 삼켜 더 작게 성공하면 StreamFailover → failOver 까지 안 간다.
+                    sentState[0] = withHistoryShrink(fitted, () -> !emitted.get(), () -> llmRouter.contextOverflowObserved(p), s -> {
+                        callOrStream(p, s, systemPrompt, directTemp,
+                                t -> { emitted.set(true); listener.onToken(t); full.append(t); }, listener::onThinking);
+                        return null;
+                    }).state();
                     return null;
                 }).provider();
 
+        state = sentState[0];
         String answer = full.toString();
         answer = enforceSummaryOnly(answer, state.responseMode());
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
@@ -219,6 +232,80 @@ public class DirectAnswerService {
                 .conversationHistory(fitted)
                 .budgetNote("컨텍스트 한도로 이전 대화 일부를 제외했습니다.")
                 .build();
+    }
+
+    /** 이력을 줄여 보냈을 때 화면에 싣는 안내 — {@link #withFittedHistory} 의 사전 축소와 같은 문구(같은 자리 {@code budgetNote}). */
+    private static final String HISTORY_TRIMMED_NOTE = "컨텍스트 한도로 이전 대화 일부를 제외했습니다.";
+
+    /** 성공한 시도의 결과와 <b>그 시도가 실제로 실은 상태</b>(줄인 이력·안내 포함). */
+    private record Shrunk<T>(T value, AgentState state) {}
+
+    /**
+     * 컨텍스트 초과로 거절되면 이력을 한 걸음 더 줄여 다시 시도한다 — {@code AnswerService.withShrinkRetry()} 의 Direct 판.
+     *
+     * <p><b>사전 예산({@link #withFittedHistory})이 있는데도 필요한 이유</b>: 그것은 {@code TokenEstimator} 추정과 기록된 창 위에
+     * 서 있고, 창을 모르면 아무것도 자르지 않는다. 추정·창이 빗나가면 사용자가 받는 것은 답이 아니라 {@code RAG-LLM-003} 이었다.
+     * 줄이는 것은 이력뿐이다(질문·시스템 프롬프트는 못 줄이고 Direct 에는 문서가 없다) — 걸음은 {@link #historyShrinkSteps}.
+     *
+     * @param canRetry   재시도해도 되는 상황인가 — 스트리밍은 토큰이 하나라도 나갔으면 안 된다
+     * @param onOverflow 초과를 볼 때마다(재시도 여부와 무관) — 스트리밍은 여기서 창 재탐지를 건다
+     */
+    private <T> Shrunk<T> withHistoryShrink(AgentState state, java.util.function.BooleanSupplier canRetry,
+                                            Runnable onOverflow, java.util.function.Function<AgentState, T> call) {
+        List<String> steps = null;
+        AgentState current = state;
+        for (int level = 0; ; level++) {
+            try {
+                return new Shrunk<>(call.apply(current), current);
+            } catch (RuntimeException e) {
+                if (!AnswerService.isContextOverflow(e)) throw e;
+                onOverflow.run();
+                if (!canRetry.getAsBoolean()) throw e;
+                if (steps == null) steps = historyShrinkSteps(state.conversationHistory());
+                if (level >= steps.size()) throw e;
+                String next = steps.get(level);
+                log.warn("[SHRINK] DIRECT 컨텍스트 초과 — 이력을 한 걸음 더 줄여 다시 시도한다 thread={} 시도 {}/{} 이력 {}→{}자. "
+                         + "사전 예산은 토큰 추정 위에 서 있어 여기까지 오는 일 자체는 정상이지만, 잦다면 프로바이더의 컨텍스트를 확인하십시오.",
+                        state.threadId(), level + 1, steps.size(), current.conversationHistory().length(), next.length());
+                current = current.toBuilder().conversationHistory(next).budgetNote(HISTORY_TRIMMED_NOTE).build();
+            }
+        }
+    }
+
+    /**
+     * Direct 의 이력 축소 사다리 — {@code PromptLadder} 의 이력 칸(1·2·5)과 같은 순서·같은 조각({@link HistoryPolicy}):
+     * ① 직전 질문을 뺀 과거 질문을 {@link HistoryPolicy#PAST_QUESTION_CAP}자로 → ② 직전 1턴만 → ③ 이력 전부. 앞 걸음과
+     * 같아지는 칸(이미 짧거나 턴이 하나뿐)은 건너뛴다 — 같은 요청을 되풀이하지 않는다. 이력이 비었으면 걸음이 없다.
+     * 문서 칸이 없는 것이 RAG 사다리와 다른 점의 전부다.
+     */
+    static List<String> historyShrinkSteps(String history) {
+        List<String> steps = new java.util.ArrayList<>();
+        if (history == null || history.isBlank()) return steps;
+        HistoryPolicy.ParsedHistory parsed = HistoryPolicy.parse(history);
+        List<HistoryPolicy.Turn> turns = parsed.turns();
+
+        String lead = HistoryPolicy.capQuestionsIn(parsed.lead(), HistoryPolicy.PAST_QUESTION_CAP);
+        List<HistoryPolicy.Turn> capped = new java.util.ArrayList<>();
+        for (int i = 0; i < turns.size(); i++) {
+            HistoryPolicy.Turn t = turns.get(i);
+            capped.add(i == turns.size() - 1 ? t
+                    : new HistoryPolicy.Turn(HistoryPolicy.capQuestion(t.question(), HistoryPolicy.PAST_QUESTION_CAP), t.answer()));
+        }
+        addIfShorter(steps, history, HistoryPolicy.render(lead, parsed.recentHeader(), capped));
+        if (!turns.isEmpty()) {
+            addIfShorter(steps, last(steps, history),
+                    HistoryPolicy.render(null, parsed.recentHeader(), List.of(turns.getLast())));
+        }
+        addIfShorter(steps, last(steps, history), "");
+        return steps;
+    }
+
+    private static String last(List<String> steps, String original) {
+        return steps.isEmpty() ? original : steps.getLast();
+    }
+
+    private static void addIfShorter(List<String> steps, String previous, String candidate) {
+        if (candidate.length() < previous.length()) steps.add(candidate);
     }
 
     /**

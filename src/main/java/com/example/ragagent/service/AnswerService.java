@@ -680,7 +680,7 @@ public class AnswerService {
      * 문장이 메시지가 아니라 응답 본문에만 있다 — {@code LlmRouter.isContextOverflow} 가 그 본문까지 읽는다
      * ({@code LlmErrorText}).
      */
-    private static boolean isContextOverflow(Throwable t) {
+    static boolean isContextOverflow(Throwable t) {
         return t instanceof LlmContextOverflowException || LlmRouter.isContextOverflow(t);
     }
 

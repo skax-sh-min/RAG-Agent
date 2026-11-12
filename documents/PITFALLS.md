@@ -425,6 +425,12 @@ SQLite DB 의 정기 백업. 결정 셋:
 
 응답 참여도 — 답변 문장을 가장 닮은 청크에 배정하고 글자수 비율을 몫으로 낸다. 순수 클래스, 추가 LLM/임베딩 호출 0회. **문자 4-gram**(공백 토큰화는 조사/어미를 잘못 끊어 "포트를"↔"포트는"이 안 잡힌다) + **희소도 가중 `1/문서빈도`**(없으면 같은 문서 청크들이 머리말·breadcrumb 으로 비슷해져 몫이 "가장 긴 청크"로 쏠린다). 매칭 안 된 문장·마크다운 헤딩 줄은 **분모에서 제외**한다(모델의 연결 문장을 억지로 배정하지 않는다). `usedDocs` 인용 신호는 후보를 **좁히기만** 하고 몫을 만들지 않는다. **추정이지 측정이 아니다**(인과적 기여도는 leave-one-out 뿐).
 
+### `service/DirectAnswerService.java` (축소 재시도)
+
+Direct 도 사전 예산(`withFittedHistory`)이 **추정 위에 서 있고 창을 모르면 아무것도 자르지 않는다** — 빗나가면 사용자는 답 대신 `RAG-LLM-003` 을 받았다. 그래서 `AnswerService.withShrinkRetry()` 의 Direct 판(`withHistoryShrink()`)이 있다. 줄일 것은 이력뿐(질문·시스템 프롬프트는 못 줄이고 문서가 없다)이라 걸음은 `PromptLadder` 의 이력 칸과 같은 순서 — 과거 질문 500자 → 직전 1턴 → 이력 전부 — 이고, 같은 `HistoryPolicy` 조각(`parse`/`render`/`capQuestionsIn`/`capQuestion`)으로 만든다. 앞 걸음과 같아지는 칸(이미 짧거나 턴이 하나뿐)은 건너뛰어 같은 요청을 되풀이하지 않고, 이력이 비었으면 걸음이 0 이다. **`PromptLadder` 를 확장하지 않은 이유**: 그쪽은 문서·검증 규칙과 얽혀 있어 Direct 용 분기를 넣으면 RAG 사다리 테스트 전체가 흔들린다 — 칸 순서가 갈라지지 않게 위 주석과 `DirectAnswerServiceShrinkRetryTest.ladder_order` 가 고정한다(사다리의 이력 칸 순서를 바꾸면 여기도 같이).
+
+**스트리밍은 토큰이 하나라도 나갔으면 다시 보내지 않는다**(`emitted` — 화면에 앞부분이 두 번 찍힌다)이고, 초과를 볼 때마다 `contextOverflowObserved` 로 창 재탐지를 건다(축소 재시도가 초과를 삼켜 더 작게 성공하면 `StreamFailover` → `failOver` 까지 안 가기 때문 — RAG 스트리밍과 같은 이유). 초과 판정은 `AnswerService.isContextOverflow` 를 그대로 쓴다(마커를 복사하면 한쪽만 고쳐진다). **테스트 함정**: `AnswerStreamer` 는 업스트림 오류 신호가 큐에 쌓인 청크를 앞지를 수 있어(`doOnNext` 주석), 청크 직후 오류를 바로 붙인 Flux 로는 "토큰이 나간 뒤" 를 재현하지 못한다 — 오류를 `delaySubscription` 으로 늦춘다.
+
 ### `service/AnswerService.java` (축소 재시도)
 
 **사전 예산이 빗나가면 조금씩 덜어내 다시 시도한다**(`withShrinkRetry()`). 답변은 축소 사다리의 다음 걸음이다([`PromptLadder`](#servicepromptladderjava)) — 이력 칸이면 그 칸 하나, 문서 칸이면 `app.llm.shrink-step` 개(기본 1)씩, 상한 = 이력 칸 수 + 문서 걸음 5. 사전 예산이 되돌려 채웠다면 초과 뒤 첫 걸음은 그것부터 다시 뺀다. 검증은 사다리와 묶지 않고 발췌 꼬리를 덜어낸다(`MAX_EVAL_SHRINK_ATTEMPTS`=5). **선형 축소인 이유**: log(n) 왕복은 왕복만 세고 버려지는 근거를 세지 않는다 — 사전 예산이 창에 맞춘 뒤라 여기까지 오는 초과는 대개 아슬아슬해(`TokenEstimator` 오차 0.75~1.35) 반을 자르면 한 개면 됐을 자리에서 다섯 개를 버린다. 대신 상한이 필요하다. **여기 있는 이유**: `LlmRouter` 는 호출을 불투명한 클로저로 받아 프롬프트 안을 못 보므로 무엇을 버릴지 아는 곳이 여기뿐이다 — 라우터의 "다른 곳에 물어본다"와 층이 달라 방해하지 않는다.
