@@ -692,7 +692,7 @@ class SettingsControllerRenderTest {
         // 상태 칸 2 + 모델 칸 2(프로바이더) + 임베딩·리랭커 모델 칸 2 — 모델 칸의 풍선이 서버의 실제 모델 id 를 싣는다
         assertThat(count(html, "hx-swap-oob=\"true\"")).isEqualTo(6);
         assertThat(html).contains("id=\"prov-model-0\"", "id=\"prov-model-1\"", "id=\"embed-model\"", "id=\"rerank-model\"",
-                "서버가 실제로 내주는 모델: model-on-disk.gguf");
+                "실제 모델명: model-on-disk.gguf");
         assertThat(html).contains("id=\"prov-status-0\"", "id=\"prov-status-1\"", ">정상<", ">접속불가<",
                 "Connection refused");
         assertThat(html).doesNotContain("id=\"llm-providers\"", "<table", "hx-get=", "??");

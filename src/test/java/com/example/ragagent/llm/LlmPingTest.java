@@ -247,22 +247,30 @@ class LlmPingTest {
     }
 
     @Test
-    @DisplayName("실제 모델 id — 설정값이 하나로 풀리면 그 id, 아니면 서버가 하나만 띄웠을 때 그 id, 여럿이면 모른다")
+    @DisplayName("실제 모델명 — 설정값이 서버 목록에서 하나로 풀릴 때만, 아니면 모른다(서버의 다른 모델로 넘겨짚지 않는다)")
     void servedModel() {
         var ids = java.util.List.of(".\\gemma-4-E2B-it-Q4_K_M.gguf");
-        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("gemma-4-e2b", ids), ids))
-                .as("설정 이름이 서버 id 와 달라도 서버가 하나만 띄웠으면 그것이 실제 모델").isEqualTo(ids.get(0));
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("gemma-4-e2b", ids)))
+                .as("설정 이름이 서버 id 의 일부면 그 id").isEqualTo(ids.get(0));
         var many = java.util.List.of("qwen3-8b", "gemma-3-4b");
-        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("qwen3", many), many)).isEqualTo("qwen3-8b");
-        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("llama", many), many)).isNull();
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("qwen3", many))).isEqualTo("qwen3-8b");
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("llama", many))).isNull();
+        // 회귀: 임베딩 주소가 LLM 서버를 가리키면 그 서버의 유일한 모델(LLM)이 임베딩의 실제 모델명으로 섞여 나왔다
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("bge-m3-Q4_K_M.gguf", ids)))
+                .as("설정한 모델이 목록에 없으면 서버가 하나만 띄웠어도 그것을 실제 모델명이라 하지 않는다").isNull();
     }
 
     @Test
-    @DisplayName("reach — 모델 목록에서 실제 모델 id 를 함께 돌려준다")
+    @DisplayName("reach — 설정한 모델이 목록에서 풀리면 실제 모델명을 함께 돌려주고, 없으면 비운다")
     void reachReportsServedModel() throws IOException {
-        String base = start(Map.of("/v1/models", Route.json("{\"data\":[{\"id\":\"model-on-disk.gguf\"}]}")));
-        var r = LlmPing.reach(base + "/v1", null, "configured-name", 2, 2);
+        String base = start(Map.of("/v1/models", Route.json("{\"data\":[{\"id\":\"C:\\\\models\\\\model-on-disk.gguf\"}]}")));
+        var r = LlmPing.reach(base + "/v1", null, "model-on-disk", 2, 2);
         assertThat(r.reachable()).isTrue();
-        assertThat(r.servedModel()).isEqualTo("model-on-disk.gguf");
+        assertThat(r.servedModel()).isEqualTo("C:\\models\\model-on-disk.gguf");
+
+        var other = LlmPing.reach(base + "/v1", null, "bge-m3", 2, 2);
+        assertThat(other.reachable()).isTrue();
+        assertThat(other.modelListed()).isFalse();
+        assertThat(other.servedModel()).isNull();
     }
 }

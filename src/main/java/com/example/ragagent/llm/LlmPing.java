@@ -128,12 +128,13 @@ public final class LlmPing {
     }
 
     /**
-     * 서버가 실제로 내주는 모델 id — 설정값이 목록에서 하나로 풀리면 그 id, 아니면 서버가 모델을 <b>하나만</b> 띄웠을 때 그 id
-     * (llama.cpp 는 요청의 {@code model} 과 상관없이 띄운 모델로 답한다), 그 밖에는 {@code null}(여럿 중 무엇인지 모른다).
+     * 설정한 모델의 서버 표기(실제 모델명) — 설정값이 서버 목록에서 하나로 풀릴 때만 그 id, 아니면 {@code null}.
+     *
+     * <p>"서버가 하나만 띄웠으면 그것"으로 넘겨짚지 않는다: 임베딩·리랭커 주소 하나가 잘못해 LLM 서버를 가리키면 그 서버의 유일한
+     * 모델(LLM)이 임베딩 줄의 "실제 모델명"으로 섞여 나왔다. 설정한 모델이 목록에 없으면 상태 칸이 이미 "모델없음"으로 말한다.
      */
-    static String servedModel(ModelNameResolver.Resolution res, List<String> ids) {
-        if (res != null && res.found()) return res.resolved();
-        return ids.size() == 1 ? ids.get(0) : null;
+    static String servedModel(ModelNameResolver.Resolution res) {
+        return res != null && res.found() ? res.resolved() : null;
     }
 
     /**
@@ -170,7 +171,7 @@ public final class LlmPing {
                 ModelNameResolver.Resolution res = (model == null || model.isBlank()) ? null : ModelNameResolver.resolve(model, ids);
                 // 부분 일치면 있는 것이다 — 포함하는 id 가 여럿이어도(모호) 모델은 있다
                 modelListed = res != null && (res.found() || res.ambiguous());
-                servedModel = servedModel(res, ids);
+                servedModel = servedModel(res);
             } else {
                 error = "models: unexpected body (no data[])";
             }
