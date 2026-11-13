@@ -120,7 +120,21 @@ public final class LlmPing {
      * @param modelListed 설정된 모델이 목록에 있는가 — {@code null} = 목록을 읽지 못했다(그건 모른다는 뜻이지 없다는 뜻이 아니다)
      * @param error       실패 사유 한 줄. 성공이면 {@code null}(목록 모양이 이상하면 닿았어도 채워진다)
      */
-    public record Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error) {}
+    public record Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error, String servedModel) {
+        /** 서버의 모델 id 를 모르는 결과(실패·목록 없음). */
+        public Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error) {
+            this(reachable, latencyMs, modelListed, error, null);
+        }
+    }
+
+    /**
+     * 서버가 실제로 내주는 모델 id — 설정값이 목록에서 하나로 풀리면 그 id, 아니면 서버가 모델을 <b>하나만</b> 띄웠을 때 그 id
+     * (llama.cpp 는 요청의 {@code model} 과 상관없이 띄운 모델로 답한다), 그 밖에는 {@code null}(여럿 중 무엇인지 모른다).
+     */
+    static String servedModel(ModelNameResolver.Resolution res, List<String> ids) {
+        if (res != null && res.found()) return res.resolved();
+        return ids.size() == 1 ? ids.get(0) : null;
+    }
 
     /**
      * "닿는가" 한 단계만 — {@link #probe} 의 첫 단계이자 {@code /settings} 프로바이더 표의 상태 열이 쓰는 정의다.
@@ -135,6 +149,7 @@ public final class LlmPing {
         boolean reachable = false;
         Long latencyMs;
         Boolean modelListed = null;
+        String servedModel = null;
         String error = null;
         long t0 = System.nanoTime();
         try {
@@ -155,6 +170,7 @@ public final class LlmPing {
                 ModelNameResolver.Resolution res = (model == null || model.isBlank()) ? null : ModelNameResolver.resolve(model, ids);
                 // 부분 일치면 있는 것이다 — 포함하는 id 가 여럿이어도(모호) 모델은 있다
                 modelListed = res != null && (res.found() || res.ambiguous());
+                servedModel = servedModel(res, ids);
             } else {
                 error = "models: unexpected body (no data[])";
             }
@@ -162,7 +178,7 @@ public final class LlmPing {
             latencyMs = elapsedMs(t0);
             error = "models: " + describe(e);
         }
-        return new Reach(reachable, latencyMs, modelListed, error);
+        return new Reach(reachable, latencyMs, modelListed, error, servedModel);
     }
 
     /**

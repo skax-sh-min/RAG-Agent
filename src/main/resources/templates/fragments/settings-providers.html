@@ -109,7 +109,7 @@
                       th:text="#{settings.provider.startup-failed}">startup check failed</span>
             </td>
             <td><span class="badge bg-secondary" th:text="${p.role}">LOCAL</span></td>
-            <td class="small" th:text="${p.model}">model</td>
+            <td class="small"><span th:replace="~{::modelName(${p.model}, ${p.connection}, 'prov-model-' + ${iter.index}, false)}"></span></td>
             <td class="small text-center text-nowrap" th:text="${p.contextWindow}">-</td>
             <td class="small text-truncate d-inline-block" style="max-width:180px;" tabindex="0"
                 th:text="${p.baseUrl}" th:title="${p.baseUrl}">http://localhost:1234/v1</td>
@@ -205,6 +205,29 @@
     </div>
 </div>
 
+
+<!-- ── 모델 이름 칸 ───────────────────────────────────────────────────────────────────────────
+     설정한 이름(환경 변수 · /settings 편집)을 그대로 보이고, 서버에 물어본 실제 모델 id 를 풍선으로 붙인다. 실제 id 는 상태 칸과
+     같은 확인(GET /settings/llm-status 의 모델 목록 API)에서 오므로 표(oob=false)는 "확인 중"으로 그리고 응답(oob=true)이 id 로
+     칸을 바꿔 끼운다. 실제 id 를 모르면(확인 중 · 접속 불가) 풍선을 달지 않는다. -->
+<span th:fragment="modelName(name, conn, id, oob)" th:id="${id}" th:attr="hx-swap-oob=${oob} ? 'true'">
+    <span th:if="${conn != null and conn.state.name() == 'OK'}" class="model-name-tip" tabindex="0"
+          data-bs-toggle="tooltip" data-bs-trigger="hover focus" data-bs-custom-class="tooltip-wide"
+          th:title="${conn.servedModel != null} ? #{settings.model.served.hint(${conn.servedModel})} : #{settings.model.served.unknown}"
+          th:text="${name}">model</span>
+    <span th:unless="${conn != null and conn.state.name() == 'OK'}" th:text="${name}">model</span>
+</span>
+
+<!-- 임베딩·리랭커 줄의 모델 칸 — 주소가 여럿일 수 있어, 닿은 주소들이 보고한 실제 모델 id 를 겹치지 않게 모아 풍선에 싣는다. -->
+<span th:fragment="auxModelName(name, endpoints, id, oob)" th:id="${id}" th:attr="hx-swap-oob=${oob} ? 'true'"
+      th:with="served=${endpoints == null ? null : #sets.toSet(endpoints.?[connection.servedModel != null].![connection.servedModel])},
+               anyOk=${endpoints != null and !endpoints.?[connection.state.name() == 'OK'].isEmpty()}">
+    <span th:if="${anyOk}" class="model-name-tip" tabindex="0"
+          data-bs-toggle="tooltip" data-bs-trigger="hover focus" data-bs-custom-class="tooltip-wide"
+          th:title="${!served.isEmpty()} ? #{settings.model.served.hint(${#strings.setJoin(served, ', ')})} : #{settings.model.served.unknown}"
+          th:text="${name}">model</span>
+    <span th:unless="${anyOk}" th:text="${name}">model</span>
+</span>
 
 <!-- ── 상태 칸 하나 ───────────────────────────────────────────────────────────────────────────
      표(oob=false)와 GET /settings/llm-status 의 응답(oob=true)이 같은 조각을 쓴다 — 응답은 id 로 칸을 찾아 통째로 바꿔 끼운다
@@ -353,7 +376,10 @@
 <th:block th:fragment="statuses(providers)">
     <th:block th:each="p, iter : ${providers}">
         <span th:replace="~{::status(${p}, ${iter.index}, true)}"></span>
+        <span th:replace="~{::modelName(${p.model}, ${p.connection}, 'prov-model-' + ${iter.index}, true)}"></span>
     </th:block>
+    <span th:replace="~{::auxModelName(${embeddingModel}, ${embeddingEndpoints}, 'embed-model', true)}"></span>
+    <span th:replace="~{::auxModelName(${rerankerModel}, ${rerankerEndpoints}, 'rerank-model', true)}"></span>
     <th:block th:each="e, iter : ${embeddingEndpoints}">
         <span th:replace="~{::auxStatus('embed-status-' + ${iter.index}, ${e.connection}, true)}"></span>
     </th:block>

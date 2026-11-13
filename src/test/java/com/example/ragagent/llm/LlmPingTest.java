@@ -245,4 +245,24 @@ class LlmPingTest {
         assertThat(ping.modelListed()).isEqualTo(reach.modelListed());
         assertThat(ping.error()).isEqualTo(reach.error());
     }
+
+    @Test
+    @DisplayName("실제 모델 id — 설정값이 하나로 풀리면 그 id, 아니면 서버가 하나만 띄웠을 때 그 id, 여럿이면 모른다")
+    void servedModel() {
+        var ids = java.util.List.of(".\\gemma-4-E2B-it-Q4_K_M.gguf");
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("gemma-4-e2b", ids), ids))
+                .as("설정 이름이 서버 id 와 달라도 서버가 하나만 띄웠으면 그것이 실제 모델").isEqualTo(ids.get(0));
+        var many = java.util.List.of("qwen3-8b", "gemma-3-4b");
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("qwen3", many), many)).isEqualTo("qwen3-8b");
+        assertThat(LlmPing.servedModel(ModelNameResolver.resolve("llama", many), many)).isNull();
+    }
+
+    @Test
+    @DisplayName("reach — 모델 목록에서 실제 모델 id 를 함께 돌려준다")
+    void reachReportsServedModel() throws IOException {
+        String base = start(Map.of("/v1/models", Route.json("{\"data\":[{\"id\":\"model-on-disk.gguf\"}]}")));
+        var r = LlmPing.reach(base + "/v1", null, "configured-name", 2, 2);
+        assertThat(r.reachable()).isTrue();
+        assertThat(r.servedModel()).isEqualTo("model-on-disk.gguf");
+    }
 }

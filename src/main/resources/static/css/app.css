@@ -678,3 +678,11 @@
 }
 .thinking-card-details:not([open]) > .thinking-card-summary { border-bottom: 0; }
 .thinking-card-details[open] > .thinking-card-summary .thinking-chevron { transform: rotate(90deg); }
+
+/* /settings 프로바이더 표의 모델 이름 — 서버가 보고한 실제 모델 id 가 풍선으로 붙어 있음을 점선 밑줄로 알린다(settings-providers.html modelName). */
+.model-name-tip {
+    cursor: help;
+    text-decoration: underline dotted;
+    text-decoration-color: var(--bs-secondary-color);
+    text-underline-offset: 3px;
+}
