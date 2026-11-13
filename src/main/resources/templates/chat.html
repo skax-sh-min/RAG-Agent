@@ -416,10 +416,9 @@
                              서버도 같은 규칙을 독립적으로 건다(ChatForm/ChatRequest — 구 L은 서버 가드가
                              없어 손으로 만든 요청이 통과했다).
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
-                        <!-- §6.31 이력 제외 — 켜면 이 메시지의 RAG 답변 프롬프트에서 [이전 대화] 를 빼고 그 자리만큼 문서를 더 검색한다.
-                             응답 모드와 같은 수명이다: 보낸 뒤에도 남고, RAG↔Direct 토글과 새 대화(페이지 로드)에서 풀린다 —
-                             그래서 localStorage 에 두지 않는다. Direct 에서는 비활성(실을 문서가 없고 이력이 유일한 재료다). 서버도 같은
-                             판정을 따로 건다(ChatForm.excludesHistory / ChatRequest — 손으로 만든 요청). 값은 아래 hidden 필드로 간다
+                        <!-- §6.31 이력 제외 — 켜면 이 메시지의 답변 프롬프트에서 [이전 대화] 를 뺀다. RAG 는 그 자리만큼 문서를 더
+                             검색하고, Direct 는 이력만 뺀다(실을 문서가 없다). 응답 모드와 같은 수명이다: 보낸 뒤에도 남고,
+                             RAG↔Direct 토글과 새 대화(페이지 로드)에서 풀린다 — 그래서 localStorage 에 두지 않는다. 값은 아래 hidden 필드로 간다
                              (태그 칩의 #chat-tags-input 처럼 HTMX 폼과 SSE 의 FormData 가 그대로 싣는다). -->
                         <div class="form-check mb-0 d-flex align-items-center gap-1" id="exclude-history-wrapper"
                              data-bs-toggle="tooltip" th:title="#{chat.exclude-history.tooltip}">
@@ -901,9 +900,8 @@
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
         updateResponseModeAvailability(isDirect);
-        /* §6.31 — 이력 제외도 어느 방향이든 푼다(응답 모드와 같은 수명). Direct 에서는 비활성. */
+        /* §6.31 — 이력 제외도 어느 방향이든 푼다(응답 모드와 같은 수명). 두 모드 모두 쓸 수 있다. */
         setExcludeHistory(false);
-        updateExcludeHistoryAvailability(isDirect);
         /* RAG ↔ Direct 를 오갈 때는 응답 모드를 **항상** 기본값(N)으로 되돌린다 — 어느 방향이든,
            직전 선택이 무엇이었든. 두 축은 성격이 달라(검색 여부 vs 답변의 성격) 한쪽을 바꾼 뒤에도
            남아 있는 다른 쪽 선택은 "내가 고른 것"이 아니라 "직전 대화에서 흘러온 것"에 가깝다.
@@ -1073,20 +1071,15 @@
     });
 
     /* ── §6.31 이력 제외 체크박스 → hidden 폼 필드 ──────────────────────────────
-       저장하지 않는다(새 대화·새로고침에서 풀린다). Direct 에서는 비활성 — 실제 방어는 서버(ChatForm.excludesHistory)다. */
+       저장하지 않는다(새 대화·새로고침에서 풀린다). RAG·Direct 둘 다 쓸 수 있다 — Direct 는 이력만 뺀다(DirectAnswerService). */
     const excludeHistoryToggle = document.getElementById('exclude-history-toggle');
     const excludeHistoryInput  = document.getElementById('form-exclude-history');
     function setExcludeHistory(on) {
         excludeHistoryToggle.checked = on;
         excludeHistoryInput.value = on ? 'true' : 'false';
     }
-    function updateExcludeHistoryAvailability(isDirect) {
-        excludeHistoryToggle.disabled = isDirect;
-        if (isDirect) setExcludeHistory(false);
-    }
     excludeHistoryToggle.addEventListener('change', function () { setExcludeHistory(this.checked); });
     setExcludeHistory(false);   /* 브라우저가 되돌려 놓은 체크 상태(뒤로 가기 캐시)를 믿지 않는다 */
-    updateExcludeHistoryAvailability(directToggle.checked);
     new bootstrap.Tooltip(document.getElementById('exclude-history-wrapper'), {delay: {show: 100, hide: 0}});
 
     /* Sync routing mode → hidden form field + PATCH thread if it exists.

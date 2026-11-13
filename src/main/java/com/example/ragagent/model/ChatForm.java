@@ -23,12 +23,11 @@ public record ChatForm(
     }
 
     /**
-     * §6.31 — 이 메시지의 RAG 답변이 이전 대화를 보지 않는가. <b>Direct 면 언제나 {@code false}</b> — 실을 문서가 없고 이력이
-     * 유일한 재료다. 화면은 Direct 에서 체크박스를 비활성화하지만 손으로 만든 요청은 그 화면을 거치지 않으므로, 응답 모드의
-     * C 가드({@link #responseModeOrDefault()})와 같은 자리에서 서버가 따로 건다.
+     * §6.31 — 이 메시지의 답변이 이전 대화를 보지 않는가. RAG 는 그 자리만큼 검색 문서를 더 싣고, Direct 는 이력만 뺀다
+     * ({@code DirectAnswerService.withoutExcludedHistory}).
      */
     public boolean excludesHistory() {
-        return Boolean.TRUE.equals(excludeHistory) && !isDirectMode();
+        return Boolean.TRUE.equals(excludeHistory);
     }
 
     /** Lenient parse of the comma-separated tag input (never throws — empty on blank/invalid). */

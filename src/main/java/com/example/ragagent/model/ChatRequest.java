@@ -24,8 +24,7 @@ public record ChatRequest(
         // 성립할 수 없다. REST 는 채팅 UI 를 거치지 않으므로 클라이언트 비활성화가 존재하지 않는
         // 경로이고, 구 L 은 이 가드가 없어 손으로 만든 요청이 그대로 통과했다.
         if (directMode && !responseMode.allowsDirect()) responseMode = ResponseMode.DEFAULT;
-        // §6.31 — 이력 제외는 RAG 답변의 손잡이다. Direct 는 이력이 유일한 재료라 같은 이유로 여기서 끈다(ChatForm 과 같은 가드).
-        if (directMode) excludeHistory = false;
+        // §6.31 — 이력 제외는 Direct 에서도 받는다(이력만 뺀다 — DirectAnswerService.withoutExcludedHistory).
         selectedTags = selectedTags == null ? List.of() : List.copyOf(selectedTags);
     }
 

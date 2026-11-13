@@ -464,8 +464,8 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 `#form-exclude-history`(`name="excludeHistory"`, `true`/`false`)로 가서 HTMX 폼·SSE 의 `FormData(form)` 가 그대로 싣는다(태그 칩의
 `#chat-tags-input` 선례). 켜면 그 메시지의 RAG 답변 프롬프트에서 `[이전 대화]` 를 빼고 그 자리만큼 문서를 더 검색한다
 (`RetrievalService.historyBoostFor`). 수명은 응답 모드와 같되 **저장하지 않는다** — 보낸 뒤에도 남고, RAG↔Direct 토글(어느 방향이든
-해제)과 페이지 로드(새 대화·다시 연 대화)에서 풀린다. Direct 에서는 비활성(`updateExcludeHistoryAvailability`) — 실을 문서가 없고
-이력이 유일한 재료다. 서버도 같은 판정을 따로 건다(`ChatForm.excludesHistory()` · `ChatRequest` 의 가드).
+해제)과 페이지 로드(새 대화·다시 연 대화)에서 풀린다. Direct 에서도 쓸 수 있다 — 그때는 `[이전 대화]` 만 빼고 문서 부스트는 없다
+(`DirectAnswerService.withoutExcludedHistory`).
 
 **질문 버블의 `이력 제외` 표시**: 켠 턴의 질문 버블에 두 글자 표기(`[RN]`) 다음 작은 테두리 표시(`.bubble-user-flag`)가 붙는다 —
 표기에는 섞지 않는다(렌더러 넷·규칙의 출처 둘, `data-question`·`data-response-mode` 도 그대로). 모양은 `base.html` 의
