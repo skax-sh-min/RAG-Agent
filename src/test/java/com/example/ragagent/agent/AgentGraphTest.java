@@ -114,6 +114,21 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("§6.31 — 사용자가 Direct 로 고른 턴은 이력 제외를 그대로 넘긴다(DirectAnswerService 가 이력만 뺀다, 부스트는 없다)")
+    void directTurnKeepsTheHistoryExclusion() {
+        org.mockito.ArgumentCaptor<AgentState> seen = org.mockito.ArgumentCaptor.forClass(AgentState.class);
+        when(directAnswerService.execute(seen.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST).toBuilder()
+                .directMode(true).excludeHistory(true).historyBoost(4).build());
+
+        assertThat(seen.getValue().excludeHistory()).isTrue();
+        assertThat(result.excludeHistory()).as("저장값도 켠 것").isTrue();
+        assertThat(result.historyBoost()).isZero();
+        verify(classifierService, never()).execute(any());
+    }
+
+    @Test
     @DisplayName("classifier 가 non-meta 분류 → RETRIEVAL → ANSWER 진행")
     void classifier_nonMeta_goesToRetrieval() {
         when(classifierService.execute(any()))

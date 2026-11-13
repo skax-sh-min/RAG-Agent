@@ -115,6 +115,8 @@ public class SettingsController {
         model.addAttribute("providers", settingsService.refreshProviderConnections());
         model.addAttribute("embeddingEndpoints", settingsService.embeddingEndpoints());
         model.addAttribute("rerankerEndpoints", settingsService.rerankerEndpoints());
+        model.addAttribute("embeddingModel", settingsService.embeddingModelLabel());
+        model.addAttribute("rerankerModel", settingsService.rerankerModelLabel());
         return "fragments/settings-providers :: statuses";
     }
 

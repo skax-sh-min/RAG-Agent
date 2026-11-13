@@ -65,7 +65,7 @@ public class DirectAnswerService {
 
     public AgentState execute(AgentState state) {
         // 블로킹 — 모드의 maxTokens 를 실어 보내므로 그만큼이 실제로 예약된다.
-        state = withFittedHistory(state, false);
+        state = withFittedHistory(withoutExcludedHistory(state), false);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -95,7 +95,7 @@ public class DirectAnswerService {
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
         // 스트리밍 — 두 갈래(직행·stream=false 의 ChatClient) 모두 maxTokens 를 싣지 않는다.
-        state = withFittedHistory(state, true);
+        state = withFittedHistory(withoutExcludedHistory(state), true);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -167,6 +167,16 @@ public class DirectAnswerService {
                 opts.build());
     }
 
+
+    /**
+     * §6.31 — Direct 에서 "이력 제외"를 켠 턴은 {@code [이전 대화]} 를 싣지 않는다. RAG 와 달리 그 자리를 채울 검색 문서가 없어
+     * <b>빼기만 한다</b>(교환이 아니다 — 프롬프트가 작아질 뿐이라 예산 판단이 필요 없다). 이력 로딩 자체는 진입점이 그대로 하고
+     * 여기서 비운다 — RAG 의 {@code AnswerService.ladderHistory()} 와 같은 자리(답변 프롬프트를 만드는 곳)에서 빼는 규칙이다.
+     */
+    static AgentState withoutExcludedHistory(AgentState state) {
+        if (!state.excludeHistory() || state.conversationHistory() == null || state.conversationHistory().isEmpty()) return state;
+        return state.toBuilder().conversationHistory("").build();
+    }
 
     /**
      * 사용자 프롬프트는 이제 대화 이력과 질문만 나른다 — 답변의 성격은 전적으로

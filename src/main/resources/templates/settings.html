@@ -127,6 +127,13 @@
                     th:title="#{settings.btn.reprobe.hint}">
                 <i class="bi bi-arrow-repeat me-1"></i><span th:text="#{settings.btn.reprobe}">Re-detect context</span>
             </button>
+            <!--/* 성능 측정(관리자) — 새 창(팝업)으로 연다. 창이 막히면 링크가 새 탭으로 열린다. */-->
+            <a th:if="${isAdmin}" href="/admin/settings/benchmark" target="model-benchmark" rel="noopener"
+               class="btn btn-sm btn-outline-secondary ms-2 py-0"
+               onclick="const w = window.open(this.href, 'model-benchmark', 'width=1280,height=860,resizable=yes,scrollbars=yes'); if (w) { w.focus(); return false; }"
+               th:title="#{settings.btn.benchmark.hint}">
+                <i class="bi bi-speedometer2 me-1"></i><span th:text="#{settings.btn.benchmark}">Benchmark</span>
+            </a>
         </div>
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
@@ -149,7 +156,7 @@
                     <tbody>
                     <tr>
                         <td class="ps-3 text-center" th:text="#{settings.endpoint.type.embedding}">Embedding</td>
-                        <td class="text-break" th:text="${settings.embeddingModel}">bge-m3</td>
+                        <td class="text-break"><span th:replace="~{fragments/settings-providers :: auxModelName(${settings.embeddingModel}, ${settings.embeddingEndpoints}, 'embed-model', false)}"></span></td>
                         <td>
                             <div th:each="e, iter : ${settings.embeddingEndpoints}" class="text-break">
                                 <span th:text="${e.url}">http://localhost:1234/v1</span>
@@ -161,7 +168,7 @@
                     </tr>
                     <tr>
                         <td class="ps-3 text-center" th:text="#{settings.endpoint.type.reranker}">Reranker</td>
-                        <td class="text-break" th:text="${settings.rerankerModel}">bge-reranker-v2-m3</td>
+                        <td class="text-break"><span th:replace="~{fragments/settings-providers :: auxModelName(${settings.rerankerModel}, ${settings.rerankerEndpoints}, 'rerank-model', false)}"></span></td>
                         <td>
                             <div th:each="e, iter : ${settings.rerankerEndpoints}" class="text-break">
                                 <span th:text="${e.url}">http://localhost:28095</span>

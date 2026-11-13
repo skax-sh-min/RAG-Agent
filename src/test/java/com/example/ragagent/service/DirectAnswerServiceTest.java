@@ -162,6 +162,35 @@ class DirectAnswerServiceTest {
         assertThat(userText).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
     }
 
+    @Test
+    @DisplayName("§6.31 — Direct 에서 이력 제외를 켜면 [이전 대화] 를 싣지 않고, 끄면 싣는다")
+    @SuppressWarnings("unchecked")
+    void execute_directMode_excludeHistoryDropsPreviousConversation() {
+        String history = "Q: 앞 질문 / A: 앞 답변";
+        assertThat(sentUserPrompt(newState(true).toBuilder().conversationHistory(history).build()))
+                .contains("[이전 대화]").contains("앞 답변");
+        assertThat(sentUserPrompt(newState(true).toBuilder().conversationHistory(history).excludeHistory(true).build()))
+                .doesNotContain("[이전 대화]").doesNotContain("앞 답변").contains("[현재 질문]");
+    }
+
+    @SuppressWarnings("unchecked")
+    private String sentUserPrompt(AgentState state) {
+        llmRouter = mock(LlmRouter.class);
+        AppProperties props = mock(AppProperties.class);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
+        DirectAnswerService svc = new DirectAnswerService(llmRouter, messageSource, props);
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+        svc.execute(state);
+        ChatModel chatModel = com.example.ragagent.LlmTestSupport.chatModelMock();
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
+        callCaptor.getValue().apply(chatModel);
+        return promptCaptor.getValue().getUserMessage().getText();
+    }
+
     /**
      * §6.18 회귀 방지 — 블로킹 Direct 호출의 Prompt가 direct-temperature(여기선 0.1)를 ChatOptions로
      * 실어 보내는지 검증한다. RAG 경로(프로바이더 defaultOptions의 일반 temperature)와 구분되는 핵심.

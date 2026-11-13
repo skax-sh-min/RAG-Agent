@@ -44,7 +44,13 @@ public class ProviderConnectivity {
      * @param modelListed 설정한 모델이 서버의 목록에 있는가 — {@code null} = 목록을 읽지 못했다. 상태 열의 3단계를 바꾸지 않고
      *                    "정상" 칸의 설명에만 쓴다(목록 API 가 없는 게이트웨이에서 오탐하지 않으려고)
      */
-    public record Result(boolean reachable, Long latencyMs, Boolean modelListed, String error, Instant checkedAt) {}
+    public record Result(boolean reachable, Long latencyMs, Boolean modelListed, String error, Instant checkedAt,
+                         String servedModel) {
+        /** 서버의 모델 id 를 모르는 결과(실패·이전 호출부). */
+        public Result(boolean reachable, Long latencyMs, Boolean modelListed, String error, Instant checkedAt) {
+            this(reachable, latencyMs, modelListed, error, checkedAt, null);
+        }
+    }
 
     /** 화면을 연 사람이 기다리는 확인이라 핑과 같게 짧다. */
     static final int CONNECT_TIMEOUT_SECONDS = 3;
@@ -149,7 +155,7 @@ public class ProviderConnectivity {
                 CompletableFuture<?>[] futures = due.stream()
                         .map(t -> CompletableFuture.runAsync(() -> {
                             LlmPing.Reach r = probeOne(t.url(), t.apiKey(), t.model());
-                            results.put(t.mapKey(), new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), clock.instant()));
+                            results.put(t.mapKey(), new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), clock.instant(), r.servedModel()));
                         }, traced))
                         .toArray(CompletableFuture<?>[]::new);
                 CompletableFuture.allOf(futures).join();
@@ -163,7 +169,7 @@ public class ProviderConnectivity {
     public static Result checkEndpointNow(String baseUrl, String apiKey, String model) {
         String key = (apiKey != null && !apiKey.isBlank()) ? apiKey : "no-key";
         LlmPing.Reach r = probeOne(baseUrl, key, model);
-        return new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), Instant.now());
+        return new Result(r.reachable(), r.latencyMs(), r.modelListed(), r.error(), Instant.now(), r.servedModel());
     }
 
     private static LlmPing.Reach probeOne(String baseUrl, String apiKey, String model) {
@@ -185,7 +191,7 @@ public class ProviderConnectivity {
         Clock clock = Clock.systemUTC();
         try {
             LlmPing.Reach reach = probe(cfg);
-            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant(), reach.servedModel());
         } catch (RuntimeException e) {
             return new Result(false, null, null, LlmPing.describe(e), clock.instant());
         }
@@ -200,7 +206,7 @@ public class ProviderConnectivity {
     private Result check(AppProperties.ProviderConfig cfg) {
         try {
             LlmPing.Reach reach = prober.apply(cfg);
-            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant());
+            return new Result(reach.reachable(), reach.latencyMs(), reach.modelListed(), reach.error(), clock.instant(), reach.servedModel());
         } catch (RuntimeException e) {
             return new Result(false, null, null, LlmPing.describe(e), clock.instant());
         }

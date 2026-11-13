@@ -141,9 +141,12 @@ public class AgentGraph {
                     yield afterClassify(state);
                 }
                 case DIRECT_ANSWER -> {
-                    // §6.31 — 이력 제외는 RAG 답변의 손잡이다. RAG 로 물었는데 분류기가 meta 로 판정한 턴은 이력이 곧 답이라
-                    // 무시하고, 저장되는 값(TurnPersistence 가 결과에서 읽는다)도 실제로 한 것으로 맞춘다.
-                    state = state.toBuilder().excludeHistory(false).historyBoost(0).build();
+                    // §6.31 — RAG 로 물었는데 분류기가 meta 로 판정한 턴은 이력이 곧 답이라 이력 제외를 무시하고, 저장되는 값
+                    // (TurnPersistence 가 결과에서 읽는다)도 실제로 한 것으로 맞춘다. 사용자가 Direct 로 고른 턴은 그대로 둔다 —
+                    // DirectAnswerService 가 이력만 뺀다(문서 부스트는 없다).
+                    state = state.directMode()
+                            ? state.toBuilder().historyBoost(0).build()
+                            : state.toBuilder().excludeHistory(false).historyBoost(0).build();
                     state = (listener == GraphListener.NOOP)
                             ? directAnswerService.execute(state)
                             : directAnswerService.executeStreaming(state, listener);

@@ -120,7 +120,22 @@ public final class LlmPing {
      * @param modelListed 설정된 모델이 목록에 있는가 — {@code null} = 목록을 읽지 못했다(그건 모른다는 뜻이지 없다는 뜻이 아니다)
      * @param error       실패 사유 한 줄. 성공이면 {@code null}(목록 모양이 이상하면 닿았어도 채워진다)
      */
-    public record Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error) {}
+    public record Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error, String servedModel) {
+        /** 서버의 모델 id 를 모르는 결과(실패·목록 없음). */
+        public Reach(boolean reachable, Long latencyMs, Boolean modelListed, String error) {
+            this(reachable, latencyMs, modelListed, error, null);
+        }
+    }
+
+    /**
+     * 설정한 모델의 서버 표기(실제 모델명) — 설정값이 서버 목록에서 하나로 풀릴 때만 그 id, 아니면 {@code null}.
+     *
+     * <p>"서버가 하나만 띄웠으면 그것"으로 넘겨짚지 않는다: 임베딩·리랭커 주소 하나가 잘못해 LLM 서버를 가리키면 그 서버의 유일한
+     * 모델(LLM)이 임베딩 줄의 "실제 모델명"으로 섞여 나왔다. 설정한 모델이 목록에 없으면 상태 칸이 이미 "모델없음"으로 말한다.
+     */
+    static String servedModel(ModelNameResolver.Resolution res) {
+        return res != null && res.found() ? res.resolved() : null;
+    }
 
     /**
      * "닿는가" 한 단계만 — {@link #probe} 의 첫 단계이자 {@code /settings} 프로바이더 표의 상태 열이 쓰는 정의다.
@@ -135,6 +150,7 @@ public final class LlmPing {
         boolean reachable = false;
         Long latencyMs;
         Boolean modelListed = null;
+        String servedModel = null;
         String error = null;
         long t0 = System.nanoTime();
         try {
@@ -155,6 +171,7 @@ public final class LlmPing {
                 ModelNameResolver.Resolution res = (model == null || model.isBlank()) ? null : ModelNameResolver.resolve(model, ids);
                 // 부분 일치면 있는 것이다 — 포함하는 id 가 여럿이어도(모호) 모델은 있다
                 modelListed = res != null && (res.found() || res.ambiguous());
+                servedModel = servedModel(res);
             } else {
                 error = "models: unexpected body (no data[])";
             }
@@ -162,7 +179,7 @@ public final class LlmPing {
             latencyMs = elapsedMs(t0);
             error = "models: " + describe(e);
         }
-        return new Reach(reachable, latencyMs, modelListed, error);
+        return new Reach(reachable, latencyMs, modelListed, error, servedModel);
     }
 
     /**
@@ -262,7 +279,7 @@ public final class LlmPing {
     }
 
     /** 예외 → 한 줄. 4xx/5xx 는 상태와 본문 앞부분까지 — 서버가 준 사유("ErrorDeviceLost")가 거기 있다. */
-    static String describe(Throwable e) {
+    public static String describe(Throwable e) {
         String text;
         if (e instanceof RestClientResponseException r) {
             String snippet = r.getResponseBodyAsString().replaceAll("\\s+", " ").strip();

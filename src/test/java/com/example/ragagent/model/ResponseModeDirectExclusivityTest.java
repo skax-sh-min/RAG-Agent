@@ -53,19 +53,19 @@ class ResponseModeDirectExclusivityTest {
     }
 
     @Test
-    @DisplayName("§6.31 — 이력 제외도 Direct 와 배타다: 폼·REST 모두 Direct 면 꺼진다")
-    void excludeHistory_isOffInDirect() {
+    @DisplayName("§6.31 — 이력 제외는 Direct 와 배타가 아니다: 폼·REST 모두 Direct 에서도 켠 값을 받는다(Direct 는 이력만 뺀다)")
+    void excludeHistory_isKeptInDirect() {
         ChatForm rag = new ChatForm("질문", "t1", "latest", "COST_FIRST", false, "", "N", true);
         ChatForm direct = new ChatForm("질문", "t1", "latest", "COST_FIRST", true, "", "N", true);
         assertThat(rag.excludesHistory()).isTrue();
-        assertThat(direct.excludesHistory()).isFalse();
+        assertThat(direct.excludesHistory()).isTrue();
         assertThat(new ChatForm("질문", "t1", "latest", "COST_FIRST", false, "", "N").excludesHistory())
                 .as("필드가 없는 폼(옛 클라이언트)은 끈 것").isFalse();
 
         assertThat(new ChatRequest("질문", "latest", "t1", RoutingMode.COST_FIRST, false, List.of(), ResponseMode.N, true)
                 .excludeHistory()).isTrue();
         assertThat(new ChatRequest("질문", "latest", "t1", RoutingMode.COST_FIRST, true, List.of(), ResponseMode.N, true)
-                .excludeHistory()).isFalse();
+                .excludeHistory()).isTrue();
     }
 
     @Test

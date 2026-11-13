@@ -682,14 +682,17 @@ class SettingsControllerRenderTest {
     @DisplayName("GET /settings/llm-status — 상태 칸 조각들이 id 로 칸을 통째로 바꿔 끼우는 형태(out-of-band)로 돌아온다 — 표 전체가 아니다")
     void statusEndpointReturnsOutOfBandCells() throws Exception {
         when(settingsService.refreshProviderConnections()).thenReturn(List.of(
-                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true)),
+                providerRow("a", true, false, SettingsView.ProviderConnection.reachable(12L, true).withServedModel("model-on-disk.gguf")),
                 providerRow("b", true, false,
                         SettingsView.ProviderConnection.unreachable("models: ConnectException: Connection refused"))));
 
         String html = mvc.perform(get("/settings/llm-status").locale(Locale.KOREAN))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(count(html, "hx-swap-oob=\"true\"")).isEqualTo(2);
+        // 상태 칸 2 + 모델 칸 2(프로바이더) + 임베딩·리랭커 모델 칸 2 — 모델 칸의 풍선이 서버의 실제 모델 id 를 싣는다
+        assertThat(count(html, "hx-swap-oob=\"true\"")).isEqualTo(6);
+        assertThat(html).contains("id=\"prov-model-0\"", "id=\"prov-model-1\"", "id=\"embed-model\"", "id=\"rerank-model\"",
+                "실제 모델명: model-on-disk.gguf");
         assertThat(html).contains("id=\"prov-status-0\"", "id=\"prov-status-1\"", ">정상<", ">접속불가<",
                 "Connection refused");
         assertThat(html).doesNotContain("id=\"llm-providers\"", "<table", "hx-get=", "??");

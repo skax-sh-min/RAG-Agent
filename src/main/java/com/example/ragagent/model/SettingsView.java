@@ -160,7 +160,17 @@ public record SettingsView(
      * @param modelListed 설정한 모델이 서버의 목록에 있는가({@code null} = 목록을 읽지 못했다). 3단계를 바꾸지 않고 설명에만 쓴다
      * @param error       접속하지 못한 사유 한 줄 — 접속불가일 때 설명에 쓴다
      */
-    public record ProviderConnection(State state, Long latencyMs, Boolean modelListed, String error) {
+    public record ProviderConnection(State state, Long latencyMs, Boolean modelListed, String error, String servedModel) {
+
+        /** 서버의 실제 모델 id 를 모르는 상태(확인 중·접속 불가·이전 호출부). */
+        public ProviderConnection(State state, Long latencyMs, Boolean modelListed, String error) {
+            this(state, latencyMs, modelListed, error, null);
+        }
+
+        /** 같은 상태에 서버가 보고한 실제 모델 id 를 얹는다 — 모델 칸의 풍선이 읽는다. */
+        public ProviderConnection withServedModel(String model) {
+            return new ProviderConnection(state, latencyMs, modelListed, error, model);
+        }
 
         public enum State {
             /** 주소나 키가 없어 등록되지 않았다 — 물어볼 곳이 없다. */

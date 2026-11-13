@@ -392,12 +392,12 @@ public class SettingsService implements AppProperties.OverrideSource {
                 llm.defaultRoutingMode(),
                 trimNum(llm.temperature()),   // general/RAG temperature — now the real effective value
                 Integer.toString(llm.maxTokens()),
-                nullToDash(props.embeddingSafe().model()),
+                embeddingModelLabel(),
                 embeddingUrls().isEmpty() ? "-" : String.join(" ; ", embeddingUrls()),
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
                 groups,
-                props.rerankerEnabled() ? props.rerankerSafe().model() : "-",
+                rerankerModelLabel(),
                 props.rerankerEnabled() ? String.join(" ; ", props.rerankerBaseUrls()) : "-",
                 // 프로바이더 표와 같이 화면을 열 때는 늘 "확인 중" 으로 시작하고 /settings/llm-status 가 채운다
                 endpointRows(ProviderConnectivity.EMBEDDING_KEY, embeddingUrls(), true),
@@ -471,7 +471,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         if (recheck) return ProviderConnection.pending();
         return connectivity.last(cfg.name())
                 .map(r -> r.reachable()
-                        ? ProviderConnection.reachable(r.latencyMs(), r.modelListed())
+                        ? ProviderConnection.reachable(r.latencyMs(), r.modelListed()).withServedModel(r.servedModel())
                         : ProviderConnection.unreachable(r.error()))
                 .orElseGet(ProviderConnection::pending);
     }
@@ -505,6 +505,16 @@ public class SettingsService implements AppProperties.OverrideSource {
         return urls;
     }
 
+    /** 임베딩·리랭커 줄의 모델 칸에 쓰는 이름(설정값) — 화면과 상태 응답({@code /settings/llm-status})이 같은 값을 그린다. */
+    public String embeddingModelLabel() {
+        return nullToDash(props.embeddingSafe().model());
+    }
+
+    /** 리랭커가 꺼져 있으면 {@code -}. */
+    public String rerankerModelLabel() {
+        return props.rerankerEnabled() ? props.rerankerSafe().model() : "-";
+    }
+
     /** 임베딩 서버 주소별 마지막 접속 확인 — 주소가 없으면 미설정 한 줄, 아직 안 물었으면 확인 중. */
     public List<SettingsView.EndpointRow> embeddingEndpoints() {
         return endpointRows(ProviderConnectivity.EMBEDDING_KEY, embeddingUrls(), false);
@@ -525,7 +535,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             SettingsView.ProviderConnection c = pending ? SettingsView.ProviderConnection.pending()
                     : connectivity.lastEndpoint(key, u)
                             .map(r -> r.reachable()
-                                    ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed())
+                                    ? SettingsView.ProviderConnection.reachable(r.latencyMs(), r.modelListed()).withServedModel(r.servedModel())
                                     : SettingsView.ProviderConnection.unreachable(r.error()))
                             .orElseGet(SettingsView.ProviderConnection::pending);
             rows.add(new SettingsView.EndpointRow(u, c));

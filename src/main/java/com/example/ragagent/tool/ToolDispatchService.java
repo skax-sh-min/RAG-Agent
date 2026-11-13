@@ -131,7 +131,7 @@ public class ToolDispatchService {
         boolean busy = "busy".equals(r.path("status").asString(""));
         String answer = busy
                 ? text("chat.answer.impact-busy", "이미 진행 중인 영향도 분석이 있습니다. 끝난 뒤 다시 요청해 주세요.", state)
-                : text("chat.answer.impact-started", "영향도 분석을 시작했습니다 (작업 #{0}). 끝나면 아래 링크에서 리포트를 볼 수 있습니다: /ui/impact-jobs/{0}", state,
+                : text("chat.answer.impact-started", "영향도 분석을 시작했습니다 (작업 #{0}). 끝나면 아래 링크에서 리포트를 볼 수 있습니다: [/ui/impact-jobs/{0}](/ui/impact-jobs/{0})", state,
                         String.valueOf(r.path("jobId").asLong(0)));
         log.info("[TOOL] 영향도 분석 {} thread={}", busy ? "중복 요청" : "시작", state.threadId());
         return fixedAnswer(state, answer);
@@ -175,7 +175,7 @@ public class ToolDispatchService {
         log.info("[TOOL] 유지보수 {} user={} thread={}", busy ? "중복 요청" : "시작", state.userId(), state.threadId());
         return fixedAnswer(state, busy
                 ? text("chat.answer.change-busy", "이미 진행 중인 유지보수 요청이 있습니다. 끝난 뒤 다시 요청해 주세요.", state)
-                : text("chat.answer.change-started", "수정안 만들기를 시작했습니다 (작업 #{0}). 끝나면 아래 화면에서 Diff 를 검토하고 승인하세요: /admin/change-jobs/{0}", state,
+                : text("chat.answer.change-started", "수정안 만들기를 시작했습니다 (작업 #{0}). 끝나면 아래 화면에서 Diff 를 검토하고 승인하세요: [/admin/change-jobs/{0}](/admin/change-jobs/{0})", state,
                         String.valueOf(r.path("jobId").asLong(0))));
     }
 
