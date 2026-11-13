@@ -261,6 +261,14 @@ class ModelBenchmarkServiceTest {
     }
 
     @Test
+    @DisplayName("리랭커 데이터셋 — 문서는 실제 청크에 가깝게 100~300자, 질의에는 50자 이상의 긴 질문이 둘 이상")
+    void rerankDatasetShape() {
+        assertThat(ModelBenchmarkService.RERANK_DOCUMENTS)
+                .allSatisfy(d -> assertThat(d.length()).as(d).isBetween(100, 300));
+        assertThat(ModelBenchmarkService.RERANK_QUERIES).filteredOn(q -> q.length() >= 50).hasSizeGreaterThanOrEqualTo(2);
+    }
+
+    @Test
     @DisplayName("통계 문구 — 최소 / 평균 / 최대, 값이 없으면 '-'")
     void statText() {
         var stat = ModelBenchmarkService.Stat.of(new ArrayList<>(List.of(10.0, 20.0, 30.0)));
