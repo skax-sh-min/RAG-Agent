@@ -58,6 +58,17 @@
                     </tbody>
                 </table>
             </div>
+            <!--/* 뺀 임베딩·리랭커 — 측정할 수 없는 주소를 조용히 숨기지 않고 사유를 적는다 */-->
+            <div th:unless="${excluded.isEmpty()}" class="border-top px-3 py-2 small text-secondary">
+                <div th:text="#{bench.excluded.title}">Not listed (cannot be measured right now):</div>
+                <ul class="mb-0">
+                    <li th:each="x : ${excluded}" class="text-break">
+                        <span th:text="#{'bench.kind.' + ${x.target().kind().name()}} + ' ' + ${x.target().name()}">embedding-2</span>
+                        <span class="font-monospace" th:text="'(' + ${x.target().baseUrl()} + ', ' + ${x.target().model()} + ')'"></span>
+                        — <span th:text="#{'bench.excluded.' + ${x.reason()}}">unreachable</span><span th:if="${x.detail() != null}" th:text="': ' + ${x.detail()}"></span>
+                    </li>
+                </ul>
+            </div>
             <div class="card-footer d-flex flex-wrap align-items-center gap-3 small">
                 <span class="text-secondary" th:text="#{bench.opt.llm}">LLM:</span>
                 <div class="form-check form-check-inline m-0">

@@ -261,7 +261,33 @@ class ModelBenchmarkServiceTest {
     }
 
     @Test
-    @DisplayName("리랭커 데이터셋 — 문서는 실제 청크에 가깝게 100~300자, 질의에는 50자 이상의 긴 질문이 둘 이상")
+    @DisplayName("목록 — 임베딩·리랭커는 지금 닿고 모델이 있는 주소만, 나머지는 사유와 함께 빼며 id 는 원래 위치를 지킨다")
+    void catalogFiltersUnmeasurableEndpoints() {
+        ModelBenchmarkService svc = service(true);
+        // 임베딩 주소를 둘로(두 번째는 죽은 주소) — 첫 번째만 닿는다
+        AppProperties props = mock(AppProperties.class);
+        when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
+                "http://dead.invalid:1/v1", "", "bge-m3", 4, 5, 30, false, 0, List.of(base), 1));
+        when(props.rerankerSafe()).thenReturn(new AppProperties.RerankerConfig(base, "bge-reranker-v2-m3", 5, 15, 2, ""));
+        when(props.rerankerBaseUrls()).thenReturn(List.of(base + "/v1"));
+        LlmRouter router = mock(LlmRouter.class);
+        when(router.allProviders()).thenReturn(List.of());
+        svc = new ModelBenchmarkService(router, props, new ProviderThinkingDialects());
+        svc.endpointCheck = (url, key, model) -> {
+            if (url.contains("dead.invalid")) return new com.example.ragagent.llm.ProviderConnectivity.Result(false, 5L, null, "ConnectException: refused", null);
+            if (model.contains("reranker")) return new com.example.ragagent.llm.ProviderConnectivity.Result(true, 5L, false, null, null);
+            return new com.example.ragagent.llm.ProviderConnectivity.Result(true, 5L, true, null, null);
+        };
+
+        var catalog = svc.catalog();
+        assertThat(catalog.targets()).extracting(ModelBenchmarkService.TargetView::id).containsExactly("embed:1");
+        assertThat(catalog.excluded()).extracting(x -> x.target().id() + "=" + x.reason())
+                .containsExactly("embed:0=unreachable", "rerank:0=model-missing");
+        assertThat(catalog.excluded().get(0).detail()).contains("refused");
+    }
+
+    @Test
+    @DisplayName("리랭커 데이터셋 —문서는 실제 청크에 가깝게 100~300자, 질의에는 50자 이상의 긴 질문이 둘 이상")
     void rerankDatasetShape() {
         assertThat(ModelBenchmarkService.RERANK_DOCUMENTS)
                 .allSatisfy(d -> assertThat(d.length()).as(d).isBetween(100, 300));

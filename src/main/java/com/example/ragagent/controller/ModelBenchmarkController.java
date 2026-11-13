@@ -29,7 +29,9 @@ public class ModelBenchmarkController {
 
     @GetMapping("/admin/settings/benchmark")
     public String page(Model model) {
-        model.addAttribute("targets", benchmark.targets());
+        ModelBenchmarkService.Catalog catalog = benchmark.catalog();   // 임베딩·리랭커는 지금 닿는 것만(주소마다 한 번 묻는다)
+        model.addAttribute("targets", catalog.targets());
+        model.addAttribute("excluded", catalog.excluded());
         model.addAttribute("job", benchmark.running().orElse(null));
         // 측정 입력 — 화면의 접힌 「측정 입력」 칸이 그대로 보여 준다(상수를 템플릿에서 T(...) 로 읽지 않게)
         model.addAttribute("llmPrompts", ModelBenchmarkService.LLM_PROMPTS);

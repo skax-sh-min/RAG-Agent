@@ -7,6 +7,7 @@ import com.example.ragagent.llm.LlmPing;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ModelNameResolver;
+import com.example.ragagent.llm.ProviderConnectivity;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.ProviderThinkingDialects;
 import com.example.ragagent.llm.ThinkingDialect;
@@ -30,7 +31,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
@@ -338,8 +341,71 @@ public class ModelBenchmarkService {
 
     /** 측정할 수 있는 대상 전부 — LLM 프로바이더(우선순위 순) → 임베딩 주소 → 리랭커 주소. */
     public List<TargetView> targets() {
-        return resolveTargets().stream().map(Target::view).toList();
+        return catalog().targets();
     }
+
+    /**
+     * 화면에 그릴 대상과 뺀 대상. 임베딩·리랭커는 <b>지금 측정할 수 있는 것만</b> 남긴다 — 주소마다 모델 목록 API 로 한 번 묻고
+     * ({@link ProviderConnectivity#checkEndpointNow}, {@code /settings} 상태 열과 같은 정의), 닿지 않거나 설정한 모델이 목록에 없는
+     * 주소는 사유와 함께 {@code excluded} 로 보낸다. 주소가 여럿이면 동시에 묻는다(화면은 가장 느린 확인 하나만큼 기다린다).
+     * LLM 은 걸러내지 않는다 — 라우터에 등록된 것만 오고, 등록은 기동 검증(G3)을 지난 결과다.
+     * 대상 id 는 거르기 전의 위치를 쓰므로 하나가 빠져도 다른 것의 id 가 바뀌지 않는다.
+     */
+    public Catalog catalog() {
+        List<Target> all = resolveTargets();
+        List<CompletableFuture<ProviderConnectivity.Result>> checks = new ArrayList<>();
+        List<TargetView> targets = new ArrayList<>();
+        List<Excluded> excluded = new ArrayList<>();
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var executor = MdcPropagation.propagating(pool);
+            for (Target t : all) {
+                checks.add(t.view().kind() == Kind.LLM ? null
+                        : CompletableFuture.supplyAsync(() -> endpointCheck.check(t.view().baseUrl(), t.apiKey(), t.view().model()), executor));
+            }
+            classify(all, checks, targets, excluded);
+        }
+        return new Catalog(List.copyOf(targets), List.copyOf(excluded));
+    }
+
+    private static void classify(List<Target> all, List<CompletableFuture<ProviderConnectivity.Result>> checks,
+                                 List<TargetView> targets, List<Excluded> excluded) {
+        for (int i = 0; i < all.size(); i++) {
+            TargetView v = all.get(i).view();
+            if (checks.get(i) == null) { targets.add(v); continue; }
+            ProviderConnectivity.Result r;
+            try {
+                r = checks.get(i).join();
+            } catch (RuntimeException e) {
+                r = new ProviderConnectivity.Result(false, null, null, LlmPing.describe(e), null);
+            }
+            if (!r.reachable()) {
+                excluded.add(new Excluded(v, "unreachable", r.error()));
+            } else if (Boolean.FALSE.equals(r.modelListed())) {
+                excluded.add(new Excluded(v, "model-missing", null));
+            } else {
+                targets.add(v);
+            }
+        }
+    }
+
+    /** 측정 화면의 대상 목록 — 측정할 수 있는 것과, 뺀 것(사유). */
+    public record Catalog(List<TargetView> targets, List<Excluded> excluded) {}
+
+    /**
+     * 목록에서 뺀 임베딩·리랭커 주소.
+     *
+     * @param reason {@code unreachable}(닿지 않음) · {@code model-missing}(설정한 모델이 서버 목록에 없음) — 화면 문구 키
+     * @param detail 서버가 한 말(닿지 않을 때) — 없으면 {@code null}
+     */
+    public record Excluded(TargetView target, String reason, String detail) {}
+
+    /** 임베딩·리랭커 주소 하나의 접속 확인 — 테스트가 바꿔 끼운다. */
+    @FunctionalInterface
+    interface EndpointCheck {
+        ProviderConnectivity.Result check(String baseUrl, String apiKey, String model);
+    }
+
+    EndpointCheck endpointCheck = ProviderConnectivity::checkEndpointNow;
 
     List<Target> resolveTargets() {
         List<Target> out = new ArrayList<>();
