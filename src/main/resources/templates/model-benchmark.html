@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{bench.title}">Model benchmark</title>
+</head>
+<body>
+
+<section layout:fragment="content" class="container-fluid py-3">
+    <h5 class="fw-semibold mb-1"><i class="bi bi-speedometer2 me-2"></i><span th:text="#{bench.title}">Model benchmark</span></h5>
+    <p class="text-secondary small mb-2" th:text="#{bench.subtitle}">Send fixed inputs to each server and measure latency and throughput.</p>
+    <ul class="small text-secondary mb-3">
+        <li th:text="#{bench.note.sequential}">Requests go one at a time; the first request per target is a warm-up and is not counted.</li>
+        <li th:text="#{bench.note.shared}">The benchmark bypasses the router and uses the same servers as chat, so chat may slow down and results may vary while chat is busy.</li>
+        <li th:text="#{bench.note.remote}">Remote providers may be billed, so they start unselected.</li>
+    </ul>
+
+    <form id="bench-form" hx-post="/admin/settings/benchmark/run" hx-target="#bench-job" hx-swap="outerHTML">
+        <div class="card mb-3">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead class="table-light">
+                    <tr>
+                        <th class="ps-3" style="width: 2.5rem">
+                            <input type="checkbox" class="form-check-input" id="bench-all"
+                                   th:title="#{bench.select-all}"
+                                   onclick="document.querySelectorAll('#bench-form input[name=targets]').forEach(c => c.checked = this.checked)">
+                        </th>
+                        <th th:text="#{bench.col.kind}">Kind</th>
+                        <th th:text="#{bench.col.name}">Name</th>
+                        <th th:text="#{bench.col.model}">Model</th>
+                        <th th:text="#{bench.col.address}">Address</th>
+                        <th class="pe-3" th:text="#{bench.col.thinking}">Thinking control</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:if="${targets.isEmpty()}">
+                        <td colspan="6" class="text-center text-secondary py-3" th:text="#{bench.no-targets}">No servers configured.</td>
+                    </tr>
+                    <tr th:each="t : ${targets}">
+                        <td class="ps-3">
+                            <input type="checkbox" class="form-check-input" name="targets"
+                                   th:value="${t.id()}" th:checked="${t.local()}" th:id="'bench-t-' + ${t.id()}">
+                        </td>
+                        <td><label th:for="'bench-t-' + ${t.id()}" th:text="#{'bench.kind.' + ${t.kind().name()}}">LLM</label></td>
+                        <td>
+                            <span th:text="${t.name()}">local</span>
+                            <span th:unless="${t.local()}" class="badge text-bg-warning ms-1" th:text="#{bench.badge.remote}">remote</span>
+                            <span th:if="${t.disabled()}" class="badge text-bg-secondary ms-1" th:text="#{bench.badge.disabled}">off</span>
+                        </td>
+                        <td class="text-break font-monospace small" th:text="${t.model()}">model</td>
+                        <td class="text-break small" th:text="${t.baseUrl()}">http://localhost:1234/v1</td>
+                        <td class="pe-3 small font-monospace"
+                            th:text="${t.kind().name() == 'LLM'} ? (${t.thinking()} ?: #{bench.thinking.none}) : '-'">chat_template_kwargs.enable_thinking</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer d-flex flex-wrap align-items-center gap-3 small">
+                <span class="text-secondary" th:text="#{bench.opt.llm}">LLM:</span>
+                <div class="form-check form-check-inline m-0">
+                    <input class="form-check-input" type="checkbox" name="thinkingOff" value="true" id="bench-off" checked>
+                    <label class="form-check-label" for="bench-off" th:text="#{bench.opt.thinking-off}">Thinking off</label>
+                </div>
+                <div class="form-check form-check-inline m-0">
+                    <input class="form-check-input" type="checkbox" name="thinkingOn" value="true" id="bench-on" checked>
+                    <label class="form-check-label" for="bench-on" th:text="#{bench.opt.thinking-on}">Thinking on</label>
+                </div>
+                <span class="text-secondary ms-2" th:text="#{bench.opt.rounds}">Embedding/reranker rounds:</span>
+                <select class="form-select form-select-sm w-auto" name="rounds">
+                    <option th:each="n : ${#numbers.sequence(1, 5)}" th:value="${n}" th:text="${n}" th:selected="${n == 3}">3</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-primary ms-auto" th:disabled="${targets.isEmpty()}">
+                    <i class="bi bi-play-fill me-1"></i><span th:text="#{bench.btn.run}">Run test</span>
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <!--/* 결과 — 측정 중이면 2초마다 자기를 다시 읽는다 */-->
+    <div id="bench-job" th:fragment="job"
+         th:attr="hx-get=${job != null and job.running()} ? @{/admin/settings/benchmark/jobs/{id}(id=${job.id()})} : null,
+                  hx-trigger=${job != null and job.running()} ? 'every 2s' : null,
+                  hx-swap=${job != null and job.running()} ? 'outerHTML' : null">
+
+        <div th:if="${notice == 'no-target'}" class="alert alert-warning py-2 small" th:text="#{bench.notice.no-target}">Select at least one target.</div>
+        <div th:if="${notice == 'busy'}" class="alert alert-info py-2 small" th:text="#{bench.notice.busy}">A benchmark is already running.</div>
+
+        <th:block th:if="${job != null}">
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <h6 class="fw-semibold mb-0" th:text="#{bench.job(${job.id()})}">Result #1</h6>
+                <span th:if="${job.running()}" class="spinner-border spinner-border-sm text-primary"></span>
+                <span th:if="${job.running() and job.cancelRequested()}" class="small text-secondary" th:text="#{bench.cancelling}">Stopping…</span>
+                <button th:if="${job.running() and !job.cancelRequested()}" type="button" class="btn btn-sm btn-outline-danger py-0 ms-auto"
+                        th:attr="hx-post=@{/admin/settings/benchmark/jobs/{id}/cancel(id=${job.id()})}"
+                        hx-target="#bench-job" hx-swap="outerHTML" th:text="#{bench.btn.cancel}">Stop</button>
+            </div>
+            <div class="progress mb-3" role="progressbar" style="height: 6px">
+                <div class="progress-bar" th:style="'width: ' + ${job.progressPercent()} + '%'"></div>
+            </div>
+
+            <!--/* LLM */-->
+            <th:block th:with="runs=${job.runs().?[target().kind().name() == 'LLM']}">
+                <div th:unless="${runs.isEmpty()}" class="card mb-3">
+                    <div class="card-header small fw-semibold" th:text="#{bench.section.llm(${job.llmPrompts()})}">LLM</div>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 align-middle small">
+                            <thead class="table-light">
+                            <tr>
+                                <th class="ps-3" th:text="#{bench.col.name}">Name</th>
+                                <th th:text="#{bench.col.mode}">Mode</th>
+                                <th class="text-end" th:text="#{bench.col.ok}">OK</th>
+                                <th class="text-end" th:text="#{bench.col.latency}">Latency ms (min/avg/max)</th>
+                                <th class="text-end" th:text="#{bench.col.out-tokens}">Output tokens (avg)</th>
+                                <th class="text-end" th:text="#{bench.col.thinking-tokens}">Thinking tokens (avg)</th>
+                                <th class="text-end" th:text="#{bench.col.e2e-tps}">E2E TPS</th>
+                                <th class="text-end" th:text="#{bench.col.decode-tps}">Decode TPS</th>
+                                <th class="text-end pe-3" th:text="#{bench.col.prefill-tps}">Prefill TPS (avg)</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <th:block th:each="r : ${runs}">
+                                <tr th:replace="~{model-benchmark :: targetStatus(${r}, 9)}"></tr>
+                                <tr th:each="m : ${r.modes()}" th:unless="${r.status().name() == 'SKIPPED'}">
+                                    <td class="ps-3" th:text="${r.target().name()}">local</td>
+                                    <td>
+                                        <span th:text="#{'bench.mode.' + ${m.mode().name()}}">off</span>
+                                        <div class="text-secondary font-monospace" th:text="${m.sent()}"></div>
+                                    </td>
+                                    <td class="text-end" th:text="${m.okCount()} + ' / ' + ${m.planned()}">6 / 6</td>
+                                    <td class="text-end" th:text="${m.latency().text(0)}">-</td>
+                                    <td class="text-end">
+                                        <span th:text="${m.tokens().avgText(0)}">-</span>
+                                        <span th:if="${m.tokensEstimated()}" class="text-secondary" th:text="#{bench.estimated}">(est.)</span>
+                                    </td>
+                                    <td class="text-end" th:text="${m.reasoningTokens().avgText(0)}">-</td>
+                                    <td class="text-end" th:text="${m.tps().text(1)}">-</td>
+                                    <td class="text-end" th:text="${m.decodeTps().text(1)}">-</td>
+                                    <td class="text-end pe-3" th:text="${m.prefillTps().avgText(1)}">-</td>
+                                </tr>
+                                <tr th:each="m : ${r.modes()}" th:if="${m.firstError() != null}">
+                                    <td colspan="9" class="ps-3 text-danger text-break">
+                                        <span th:text="${r.target().name()} + ' · ' + #{'bench.mode.' + ${m.mode().name()}} + ': '"></span>
+                                        <span th:text="${m.firstError()}"></span>
+                                    </td>
+                                </tr>
+                            </th:block>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </th:block>
+
+            <!--/* 임베딩 */-->
+            <th:block th:with="runs=${job.runs().?[target().kind().name() == 'EMBEDDING']}">
+                <div th:unless="${runs.isEmpty()}" class="card mb-3">
+                    <div class="card-header small fw-semibold"
+                         th:text="#{bench.section.embedding(${job.embeddingTexts()}, ${job.options().rounds()})}">Embedding</div>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 align-middle small">
+                            <thead class="table-light">
+                            <tr>
+                                <th class="ps-3" th:text="#{bench.col.name}">Name</th>
+                                <th th:text="#{bench.col.model}">Model</th>
+                                <th class="text-end" th:text="#{bench.col.ok}">OK</th>
+                                <th class="text-end" th:text="#{bench.col.latency}">Latency</th>
+                                <th class="text-end" th:text="#{bench.col.tokens-per-sec}">Tokens/s</th>
+                                <th class="text-end" th:text="#{bench.col.req-per-sec}">Requests/s (avg)</th>
+                                <th class="text-end pe-3" th:text="#{bench.col.dimensions}">Dimensions</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <th:block th:each="r : ${runs}">
+                                <tr th:replace="~{model-benchmark :: targetStatus(${r}, 7)}"></tr>
+                                <tr th:each="m : ${r.modes()}" th:unless="${r.status().name() == 'SKIPPED'}">
+                                    <td class="ps-3" th:text="${r.target().name()}">embedding-1</td>
+                                    <td class="font-monospace text-break" th:text="${r.resolvedModel()}">bge-m3</td>
+                                    <td class="text-end" th:text="${m.okCount()} + ' / ' + ${m.planned()}">24 / 24</td>
+                                    <td class="text-end" th:text="${m.latency().text(0)}">-</td>
+                                    <td class="text-end">
+                                        <span th:text="${m.tps().text(0)}">-</span>
+                                        <span th:if="${m.tokensEstimated()}" class="text-secondary" th:text="#{bench.estimated}">(est.)</span>
+                                    </td>
+                                    <td class="text-end" th:text="${m.latency().present()} ? ${#numbers.formatDecimal(1000.0 / m.latency().avg(), 1, 1)} : '-'">-</td>
+                                    <td class="text-end pe-3" th:text="${m.dimensions()} ?: '-'">1024</td>
+                                </tr>
+                                <tr th:each="m : ${r.modes()}" th:if="${m.firstError() != null}">
+                                    <td colspan="7" class="ps-3 text-danger text-break" th:text="${r.target().name()} + ': ' + ${m.firstError()}"></td>
+                                </tr>
+                            </th:block>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </th:block>
+
+            <!--/* 리랭커 */-->
+            <th:block th:with="runs=${job.runs().?[target().kind().name() == 'RERANKER']}">
+                <div th:unless="${runs.isEmpty()}" class="card mb-3">
+                    <div class="card-header small fw-semibold"
+                         th:text="#{bench.section.reranker(${job.rerankQueries()}, ${job.rerankDocuments()}, ${job.options().rounds()})}">Reranker</div>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 align-middle small">
+                            <thead class="table-light">
+                            <tr>
+                                <th class="ps-3" th:text="#{bench.col.name}">Name</th>
+                                <th th:text="#{bench.col.model}">Model</th>
+                                <th class="text-end" th:text="#{bench.col.ok}">OK</th>
+                                <th class="text-end" th:text="#{bench.col.latency}">Latency</th>
+                                <th class="text-end" th:text="#{bench.col.docs-per-sec}">Docs/s</th>
+                                <th class="text-end pe-3" th:text="#{bench.col.tokens-per-sec}">Tokens/s</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <th:block th:each="r : ${runs}">
+                                <tr th:replace="~{model-benchmark :: targetStatus(${r}, 6)}"></tr>
+                                <tr th:each="m : ${r.modes()}" th:unless="${r.status().name() == 'SKIPPED'}">
+                                    <td class="ps-3" th:text="${r.target().name()}">reranker-1</td>
+                                    <td class="font-monospace text-break" th:text="${r.resolvedModel()}">bge-reranker-v2-m3</td>
+                                    <td class="text-end" th:text="${m.okCount()} + ' / ' + ${m.planned()}">15 / 15</td>
+                                    <td class="text-end" th:text="${m.latency().text(0)}">-</td>
+                                    <td class="text-end" th:text="${m.docsPerSecond().text(1)}">-</td>
+                                    <td class="text-end pe-3">
+                                        <span th:text="${m.tps().text(0)}">-</span>
+                                        <span th:if="${m.tokensEstimated()}" class="text-secondary" th:text="#{bench.estimated}">(est.)</span>
+                                    </td>
+                                </tr>
+                                <tr th:each="m : ${r.modes()}" th:if="${m.firstError() != null}">
+                                    <td colspan="6" class="ps-3 text-danger text-break" th:text="${r.target().name()} + ': ' + ${m.firstError()}"></td>
+                                </tr>
+                            </th:block>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </th:block>
+
+            <p class="small text-secondary" th:text="#{bench.legend}">TPS = tokens ÷ total request time.</p>
+        </th:block>
+    </div>
+
+    <!--/* 대상 하나의 상태 줄 — 대기·진행·건너뜀(사유)·멈춤. 끝난 것은 줄을 그리지 않는다. */-->
+    <th:block th:remove="all">
+        <tr th:fragment="targetStatus(r, cols)" th:unless="${r.status().name() == 'DONE'}">
+            <td th:colspan="${cols}" class="ps-3"
+                th:classappend="${r.status().name() == 'SKIPPED'} ? 'text-danger text-break' : 'text-secondary'">
+                <span th:text="${r.target().name()} + ' — ' + #{'bench.status.' + ${r.status().name()}}">local — waiting</span>
+                <span th:if="${r.error() != null}" th:text="': ' + ${r.error()}"></span>
+            </td>
+        </tr>
+    </th:block>
+</section>
+
+</body>
+</html>

@@ -262,7 +262,7 @@ public final class LlmPing {
     }
 
     /** 예외 → 한 줄. 4xx/5xx 는 상태와 본문 앞부분까지 — 서버가 준 사유("ErrorDeviceLost")가 거기 있다. */
-    static String describe(Throwable e) {
+    public static String describe(Throwable e) {
         String text;
         if (e instanceof RestClientResponseException r) {
             String snippet = r.getResponseBodyAsString().replaceAll("\\s+", " ").strip();

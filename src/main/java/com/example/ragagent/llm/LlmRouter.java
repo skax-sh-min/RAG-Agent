@@ -528,6 +528,19 @@ public class LlmRouter {
      * Shared by {@link #localTier1Concurrency()} (header indicator) and the ping endpoint
      * ({@code LlmPing}) so both agree on which providers "the local LLM" means.
      */
+    /**
+     * 등록된 프로바이더 전부(우선순위 순, {@code /settings} 토글로 꺼진 것 포함) — 모델 성능 측정 화면이 측정 대상을 고를 때 쓴다.
+     * 라우팅에는 쓰지 않는다.
+     */
+    public List<LlmProvider> allProviders() {
+        return List.copyOf(providers);
+    }
+
+    /** {@code /settings} 토글로 꺼져 있는가 — 측정 화면이 표시만 한다. */
+    public boolean isDisabled(String providerName) {
+        return providerToggle.isDisabled(providerName);
+    }
+
     public List<LlmProvider> localTier1Providers() {
         return providers.stream()
                 .filter(p -> p.role() == LOCAL && p.priority() == 1)
