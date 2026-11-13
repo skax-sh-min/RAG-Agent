@@ -31,6 +31,13 @@ public class ModelBenchmarkController {
     public String page(Model model) {
         model.addAttribute("targets", benchmark.targets());
         model.addAttribute("job", benchmark.running().orElse(null));
+        // 측정 입력 — 화면의 접힌 「측정 입력」 칸이 그대로 보여 준다(상수를 템플릿에서 T(...) 로 읽지 않게)
+        model.addAttribute("llmPrompts", ModelBenchmarkService.LLM_PROMPTS);
+        model.addAttribute("embeddingTexts", ModelBenchmarkService.EMBEDDING_TEXTS);
+        model.addAttribute("rerankQueries", ModelBenchmarkService.RERANK_QUERIES);
+        model.addAttribute("rerankDocuments", ModelBenchmarkService.RERANK_DOCUMENTS);
+        model.addAttribute("maxTokensOff", ModelBenchmarkService.MAX_TOKENS_THINKING_OFF);
+        model.addAttribute("maxTokensOn", ModelBenchmarkService.MAX_TOKENS_THINKING_ON);
         return "model-benchmark";
     }
 

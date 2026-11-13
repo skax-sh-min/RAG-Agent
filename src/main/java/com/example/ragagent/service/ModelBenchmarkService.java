@@ -65,9 +65,9 @@ public class ModelBenchmarkService {
     static final int LLM_READ_TIMEOUT_SECONDS = 300;
     static final int AUX_READ_TIMEOUT_SECONDS = 60;
     /** 생각을 끈 요청의 출력 상한 — 프롬프트가 3~5문장을 청하므로 넉넉하다. */
-    static final int MAX_TOKENS_THINKING_OFF = 512;
+    public static final int MAX_TOKENS_THINKING_OFF = 512;
     /** 생각을 켠 요청의 출력 상한 — 생각 토큰이 같은 상한을 나눠 쓴다. */
-    static final int MAX_TOKENS_THINKING_ON = 2048;
+    public static final int MAX_TOKENS_THINKING_ON = 2048;
     static final int MIN_ROUNDS = 1;
     static final int MAX_ROUNDS = 5;
     static final int DEFAULT_ROUNDS = 3;
@@ -75,7 +75,7 @@ public class ModelBenchmarkService {
     static final int KEEP_JOBS = 5;
 
     /** LLM 측정 프롬프트 — 출력 길이가 비슷하도록 모두 "3~5문장"을 청한다. 데이터셋이라 번역하지 않는다. */
-    static final List<String> LLM_PROMPTS = List.of(
+    public static final List<String> LLM_PROMPTS = List.of(
             "HTTP 와 HTTPS 의 차이를 3~5문장으로 설명하세요.",
             "데이터베이스 인덱스가 조회를 빠르게 만드는 원리를 3~5문장으로 설명하세요.",
             "REST API 에서 GET 과 POST 를 언제 쓰는지 예를 들어 3~5문장으로 설명하세요.",
@@ -84,7 +84,7 @@ public class ModelBenchmarkService {
             "Git 에서 merge 와 rebase 의 차이를 3~5문장으로 설명하세요.");
 
     /** 임베딩 측정 텍스트 — 짧은 구절부터 긴 문단까지 길이를 섞는다. */
-    static final List<String> EMBEDDING_TEXTS = List.of(
+    public static final List<String> EMBEDDING_TEXTS = List.of(
             "서버 포트 설정",
             "로그인 세션이 8시간 뒤에 만료되는 이유",
             "애플리케이션은 기본적으로 8080 포트에서 실행되며, 환경 변수 SERVER_PORT 로 바꿀 수 있다.",
@@ -99,7 +99,7 @@ public class ModelBenchmarkService {
                     + "입력 예산이 함께 다시 계산되고, 카드에 그 숫자가 즉시 표시된다. 변경 이력은 감사 로그에 남는다.");
 
     /** 리랭커 측정 문서 — 질의마다 같은 8개를 순위 매긴다. */
-    static final List<String> RERANK_DOCUMENTS = List.of(
+    public static final List<String> RERANK_DOCUMENTS = List.of(
             "애플리케이션은 기본적으로 8080 포트에서 실행되며, 환경 변수 SERVER_PORT 로 바꿀 수 있다.",
             "데이터베이스 백업은 매일 새벽 3시 30분에 실행되고 최근 7개만 보관한다.",
             "로그인 세션은 마지막 요청 뒤 8시간이 지나면 만료되고 다시 로그인해야 한다.",
@@ -109,7 +109,7 @@ public class ModelBenchmarkService {
             "검색 결과가 하나도 없으면 LLM 을 부르지 않고 '관련 문서를 찾지 못했다'는 정형 응답을 돌려준다.",
             "관리자 계정은 처음 접속할 때 /setup 화면에서 만들며, 관리자가 하나라도 있으면 그 화면은 닫힌다.");
 
-    static final List<String> RERANK_QUERIES = List.of(
+    public static final List<String> RERANK_QUERIES = List.of(
             "서버 포트를 바꾸는 방법",
             "백업은 언제 몇 개까지 보관하나요?",
             "세션이 자꾸 끊기는 이유",
