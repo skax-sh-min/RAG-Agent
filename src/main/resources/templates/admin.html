@@ -468,10 +468,12 @@
                 <div id="upd-phase" class="mt-1"></div>
             </div>
             <div id="upd-result" class="mt-2 d-none"></div>
+            <div id="upd-launcher" class="text-muted small mt-2 d-none"></div>
             <div class="text-muted mt-2">
                 기본은 꺼져 있고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망용). 켜면(<code>UPDATE_CHECK_ENABLED=true</code>, 재기동)
                 기동 직후와 매일 정해진 시각(<code>UPDATE_CHECK_CRON</code>)에 GitHub Releases 의 최신 정식 릴리즈를 확인합니다 — 공개 저장소만, 토큰은 쓰지 않습니다.
                 jar 파일(<code>rag-agent-*.jar</code>)이 첨부된 릴리즈만 새 버전으로 알립니다. <strong>런처</strong>(<code>java -jar rag-agent-launcher.jar</code>)로 실행 중이면 [새 버전으로 업데이트] 가 jar 받기 → SHA-256 체크섬·구조 확인 → 업데이트 전 DB 백업 → 재시작·교체를 한 번에 하고, 새 버전이 정상 기동(헬스)하지 못하면 이전 버전과 그 백업 DB 로 <strong>자동으로 되돌립니다</strong>. 런처 없이 실행 중이면 알림만 합니다 — 직접 교체하세요(운영자 매뉴얼 §6.2.3).
+                런처 jar 자체는 자동으로 바뀌지 않습니다 — 새 버전이 더 새 런처를 요구하면 받은 뒤 DB 를 건드리기 전에 사유와 함께 멈추니, 그때 릴리즈의 런처 jar 로 교체하세요.
                 사내 프록시 뒤라면 <code>JAVA_OPTS</code> 에 <code>-Dhttps.proxyHost</code>/<code>-Dhttps.proxyPort</code> 를 주세요.
             </div>
         </div>
@@ -2584,6 +2586,15 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
             rbox.classList.add('d-none');
         }
         el('upd-fail-pill').classList.toggle('d-none', !(res && res.status !== 'ok'));
+
+        /* 런처 버전 — 런처 jar 는 앱과 따로 교체하므로 어떤 것이 돌고 있는지 보인다(새 앱이 더 새 런처를 요구하면 업데이트가 사유와 함께 멈춘다) */
+        const lbox = el('upd-launcher');
+        if (a.supervised) {
+            lbox.classList.remove('d-none');
+            lbox.textContent = '런처 ' + (a.launcherVersion || '(버전 미상)') + ' · 프로토콜 ' + a.launcherProtocol;
+        } else {
+            lbox.classList.add('d-none');
+        }
 
         if (running) {
             applyActive = true;

@@ -41,13 +41,26 @@ import java.util.stream.Stream;
  * 앱이 비정상 종료하면 다시 띄운다(제한 횟수 안에서).
  *
  * <p>앱과의 약속 — 파일 형식은 {@link Props}, 종료 코드 {@value #EXIT_UPDATE}, 앱에 넘기는 환경변수
- * {@code RAG_SUPERVISED=1} · {@code UPDATE_DIR} · {@code RAG_LAUNCHER_PID}/{@code RAG_LAUNCHER_STARTED}(앱이 런처를 지켜보다 사라지면 스스로 끝난다).
+ * {@code RAG_SUPERVISED=1} · {@code UPDATE_DIR} · {@code RAG_LAUNCHER_PID}/{@code RAG_LAUNCHER_STARTED}(앱이 런처를 지켜보다 사라지면 스스로 끝난다) ·
+ * {@code RAG_LAUNCHER_PROTOCOL}/{@code RAG_LAUNCHER_VERSION}(앱이 새 jar 의 {@code Min-Launcher-Protocol} 과 견주고 화면에 보인다).
  * 이 패키지는 JDK 만 쓴다.
  */
 public final class Launcher {
 
     /** 앱이 "업데이트를 위해 끝난다"는 뜻으로 쓰는 종료 코드 — {@code UpdateApplyService.EXIT_CODE_UPDATE} 와 같은 값이다. */
     public static final int EXIT_UPDATE = 42;
+
+    /**
+     * 앱과의 약속(파일 형식·종료 코드·환경변수)의 세대. 앱 jar 의 {@code Min-Launcher-Protocol} 이 이보다 크면 이 런처는 그 버전을 설치하지
+     * 않는다 — 옛 런처가 모르는 방식을 요구하는 업데이트를 조용히 깨뜨리지 않으려고 있다. <b>약속이 호환되지 않게 바뀔 때만 올린다.</b>
+     */
+    public static final int PROTOCOL = 1;
+
+    /** 이 런처의 버전 — 런처 jar 매니페스트의 {@code Implementation-Version}. IDE·테스트처럼 jar 가 아니면 {@code dev}. */
+    static String version() {
+        String v = Launcher.class.getPackage() == null ? null : Launcher.class.getPackage().getImplementationVersion();
+        return v == null || v.isBlank() ? "dev" : v;
+    }
 
     static final String USAGE = String.join("\n",
             "RAG Agent launcher - runs the application and applies the updates it stages.",
@@ -56,6 +69,7 @@ public final class Launcher {
             "  --home DIR   install directory (versions/, current.txt, .env, data/). Default: the current directory.",
             "  --jar FILE   first install only: the application jar to install as the first version.",
             "               Without it the launcher looks for rag-agent*.jar in the install directory, then in target/.",
+            "  -v, --version  print the launcher version and protocol",
             "  -h, --help   this text",
             "",
             "Settings come from the environment and DIR/.env (.env wins; its values are passed on to the application):",
@@ -96,6 +110,10 @@ public final class Launcher {
             switch (args[i]) {
                 case "-h", "--help" -> {
                     out.println(USAGE);
+                    return 0;
+                }
+                case "-v", "--version" -> {
+                    out.println("rag-agent launcher " + version() + " (protocol " + PROTOCOL + ")");
                     return 0;
                 }
                 case "--home" -> {
@@ -286,6 +304,13 @@ public final class Launcher {
             reject(version, "checksum-mismatch");
             return;
         }
+        int needed = Jars.minLauncherProtocol(staged);
+        if (needed > PROTOCOL) {
+            // 앱도 받은 뒤에 같은 검사를 하지만(옛 앱이 새 jar 를 받는 경우는 앱이 모른다), 설치 직전에 한 번 더 — 포인터를 건드리기 전이다
+            info("update to " + version + " needs launcher protocol " + needed + " but this launcher speaks " + PROTOCOL);
+            reject(version, "launcher-too-old");
+            return;
+        }
         try {
             layout.install(version, staged, false);
         } catch (IOException e) {
@@ -380,6 +405,9 @@ public final class Launcher {
         pb.environment().putAll(cfg.overrides);
         pb.environment().put("RAG_SUPERVISED", "1");          // 앱이 "업데이트 버튼을 켜도 된다"고 아는 신호
         pb.environment().put("UPDATE_DIR", cfg.updateDir.toString());
+        // 앱이 업데이트를 받은 뒤 "이 런처로 설치할 수 있는 버전인가"를 알려면 런처의 세대를 알아야 한다(.env 에 있어도 이 값이 이긴다)
+        pb.environment().put("RAG_LAUNCHER_PROTOCOL", String.valueOf(PROTOCOL));
+        pb.environment().put("RAG_LAUNCHER_VERSION", version());
         // 강제 종료된 런처 뒤에 앱이 고아로 남지 않게 - 앱이 이 값으로 런처를 지켜보다 사라지면 스스로 끝난다(LauncherWatchdog)
         ProcessHandle self = ProcessHandle.current();
         pb.environment().put("RAG_LAUNCHER_PID", String.valueOf(self.pid()));

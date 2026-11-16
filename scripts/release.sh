@@ -8,7 +8,8 @@
 #   2. build       sets the pom version to the release version and runs "mvn clean package" (tests included unless
 #                  --skip-tests). A failure puts pom.xml back.
 #   3. verify      jar build.version must equal the release version (the app refuses an update whose jar disagrees
-#                  with the tag), Start-Class must be the app's. Writes the artifacts to target/release/:
+#                  with the tag), Start-Class must be the app's, and the manifest's Min-Launcher-Protocol (the launcher
+#                  generation this version needs) must be a positive integer. Writes the artifacts to target/release/:
 #                    rag-agent-<v>.jar            the file the running apps download
 #                    rag-agent-<v>.jar.sha256     sha256sum format - without it apps announce the release but cannot update
 #                    rag-agent-<v>-launcher.jar   the ~30 KB launcher a new install starts with (+ its .sha256);
@@ -111,6 +112,7 @@ jar_entry() {  # jar_entry <jar> <entry>
 
 jar_build_version() { jar_entry "$1" META-INF/build-info.properties | tr -d '\r' | sed -n 's/^build\.version=//p' | head -n 1; }
 jar_start_class() { jar_entry "$1" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Start-Class: //p' | head -n 1; }
+jar_min_launcher_protocol() { jar_entry "$1" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Min-Launcher-Protocol: //p' | head -n 1; }
 
 confirm() {  # confirm <question>
   [ "$YES" -eq 1 ] && return 0
@@ -232,6 +234,15 @@ $(git status --short)"
   [ "$built" = "$VERSION" ] || die "the jar says build.version='$built', expected '$VERSION' - not releasing"
   start=$(jar_start_class "$OUT/$JAR_NAME")
   [ "$start" = "com.example.ragagent.RagAgentApplication" ] || die "unexpected Start-Class '$start' in the jar - not releasing"
+  # which launcher generation this version needs (pom property min.launcher.protocol -> jar manifest). Launchers and apps read it from
+  # the downloaded jar; a missing or non-numeric value would make them treat the release as "any launcher will do".
+  minproto=$(jar_min_launcher_protocol "$OUT/$JAR_NAME")
+  case "$minproto" in
+    ''|*[!0-9]*|0) die "the jar's Min-Launcher-Protocol is '$minproto' (expected a positive integer; pom property min.launcher.protocol) - not releasing" ;;
+  esac
+  if [ "$minproto" -gt 1 ]; then
+    info "NOTE: this release needs launcher protocol $minproto - an older launcher stops the update with 'launcher-too-old'; say so in the release notes"
+  fi
   sum=$(sha256_of "$OUT/$JAR_NAME")
   printf '%s  %s\n' "$sum" "$JAR_NAME" > "$OUT/$JAR_NAME.sha256" || die "cannot write the checksum file"
   [ "$(sha256_of "$OUT/$JAR_NAME")" = "$sum" ] || die "checksum changed while writing"

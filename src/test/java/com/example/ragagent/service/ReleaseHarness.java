@@ -186,6 +186,7 @@ abstract class ReleaseHarness {
                 "mkdir -p target/stage/META-INF",
                 "printf 'build.version=%s\\nbuild.name=rag-agent\\n' \"$bv\" > target/stage/META-INF/build-info.properties",
                 "printf 'Start-Class: %s\\n' \"$start\" > target/manifest.txt",
+                "[ -z \"$FAKE_MVN_NO_PROTOCOL\" ] && printf 'Min-Launcher-Protocol: %s\\n' \"${FAKE_MVN_PROTOCOL:-1}\" >> target/manifest.txt",
                 "\"$FAKE_JAR\" --create --file \"target/rag-agent-$ver.jar\" --manifest target/manifest.txt -C target/stage . || exit 1",
                 "if [ -z \"$FAKE_MVN_NO_LAUNCHER\" ]; then",
                 "  mkdir -p target/lstage/com/example/ragagent/launcher",

@@ -51,7 +51,7 @@ class UpdateApplyControllerWebMvcTest {
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;   // WebConfig.chatClient 의존
 
     private static UpdateApplyService.View view(boolean canApply, UpdateApplyService.Job job, UpdateApplyService.LauncherResult last) {
-        return new UpdateApplyService.View(true, canApply, canApply ? null : "사유", job, last);
+        return new UpdateApplyService.View(true, canApply, canApply ? null : "사유", job, last, "0.5.6", 1);
     }
 
     private static UpdateApplyService.Job downloading() {
@@ -69,6 +69,8 @@ class UpdateApplyControllerWebMvcTest {
         mvc.perform(get("/admin/update/apply").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.supervised").value(true))
+                .andExpect(jsonPath("$.launcherVersion").value("0.5.6"))
+                .andExpect(jsonPath("$.launcherProtocol").value(1))
                 .andExpect(jsonPath("$.canApply").value(true))
                 .andExpect(jsonPath("$.job.phase").value("DOWNLOADING"))
                 .andExpect(jsonPath("$.job.bytesDone").value(100))

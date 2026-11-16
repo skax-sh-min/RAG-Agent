@@ -300,6 +300,35 @@ class ReleaseBashScriptTest extends ReleaseHarness {
     }
 
     @Test
+    @DisplayName("앱 jar 에 Min-Launcher-Protocol 이 없으면 릴리즈하지 않는다 — 런처·앱이 '아무 런처나 된다'고 읽게 되기 때문")
+    void aMissingMinLauncherProtocolIsNotReleased() throws Exception {
+        Result r = run(args(opt(Opt.YES)), Map.of("FAKE_MVN_NO_PROTOCOL", "1"), "");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("Min-Launcher-Protocol").contains("positive integer");
+        assertNothingChanged();
+    }
+
+    @Test
+    @DisplayName("Min-Launcher-Protocol 이 숫자가 아니면 릴리즈하지 않는다")
+    void aNonNumericMinLauncherProtocolIsNotReleased() throws Exception {
+        Result r = run(args(opt(Opt.YES)), Map.of("FAKE_MVN_PROTOCOL", "two"), "");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("Min-Launcher-Protocol is 'two'");
+        assertNothingChanged();
+    }
+
+    @Test
+    @DisplayName("릴리즈가 더 새 런처를 요구하면(2 이상) 알려 준다 — 릴리즈는 막지 않는다")
+    void aHigherMinLauncherProtocolIsAnnounced() throws Exception {
+        Result r = run(args(opt(Opt.BUILD_ONLY)), Map.of("FAKE_MVN_PROTOCOL", "2"), "");
+
+        assertThat(r.exit()).isZero();
+        assertThat(r.out()).contains("needs launcher protocol 2").contains("launcher-too-old");
+    }
+
+    @Test
     @DisplayName("jar 안의 build.version 이 릴리즈 버전과 다르면 릴리즈하지 않는다 (앱도 이런 jar 의 업데이트를 거절한다)")
     void wrongJarVersionIsNotReleased() throws Exception {
         Result r = run(args(opt(Opt.YES)), Map.of("FAKE_MVN_WRONG_VERSION", "1"), "");

@@ -34,7 +34,8 @@ public final class StubApp {
         append("start " + version + " " + behavior);
         append("env supervised=" + System.getenv("RAG_SUPERVISED") + " updateDir=" + System.getenv("UPDATE_DIR")
                 + " flag=" + System.getProperty("stub.flag") + " x=" + System.getenv("STUB_X")
-                + " launcherPid=" + System.getenv("RAG_LAUNCHER_PID") + " launcherStarted=" + System.getenv("RAG_LAUNCHER_STARTED"));
+                + " launcherPid=" + System.getenv("RAG_LAUNCHER_PID") + " launcherStarted=" + System.getenv("RAG_LAUNCHER_STARTED")
+                + " protocol=" + System.getenv("RAG_LAUNCHER_PROTOCOL") + " launcherVersion=" + System.getenv("RAG_LAUNCHER_VERSION"));
         switch (behavior) {
             case "healthy-exit0" -> {
                 serve();

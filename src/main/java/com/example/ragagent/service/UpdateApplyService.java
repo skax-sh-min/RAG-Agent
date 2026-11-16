@@ -82,7 +82,8 @@ public class UpdateApplyService {
     public record LauncherResult(String status, String version, String reason, boolean dbRestored, Instant at, String message) {}
 
     /** {@code /admin} 카드가 그리는 것. {@code reason} 은 새 버전이 있는데 적용할 수 없을 때만 채워진다. */
-    public record View(boolean supervised, boolean canApply, String reason, Job job, LauncherResult lastResult) {}
+    public record View(boolean supervised, boolean canApply, String reason, Job job, LauncherResult lastResult,
+                       String launcherVersion, int launcherProtocol) {}
 
     /** 사용자에게 그대로 보일 사유가 있는 실패. */
     static final class Failure extends RuntimeException {
@@ -97,6 +98,8 @@ public class UpdateApplyService {
     private final IndexingProgressService indexing;
     private final ObjectProvider<EmbeddingRebuildService> rebuild;
     private final boolean supervised;
+    private final int launcherProtocol;
+    private final String launcherVersion;
     private final Path dir;
     private final RestClient client;
 
@@ -109,13 +112,18 @@ public class UpdateApplyService {
                               ObjectProvider<EmbeddingRebuildService> rebuild,
                               @Value("${app.update.supervised:false}") boolean supervised,
                               @Value("${app.update.dir:}") String updateDir,
-                              @Value("${app.data-dir:./data}") String dataDir) {
+                              @Value("${app.data-dir:./data}") String dataDir,
+                              @Value("${app.update.launcher-protocol:0}") int launcherProtocol,
+                              @Value("${app.update.launcher-version:}") String launcherVersion) {
         this.updates = updates;
         this.backups = backups;
         this.restarter = restarter;
         this.indexing = indexing;
         this.rebuild = rebuild;
         this.supervised = supervised;
+        // 런처가 세대를 알려 주지 않으면(0) 첫 런처부터 지키는 기준선 1 로 본다 — 그 이상을 요구하는 jar 만 거절된다
+        this.launcherProtocol = Math.max(1, launcherProtocol);
+        this.launcherVersion = launcherVersion == null || launcherVersion.isBlank() ? null : launcherVersion.strip();
         this.dir = (updateDir == null || updateDir.isBlank() ? Path.of(dataDir).resolve("updates") : Path.of(updateDir))
                 .toAbsolutePath();
         this.client = HttpClientTimeouts.restClientBuilder(5, 60).build();
@@ -127,7 +135,8 @@ public class UpdateApplyService {
         UpdateCheckService.Status s = updates.status();
         String blocker = blocker(s);
         boolean available = s.updateAvailable();
-        return new View(supervised, available && blocker == null, available ? blocker : null, job, readResult(s.currentVersion()));
+        return new View(supervised, available && blocker == null, available ? blocker : null, job, readResult(s.currentVersion()),
+                supervised ? launcherVersion : null, supervised ? launcherProtocol : 0);
     }
 
     /** 지금 적용할 수 없는 이유 — 없으면 null. */
@@ -190,7 +199,13 @@ public class UpdateApplyService {
             if (!actual.equalsIgnoreCase(expected)) {
                 throw new Failure("체크섬이 맞지 않습니다 — 받은 파일이 릴리즈의 것과 다릅니다(손상 또는 변조). 적용하지 않았습니다.");
             }
-            inspectJar(partial, release.version());
+            int neededProtocol = inspectJar(partial, release.version());
+            if (neededProtocol > launcherProtocol) {
+                // 지금 런처가 모르는 방식을 요구하는 버전 — DB 백업·종료·롤백 같은 위험한 단계에 들어가기 전에 멈춘다
+                throw new Failure("이 버전(" + release.version() + ")을 올리려면 런처를 먼저 새 것으로 바꿔야 합니다 — 필요한 런처 프로토콜 " + neededProtocol
+                        + ", 지금 런처는 " + launcherProtocol + (launcherVersion == null ? "" : "(버전 " + launcherVersion + ")") + " 입니다. "
+                        + "릴리즈의 rag-agent-" + release.version() + "-launcher.jar 로 런처를 교체한 뒤 다시 시도하세요(운영자 매뉴얼 §6.2.3). 아무것도 바꾸지 않았습니다.");
+            }
             Files.move(partial, jarFile, StandardCopyOption.REPLACE_EXISTING);
 
             progress(Phase.BACKING_UP, release, release.jar().size(), "업데이트 전 DB 백업을 만드는 중");
@@ -330,15 +345,21 @@ public class UpdateApplyService {
         return p.substring(p.lastIndexOf('/') + 1);
     }
 
-    /** jar 가 이 앱의 것이고({@code Start-Class}) 안의 빌드 버전이 릴리즈 태그와 같은지 본다. */
-    static void inspectJar(Path jar, String expectedVersion) {
+    /**
+     * jar 가 이 앱의 것이고({@code Start-Class}) 안의 빌드 버전이 릴리즈 태그와 같은지 본다.
+     *
+     * @return 이 jar 가 요구하는 최소 런처 프로토콜({@code Min-Launcher-Protocol} — 없거나 숫자가 아니면 기준선 1)
+     */
+    static int inspectJar(Path jar, String expectedVersion) {
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             ZipEntry manifestEntry = zip.getEntry("META-INF/MANIFEST.MF");
             if (manifestEntry == null) throw new Failure("jar 에 매니페스트가 없습니다 — 이 앱의 jar 가 아닙니다.");
             String startClass;
+            int minLauncherProtocol;
             try (InputStream in = zip.getInputStream(manifestEntry)) {
-                startClass = new Manifest(new java.io.ByteArrayInputStream(in.readNBytes(256 * 1024)))
-                        .getMainAttributes().getValue("Start-Class");
+                var attributes = new Manifest(new java.io.ByteArrayInputStream(in.readNBytes(256 * 1024))).getMainAttributes();
+                startClass = attributes.getValue("Start-Class");
+                minLauncherProtocol = parseProtocol(attributes.getValue("Min-Launcher-Protocol"));
             }
             if (!START_CLASS.equals(startClass)) throw new Failure("이 앱의 jar 가 아닙니다 (Start-Class=" + startClass + ").");
             ZipEntry info = zip.getEntry("META-INF/build-info.properties");
@@ -353,10 +374,21 @@ public class UpdateApplyService {
             if (a == null || b == null || !a.equals(b)) {
                 throw new Failure("릴리즈 태그의 버전(" + expectedVersion + ")과 jar 안의 버전(" + inJar + ")이 다릅니다 — 잘못 올린 릴리즈일 수 있어 적용하지 않았습니다.");
             }
+            return minLauncherProtocol;
         } catch (ZipException e) {
             throw new Failure("받은 파일이 올바른 jar(zip)가 아닙니다 — " + e.getMessage());
         } catch (IOException e) {
             throw new Failure("받은 jar 를 읽지 못했습니다 — " + e.getMessage());
+        }
+    }
+
+    /** {@code Min-Launcher-Protocol} 속성값 — 없거나 숫자가 아니면 기준선 1(런처의 {@code Jars.minLauncherProtocol} 과 같은 규칙). */
+    static int parseProtocol(String value) {
+        if (value == null) return 1;
+        try {
+            return Math.max(1, Integer.parseInt(value.strip()));
+        } catch (NumberFormatException e) {
+            return 1;
         }
     }
 
@@ -425,6 +457,7 @@ public class UpdateApplyService {
                 case "missing-jar" -> "받아 둔 jar 가 없습니다";
                 case "copy-failed" -> "jar 설치에 실패했습니다(같은 버전 이름에 다른 jar 가 이미 있을 수 있습니다)";
                 case "invalid-pending" -> "업데이트 요청의 내용(버전 이름·jar 위치)이 올바르지 않습니다";
+                case "launcher-too-old" -> "이 버전은 지금 런처보다 새 런처가 필요합니다(릴리즈의 런처 jar 로 교체한 뒤 다시 시도하세요)";
                 default -> reason.isBlank() ? "원인을 알 수 없습니다" : reason;
             } + ".";
             default -> status + " " + version;

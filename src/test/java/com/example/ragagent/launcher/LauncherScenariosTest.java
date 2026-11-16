@@ -243,6 +243,44 @@ class LauncherScenariosTest {
     }
 
     @Test
+    @DisplayName("새 jar 가 이 런처보다 높은 프로토콜을 요구하면 설치하지 않고 거절한다 — 포인터·DB 를 건드리기 전이다")
+    void rejectsAJarThatNeedsANewerLauncher() throws Exception {
+        installCurrent("0.5.6", "healthy-exit0");
+        Path jar = StubJars.create(updates, "0.5.7", "healthy-exit0", String.valueOf(Launcher.PROTOCOL + 1));
+        writePending("0.5.7", jar, Jars.sha256(jar), backup.toString());
+
+        Run r = run();
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        assertThat(r.out()).contains("needs launcher protocol " + (Launcher.PROTOCOL + 1));
+        assertThat(started()).containsExactly("start 0.5.6 healthy-exit0");
+        assertThat(currentVersion()).isEqualTo("0.5.6");
+        assertThat(layout().jarOf("0.5.7")).doesNotExist();
+        assertThat(result()).containsEntry("status", "rejected").containsEntry("version", "0.5.7")
+                .containsEntry("reason", "launcher-too-old");
+        assertThat(updates.resolve("pending.properties")).doesNotExist();
+        assertThat(updates.resolve("trial.properties")).doesNotExist();
+        assertThat(Files.readString(db)).isEqualTo("v1-data");
+    }
+
+    @Test
+    @DisplayName("요구 프로토콜이 이 런처와 같거나 낮거나 속성이 없으면 설치한다")
+    void installsAJarWhoseRequirementIsMet() throws Exception {
+        installCurrent("0.5.6", "healthy-exit0");
+        Path jar = StubJars.create(updates, "0.5.7", "healthy-exit0", String.valueOf(Launcher.PROTOCOL));
+        writePending("0.5.7", jar, Jars.sha256(jar), backup.toString());
+
+        Run r = run();
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        assertThat(currentVersion()).isEqualTo("0.5.7");
+        assertThat(Jars.minLauncherProtocol(jar)).isEqualTo(Launcher.PROTOCOL);
+        assertThat(Jars.minLauncherProtocol(StubJars.create(home.resolve("none"), "0.5.8", "x"))).isEqualTo(1);       // 속성 없음
+        assertThat(Jars.minLauncherProtocol(StubJars.create(home.resolve("bad"), "0.5.9", "x", "abc"))).isEqualTo(1);  // 숫자가 아님
+        assertThat(Jars.minLauncherProtocol(home.resolve("no-such.jar"))).isEqualTo(1);                                // 읽을 수 없음
+    }
+
+    @Test
     @DisplayName("받아 둔 jar 가 사라졌으면 거절한다")
     void rejectsWhenTheStagedJarIsMissing() throws Exception {
         installCurrent("0.5.6", "healthy-exit0");
@@ -416,6 +454,31 @@ class LauncherScenariosTest {
         assertThat(line).contains("supervised=1").contains("flag=on").contains("x=a b=c")
                 .contains("updateDir=" + updates.toAbsolutePath().normalize())
                 .contains("launcherPid=" + ProcessHandle.current().pid());      // 앱이 런처를 지켜보는 데 쓰는 값
+    }
+
+    @Test
+    @DisplayName("앱에 런처의 프로토콜 세대와 버전이 넘어간다 — .env 에 같은 이름이 있어도 런처의 값이 이긴다")
+    void passesTheLauncherProtocolAndVersion() throws Exception {
+        env.put("RAG_LAUNCHER_PROTOCOL", "99");
+        env.put("RAG_LAUNCHER_VERSION", "spoofed");
+        installCurrent("0.5.6", "quick-exit0");
+
+        Run r = run();
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        String line = Files.readAllLines(stubLog).stream().filter(l -> l.startsWith("env ")).findFirst().orElse("");
+        assertThat(line).contains("protocol=" + Launcher.PROTOCOL).contains("launcherVersion=" + Launcher.version())
+                .doesNotContain("spoofed").doesNotContain("protocol=99");
+    }
+
+    @Test
+    @DisplayName("--version 은 런처 버전과 프로토콜을 찍고 아무것도 시작하지 않는다")
+    void versionFlagPrintsAndExits() throws Exception {
+        Run r = run("--version");
+
+        assertThat(r.exit()).isZero();
+        assertThat(r.out()).contains("rag-agent launcher").contains("protocol " + Launcher.PROTOCOL);
+        assertThat(started()).isEmpty();
     }
 
     // ── 첫 설치 ──────────────────────────────────────────────────────────────

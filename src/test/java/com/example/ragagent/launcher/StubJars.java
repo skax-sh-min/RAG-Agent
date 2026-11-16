@@ -18,11 +18,17 @@ final class StubJars {
 
     /** {@code dir/rag-agent-<version>.jar}. 같은 behavior 라도 jar 마다 내용이 다르도록 버전·행동이 안에 들어간다. */
     static Path create(Path dir, String version, String behavior) throws IOException {
+        return create(dir, version, behavior, null);
+    }
+
+    /** {@code minLauncherProtocol} 은 매니페스트 {@code Min-Launcher-Protocol} 에 적을 문자열 그대로(null = 속성 없음). */
+    static Path create(Path dir, String version, String behavior, String minLauncherProtocol) throws IOException {
         Files.createDirectories(dir);
         Path jar = dir.resolve("rag-agent-" + version + ".jar");
         Manifest mf = new Manifest();
         mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         mf.getMainAttributes().put(Attributes.Name.MAIN_CLASS, StubApp.class.getName());
+        if (minLauncherProtocol != null) mf.getMainAttributes().putValue("Min-Launcher-Protocol", minLauncherProtocol);
         try (OutputStream os = Files.newOutputStream(jar); JarOutputStream out = new JarOutputStream(os, mf)) {
             out.putNextEntry(new ZipEntry(StubApp.class.getName().replace('.', '/') + ".class"));
             try (InputStream in = StubApp.class.getResourceAsStream("StubApp.class")) {

@@ -86,9 +86,15 @@ class UpdateApplyServiceTest {
     // ── 가짜 GitHub ──────────────────────────────────────────────────────────
 
     private static byte[] jar(String startClass, String buildVersion) throws IOException {
+        return jar(startClass, buildVersion, null);
+    }
+
+    /** {@code minLauncherProtocol} 은 매니페스트에 적을 문자열 그대로(null = 속성 없음). */
+    private static byte[] jar(String startClass, String buildVersion, String minLauncherProtocol) throws IOException {
         Manifest mf = new Manifest();
         mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         if (startClass != null) mf.getMainAttributes().putValue("Start-Class", startClass);
+        if (minLauncherProtocol != null) mf.getMainAttributes().putValue("Min-Launcher-Protocol", minLauncherProtocol);
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (JarOutputStream out = new JarOutputStream(bos, mf)) {
             if (buildVersion != null) {
@@ -117,6 +123,11 @@ class UpdateApplyServiceTest {
 
     /** 서버를 띄우고 현재 버전({@code current}) 기준의 서비스를 만든 뒤 확인을 한 번 돌려 latest 를 채운다. */
     private UpdateApplyService prepare(String current, boolean supervised) throws Exception {
+        return prepare(current, supervised, 1, "0.5.6");
+    }
+
+    /** {@code launcherProtocol}·{@code launcherVersion} 은 런처가 환경변수로 넘기는 값(0·빈 값 = 알려 주지 않음). */
+    private UpdateApplyService prepare(String current, boolean supervised, int launcherProtocol, String launcherVersion) throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         port = server.getAddress().getPort();
         String base = "http://127.0.0.1:" + port;
@@ -152,7 +163,7 @@ class UpdateApplyServiceTest {
         checks = new UpdateCheckService(about, true, "0 0 9 * * *", REPO, base, "Asia/Seoul");
         checks.check("manual");
         return new UpdateApplyService(checks, backups, restarter, indexing, rebuildProvider, supervised, updateDir.toString(),
-                tmp.resolve("data").toString());
+                tmp.resolve("data").toString(), launcherProtocol, launcherVersion);
     }
 
     private static void reply(com.sun.net.httpserver.HttpExchange ex, int status, byte[] body) throws IOException {
@@ -291,6 +302,72 @@ class UpdateApplyServiceTest {
         svc.start("0.5.7");
 
         assertFailedBeforeAnyChange(svc, "다릅니다");
+    }
+
+    // ── 런처 호환(Min-Launcher-Protocol) ─────────────────────────────────────
+
+    @Test
+    @DisplayName("새 jar 가 지금 런처보다 높은 프로토콜을 요구하면 받은 뒤 DB 백업·종료 전에 멈추고 런처 교체를 안내한다")
+    void jarNeedsANewerLauncher() throws Exception {
+        jarBytes = jar(UpdateApplyService.START_CLASS, "0.5.7", "2");
+        checksumText = sumFile(jarBytes);
+        UpdateApplyService svc = prepare("0.5.6", true, 1, "0.5.6");
+
+        svc.start("0.5.7");
+
+        assertFailedBeforeAnyChange(svc, "런처를 먼저 새 것으로 바꿔야");
+        UpdateApplyService.Job job = svc.view().job();
+        assertThat(job.message()).contains("필요한 런처 프로토콜 2").contains("지금 런처는 1").contains("버전 0.5.6")
+                .contains("rag-agent-0.5.7-launcher.jar").contains("아무것도 바꾸지 않았습니다");
+        verify(backups, never()).run(anyString());
+    }
+
+    @Test
+    @DisplayName("런처가 요구와 같거나 더 높은 프로토콜이면 그대로 진행한다")
+    void launcherMeetsTheRequirement() throws Exception {
+        jarBytes = jar(UpdateApplyService.START_CLASS, "0.5.7", "2");
+        checksumText = sumFile(jarBytes);
+        UpdateApplyService svc = prepare("0.5.6", true, 2, "0.6.0");
+
+        svc.start("0.5.7");
+
+        assertThat(waitDone(svc).phase()).isEqualTo(UpdateApplyService.Phase.RESTARTING);
+        verify(restarter).restart(UpdateApplyService.EXIT_CODE_UPDATE);
+    }
+
+    @Test
+    @DisplayName("속성이 없거나 숫자가 아니면 요구 없음(기준선 1)이고, 런처가 세대를 알려 주지 않으면(0) 1 로 본다")
+    void missingOrBrokenRequirementIsBaseline() throws Exception {
+        assertThat(UpdateApplyService.parseProtocol(null)).isEqualTo(1);
+        assertThat(UpdateApplyService.parseProtocol("abc")).isEqualTo(1);
+        assertThat(UpdateApplyService.parseProtocol("0")).isEqualTo(1);
+        assertThat(UpdateApplyService.parseProtocol("-3")).isEqualTo(1);
+        assertThat(UpdateApplyService.parseProtocol(" 3 ")).isEqualTo(3);
+
+        jarBytes = jar(UpdateApplyService.START_CLASS, "0.5.7", "abc");
+        checksumText = sumFile(jarBytes);
+        UpdateApplyService svc = prepare("0.5.6", true, 0, "");     // 런처가 아무것도 알려 주지 않았다
+
+        svc.start("0.5.7");
+
+        assertThat(waitDone(svc).phase()).isEqualTo(UpdateApplyService.Phase.RESTARTING);
+        assertThat(svc.view().launcherProtocol()).isEqualTo(1);
+        assertThat(svc.view().launcherVersion()).isNull();
+    }
+
+    @Test
+    @DisplayName("view() 는 런처 버전·프로토콜을 런처 아래에서 돌 때만 내보낸다")
+    void viewCarriesTheLauncherOnlyWhenSupervised() throws Exception {
+        jarBytes = goodJar();
+        checksumText = sumFile(jarBytes);
+        UpdateApplyService supervised = prepare("0.5.6", true, 1, "0.5.6");
+        assertThat(supervised.view().launcherVersion()).isEqualTo("0.5.6");
+        assertThat(supervised.view().launcherProtocol()).isEqualTo(1);
+        server.stop(0);
+
+        UpdateApplyService plain = prepare("0.5.6", false, 1, "0.5.6");
+        assertThat(plain.view().launcherVersion()).isNull();
+        assertThat(plain.view().launcherProtocol()).isZero();
     }
 
     @Test
@@ -565,6 +642,8 @@ class UpdateApplyServiceTest {
         assertThat(svc.readResult("0.5.6").message()).contains("설치에 실패");
         writeResult("status=rejected\nversion=0.5.7\nreason=invalid-pending\n");
         assertThat(svc.readResult("0.5.6").message()).contains("올바르지 않습니다");
+        writeResult("status=rejected\nversion=0.5.7\nreason=launcher-too-old\n");
+        assertThat(svc.readResult("0.5.6").message()).contains("새 런처가 필요합니다").contains("런처 jar");
     }
 
     @Test
