@@ -455,12 +455,13 @@
                     <strong id="upd-name"></strong> <span class="text-muted" id="upd-published"></span>
                     <a id="upd-link" class="ms-2 d-none" target="_blank" rel="noopener noreferrer">릴리즈 페이지 <i class="bi bi-box-arrow-up-right"></i></a>
                 </div>
+                <div class="text-muted mt-1" id="upd-jar"></div>
                 <pre id="upd-notes" class="border rounded p-2 mt-2 mb-0" style="white-space:pre-wrap; max-height:16rem; overflow:auto;"></pre>
             </div>
             <div class="text-muted mt-2">
                 기본은 꺼져 있고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망용). 켜면(<code>UPDATE_CHECK_ENABLED=true</code>, 재기동)
                 기동 직후와 매일 정해진 시각(<code>UPDATE_CHECK_CRON</code>)에 GitHub Releases 의 최신 정식 릴리즈를 확인합니다 — 공개 저장소만, 토큰은 쓰지 않습니다.
-                이 기능은 <strong>알림만</strong> 합니다. 새 버전을 내려받아 바꾸는 일은 하지 않으므로 업데이트는 직접 하세요.
+                jar 파일(<code>rag-agent-*.jar</code>)이 첨부된 릴리즈만 새 버전으로 알립니다. 이 기능은 <strong>알림만</strong> 합니다. 새 버전을 내려받아 바꾸는 일은 하지 않으므로 업데이트는 직접 하세요.
                 사내 프록시 뒤라면 <code>JAVA_OPTS</code> 에 <code>-Dhttps.proxyHost</code>/<code>-Dhttps.proxyPort</code> 를 주세요.
             </div>
         </div>
@@ -2485,6 +2486,9 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
         } else if (!last.ok) {
             box.textContent = '마지막 확인(' + fmtTime(last.checkedAt) + ', ' + last.trigger + ') 실패: ' + last.error;
             box.className = 'mt-2 text-danger';
+        } else if (s.releaseWithoutJar) {
+            box.textContent = '릴리즈 ' + latest.version + ' 이(가) 게시됐지만 jar 파일이 첨부되지 않아 알리지 않습니다 — 파일이 올라오면 다음 확인에서 알립니다.';
+            box.className = 'mt-2 text-warning';
         } else if (s.updateAvailable) {
             box.textContent = '새 버전 ' + latest.version + ' 이(가) 있습니다 (확인 ' + fmtTime(last.checkedAt) + ', ' + last.trigger + ').';
             box.className = 'mt-2 text-success';
@@ -2508,6 +2512,9 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
             } else {
                 link.classList.add('d-none');
             }
+            el('upd-jar').textContent = latest.jar
+                ? '첨부: ' + latest.jar.name + ' (' + (latest.jar.size / 1048576).toFixed(1) + ' MB)'
+                : '첨부된 jar 가 없습니다';
             el('upd-notes').textContent = latest.notes || '(릴리즈 노트가 없습니다)';
         } else {
             rel.classList.add('d-none');

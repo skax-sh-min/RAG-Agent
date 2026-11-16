@@ -25,6 +25,11 @@ import java.util.regex.Pattern;
  * 새 릴리즈 확인 — GitHub Releases 의 <b>최신 정식 릴리즈</b>({@code GET /repos/{owner}/{repo}/releases/latest} — draft·prerelease 는
  * API 가 이미 뺀다)를 지금 실행 중인 버전과 견주어 관리자에게 알린다. <b>알리기만 한다</b> — 내려받기·교체는 이 클래스의 일이 아니다.
  *
+ * <p><b>새 버전으로 알리는 조건은 "버전이 더 높다"와 "그 릴리즈에 jar 가 첨부돼 있다" 둘 다다.</b> 태그만 먼저 게시하고 파일을 나중에 올리는
+ * 동안 관리자가 받을 것이 없는 알림을 받지 않게 하려는 것이다 — jar 가 없으면 {@link Status#releaseWithoutJar} 로 사유만 보이고
+ * 파일이 올라온 뒤의 다음 확인에서 알린다. jar 는 {@code rag-agent-*.jar}(소스·javadoc·plain 제외)이고, 업로드가 끝난
+ * 자산({@code state=uploaded})이며, 내려받기 주소가 {@code https://github.com/{repo}/releases/download/} 아래일 때만 인정한다.
+ *
  * <p><b>기본값은 꺼짐이고, 꺼져 있으면 밖으로 아무 요청도 나가지 않는다</b>(수동 확인 포함). 폐쇄망 배포가 전제인 앱이라 외부 호출은
  * 운영자가 명시적으로 켜야 한다. 켜면 기동 직후 한 번, 그 뒤 {@code app.update.cron}(기본 매일 09:00, {@code app.time-zone} 기준)에
  * 확인한다. 저장소는 공개 전제라 토큰을 받지 않는다(토큰이 필요한 비공개 저장소는 지원하지 않는다 — 인증 헤더가 있는 외부 요청을
@@ -49,9 +54,16 @@ public class UpdateCheckService {
     /** 수동 확인 연타가 GitHub 의 비인증 한도(시간당 60회)를 태우지 않게 — 이 간격 안의 수동 확인은 직전 결과를 그대로 돌려준다. */
     static final Duration MANUAL_MIN_INTERVAL = Duration.ofSeconds(10);
     private static final Pattern REPO = Pattern.compile("[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}");
+    private static final Pattern JAR_NAME = Pattern.compile("rag-agent-[A-Za-z0-9._+-]{1,80}\\.jar");
 
-    /** 최신 릴리즈 하나. {@code version} 은 접두 {@code v} 를 뗀 표기, {@code url} 은 안전하다고 본 링크일 때만(아니면 null). */
-    public record Release(String tag, String version, String name, String notes, String url, Instant publishedAt) {}
+    /** 릴리즈에 첨부된 파일 하나 — {@code url} 은 내려받기 주소로 허용된 것일 때만 채워진다. */
+    public record Asset(String name, long size, String url) {}
+
+    /**
+     * 최신 릴리즈 하나. {@code version} 은 접두 {@code v} 를 뗀 표기, {@code url} 은 안전하다고 본 링크일 때만(아니면 null).
+     * {@code jar} 는 첨부된 앱 jar — 없으면 null(그 릴리즈는 알리지 않는다).
+     */
+    public record Release(String tag, String version, String name, String notes, String url, Instant publishedAt, Asset jar) {}
 
     /** 마지막 확인의 결과. {@code error} 가 있으면 실패다. */
     public record CheckResult(String trigger, Instant checkedAt, boolean ok, String error) {}
@@ -59,9 +71,12 @@ public class UpdateCheckService {
     /**
      * {@code /admin} 카드가 그리는 것. {@code currentVersion} 이 null 이면 빌드 정보가 없는 개발 실행({@code devBuild})이라 비교하지
      * 않는다({@code updateAvailable=false}). {@code latest} 는 <b>마지막으로 성공한</b> 확인의 릴리즈이며 이후 확인이 실패해도 남는다.
+     * {@code updateAvailable} 은 <b>더 높은 버전이고 jar 가 첨부된</b> 릴리즈일 때만 참이다 — 더 높은 버전이지만 jar 가 없으면
+     * {@code releaseWithoutJar}.
      */
     public record Status(boolean enabled, String cron, String zone, String repo, String currentVersion, boolean devBuild,
-                         boolean checking, CheckResult last, Release latest, boolean updateAvailable, String configError) {}
+                         boolean checking, CheckResult last, Release latest, boolean updateAvailable,
+                         boolean releaseWithoutJar, String configError) {}
 
     private final AboutService about;
     private final boolean enabled;
@@ -148,9 +163,10 @@ public class UpdateCheckService {
             last = new CheckResult(trigger, Instant.now(), true, null);
             AppVersion cur = currentVersion().orElse(null);
             AppVersion lat = AppVersion.parse(found.version()).orElse(null);
+            boolean newer = cur != null && lat != null && lat.isNewerThan(cur);
             log.info("[UPDATE-CHECK] {} — 최신 {} / 현재 {}{}", trigger, found.version(),
                     cur == null ? "(개발 빌드)" : cur.text(),
-                    cur != null && lat != null && lat.isNewerThan(cur) ? " → 새 버전이 있다" : "");
+                    !newer ? "" : found.jar() != null ? " → 새 버전이 있다" : " → 더 높은 버전이지만 jar 가 첨부되지 않아 알리지 않는다");
         } catch (CheckFailure e) {
             last = new CheckResult(trigger, Instant.now(), false, e.getMessage());
             log.warn("[UPDATE-CHECK] {} 실패: {}", trigger, e.getMessage());
@@ -167,10 +183,11 @@ public class UpdateCheckService {
     public Status status() {
         Release l = latest;
         Optional<AppVersion> cur = currentVersion();
-        boolean available = l != null && cur.isPresent()
+        boolean newer = l != null && cur.isPresent()
                 && AppVersion.parse(l.version()).map(v -> v.isNewerThan(cur.get())).orElse(false);
+        boolean available = newer && l.jar() != null;
         return new Status(enabled, cron, zone, repo, cur.map(AppVersion::text).orElse(null), about.info().devBuild(),
-                checking, last, l, available, configError);
+                checking, last, l, available, newer && l.jar() == null, configError);
     }
 
     /** 새 버전이 있는가 — 헤더 배지가 묻는다. */
@@ -236,7 +253,51 @@ public class UpdateCheckService {
         return new Release(abbreviate(tag, 64), version.text(),
                 abbreviate(root.path("name").asText(""), 200),
                 abbreviate(root.path("body").asText(""), MAX_NOTES_CHARS),
-                safeUrl(root.path("html_url").asText("")), published);
+                safeUrl(root.path("html_url").asText("")), published, pickJar(root.path("assets"), version.text()));
+    }
+
+    /**
+     * 첨부 파일 중 앱 jar 를 고른다 — {@code rag-agent-*.jar}(소스·javadoc·plain 제외), 업로드가 끝난 것, 내려받기 주소가 허용된 것.
+     * 여럿이면 {@code rag-agent-{version}.jar} 를 우선한다. 없으면 null.
+     */
+    Asset pickJar(JsonNode assets, String version) {
+        if (assets == null || !assets.isArray()) return null;
+        Asset best = null;
+        for (JsonNode a : assets) {
+            String name = a.path("name").asText("");
+            if (!JAR_NAME.matcher(name).matches() || name.endsWith("-sources.jar") || name.endsWith("-javadoc.jar")
+                    || name.endsWith("-plain.jar")) continue;
+            String state = a.path("state").asText("uploaded");
+            if (!"uploaded".equals(state)) continue;             // open = 업로드가 끝나지 않았다
+            long size = a.path("size").asLong(0);
+            String url = safeDownloadUrl(a.path("browser_download_url").asText(""));
+            if (size <= 0 || url == null) continue;
+            Asset candidate = new Asset(name, size, url);
+            if (name.equals("rag-agent-" + version + ".jar")) return candidate;
+            if (best == null) best = candidate;
+        }
+        return best;
+    }
+
+    /**
+     * 내려받기 주소로 허용하는 것 — {@code https://github.com/{repo}/releases/download/…}. 테스트용으로 api-base 가 루프백이면 같은 루프백
+     * 호스트의 같은 경로도 허용한다. 릴리즈 JSON 이 다른 호스트를 가리켜도 따라가지 않는다(실행할 파일을 받는 주소라서).
+     */
+    String safeDownloadUrl(String url) {
+        if (url == null || url.isBlank() || url.length() > 500) return null;
+        try {
+            URI u = URI.create(url.strip());
+            if (u.getUserInfo() != null || u.getHost() == null || u.getQuery() != null || u.getFragment() != null) return null;
+            String prefix = "/" + repo + "/releases/download/";
+            if (u.getPath() == null || !u.getPath().startsWith(prefix) || u.getPath().contains("..")) return null;
+            boolean github = "https".equalsIgnoreCase(u.getScheme()) && "github.com".equalsIgnoreCase(u.getHost());
+            URI base = URI.create(apiBase);
+            boolean sameLoopback = "http".equalsIgnoreCase(u.getScheme()) && isLoopback(u.getHost())
+                    && isLoopback(base.getHost()) && u.getPort() == base.getPort();
+            return github || sameLoopback ? url.strip() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     // ── 검증 보조 ──────────────────────────────────────────────────────────────

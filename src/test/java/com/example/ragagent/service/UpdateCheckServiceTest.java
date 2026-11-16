@@ -69,7 +69,21 @@ class UpdateCheckServiceTest {
     private static String release(String tag) {
         return "{\"tag_name\":\"" + tag + "\",\"name\":\"Release " + tag + "\",\"body\":\"- fix A\\n- fix B\","
                 + "\"html_url\":\"https://github.com/owner/name/releases/tag/" + tag + "\","
-                + "\"published_at\":\"2026-11-16T01:02:03Z\",\"draft\":false,\"prerelease\":false}";
+                + "\"published_at\":\"2026-11-16T01:02:03Z\",\"draft\":false,\"prerelease\":false,"
+                + "\"assets\":[" + asset("rag-agent-" + tag.replaceFirst("^v", "") + ".jar", tag, 1234, "uploaded") + "]}";
+    }
+
+    private static String asset(String name, String tag, long size, String state) {
+        return "{\"name\":\"" + name + "\",\"state\":\"" + state + "\",\"size\":" + size + ","
+                + "\"browser_download_url\":\"https://github.com/owner/name/releases/download/" + tag + "/" + name + "\"}";
+    }
+
+    private static String releaseWithAssets(String tag, String assetsJson) {
+        return "{\"tag_name\":\"" + tag + "\",\"assets\":[" + assetsJson + "]}";
+    }
+
+    private UpdateCheckService.Release parse(String json) {
+        return service("0.5.6", true, REPO, "http://127.0.0.1:1").parseRelease(json.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
@@ -281,6 +295,109 @@ class UpdateCheckServiceTest {
         assertThat(none.url()).isNull();
         assertThat(none.notes()).isEmpty();
         assertThat(none.publishedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("jar 가 첨부되지 않은 릴리즈는 알리지 않는다 — 더 높은 버전이어도 updateAvailable 은 거짓, 사유(releaseWithoutJar)만 남는다")
+    void releaseWithoutJarIsNotAnnounced() throws Exception {
+        String base = serve(200, "{\"tag_name\":\"v0.5.7\",\"name\":\"n\",\"body\":\"b\",\"assets\":[]}");
+        UpdateCheckService svc = service("0.5.6", true, REPO, base);
+
+        UpdateCheckService.Status s = svc.check("manual");
+
+        assertThat(s.last().ok()).isTrue();
+        assertThat(s.latest().version()).isEqualTo("0.5.7");
+        assertThat(s.latest().jar()).isNull();
+        assertThat(s.updateAvailable()).isFalse();
+        assertThat(s.releaseWithoutJar()).isTrue();
+        assertThat(svc.updateAvailable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("assets 필드가 아예 없어도 jar 없음으로 본다")
+    void missingAssetsFieldMeansNoJar() {
+        assertThat(parse("{\"tag_name\":\"v0.5.7\"}").jar()).isNull();
+    }
+
+    @Test
+    @DisplayName("jar 가 있으면 이름·크기·주소를 싣는다")
+    void jarIsReported() throws Exception {
+        String base = serve(200, release("v0.5.7"));
+
+        UpdateCheckService.Status s = service("0.5.6", true, REPO, base).check("manual");
+
+        assertThat(s.updateAvailable()).isTrue();
+        assertThat(s.releaseWithoutJar()).isFalse();
+        assertThat(s.latest().jar().name()).isEqualTo("rag-agent-0.5.7.jar");
+        assertThat(s.latest().jar().size()).isEqualTo(1234);
+        assertThat(s.latest().jar().url()).isEqualTo("https://github.com/owner/name/releases/download/v0.5.7/rag-agent-0.5.7.jar");
+    }
+
+    @Test
+    @DisplayName("같은 버전이면 jar 가 없어도 releaseWithoutJar 가 아니다 — 알릴 새 버전이 아니므로")
+    void sameVersionWithoutJarIsQuiet() throws Exception {
+        String base = serve(200, "{\"tag_name\":\"v0.5.6\",\"assets\":[]}");
+
+        UpdateCheckService.Status s = service("0.5.6", true, REPO, base).check("manual");
+
+        assertThat(s.updateAvailable()).isFalse();
+        assertThat(s.releaseWithoutJar()).isFalse();
+    }
+
+    @Test
+    @DisplayName("소스·javadoc·plain jar, .sha256, 다른 이름의 파일은 앱 jar 가 아니다")
+    void onlyTheApplicationJarCounts() {
+        String assets = String.join(",",
+                asset("rag-agent-0.5.7-sources.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7-javadoc.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7-plain.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7.jar.sha256", "v0.5.7", 10, "uploaded"),
+                asset("other-0.5.7.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7.zip", "v0.5.7", 10, "uploaded"));
+
+        assertThat(parse(releaseWithAssets("v0.5.7", assets)).jar()).isNull();
+    }
+
+    @Test
+    @DisplayName("업로드가 끝나지 않은 자산(state=open)과 크기가 0인 자산은 인정하지 않는다")
+    void incompleteAssetsAreIgnored() {
+        assertThat(parse(releaseWithAssets("v0.5.7", asset("rag-agent-0.5.7.jar", "v0.5.7", 100, "open"))).jar()).isNull();
+        assertThat(parse(releaseWithAssets("v0.5.7", asset("rag-agent-0.5.7.jar", "v0.5.7", 0, "uploaded"))).jar()).isNull();
+    }
+
+    @Test
+    @DisplayName("여러 jar 가 있으면 rag-agent-{버전}.jar 를 우선한다")
+    void prefersTheExactName() {
+        String assets = String.join(",",
+                asset("rag-agent-0.5.7-rc1.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7.jar", "v0.5.7", 20, "uploaded"));
+
+        assertThat(parse(releaseWithAssets("v0.5.7", assets)).jar().name()).isEqualTo("rag-agent-0.5.7.jar");
+        assertThat(parse(releaseWithAssets("v0.5.7", assets)).jar().size()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("내려받기 주소는 github.com 의 이 저장소 releases/download 아래 https 만 — 다른 호스트·다른 저장소·http·사용자 정보는 버린다")
+    void downloadUrlMustBeGithubReleaseDownload() {
+        UpdateCheckService svc = service("0.5.6", true, REPO, "https://api.github.com");
+        String ok = "https://github.com/owner/name/releases/download/v1/rag-agent-1.0.0.jar";
+
+        assertThat(svc.safeDownloadUrl(ok)).isEqualTo(ok);
+        assertThat(svc.safeDownloadUrl("https://evil.example/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("https://github.com/other/repo/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("http://github.com/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("https://user:pw@github.com/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("https://github.com/owner/name/releases/download/../../x.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("https://github.com/owner/name/releases/download/v1/x.jar?token=1")).isNull();
+        assertThat(svc.safeDownloadUrl("https://github.com.evil.example/owner/name/releases/download/v1/x.jar")).isNull();
+        assertThat(svc.safeDownloadUrl("")).isNull();
+        assertThat(svc.safeDownloadUrl(null)).isNull();
+        // 루프백 api-base(테스트) 여도 github.com 규칙은 그대로이고, 같은 루프백 호스트·포트의 같은 경로만 더 허용한다
+        UpdateCheckService local = service("0.5.6", true, REPO, "http://127.0.0.1:9999");
+        assertThat(local.safeDownloadUrl("http://127.0.0.1:9999/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNotNull();
+        assertThat(local.safeDownloadUrl("http://127.0.0.1:8888/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+        assertThat(service("0.5.6", true, REPO, "https://api.github.com")
+                .safeDownloadUrl("http://127.0.0.1:9999/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
     }
 
     @Test
