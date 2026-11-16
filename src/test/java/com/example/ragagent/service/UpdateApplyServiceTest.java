@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
 /**
  * 업데이트 적용 — 진짜 {@link HttpServer} 가 GitHub(릴리즈 JSON · jar · 체크섬)를 흉내 내므로 받기·크기 검사·해시 계산이 실제 HTTP 를
  * 지난다. 테스트 jar 는 코드로 만든다(매니페스트 {@code Start-Class} + {@code META-INF/build-info.properties}). DB 백업·재시작·인덱싱
- * 상태만 가짜다. 마지막 두 테스트 묶음은 감독 스크립트와의 약속(체크섬 파일 읽기 · {@code result.properties} 읽기)이다.
+ * 상태만 가짜다. 마지막 두 테스트 묶음은 런처와의 약속(체크섬 파일 읽기 · {@code result.properties} 읽기)이다.
  */
 class UpdateApplyServiceTest {
 
@@ -361,7 +361,7 @@ class UpdateApplyServiceTest {
     }
 
     @Test
-    @DisplayName("재시작 요청이 실패하면 pending 을 거두고 실패로 남는다 — 감독 스크립트가 나중에 엉뚱하게 적용하지 않게")
+    @DisplayName("재시작 요청이 실패하면 pending 을 거두고 실패로 남는다 — 런처가 나중에 엉뚱하게 적용하지 않게")
     void restartFailureRemovesPending() throws Exception {
         doThrow(new IllegalStateException("cannot exit")).when(restarter).restart(UpdateApplyService.EXIT_CODE_UPDATE);
         UpdateApplyService svc = ready();
@@ -379,7 +379,7 @@ class UpdateApplyServiceTest {
     // ── 시작 조건 ────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("감독 스크립트 아래가 아니면 적용할 수 없다 — 사유를 보이고 start 는 거절")
+    @DisplayName("런처 아래가 아니면 적용할 수 없다 — 사유를 보이고 start 는 거절")
     void notSupervised() throws Exception {
         jarBytes = goodJar();
         checksumText = sumFile(jarBytes);
@@ -388,8 +388,8 @@ class UpdateApplyServiceTest {
         UpdateApplyService.View view = svc.view();
         assertThat(view.supervised()).isFalse();
         assertThat(view.canApply()).isFalse();
-        assertThat(view.reason()).contains("감독 스크립트");
-        assertThatThrownBy(() -> svc.start("0.5.7")).isInstanceOf(IllegalStateException.class).hasMessageContaining("감독 스크립트");
+        assertThat(view.reason()).contains("런처");
+        assertThatThrownBy(() -> svc.start("0.5.7")).isInstanceOf(IllegalStateException.class).hasMessageContaining("런처");
         assertThat(svc.view().job()).isNull();
     }
 
@@ -505,7 +505,7 @@ class UpdateApplyServiceTest {
                 .isInstanceOf(UpdateApplyService.Failure.class);
     }
 
-    // ── 감독 스크립트가 남긴 결과 읽기 ───────────────────────────────────────
+    // ── 런처가 남긴 결과 읽기 ───────────────────────────────────────
 
     private UpdateApplyService serviceForResults() throws Exception {
         return ready();
@@ -528,7 +528,7 @@ class UpdateApplyServiceTest {
         UpdateApplyService svc = serviceForResults();
         writeResult("status=ok\nversion=0.5.7\nreason=\ndbRestored=false\nat=2026-11-16T01:02:03Z\n");
 
-        UpdateApplyService.SupervisorResult shown = svc.readResult("0.5.7");
+        UpdateApplyService.LauncherResult shown = svc.readResult("0.5.7");
         assertThat(shown.status()).isEqualTo("ok");
         assertThat(shown.message()).contains("0.5.7").contains("업데이트했습니다");
         assertThat(shown.at()).isEqualTo(Instant.parse("2026-11-16T01:02:03Z"));
@@ -543,7 +543,7 @@ class UpdateApplyServiceTest {
         UpdateApplyService svc = serviceForResults();
         writeResult("status=rolled-back\nversion=0.5.7\nreason=unhealthy-timeout\ndbRestored=true\nat=2026-11-16T01:02:03Z\n");
 
-        UpdateApplyService.SupervisorResult r = svc.readResult("0.5.6");
+        UpdateApplyService.LauncherResult r = svc.readResult("0.5.6");
 
         assertThat(r.status()).isEqualTo("rolled-back");
         assertThat(r.dbRestored()).isTrue();
@@ -562,7 +562,9 @@ class UpdateApplyServiceTest {
         writeResult("status=rejected\nversion=0.5.7\nreason=missing-jar\n");
         assertThat(svc.readResult("0.5.6").message()).contains("받아 둔 jar 가 없습니다");
         writeResult("status=rejected\nversion=0.5.7\nreason=copy-failed\n");
-        assertThat(svc.readResult("0.5.6").message()).contains("교체에 실패");
+        assertThat(svc.readResult("0.5.6").message()).contains("설치에 실패");
+        writeResult("status=rejected\nversion=0.5.7\nreason=invalid-pending\n");
+        assertThat(svc.readResult("0.5.6").message()).contains("올바르지 않습니다");
     }
 
     @Test

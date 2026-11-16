@@ -35,6 +35,11 @@ class ReleaseBashScriptTest extends ReleaseHarness {
         assertThat(Files.readString(repo.resolve("target/release/rag-agent-0.5.6.jar.sha256")))
                 .isEqualTo(sha256(jar) + "  rag-agent-0.5.6.jar\n");
         assertThat(jarEntry(jar, "META-INF/build-info.properties")).contains("build.version=0.5.6");   // SNAPSHOT 이 아니라 릴리즈 버전으로 빌드했다
+        Path launcher = repo.resolve("target/release/rag-agent-0.5.6-launcher.jar");                    // 첫 설치용 런처 jar 도 함께
+        assertThat(launcher).exists();
+        assertThat(Files.readString(repo.resolve("target/release/rag-agent-0.5.6-launcher.jar.sha256")))
+                .isEqualTo(sha256(launcher) + "  rag-agent-0.5.6-launcher.jar\n");
+        assertThat(jarEntry(launcher, "META-INF/MANIFEST.MF")).contains("Main-Class: com.example.ragagent.launcher.Launcher");
         assertThat(Files.readString(mvnLog)).contains("clean package").doesNotContain("-DskipTests");
         assertNothingChanged();
         assertThat(ghCalls()).as("--build-only 는 gh 를 부르지 않는다").isEmpty();
@@ -62,6 +67,7 @@ class ReleaseBashScriptTest extends ReleaseHarness {
         assertThat(calls).hasSize(3);
         assertThat(calls.get(0)).isEqualTo("auth status");
         assertThat(calls.get(1)).startsWith("release create v0.5.6 ").contains("rag-agent-0.5.6.jar ").contains("rag-agent-0.5.6.jar.sha256 ")
+                .contains("rag-agent-0.5.6-launcher.jar ").contains("rag-agent-0.5.6-launcher.jar.sha256 ")
                 .endsWith("--title 0.5.6 --generate-notes --verify-tag --draft");
         assertThat(calls.get(2)).isEqualTo("release edit v0.5.6 --draft=false");                    // 올린 뒤에 게시
         assertThat(r.out()).contains("published v0.5.6");
@@ -281,6 +287,16 @@ class ReleaseBashScriptTest extends ReleaseHarness {
         assertNothingChanged();
         assertThat(Files.readString(repo.resolve("pom.xml"))).contains("0.5.6-SNAPSHOT");
         assertThat(ghCalls()).doesNotContain("release edit v0.5.6 --draft=false");
+    }
+
+    @Test
+    @DisplayName("런처 jar 가 만들어지지 않았으면 릴리즈하지 않는다 — 첫 설치용 파일이 빠진 릴리즈를 올리지 않는다")
+    void aMissingLauncherJarIsNotReleased() throws Exception {
+        Result r = run(args(opt(Opt.YES)), Map.of("FAKE_MVN_NO_LAUNCHER", "1"), "");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("did not produce").contains("-launcher.jar");
+        assertNothingChanged();
     }
 
     @Test

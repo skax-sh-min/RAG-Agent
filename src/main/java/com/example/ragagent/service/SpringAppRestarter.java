@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * {@link AppRestarter} 의 실제 구현 — {@link SpringApplication#exit} 로 컨텍스트를 정상 종료(진행 중 요청 마무리·풀 닫기)한 뒤
- * 그 종료 코드로 {@code System.exit} 한다. 다시 띄우는 것은 이 클래스가 아니라 감독 스크립트(종료 코드 42 를 보고 jar 를 바꿔 재시작)다.
+ * 그 종료 코드로 {@code System.exit} 한다. 다시 띄우는 것은 이 클래스가 아니라 런처(종료 코드 42 를 보고 jar 를 바꿔 재시작)다.
  */
 @Component
 public class SpringAppRestarter implements AppRestarter {
@@ -32,7 +32,7 @@ public class SpringAppRestarter implements AppRestarter {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            log.warn("[UPDATE-APPLY] 업데이트를 위해 종료 코드 {} 로 앱을 끝낸다 — 감독 스크립트가 jar 를 바꿔 다시 띄운다", exitCode);
+            log.warn("[UPDATE-APPLY] 업데이트를 위해 종료 코드 {} 로 앱을 끝낸다 — 런처가 jar 를 바꿔 다시 띄운다", exitCode);
             int code = SpringApplication.exit(context, () -> exitCode);
             System.exit(code);
         }));

@@ -35,7 +35,7 @@ import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
 /**
- * 관리자가 「업데이트」 를 누르면 새 jar 를 받아 검증하고, 업데이트 전 DB 백업을 만든 뒤, 감독 스크립트에 교체를 맡기고 앱을 끝낸다.
+ * 관리자가 「업데이트」 를 누르면 새 jar 를 받아 검증하고, 업데이트 전 DB 백업을 만든 뒤, 런처에 교체를 맡기고 앱을 끝낸다.
  * <b>이 클래스는 실행 중인 jar 를 직접 바꾸지 않는다</b> — 실행 중인 JVM 은 자기 jar 를 못 바꾸고(Windows 는 파일이 잠긴다) 바꾸다 죽으면
  * 되돌릴 사람이 없다. 그래서 순서는 다음과 같다.
  * <ol>
@@ -44,10 +44,10 @@ import java.util.zip.ZipFile;
  *       릴리즈 태그와 같은지({@code META-INF/build-info.properties}) 본다 — 태그와 파일이 어긋난 릴리즈를 걸러 낸다.</li>
  *   <li>{@link DatabaseBackupService} 로 {@code pre-update-<버전>} 백업을 만든다. <b>실패하면 아무것도 바꾸지 않고 멈춘다</b>
  *       (되돌릴 지점 없이는 새 버전을 올리지 않는다 — 마이그레이션은 앞으로만 간다).</li>
- *   <li>{@code pending.properties} 를 쓰고 종료 코드 {@link #EXIT_CODE_UPDATE} 로 끝낸다. 감독 스크립트가 jar 를 바꾸고 새 버전을 띄우며,
+ *   <li>{@code pending.properties} 를 쓰고 종료 코드 {@link #EXIT_CODE_UPDATE} 로 끝낸다. 런처가 jar 를 바꾸고 새 버전을 띄우며,
  *       정상 기동(헬스)하지 못하면 이전 jar 와 위의 DB 백업으로 되돌린다.</li>
  * </ol>
- * 감독 스크립트 아래에서 돌 때만({@code RAG_SUPERVISED}) 적용할 수 있다. 결과는 스크립트가 쓰는 {@code result.properties} 로 앱이 다시 뜬
+ * 런처 아래에서 돌 때만({@code RAG_SUPERVISED}) 적용할 수 있다. 결과는 스크립트가 쓰는 {@code result.properties} 로 앱이 다시 뜬
  * 뒤 {@link View#lastResult()} 에서 읽는다.
  *
  * <p>체크섬은 같은 릴리즈에 올라온 파일이라 <b>손상·중간 끊김·CDN 변조</b>를 막지만 GitHub 계정이 탈취된 경우까지 막지는 못한다(서명은 쓰지
@@ -58,7 +58,7 @@ public class UpdateApplyService {
 
     private static final Logger log = LoggerFactory.getLogger(UpdateApplyService.class);
 
-    /** 감독 스크립트와 맞춘 값 — 이 코드로 끝나면 "업데이트를 위한 종료"이니 pending 을 적용하고 다시 띄운다. */
+    /** 런처와 맞춘 값 — 이 코드로 끝나면 "업데이트를 위한 종료"이니 pending 을 적용하고 다시 띄운다. */
     public static final int EXIT_CODE_UPDATE = 42;
     static final String START_CLASS = "com.example.ragagent.RagAgentApplication";
     static final long MAX_JAR_BYTES = 1_000_000_000L;
@@ -70,7 +70,7 @@ public class UpdateApplyService {
 
     public enum Phase { IDLE, DOWNLOADING, VERIFYING, BACKING_UP, RESTARTING, FAILED }
 
-    /** 진행 중이거나 마지막으로 끝난 적용 작업. 메모리에만 있다(재기동하면 {@link SupervisorResult} 가 이어받는다). */
+    /** 진행 중이거나 마지막으로 끝난 적용 작업. 메모리에만 있다(재기동하면 {@link LauncherResult} 가 이어받는다). */
     public record Job(Phase phase, String version, long bytesDone, long bytesTotal, String message,
                       Instant startedAt, Instant finishedAt) {
         boolean running() {
@@ -78,11 +78,11 @@ public class UpdateApplyService {
         }
     }
 
-    /** 감독 스크립트가 남긴 마지막 교체 결과({@code result.properties}) — {@code message} 는 사유 코드를 풀어 쓴 문장이다. */
-    public record SupervisorResult(String status, String version, String reason, boolean dbRestored, Instant at, String message) {}
+    /** 런처가 남긴 마지막 교체 결과({@code result.properties}) — {@code message} 는 사유 코드를 풀어 쓴 문장이다. */
+    public record LauncherResult(String status, String version, String reason, boolean dbRestored, Instant at, String message) {}
 
     /** {@code /admin} 카드가 그리는 것. {@code reason} 은 새 버전이 있는데 적용할 수 없을 때만 채워진다. */
-    public record View(boolean supervised, boolean canApply, String reason, Job job, SupervisorResult lastResult) {}
+    public record View(boolean supervised, boolean canApply, String reason, Job job, LauncherResult lastResult) {}
 
     /** 사용자에게 그대로 보일 사유가 있는 실패. */
     static final class Failure extends RuntimeException {
@@ -134,14 +134,14 @@ public class UpdateApplyService {
     private String blocker(UpdateCheckService.Status s) {
         if (!s.enabled()) return "새 버전 확인이 꺼져 있습니다.";
         if (!supervised) {
-            return "감독 스크립트(rag-agent-supervisor)로 실행 중이 아니라 자동 업데이트를 할 수 없습니다 — 운영자 매뉴얼 §6.2.3 의 절차로 직접 교체하세요.";
+            return "런처(rag-agent-launcher.jar)로 실행 중이 아니라 자동 업데이트를 할 수 없습니다 — 운영자 매뉴얼 §6.2.3 의 절차로 직접 교체하세요.";
         }
         Job j = job;
         if (j != null && j.running()) return "이미 업데이트가 진행 중입니다.";
         if (s.latest() != null && s.latest().checksum() == null) {
             return "릴리즈에 체크섬 파일(" + (s.latest().jar() == null ? "<jar>" : s.latest().jar().name()) + ".sha256)이 없어 자동 업데이트를 할 수 없습니다.";
         }
-        if (Files.exists(dir.resolve(PENDING))) return "이전 업데이트 요청이 아직 처리되지 않았습니다(감독 스크립트가 교체하지 않았습니다).";
+        if (Files.exists(dir.resolve(PENDING))) return "이전 업데이트 요청이 아직 처리되지 않았습니다(런처가 교체하지 않았습니다).";
         if (indexing.activeWorkerCount() > 0) return "문서 인덱싱이 진행 중입니다 — 끝난 뒤 다시 시도하세요.";
         EmbeddingRebuildService r = rebuild.getIfAvailable();
         if (r != null && r.status().running()) return "임베딩 재생성이 진행 중입니다 — 끝난 뒤 다시 시도하세요.";
@@ -202,7 +202,7 @@ public class UpdateApplyService {
             writePending(release, fromVersion, jarFile, actual, backups.backupFile(backup.file()), backups.databaseFile());
             pendingWritten = true;
             progress(Phase.RESTARTING, release, release.jar().size(), "다시 시작하는 중 — 새 버전이 뜨면 이 화면을 새로 고치세요");
-            log.warn("[UPDATE-APPLY] {} → {} 교체를 감독 스크립트에 맡긴다 (백업 {})", fromVersion, release.version(), backup.file());
+            log.warn("[UPDATE-APPLY] {} → {} 교체를 런처에 맡긴다 (백업 {})", fromVersion, release.version(), backup.file());
             restarter.restart(EXIT_CODE_UPDATE);
         } catch (Failure e) {
             fail(release, e.getMessage(), partial, pendingWritten);
@@ -360,9 +360,9 @@ public class UpdateApplyService {
         }
     }
 
-    // ── 감독 스크립트와의 약속 ───────────────────────────────────────────────
+    // ── 런처와의 약속 ───────────────────────────────────────────────
 
-    /** {@code pending.properties} — 감독 스크립트가 읽는다. 줄 단위 {@code key=value}(이스케이프 없음 — 스크립트가 셸·PowerShell 로 읽는다). */
+    /** {@code pending.properties} — 런처가 읽는다. 줄 단위 {@code key=value}(이스케이프 없음 — 스크립트가 셸·PowerShell 로 읽는다). */
     private void writePending(UpdateCheckService.Release release, String fromVersion, Path jarFile, String sha256,
                               Path dbBackup, Path dbFile) throws IOException {
         String body = String.join("\n",
@@ -379,10 +379,10 @@ public class UpdateApplyService {
     }
 
     /**
-     * 감독 스크립트가 남긴 마지막 결과. 성공({@code ok}) 은 <b>지금 실행 중인 버전과 같을 때만</b> 보인다(더 새 버전이 뜨면 낡은 결과다).
+     * 런처가 남긴 마지막 결과. 성공({@code ok}) 은 <b>지금 실행 중인 버전과 같을 때만</b> 보인다(더 새 버전이 뜨면 낡은 결과다).
      * 롤백·거절은 다음 시도가 덮어쓸 때까지 보인다.
      */
-    SupervisorResult readResult(String currentVersion) {
+    LauncherResult readResult(String currentVersion) {
         Path file = dir.resolve(RESULT);
         if (!Files.isRegularFile(file)) return null;
         try {
@@ -405,7 +405,7 @@ public class UpdateApplyService {
             }
             boolean dbRestored = "true".equalsIgnoreCase(p.getProperty("dbRestored", "false"));
             String reason = p.getProperty("reason", "");
-            return new SupervisorResult(status, version, reason, dbRestored, at, describe(status, version, reason, dbRestored));
+            return new LauncherResult(status, version, reason, dbRestored, at, describe(status, version, reason, dbRestored));
         } catch (IOException | RuntimeException e) {
             log.warn("[UPDATE-APPLY] 결과 파일을 읽지 못했다 {}: {}", file, e.getMessage());
             return null;
@@ -423,7 +423,8 @@ public class UpdateApplyService {
             case "rejected" -> version + " 은(는) 교체 직전 확인에서 걸러져 적용하지 않았습니다 — " + switch (reason) {
                 case "checksum-mismatch" -> "체크섬이 맞지 않습니다";
                 case "missing-jar" -> "받아 둔 jar 가 없습니다";
-                case "copy-failed" -> "jar 교체에 실패했습니다";
+                case "copy-failed" -> "jar 설치에 실패했습니다(같은 버전 이름에 다른 jar 가 이미 있을 수 있습니다)";
+                case "invalid-pending" -> "업데이트 요청의 내용(버전 이름·jar 위치)이 올바르지 않습니다";
                 default -> reason.isBlank() ? "원인을 알 수 없습니다" : reason;
             } + ".";
             default -> status + " " + version;

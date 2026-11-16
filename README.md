@@ -78,6 +78,12 @@ export $(grep -v '^#' .env | xargs)
 java -jar target/rag-agent-*.jar
 ```
 
+> **One-click updates** — to let the admin screen update the running app (download, checksum check, DB backup, swap, health check, automatic rollback), start it through the **launcher** instead of `java -jar`. The launcher is a ~30 KB JDK-only jar that `mvn package` builds next to the app jar (`target/rag-agent-<version>-launcher.jar`); it runs the app as its child and keeps every version in `versions/`:
+> ```bash
+> java -jar rag-agent-<version>-launcher.jar     # in the folder that holds rag-agent-*.jar, .env and data/
+> ```
+> Without it the app still announces new releases but cannot replace itself. Details, layout and rollback rules: [OPERATOR_MANUAL.md §6.2.3](documents/OPERATOR_MANUAL.md#623-새-버전-알림-github-releases).
+
 #### macOS — Apple Container (Apple Silicon alternative)
 
 ```bash
@@ -116,9 +122,10 @@ Installed apps learn about a new version from the **latest GitHub release** and 
 | Version inside the jar | `X.Y.Z` — the tag without the `v`. The jar carries the `pom.xml` version it was built with (`build.version`), and the app **refuses to update** when that differs from the tag |
 | Asset 1 | `rag-agent-X.Y.Z.jar` — Maven's output file, unchanged |
 | Asset 2 | `rag-agent-X.Y.Z.jar.sha256` — `sha256sum` format, `<64 hex digits>  rag-agent-X.Y.Z.jar`. Without it apps announce the release but cannot update from it |
+| Asset 3 (recommended) | `rag-agent-X.Y.Z-launcher.jar` (+ its `.sha256`) — the ~30 KB launcher a new install starts with; `mvn package` builds it as `target/rag-agent-X.Y.Z-launcher.jar`. Apps never mistake it for the application jar |
 | State | **published** — not a draft, not a pre-release. A release without the jar attached is not announced at all |
 
-> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the two files and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
+> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
 
 The steps below release `0.5.7` while `pom.xml` says `0.5.7-SNAPSHOT`. Run them from the repository root.
 
@@ -182,13 +189,13 @@ git push origin main
 git push origin v0.5.7
 ```
 
-**7. Publish on GitHub** — *Releases → Draft a new release*: choose the existing tag `v0.5.7`, title `0.5.7`, click *Generate release notes* (edit as needed), drag **both** `rag-agent-0.5.7.jar` and `rag-agent-0.5.7.jar.sha256` onto the page, **wait until both uploads have finished**, leave *pre-release* unchecked, then *Publish release*.
+**7. Publish on GitHub** — *Releases → Draft a new release*: choose the existing tag `v0.5.7`, title `0.5.7`, click *Generate release notes* (edit as needed), drag `rag-agent-0.5.7.jar` and `rag-agent-0.5.7.jar.sha256` (and, recommended, `rag-agent-0.5.7-launcher.jar` with its `.sha256`) onto the page, **wait until every upload has finished**, leave *pre-release* unchecked, then *Publish release*.
 
-**8. Verify** — the release page lists both files. Apps with `UPDATE_CHECK_ENABLED=true` announce it at their next check (start-up or the daily one), or when an admin presses *Check now* on `/admin`. A quick look at what they see:
+**8. Verify** — the release page lists every file you attached. Apps with `UPDATE_CHECK_ENABLED=true` announce it at their next check (start-up or the daily one), or when an admin presses *Check now* on `/admin`. A quick look at what they see:
 
 ```bash
 curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
-# "tag_name": "v0.5.7" and both assets with "state": "uploaded"
+# "tag_name": "v0.5.7" and every asset with "state": "uploaded"
 ```
 
 **If something went wrong**

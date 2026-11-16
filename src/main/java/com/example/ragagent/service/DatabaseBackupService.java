@@ -152,7 +152,7 @@ public class DatabaseBackupService {
     }
 
     /**
-     * 앱이 지금 쓰는 SQLite 파일의 절대 경로 — 업데이트가 실패해 되돌릴 때 감독 스크립트가 백업을 이 자리에 복원한다.
+     * 앱이 지금 쓰는 SQLite 파일의 절대 경로 — 업데이트가 실패해 되돌릴 때 런처가 백업을 이 자리에 복원한다.
      * DataSource 가 실제로 연 파일에서 읽는다({@link com.example.ragagent.config.DataSourceConfig#sqliteFilePath}).
      */
     public Path databaseFile() {

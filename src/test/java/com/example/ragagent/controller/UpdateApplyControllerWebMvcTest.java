@@ -50,7 +50,7 @@ class UpdateApplyControllerWebMvcTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;   // WebConfig.chatClient 의존
 
-    private static UpdateApplyService.View view(boolean canApply, UpdateApplyService.Job job, UpdateApplyService.SupervisorResult last) {
+    private static UpdateApplyService.View view(boolean canApply, UpdateApplyService.Job job, UpdateApplyService.LauncherResult last) {
         return new UpdateApplyService.View(true, canApply, canApply ? null : "사유", job, last);
     }
 
@@ -62,7 +62,7 @@ class UpdateApplyControllerWebMvcTest {
     @Test
     @DisplayName("GET /admin/update/apply — 적용 가능 여부·진행 작업·마지막 결과를 JSON 으로")
     void viewForAdmin() throws Exception {
-        UpdateApplyService.SupervisorResult last = new UpdateApplyService.SupervisorResult(
+        UpdateApplyService.LauncherResult last = new UpdateApplyService.LauncherResult(
                 "rolled-back", "0.5.7", "exited-early", true, Instant.parse("2026-11-15T00:00:00Z"), "되돌렸습니다");
         when(service.view()).thenReturn(view(true, downloading(), last));
 
@@ -103,7 +103,7 @@ class UpdateApplyControllerWebMvcTest {
     @DisplayName("조건이 안 맞으면 409 와 사유 — 감사 로그는 남기지 않는다(시작되지 않았다)")
     void conflictWhenNotAllowed() throws Exception {
         when(service.view()).thenReturn(view(false, null, null));
-        when(service.start("0.5.7")).thenThrow(new IllegalStateException("감독 스크립트로 실행 중이 아닙니다"));
+        when(service.start("0.5.7")).thenThrow(new IllegalStateException("런처로 실행 중이 아닙니다"));
 
         mvc.perform(post("/admin/update/apply").param("version", "0.5.7").with(user(ADMIN)).with(csrf()))
                 .andExpect(status().isConflict());

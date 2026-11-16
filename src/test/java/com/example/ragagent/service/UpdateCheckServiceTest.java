@@ -352,6 +352,7 @@ class UpdateCheckServiceTest {
                 asset("rag-agent-0.5.7-sources.jar", "v0.5.7", 10, "uploaded"),
                 asset("rag-agent-0.5.7-javadoc.jar", "v0.5.7", 10, "uploaded"),
                 asset("rag-agent-0.5.7-plain.jar", "v0.5.7", 10, "uploaded"),
+                asset("rag-agent-0.5.7-launcher.jar", "v0.5.7", 10, "uploaded"),
                 asset("rag-agent-0.5.7.jar.sha256", "v0.5.7", 10, "uploaded"),
                 asset("other-0.5.7.jar", "v0.5.7", 10, "uploaded"),
                 asset("rag-agent-0.5.7.zip", "v0.5.7", 10, "uploaded"));

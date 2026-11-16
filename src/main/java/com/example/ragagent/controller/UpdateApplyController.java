@@ -28,7 +28,7 @@ public class UpdateApplyController {
         this.auditLogger = auditLogger;
     }
 
-    /** 적용 가능 여부·사유, 진행 중인 작업, 감독 스크립트가 남긴 마지막 결과. */
+    /** 적용 가능 여부·사유, 진행 중인 작업, 런처가 남긴 마지막 결과. */
     @GetMapping("/admin/update/apply")
     public UpdateApplyService.View view() {
         return apply.view();
@@ -37,7 +37,7 @@ public class UpdateApplyController {
     /**
      * 업데이트 시작 — {@code version} 은 관리자가 화면에서 본 최신 버전이어야 한다(그사이 바뀌었으면 409). 받기·검증·백업은
      * 백그라운드로 이어지므로 진행 상태를 바로 돌려주고, 화면이 {@code GET /admin/update/apply} 를 다시 물어 따라간다.
-     * 조건이 안 맞으면(감독 스크립트 아님·새 버전 없음·다른 작업 진행 중 …) 409 와 사유.
+     * 조건이 안 맞으면(런처 아님·새 버전 없음·다른 작업 진행 중 …) 409 와 사유.
      */
     @PostMapping("/admin/update/apply")
     public UpdateApplyService.View start(@RequestParam(value = "version", required = false) String version) {
@@ -53,7 +53,7 @@ public class UpdateApplyController {
         }
         Map<String, Object> details = new HashMap<>();
         details.put("to", version);
-        UpdateApplyService.SupervisorResult last = before.lastResult();
+        UpdateApplyService.LauncherResult last = before.lastResult();
         if (last != null) details.put("previousAttempt", last.status() + " " + last.version());
         auditLogger.log("admin.update.apply", version, details);
         return apply.view();

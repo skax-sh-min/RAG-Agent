@@ -284,7 +284,7 @@ public class UpdateCheckService {
         for (JsonNode a : assets) {
             String name = a.path("name").asText("");
             if (!JAR_NAME.matcher(name).matches() || name.endsWith("-sources.jar") || name.endsWith("-javadoc.jar")
-                    || name.endsWith("-plain.jar")) continue;
+                    || name.endsWith("-plain.jar") || name.endsWith("-launcher.jar")) continue;   // 런처 jar 는 앱이 아니다
             String state = a.path("state").asText("uploaded");
             if (!"uploaded".equals(state)) continue;             // open = 업로드가 끝나지 않았다
             long size = a.path("size").asLong(0);

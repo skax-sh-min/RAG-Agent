@@ -187,6 +187,12 @@ abstract class ReleaseHarness {
                 "printf 'build.version=%s\\nbuild.name=rag-agent\\n' \"$bv\" > target/stage/META-INF/build-info.properties",
                 "printf 'Start-Class: %s\\n' \"$start\" > target/manifest.txt",
                 "\"$FAKE_JAR\" --create --file \"target/rag-agent-$ver.jar\" --manifest target/manifest.txt -C target/stage . || exit 1",
+                "if [ -z \"$FAKE_MVN_NO_LAUNCHER\" ]; then",
+                "  mkdir -p target/lstage/com/example/ragagent/launcher",
+                "  : > target/lstage/com/example/ragagent/launcher/Launcher.class",
+                "  printf 'Main-Class: com.example.ragagent.launcher.Launcher\\n' > target/lmanifest.txt",
+                "  \"$FAKE_JAR\" --create --file \"target/rag-agent-$ver-launcher.jar\" --manifest target/lmanifest.txt -C target/lstage . || exit 1",
+                "fi",
                 "exit 0",
                 ""));
         mvn.toFile().setExecutable(true);

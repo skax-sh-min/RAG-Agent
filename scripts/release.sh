@@ -11,6 +11,8 @@
 #                  with the tag), Start-Class must be the app's. Writes the artifacts to target/release/:
 #                    rag-agent-<v>.jar            the file the running apps download
 #                    rag-agent-<v>.jar.sha256     sha256sum format - without it apps announce the release but cannot update
+#                    rag-agent-<v>-launcher.jar   the ~30 KB launcher a new install starts with (+ its .sha256);
+#                                                 apps never mistake it for the application jar
 #   4. git         commit "release: v<v>", annotated tag v<v>, then bump the pom to the next -SNAPSHOT and commit that
 #                  (otherwise the freshly released build would keep announcing itself as an update).
 #   5. publish     pushes the branch and the tag, creates the GitHub release as a DRAFT with both files and publishes it
@@ -203,6 +205,7 @@ $(git status --short)"
 
   TAG="v$VERSION"
   JAR_NAME="rag-agent-$VERSION.jar"
+  LAUNCHER_NAME="rag-agent-$VERSION-launcher.jar"
   if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then die "tag $TAG already exists locally"; fi
   if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then die "tag $TAG already exists on origin"; fi
 
@@ -235,6 +238,16 @@ $(git status --short)"
   size=$(wc -c < "$OUT/$JAR_NAME" | tr -d ' ')
   info "built and verified: $OUT/$JAR_NAME ($size bytes, sha256 $(echo "$sum" | cut -c1-16)...)"
 
+  # the launcher jar (built next to the app jar by the second maven-jar-plugin execution): a new install starts with it
+  [ -f "target/$LAUNCHER_NAME" ] || die "the build did not produce target/$LAUNCHER_NAME (maven-jar-plugin 'launcher-jar' execution)"
+  cp "target/$LAUNCHER_NAME" "$OUT/$LAUNCHER_NAME" || die "cannot copy the launcher jar"
+  lmain=$(jar_entry "$OUT/$LAUNCHER_NAME" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Main-Class: //p' | head -n 1)
+  [ "$lmain" = "com.example.ragagent.launcher.Launcher" ] || die "unexpected Main-Class '$lmain' in the launcher jar - not releasing"
+  lsum=$(sha256_of "$OUT/$LAUNCHER_NAME")
+  printf '%s  %s\n' "$lsum" "$LAUNCHER_NAME" > "$OUT/$LAUNCHER_NAME.sha256" || die "cannot write the launcher checksum file"
+  lsize=$(wc -c < "$OUT/$LAUNCHER_NAME" | tr -d ' ')
+  info "built and verified: $OUT/$LAUNCHER_NAME ($lsize bytes)"
+
   if [ "$BUILD_ONLY" -eq 1 ]; then
     restore_pom
     info "--build-only: git was not touched; artifacts are in $OUT/"
@@ -257,8 +270,8 @@ $(git status --short)"
   if [ "$PUBLISH" -eq 0 ]; then
     info "not publishing (--no-publish). To finish by hand:"
     echo "  git push origin $BRANCH && git push origin $TAG"
-    echo "  $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 --title $VERSION --generate-notes --verify-tag"
-    echo "  (or upload both files from $OUT/ on the release page of tag $TAG)"
+    echo "  $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 $OUT/$LAUNCHER_NAME $OUT/$LAUNCHER_NAME.sha256 --title $VERSION --generate-notes --verify-tag"
+    echo "  (or upload the four files from $OUT/ on the release page of tag $TAG)"
     exit 0
   fi
 
@@ -271,10 +284,11 @@ $(git status --short)"
     notes_args="--generate-notes"
   fi
   # shellcheck disable=SC2086
-  "$GH" release create "$TAG" "$OUT/$JAR_NAME" "$OUT/$JAR_NAME.sha256" --title "$VERSION" $notes_args --verify-tag --draft \
-    || die "creating the draft release failed. The branch and tag are pushed; retry: $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 --title $VERSION $notes_args --verify-tag --draft"
+  "$GH" release create "$TAG" "$OUT/$JAR_NAME" "$OUT/$JAR_NAME.sha256" "$OUT/$LAUNCHER_NAME" "$OUT/$LAUNCHER_NAME.sha256" \
+    --title "$VERSION" $notes_args --verify-tag --draft \
+    || die "creating the draft release failed. The branch and tag are pushed; retry: $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 $OUT/$LAUNCHER_NAME $OUT/$LAUNCHER_NAME.sha256 --title $VERSION $notes_args --verify-tag --draft"
   "$GH" release edit "$TAG" --draft=false \
-    || die "the draft release $TAG was created with both files but not published - publish it on GitHub (Releases > Draft) or: $GH release edit $TAG --draft=false"
+    || die "the draft release $TAG was created with its files but not published - publish it on GitHub (Releases > Draft) or: $GH release edit $TAG --draft=false"
   info "published $TAG: $(git remote get-url origin 2>/dev/null)"
 }
 

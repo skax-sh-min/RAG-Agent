@@ -78,6 +78,12 @@ export $(grep -v '^#' .env | xargs)
 java -jar target/rag-agent-*.jar
 ```
 
+> **원클릭 업데이트** — 관리자 화면에서 실행 중인 앱을 업데이트(받기·체크섬 확인·DB 백업·교체·헬스 확인·자동 롤백)하려면 `java -jar` 대신 **런처**로 띄우세요. 런처는 `mvn package` 가 앱 jar 옆에 함께 만드는 약 30KB 짜리 JDK 전용 jar(`target/rag-agent-<버전>-launcher.jar`)이며, 앱을 자식 프로세스로 실행하고 모든 버전을 `versions/` 에 보관합니다:
+> ```bash
+> java -jar rag-agent-<버전>-launcher.jar     # rag-agent-*.jar · .env · data/ 가 있는 폴더에서
+> ```
+> 런처 없이 실행해도 앱은 새 릴리즈를 알리지만 스스로 교체하지는 못합니다. 구성·롤백 규칙은 [OPERATOR_MANUAL.md §6.2.3](documents/OPERATOR_MANUAL.md#623-새-버전-알림-github-releases) 참고.
+
 #### macOS — Apple Container (Apple Silicon 대안)
 
 ```bash
@@ -118,9 +124,10 @@ container system stop
 | jar 안의 버전 | `X.Y.Z` — 태그에서 `v`를 뗀 값. jar에는 빌드 때의 `pom.xml` 버전(`build.version`)이 들어 있고, 이것이 태그와 다르면 앱이 **업데이트를 거절**합니다 |
 | 첨부 파일 1 | `rag-agent-X.Y.Z.jar` — Maven이 만든 파일 그대로 |
 | 첨부 파일 2 | `rag-agent-X.Y.Z.jar.sha256` — `sha256sum` 형식, `<해시 64자>  rag-agent-X.Y.Z.jar`. 없으면 앱이 릴리즈를 알리기는 하지만 업데이트는 못 합니다 |
+| 첨부 파일 3 (권장) | `rag-agent-X.Y.Z-launcher.jar`(+ `.sha256`) — 새로 설치할 때 시작하는 약 30KB 짜리 런처. `mvn package` 가 `target/rag-agent-X.Y.Z-launcher.jar` 로 만듭니다. 앱은 이 파일을 앱 jar 로 오인하지 않습니다 |
 | 상태 | **게시됨** — 초안(draft)도, 시험판(pre-release)도 아니어야 합니다. jar가 첨부되지 않은 릴리즈는 아예 알리지 않습니다 |
 
-> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 두 파일을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
+> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
 
 아래는 `pom.xml`이 `0.5.7-SNAPSHOT`일 때 `0.5.7`을 릴리즈하는 순서입니다. 저장소 루트에서 실행하세요.
 
@@ -184,13 +191,13 @@ git push origin main
 git push origin v0.5.7
 ```
 
-**7. GitHub에서 게시** — *Releases → Draft a new release*: 이미 푸시한 태그 `v0.5.7`을 고르고, 제목은 `0.5.7`, *Generate release notes*로 릴리즈 노트를 만든 뒤(필요하면 고칩니다), `rag-agent-0.5.7.jar`와 `rag-agent-0.5.7.jar.sha256` **두 파일을 모두** 끌어다 놓고, **두 업로드가 끝날 때까지 기다린** 다음, *pre-release*는 체크하지 않은 채 *Publish release*를 누릅니다.
+**7. GitHub에서 게시** — *Releases → Draft a new release*: 이미 푸시한 태그 `v0.5.7`을 고르고, 제목은 `0.5.7`, *Generate release notes*로 릴리즈 노트를 만든 뒤(필요하면 고칩니다), `rag-agent-0.5.7.jar`와 `rag-agent-0.5.7.jar.sha256`(권장: `rag-agent-0.5.7-launcher.jar` 와 그 `.sha256` 도)을 끌어다 놓고, **모든 업로드가 끝날 때까지 기다린** 다음, *pre-release*는 체크하지 않은 채 *Publish release*를 누릅니다.
 
-**8. 확인** — 릴리즈 페이지에 두 파일이 보여야 합니다. `UPDATE_CHECK_ENABLED=true`인 앱은 다음 확인(기동 직후 또는 매일 정해진 시각)이나 관리자가 `/admin`에서 *지금 확인*을 눌렀을 때 알립니다. 앱이 보는 응답은 다음으로 볼 수 있습니다:
+**8. 확인** — 릴리즈 페이지에 올린 파일이 모두 보여야 합니다. `UPDATE_CHECK_ENABLED=true`인 앱은 다음 확인(기동 직후 또는 매일 정해진 시각)이나 관리자가 `/admin`에서 *지금 확인*을 눌렀을 때 알립니다. 앱이 보는 응답은 다음으로 볼 수 있습니다:
 
 ```bash
 curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
-# "tag_name": "v0.5.7" 이고, 두 첨부 파일 모두 "state": "uploaded"
+# "tag_name": "v0.5.7" 이고, 첨부 파일이 모두 "state": "uploaded"
 ```
 
 **잘못됐을 때**
