@@ -1027,6 +1027,20 @@ RAG 에서 검색이 비었을 때 문서 없는 프롬프트로 답변을 받�
 - **`DROP TABLE vec_embeddings` 는 vec0 확장이 로드된 연결에서만 된다**(없으면 `no such module: vec0`, 실측). 앱의 연결은 커넥션마다 확장을 싣고 풀이 1개라 카드의 DROP/CREATE 가 그대로 된다(`EmbeddingRebuildIntegrationTest` — `-Dsqlitevec.path` 가 있을 때 진짜 vec0 로 DROP/CREATE·차집합·한 바퀴를 확인, 없으면 skip). 그림자 테이블(`vec_embeddings_*`)은 함께 사라진다. 앱 밖에서는 `sqlite3` CLI 로 확장을 로드한 뒤 지운다(OPERATOR_MANUAL §7.3). Python 이 없는 환경(폐쇄망·Docker)에서도 되도록 앱 안의 카드를 정공법으로 만들었다.
 - **정한 임계값은 옛 모델의 분포에 맞춘 값이다**: `app.search-similarity-threshold`(0.3)·`app.search-curated-qa-min-similarity`(0.5)는 코사인 유사도의 절댓값이라 모델이 바뀌면 같은 값이 다른 컷이 된다 — 교체 뒤 결과 수가 이상하면 `/settings` 에서 재조정(핫).
 
+### 새 버전 확인(UpdateCheckService) — 알림만 한다
+
+- **알림과 적용은 다른 문제다 — 지금 있는 것은 알림뿐이다.** 새 릴리즈를 내려받아 jar 를 바꾸는 일(실행 중인 JVM 은 자기 jar 를 못 바꾸고 Windows 는 파일이 잠긴다 → 감독 스크립트·체크섬·롤백이 필요)은 아직 없다. 카드 문구가 "알림만 한다"고 말하는 이유다. Docker 는 컨테이너가 스스로 갱신하려면 Docker 소켓(호스트 root 와 같다)이 필요해 비-root 로 굳힌 Dockerfile 과 충돌하므로 알림 + `docker compose pull` 안내가 맞다.
+- **기본 꺼짐이고, 꺼져 있으면 수동 확인도 요청을 보내지 않는다(409)**: 폐쇄망 배포가 전제인 앱이라 외부 호출이 기본으로 나가면 안 된다. 꺼짐 판정은 서비스가 한다(컨트롤러가 아니라) — `check()` 가 `IllegalStateException` 을 던지고 컨트롤러가 409 로 바꾼다. 기동 확인·정기 확인도 같은 게이트를 지난다(`UpdateCheckServiceTest.disabledSendsNothing` 이 요청 0건을 본다).
+- **공개 저장소만, 토큰은 받지 않는다**: 인증 헤더를 단 외부 요청을 만들지 않으려는 결정이다(토큰은 환경변수에 둬야 하고 로그·화면 어디로든 샐 수 있다). 비공개 저장소가 필요해지면 그때 토큰 취급(읽기 전용 · 화면에 안 받음 · 로그에 안 찍음)을 새로 설계한다. `User-Agent` 는 일반 이름(`update-check`)이고 앱·사용자 식별 정보를 싣지 않는다.
+- **설정은 `@Value`(재기동)이고 틀려도 기동을 막지 않는다**: 부가 기능이라 앱을 못 띄우는 것은 과하다. `app.update.repo` 가 `owner/name` 이 아니거나 `api-base` 가 https 가 아니면(루프백 http 만 테스트용으로 허용) 그 기능만 끄고 ERROR 로그 + `Status.configError` 로 카드에 보인다. 반대로 `app.time-zone` 은 `@Scheduled(zone)` 이 같은 값을 읽어 틀리면 기동이 멈춘다(`DatabaseBackupService` 와 같다). 경로 조립에 쓰이는 두 값을 검증하는 이유는 `releases/latest` 주소를 문자열로 이어 붙이기 때문이다(`URI.create` — 슬래시가 `%2F` 로 바뀌지 않게 템플릿 변수를 쓰지 않았다).
+- **날짜 태그가 "새 버전"으로 읽히는 버그를 테스트가 잡았다**: 처음 `AppVersion` 은 숫자 1~4개를 받았는데 `2026-11-16` 이 "본체 2026 + 한정자 11-16" 으로 읽혀 현재 `0.5.6` 보다 새롭다고 판정했다 — 날짜 태그를 쓰는 릴리즈가 한 번이라도 있으면 영구히 "새 버전 있음" 이 뜬다. 숫자 하나뿐인 본체는 버전이 아니다(`major.minor` 이상 2~4개). 읽지 못한 태그는 추측하지 않고 실패 결과("버전 형식을 읽지 못했습니다")로 남긴다.
+- **스냅샷은 그 번호의 정식 릴리즈보다 앞선다**: `0.5.6-SNAPSHOT` 에서 `v0.5.6` 이 나오면 "새 버전" 이다(정식 > 한정자 있는 쪽, 한정자끼리는 SNAPSHOT 이 가장 낮고 나머지는 사전순). 개발 중 pom 버전을 올리지 않은 채 같은 번호를 릴리즈하면 방금 만든 빌드에도 알림이 뜬다 — 릴리즈하면 pom 을 다음 SNAPSHOT 으로 올릴 것. 빌드 정보가 없는 개발 실행(IDE `main()`)은 `devBuild` 라 비교하지 않는다.
+- **GitHub 응답은 신뢰 경계 밖이다**: 본문은 `readNBytes(1MB+1)` 로 읽어 넘으면 거절하고, 릴리즈 노트·이름은 잘라서(4,000·200자) **화면이 `textContent` 로만 그린다**(마크다운·HTML 해석 없음 — 노트에 `<script>` 가 있어도 글자일 뿐, 화면 확인으로 검증), `html_url` 은 https(루프백 http 만 예외)이고 사용자 정보가 없을 때만 링크로 싣는다(`javascript:` 차단 — 클라이언트도 `^https?://` 를 한 번 더 본다).
+- **수동 확인은 10초 간격이다**: 비인증 GitHub API 는 IP 당 시간당 60회라 버튼 연타와 여러 관리자가 한도를 태울 수 있다. 간격 안의 수동 확인은 직전 결과를 그대로 돌려주고, 정기·기동 확인은 막지 않는다. 403·429 는 "요청 한도일 수 있다" 로 안내한다. 확인이 실패해도 **마지막으로 성공한 `latest` 는 남는다**(배지가 일시 장애로 꺼지지 않게).
+- **배지는 GitHub 를 부르지 않는다**: 관리 메뉴의 `NEW` 는 `/admin/update/available`(최소 응답 — 노트 없음)을 60초마다 읽을 뿐이고 그 값은 서버가 기동 때·정해진 시각에 둔 것이다. 비관리자에게는 엘리먼트도 폴링도 없다(`th:if="${isAdmin}"` 안). 이 엔드포인트 셋은 모두 `/admin/**` 라 모든 인증 모드에서 관리자 전용이다.
+- **`@Scheduled` 빈이 셋이 됐다**(`CuratedImageStore` · `DatabaseBackupService` · `UpdateCheckService`) — 기본 스케줄러는 스레드 하나라 겹치면 줄을 서지만 셋 다 짧다(확인은 연결 5초·읽기 10초 제한). cron 은 `zone` 을 적어야 한다(`TimeZoneConventionTest`).
+- **사내 프록시**: JVM 표준 프록시 설정(`-Dhttps.proxyHost`/`-Dhttps.proxyPort`, `JAVA_OPTS`)을 따른다 — `HttpClientTimeouts` 가 JDK 의 `HttpURLConnection` 을 쓰기 때문. 프록시가 TLS 를 가로채면 JVM 이 그 CA 를 신뢰해야 한다.
+
 ### 운영 테이블 스키마는 Flyway 에만 있다
 
 - **새 테이블·컬럼·인덱스는 `V5` 이후의 평범한 SQL 마이그레이션**(`src/main/resources/db/migration/`)이다 — V4 뒤로는 모든 DB 가 한 모양이라 `ALTER TABLE … ADD COLUMN` 한 줄이면 되고 재실행 방어도 필요 없다. 저장소 클래스에 `CREATE TABLE IF NOT EXISTS`/`ALTER` 를 다시 넣으면 "스키마가 두 곳"(V1 과 저장소가 같은 테이블을 다른 모양으로 선언, 컬럼 추가 방식이 둘, 저장소가 남의 테이블을 읽을 때마다 "그쪽 init 이 먼저 돌았나"를 신경 써야 하는 상태)으로 돌아간다. 예외는 SQL 이 알 수 없는 값이 필요한 **데이터** 변환뿐이다(V9 는 JVM 시간대가 필요해 Java).

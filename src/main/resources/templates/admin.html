@@ -426,6 +426,46 @@
         </div>
     </details>
 
+    <!-- ── 새 버전 알림 (UpdateCheckService) ───────────────────────────────────────────── -->
+    <!-- GitHub Releases 의 최신 정식 릴리즈를 지금 실행 중인 버전과 견준다. 알리기만 한다(내려받기·교체 없음). 기본 꺼짐 —
+         꺼져 있으면 GitHub 로 아무 요청도 나가지 않는다. 상태는 JSON 으로 받아 아래 스크립트가 그린다. -->
+    <details class="card mt-4" id="update-card">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-cloud-arrow-down me-2"></i>
+            <span class="fw-semibold small">새 버전</span>
+            <span id="upd-pill" class="badge bg-success ms-2 d-none">새 버전 있음</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                GitHub 릴리즈와 지금 버전을 비교 — 알림만 합니다
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div>현재 <strong id="upd-current">-</strong></div>
+                <div>최신 <strong id="upd-latest">-</strong></div>
+                <div class="text-muted">저장소 <code id="upd-repo">-</code></div>
+                <div class="text-muted">확인 <span id="upd-schedule">-</span></div>
+                <div class="ms-auto">
+                    <button type="button" class="btn btn-sm btn-primary" id="upd-check">지금 확인</button>
+                </div>
+            </div>
+            <div id="upd-last" class="mt-2"></div>
+            <div id="upd-release" class="mt-2 d-none">
+                <div>
+                    <strong id="upd-name"></strong> <span class="text-muted" id="upd-published"></span>
+                    <a id="upd-link" class="ms-2 d-none" target="_blank" rel="noopener noreferrer">릴리즈 페이지 <i class="bi bi-box-arrow-up-right"></i></a>
+                </div>
+                <pre id="upd-notes" class="border rounded p-2 mt-2 mb-0" style="white-space:pre-wrap; max-height:16rem; overflow:auto;"></pre>
+            </div>
+            <div class="text-muted mt-2">
+                기본은 꺼져 있고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망용). 켜면(<code>UPDATE_CHECK_ENABLED=true</code>, 재기동)
+                기동 직후와 매일 정해진 시각(<code>UPDATE_CHECK_CRON</code>)에 GitHub Releases 의 최신 정식 릴리즈를 확인합니다 — 공개 저장소만, 토큰은 쓰지 않습니다.
+                이 기능은 <strong>알림만</strong> 합니다. 새 버전을 내려받아 바꾸는 일은 하지 않으므로 업데이트는 직접 하세요.
+                사내 프록시 뒤라면 <code>JAVA_OPTS</code> 에 <code>-Dhttps.proxyHost</code>/<code>-Dhttps.proxyPort</code> 를 주세요.
+            </div>
+        </div>
+    </details>
+
     <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
          확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
     <details class="card mt-4" id="retrieval-metrics-card"
@@ -2402,6 +2442,97 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
                 showToast(s.last && !s.last.error ? '백업했습니다: ' + s.last.file : '백업이 실패했습니다', s.last && !s.last.error ? 'success' : 'danger');
             })
             .catch(status => { el('dbb-run').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
+    });
+    card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
+
+/* ── 새 버전 알림 (UpdateCheckService) ─────────────────────────────────────────────
+   서버가 상태를 통째로 돌려준다(설정 · 마지막 확인 · 최신 릴리즈). 카드를 열 때와 "지금 확인" 뒤에 그린다. 페이지를 열 때도 한 번 물어
+   새 버전이 있으면 카드 머리에 표시를 단다. 릴리즈 노트·이름은 GitHub 가 준 글자라 textContent 로만 넣는다(해석 없음). */
+(function () {
+    const card = document.getElementById('update-card');
+    if (!card) return;
+    const el = id => document.getElementById(id);
+    const fmtTime = iso => formatLocalTime(iso, 'second') || '-';
+
+    function render(s) {
+        el('upd-repo').textContent = s.repo || '-';
+        if (s.configError) {
+            el('upd-schedule').textContent = '꺼짐 (설정 오류)';
+        } else if (!s.enabled) {
+            el('upd-schedule').textContent = '꺼짐 (UPDATE_CHECK_ENABLED=true 로 켜고 재기동)';
+        } else {
+            el('upd-schedule').textContent = '기동 직후 + ' + s.cron + ' (' + s.zone + ')';
+        }
+        el('upd-current').textContent = s.devBuild ? '개발 빌드 (비교하지 않음)' : (s.currentVersion || '-');
+        const latest = s.latest;
+        el('upd-latest').textContent = latest ? latest.version : '-';
+        el('upd-latest').className = s.updateAvailable ? 'text-success' : '';
+        el('upd-pill').classList.toggle('d-none', !s.updateAvailable);
+
+        const box = el('upd-last');
+        const last = s.last;
+        if (s.configError) {
+            box.textContent = s.configError;
+            box.className = 'mt-2 text-danger';
+        } else if (!s.enabled) {
+            box.textContent = '새 버전 확인이 꺼져 있습니다 — GitHub 로 아무 요청도 보내지 않습니다.';
+            box.className = 'mt-2 text-muted';
+        } else if (!last) {
+            box.textContent = '이번 기동 뒤 아직 확인하지 않았습니다.';
+            box.className = 'mt-2 text-muted';
+        } else if (!last.ok) {
+            box.textContent = '마지막 확인(' + fmtTime(last.checkedAt) + ', ' + last.trigger + ') 실패: ' + last.error;
+            box.className = 'mt-2 text-danger';
+        } else if (s.updateAvailable) {
+            box.textContent = '새 버전 ' + latest.version + ' 이(가) 있습니다 (확인 ' + fmtTime(last.checkedAt) + ', ' + last.trigger + ').';
+            box.className = 'mt-2 text-success';
+        } else if (s.devBuild) {
+            box.textContent = '확인했습니다(' + fmtTime(last.checkedAt) + ') — 개발 빌드는 버전을 비교하지 않습니다.';
+            box.className = 'mt-2 text-muted';
+        } else {
+            box.textContent = '최신 버전입니다 (확인 ' + fmtTime(last.checkedAt) + ', ' + last.trigger + ').';
+            box.className = 'mt-2 text-success';
+        }
+
+        const rel = el('upd-release');
+        if (latest) {
+            rel.classList.remove('d-none');
+            el('upd-name').textContent = latest.name || latest.tag;
+            el('upd-published').textContent = latest.publishedAt ? '(' + fmtTime(latest.publishedAt) + ')' : '';
+            const link = el('upd-link');
+            if (latest.url && /^https?:\/\//.test(latest.url)) {
+                link.href = latest.url;
+                link.classList.remove('d-none');
+            } else {
+                link.classList.add('d-none');
+            }
+            el('upd-notes').textContent = latest.notes || '(릴리즈 노트가 없습니다)';
+        } else {
+            rel.classList.add('d-none');
+        }
+        el('upd-check').disabled = !s.enabled || !!s.configError || !!s.checking;
+    }
+
+    function refresh() {
+        return fetch('/admin/update')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('upd-last').textContent = '상태를 불러오지 못했습니다'; });
+    }
+
+    el('upd-check').addEventListener('click', () => {
+        el('upd-check').disabled = true;
+        fetch('/admin/update/check', { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(s => {
+                render(s);
+                const ok = s.last && s.last.ok;
+                showToast(!ok ? '확인에 실패했습니다' : (s.updateAvailable ? '새 버전이 있습니다: ' + s.latest.version : '최신 버전입니다'),
+                          !ok ? 'danger' : (s.updateAvailable ? 'success' : 'info'));
+            })
+            .catch(status => { el('upd-check').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
     });
     card.addEventListener('toggle', () => { if (card.open) refresh(); });
     refresh();
