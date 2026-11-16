@@ -2348,22 +2348,12 @@ docker compose up -d         # Docker — .env 를 바꿨으니 컨테이너가 
 - **같은 절차를 옛 모델로 되돌려 실행**(2→4단계, `EMBED_MODEL`/`EMBED_DIMENSIONS` 를 옛 값으로) — 교체 이후 쌓인 대화·문서를 잃지 않는 방법입니다.
 - **1단계의 백업으로 복원** — 앱 중지 → [§6.2.2 복구](#622-db-백업과-복구) 절차로 `memory.db` 를 사본으로 교체 → **`.env` 도 옛 `EMBED_MODEL`/`EMBED_DIMENSIONS` 로 되돌린 뒤** 기동. 사본 이후의 대화·업로드는 사라지고(문서는 동기화로 다시 색인), 옛 벡터가 그대로 살아 있습니다. 설정을 안 되돌리면 「차원 불일치」가 다시 뜹니다.
 
-#### 화면을 쓸 수 없을 때 (CLI 스크립트 — Python 3 필요)
+#### 화면을 쓸 수 없을 때
 
-관리자 화면에 들어갈 수 없거나 자동화가 필요할 때만 씁니다. 두 스크립트는 같은 일을 DB 와 HTTP 로 합니다. **앱을 멈춘 상태에서** 1) 벡터 테이블을 지우고, 앱을 띄운 뒤 2) 청크 재임베딩을 돌립니다.
+관리자 화면에 들어갈 수 없을 때만 씁니다. **앱을 멈춘 상태에서** `sqlite3` CLI 로 벡터 테이블을 지우고, 앱을 띄운 뒤 `/admin` 카드의 「이어서」로 임베딩합니다.
 
-```bash
-# 1) 앱을 멈춘 상태 — vec0 를 로드해 vec_embeddings 만 지운다(--yes 없으면 상태만 출력)
-python scripts/drop_vec_embeddings.py --db data/memory.db --vec0 lib/win64/vec0.dll --yes
-
-# 2) 앱을 띄운 뒤 — 청크마다 POST /admin/chunks/{id}/reindex (벡터 없는 청크만, 중단돼도 같은 명령으로 이어서)
-python scripts/reembed_all_chunks.py --db data/memory.db --vec0 lib/win64/vec0.dll
-```
-
-- `--db`: 앱의 SQLite 파일 — 기본 `DATA_DIR/memory.db`, 옛 `SQLITE_VEC_DB_PATH` 를 쓰는 배포는 그 경로([§6.2.1](#621-sqlite-파일별-테이블-구성)). `--vec0`: `SQLITE_VEC_EXTENSION_PATH` 와 같은 파일.
-- 로그인이 필요한 배포(전체 인증 · management-only)는 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 환경변수를 줍니다(인자로 받지 않습니다). 평문 no-auth 는 계정이 필요 없습니다. 요청 한도(`default` 버킷 분당 120)의 `429` 는 `Retry-After` 만큼 쉬고 다시 보냅니다.
-- `sqlite3` CLI 로 지우려면 확장을 먼저 로드합니다: `sqlite3 data/memory.db` → `.load /opt/sqlite-vec/vec0` → `DROP TABLE vec_embeddings;`. **확장 없이 지우면 `no such module: vec0`** 입니다.
-- 지운 뒤 앱을 띄우면 테이블이 새 차원으로 자동으로 다시 만들어지고, 카드는 「벡터 N개 없음」으로 보입니다 — 화면과 스크립트는 **섞어 써도 됩니다**(스크립트로 하다 멈췄다면 카드의 「이어서」로 마저 할 수 있습니다).
+- 확장을 먼저 로드해야 합니다: `sqlite3 data/memory.db` → `.load /opt/sqlite-vec/vec0` → `DROP TABLE vec_embeddings;`. **확장 없이 지우면 `no such module: vec0`** 입니다. DB 파일은 기본 `DATA_DIR/memory.db`, 옛 `SQLITE_VEC_DB_PATH` 를 쓰는 배포는 그 경로([§6.2.1](#621-sqlite-파일별-테이블-구성))입니다.
+- 지운 뒤 앱을 띄우면 테이블이 새 차원으로 자동으로 다시 만들어지고, 카드는 「벡터 N개 없음」으로 보입니다. 거기서 **이어서 임베딩**을 누르세요.
 
 #### 자주 막히는 곳
 
