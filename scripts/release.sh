@@ -16,13 +16,20 @@
 #                                                 apps never mistake it for the application jar
 #   4. git         commit "release: v<v>", annotated tag v<v>, then bump the pom to the next -SNAPSHOT and commit that
 #                  (otherwise the freshly released build would keep announcing itself as an update).
-#   5. publish     pushes the branch and the tag, creates the GitHub release as a DRAFT with both files and publishes it
+#   5. publish     pushes the branch and the tag, creates the GitHub release as a DRAFT with its four files and publishes it
 #                  once the upload is done, so nobody can see a half-uploaded release.
+#
+#   With --pr (the branch only accepts pull requests) steps 4-5 change: the commits go on a new branch release/<v>
+#   instead of the current branch, which stays untouched; the script pushes that branch and the tag, creates the
+#   release as a DRAFT and opens a pull request into the branch you started on. It does NOT publish: merge the PR
+#   with "Create a merge commit" (a squash or rebase merge creates new commits, so the tag would no longer be part
+#   of the branch history), then publish with: gh release edit v<v> --draft=false
 #
 # Usage:  scripts/release.sh [VERSION] [options]
 #   VERSION         release version X.Y.Z. Default: the pom version without -SNAPSHOT.
 #   --build-only    stop after step 3: artifacts are built and verified, pom.xml is restored, git is untouched.
 #   --no-publish    do steps 1-4 locally; print the push / gh commands instead of running them.
+#   --pr            release through a pull request (see above). Needs the GitHub CLI unless --no-publish is given.
 #   --skip-tests    pass -DskipTests to Maven (the full suite takes minutes).
 #   --next X.Y.Z-SNAPSHOT   version to continue with. Default: patch + 1.
 #   --notes-file F  release notes from file F. Default: let GitHub generate them from the merged work.
@@ -30,7 +37,7 @@
 #   -y, --yes       do not ask for confirmation.
 #   -h, --help
 # Environment: RELEASE_MVN, RELEASE_GH (command names/paths), RELEASE_BRANCH (default main).
-# Publishing needs the GitHub CLI (https://cli.github.com, "gh auth login"); without it use --no-publish and upload the two
+# Publishing needs the GitHub CLI (https://cli.github.com, "gh auth login"); without it use --no-publish and upload the four
 # files from target/release/ on the release page by hand.
 
 POM="pom.xml"
@@ -131,11 +138,13 @@ main() {
   YES=0
   SKIP_TESTS=0
   ANY_BRANCH=0
+  VIA_PR=0
   NOTES_FILE=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --build-only) BUILD_ONLY=1 ;;
       --no-publish) NO_PUBLISH=1 ;;
+      --pr) VIA_PR=1 ;;
       --skip-tests) SKIP_TESTS=1 ;;
       --any-branch) ANY_BRANCH=1 ;;
       -y | --yes) YES=1 ;;
@@ -210,8 +219,17 @@ $(git status --short)"
   LAUNCHER_NAME="rag-agent-$VERSION-launcher.jar"
   if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then die "tag $TAG already exists locally"; fi
   if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then die "tag $TAG already exists on origin"; fi
+  RBRANCH="release/$VERSION"
+  if [ "$VIA_PR" -eq 1 ]; then
+    if git rev-parse -q --verify "refs/heads/$RBRANCH" >/dev/null; then die "branch $RBRANCH already exists locally (a previous --pr run? delete it or finish that release)"; fi
+    if git ls-remote --exit-code --heads origin "refs/heads/$RBRANCH" >/dev/null 2>&1; then die "branch $RBRANCH already exists on origin (a previous --pr run? delete it or finish that release)"; fi
+  fi
 
-  info "releasing $VERSION from '$BRANCH' (pom is $CURRENT, next will be $NEXT)"
+  if [ "$VIA_PR" -eq 1 ]; then
+    info "releasing $VERSION through a pull request: commits go on $RBRANCH, '$BRANCH' stays untouched (pom is $CURRENT, next will be $NEXT)"
+  else
+    info "releasing $VERSION from '$BRANCH' (pom is $CURRENT, next will be $NEXT)"
+  fi
 
   # ---- 2. build ---------------------------------------------------------------------------------------------------
   set_pom_version "$VERSION" || { git checkout -- "$POM" 2>/dev/null; die "could not set the pom version"; }
@@ -266,38 +284,81 @@ $(git status --short)"
   fi
 
   # ---- 4. git -----------------------------------------------------------------------------------------------------
-  if [ "$PUBLISH" -eq 1 ]; then
+  if [ "$VIA_PR" -eq 1 ] && [ "$PUBLISH" -eq 1 ]; then
+    confirm "Create branch $RBRANCH with the release commit, tag $TAG and the bump to $NEXT, push the branch + tag, create the DRAFT release and open a pull request into '$BRANCH'?" || die "aborted (nothing committed)"
+  elif [ "$VIA_PR" -eq 1 ]; then
+    confirm "Create branch $RBRANCH with the release commit, tag $TAG and the bump to $NEXT locally (nothing is pushed)?" || die "aborted (nothing committed)"
+  elif [ "$PUBLISH" -eq 1 ]; then
     confirm "Commit, tag $TAG, bump to $NEXT, push '$BRANCH' + $TAG to origin and publish the GitHub release?" || die "aborted (nothing committed)"
   else
     confirm "Commit, tag $TAG and bump to $NEXT locally (nothing is pushed)?" || die "aborted (nothing committed)"
+  fi
+  if [ "$VIA_PR" -eq 1 ]; then
+    # the uncommitted pom change comes along; the starting branch is not touched
+    git checkout -q -b "$RBRANCH" || die "could not create branch $RBRANCH"
   fi
   git add "$POM" && git commit -q -m "release: $TAG" || die "git commit failed (is user.name / user.email set?)"
   POM_DIRTY=0
   git tag -a "$TAG" -m "Release $VERSION" || die "git tag failed - the release commit is already made, tag it by hand: git tag -a $TAG -m 'Release $VERSION'"
   set_pom_version "$NEXT" || die "could not set the next version - set the pom to $NEXT by hand and commit"
   git add "$POM" && git commit -q -m "chore: begin $NEXT" || die "git commit failed for the version bump - commit the pom ($NEXT) by hand"
-  info "committed release: $TAG, now on $NEXT"
-
-  if [ "$PUBLISH" -eq 0 ]; then
-    info "not publishing (--no-publish). To finish by hand:"
-    echo "  git push origin $BRANCH && git push origin $TAG"
-    echo "  $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 $OUT/$LAUNCHER_NAME $OUT/$LAUNCHER_NAME.sha256 --title $VERSION --generate-notes --verify-tag"
-    echo "  (or upload the four files from $OUT/ on the release page of tag $TAG)"
-    exit 0
+  if [ "$VIA_PR" -eq 1 ]; then
+    info "committed release: $TAG on $RBRANCH, now on $NEXT ('$BRANCH' is untouched)"
+  else
+    info "committed release: $TAG, now on $NEXT"
   fi
 
-  # ---- 5. publish -------------------------------------------------------------------------------------------------
-  git push origin "$BRANCH" || die "pushing the branch failed. The release is committed and tagged locally; fix the push, then: git push origin $BRANCH && git push origin $TAG && (gh release create ... see --no-publish output)"
-  git push origin "$TAG" || die "pushing the tag failed. Retry: git push origin $TAG, then create the release (files are in $OUT/)"
+  RELEASE_FILES="$OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 $OUT/$LAUNCHER_NAME $OUT/$LAUNCHER_NAME.sha256"
   if [ -n "$NOTES_FILE" ]; then
     notes_args="--notes-file $NOTES_FILE"
   else
     notes_args="--generate-notes"
   fi
+  PR_BODY="Release $VERSION ($TAG). Merge this pull request with \"Create a merge commit\" - not squash or rebase: the tag $TAG points at the release commit of this branch and has to stay reachable from $BRANCH.
+
+After merging, publish the draft release: $GH release edit $TAG --draft=false"
+
+  if [ "$PUBLISH" -eq 0 ]; then
+    info "not publishing (--no-publish). To finish by hand:"
+    if [ "$VIA_PR" -eq 1 ]; then
+      echo "  git push origin $RBRANCH && git push origin $TAG"
+      echo "  $GH release create $TAG $RELEASE_FILES --title $VERSION --generate-notes --verify-tag --draft"
+      echo "  $GH pr create --base $BRANCH --head $RBRANCH --title \"release: $TAG\" --body \"Merge with 'Create a merge commit' (not squash/rebase) so $TAG stays reachable from $BRANCH\""
+      echo "  (merge the pull request with 'Create a merge commit', then publish the draft:)"
+      echo "  $GH release edit $TAG --draft=false"
+      git checkout -q "$BRANCH" || info "could not switch back to '$BRANCH' - run: git checkout $BRANCH"
+    else
+      echo "  git push origin $BRANCH && git push origin $TAG"
+      echo "  $GH release create $TAG $RELEASE_FILES --title $VERSION --generate-notes --verify-tag --draft"
+      echo "  $GH release edit $TAG --draft=false"
+      echo "  (or upload the four files from $OUT/ on the release page of tag $TAG)"
+      echo "  ('$BRANCH' only accepts pull requests? run the whole script with --pr instead, or:"
+      echo "   git branch $RBRANCH && git push origin $RBRANCH $TAG, open a pull request into $BRANCH and merge it with 'Create a merge commit')"
+    fi
+    exit 0
+  fi
+
+  # ---- 5. publish -------------------------------------------------------------------------------------------------
+  if [ "$VIA_PR" -eq 1 ]; then
+    git push origin "$RBRANCH" || die "pushing $RBRANCH failed. Everything is committed and tagged locally on $RBRANCH; retry: git push origin $RBRANCH && git push origin $TAG, then create the draft release and the pull request (see --no-publish output)"
+    git push origin "$TAG" || die "pushing the tag failed. Retry: git push origin $TAG, then create the draft release and the pull request (files are in $OUT/)"
+  else
+    git push origin "$BRANCH" || die "pushing the branch failed. The release is committed and tagged locally. If '$BRANCH' only accepts pull requests (a protected branch): git branch $RBRANCH && git push origin $RBRANCH $TAG, open a pull request into $BRANCH and merge it with 'Create a merge commit' (not squash/rebase), then create the release (see --no-publish output) - or start over with --pr. Otherwise fix the push, then: git push origin $BRANCH && git push origin $TAG && create the release"
+    git push origin "$TAG" || die "pushing the tag failed. Retry: git push origin $TAG, then create the release (files are in $OUT/)"
+  fi
   # shellcheck disable=SC2086
-  "$GH" release create "$TAG" "$OUT/$JAR_NAME" "$OUT/$JAR_NAME.sha256" "$OUT/$LAUNCHER_NAME" "$OUT/$LAUNCHER_NAME.sha256" \
+  "$GH" release create "$TAG" $RELEASE_FILES \
     --title "$VERSION" $notes_args --verify-tag --draft \
-    || die "creating the draft release failed. The branch and tag are pushed; retry: $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 $OUT/$LAUNCHER_NAME $OUT/$LAUNCHER_NAME.sha256 --title $VERSION $notes_args --verify-tag --draft"
+    || die "creating the draft release failed. The branch and tag are pushed; retry: $GH release create $TAG $RELEASE_FILES --title $VERSION $notes_args --verify-tag --draft"
+  if [ "$VIA_PR" -eq 1 ]; then
+    # the release stays a DRAFT until the pull request is merged: the tag is only part of '$BRANCH' after a merge commit
+    "$GH" pr create --base "$BRANCH" --head "$RBRANCH" --title "release: $TAG" --body "$PR_BODY" \
+      || die "the draft release $TAG was created but the pull request was not - open it by hand ($RBRANCH -> $BRANCH), merge it with 'Create a merge commit', then: $GH release edit $TAG --draft=false"
+    git checkout -q "$BRANCH" || info "could not switch back to '$BRANCH' - run: git checkout $BRANCH"
+    info "pull request opened ($RBRANCH -> $BRANCH); the release $TAG is still a DRAFT"
+    info "next: merge it with 'Create a merge commit' (not squash/rebase), then: $GH release edit $TAG --draft=false"
+    exit 0
+  fi
   "$GH" release edit "$TAG" --draft=false \
     || die "the draft release $TAG was created with its files but not published - publish it on GitHub (Releases > Draft) or: $GH release edit $TAG --draft=false"
   info "published $TAG: $(git remote get-url origin 2>/dev/null)"

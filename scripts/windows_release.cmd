@@ -10,12 +10,14 @@ REM Windows and Linux/macOS releases are the same, tested code.
 REM
 REM   windows_release.cmd --build-only           build + verify only, git untouched
 REM   windows_release.cmd 0.5.7 --skip-tests     release 0.5.7 without running the tests
+REM   windows_release.cmd --pr                   main only accepts pull requests: push a release
+REM                                              branch + the tag, open the PR, keep the release a draft
 REM   windows_release.cmd --help
 REM
 REM Needs Git for Windows (it ships bash.exe). WSL's C:\Windows\System32\bash.exe
 REM is NOT used: it cannot read Windows paths. To use another bash, set RELEASE_BASH.
 REM Publishing also needs the GitHub CLI (winget install GitHub.cli, then gh auth login);
-REM without it use --no-publish and upload the two files from target\ by hand.
+REM without it use --no-publish and upload the four files from target\release\ by hand.
 REM
 REM No parenthesized blocks around the paths below on purpose: a path such as
 REM "C:\Program Files (x86)\Git\bin\bash.exe" would end the block at its ")".

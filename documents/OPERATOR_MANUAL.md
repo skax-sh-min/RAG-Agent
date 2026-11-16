@@ -2179,6 +2179,7 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 | `--skip-tests` | Maven 에 `-DskipTests` (전체 테스트는 몇 분 걸립니다) |
 | `--next X.Y.Z-SNAPSHOT` | 이어 갈 버전. 기본은 patch + 1 (0.5.9 → 0.5.10-SNAPSHOT) |
 | `--notes-file 파일` | 릴리즈 노트 파일. 기본은 GitHub 이 자동 생성 |
+| `--pr` | **`main` 이 풀 리퀘스트로만 받는 저장소**용 — 아래 「PR 로만 받는 main」 |
 | `--any-branch` | `main` 이 아닌 브랜치에서 릴리즈(기본은 거절, `RELEASE_BRANCH` 로 기준 브랜치 변경) |
 | `-y`, `--yes` | 확인 질문 생략 |
 
@@ -2189,6 +2190,14 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 3. **검증·산출물** — jar 안의 `build.version` 이 릴리즈 버전과 같고 `Start-Class` 가 이 앱의 것인지 확인합니다(앱도 같은 검사로 어긋난 릴리즈의 업데이트를 거절합니다). `target/release/` 에 `rag-agent-X.Y.Z.jar` 와 `rag-agent-X.Y.Z.jar.sha256`(`sha256sum` 형식)을 만들고, **런처 jar**(`rag-agent-X.Y.Z-launcher.jar` — `Main-Class` 를 확인하고 없으면 릴리즈하지 않습니다)와 그 `.sha256` 도 같은 곳에 둡니다.
 4. **git** — 확인 질문 뒤에 `release: vX.Y.Z` 커밋 → 주석 태그 `vX.Y.Z` → pom 을 다음 SNAPSHOT 으로 올려 `chore: begin …` 커밋(안 올리면 이후 빌드가 계속 방금 릴리즈한 버전이라 자처합니다).
 5. **게시** — 브랜치와 태그를 푸시하고, **초안(draft)** 릴리즈에 네 파일을 올린 뒤 **업로드가 끝나면 게시**합니다(반쯤 올라간 릴리즈가 보이지 않게 — 앱은 업로드가 끝난 jar 가 있는 릴리즈만 알립니다).
+
+**PR 로만 받는 main (`--pr`)**: 보호 규칙이 `main` 으로의 직접 푸시를 막으면 기본 흐름은 4단계(로컬 커밋·태그)까지 가고 5단계의 `git push origin main` 에서 거절됩니다 — 원격에는 아무것도 올라가지 않고, 로컬 `main` 만 커밋 2개 앞서 있습니다. `--pr` 은 그 흐름을 PR 로 바꿉니다:
+
+1. 사전 점검·빌드·검증은 같고, 시작한 브랜치(`main`)는 **건드리지 않습니다** — 커밋은 새 브랜치 **`release/X.Y.Z`** 에 만듭니다(이미 있으면 빌드 전에 거절).
+2. 그 브랜치와 태그 `vX.Y.Z` 를 푸시하고, **초안(draft)** 릴리즈에 네 파일을 올린 뒤, `release/X.Y.Z` → 시작 브랜치로의 **PR 을 엽니다**(`gh pr create`).
+3. **릴리즈를 게시하지 않습니다.** PR 을 **"Create a merge commit"** 으로 병합한 뒤(스쿼시·리베이스 병합은 커밋을 새로 만들어, 태그가 가리키는 릴리즈 커밋이 `main` 이력에서 빠집니다) `gh release edit vX.Y.Z --draft=false` 로 게시하세요 — 병합 전에는 앱이 새 버전을 알리지 않습니다.
+
+`--pr --no-publish` 는 브랜치에 커밋·태그까지만 로컬에서 하고 위 명령을 출력합니다(`gh` 없이 쓸 때). 이미 기본 흐름이 푸시에서 막혔다면(로컬 `main` 이 앞서 있고 태그가 있음) 스크립트가 출력한 대로 `git branch release/X.Y.Z && git push origin release/X.Y.Z vX.Y.Z` 로 같은 PR 흐름에 합류하면 됩니다.
 
 **중간에 멈췄을 때**: 사전 점검·빌드·검증 실패는 아무 흔적도 남기지 않습니다(pom 복원). 커밋 뒤에 실패하면 스크립트가 **어디까지 됐고 다음에 무엇을 칠지** 출력합니다 — 푸시 실패는 같은 푸시를, 초안 생성 실패는 출력된 `gh release create …` 를 다시, 게시 실패는 GitHub 의 Releases › Draft 에서 게시하면 됩니다. 산출물은 `target/release/` 에 남아 있습니다.
 

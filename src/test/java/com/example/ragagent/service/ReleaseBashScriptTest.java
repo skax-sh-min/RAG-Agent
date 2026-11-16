@@ -85,7 +85,101 @@ class ReleaseBashScriptTest extends ReleaseHarness {
         assertThat(remoteGit("rev-list", "--count", "main")).isEqualTo("1");
         assertThat(ghCalls()).isEmpty();
         assertThat(r.out()).contains("git push origin main").contains("release create v0.5.6");
+        // 안내하는 명령도 본 게시 경로와 같다 — 초안으로 만들어 올린 뒤 게시(--draft 없이 만들면 파일이 올라오기 전에 공개된다)
+        assertThat(r.out()).contains("--verify-tag --draft").contains("release edit v0.5.6 --draft=false");
+        assertThat(r.out()).contains("--pr").contains("git branch release/0.5.6");               // main 이 PR 로만 받는 저장소를 위한 길도 알려 준다
         assertThat(repo.resolve("target/release/rag-agent-0.5.6.jar")).exists();
+    }
+
+    // ── --pr: main 이 풀 리퀘스트로만 받는 저장소 ───────────────────────────
+
+    @Test
+    @DisplayName("--pr: main 은 건드리지 않고 release/<v> 브랜치와 태그를 푸시하고, 초안 릴리즈를 만들고 PR 을 연다 — 게시는 하지 않는다 (main 푸시를 거절하는 원격에서)")
+    void prModePushesABranchAndTagOpensAPrAndKeepsTheReleaseADraft() throws Exception {
+        protectMain();     // main 으로 푸시하면 거절된다 — 이 흐름이 main 을 한 번도 밀지 않는다는 증거
+        Result r = run(args(opt(Opt.PR), opt(Opt.YES)));
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        // 시작한 브랜치는 그대로 — 커밋도 pom 변경도 없다
+        assertThat(git("rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main");
+        assertThat(git("rev-list", "--count", "main")).isEqualTo("1");
+        assertThat(git("show", "HEAD:pom.xml")).contains("<version>0.5.6-SNAPSHOT</version>");
+        assertThat(git("status", "--porcelain")).isEmpty();
+        // 릴리즈 커밋 · 다음 SNAPSHOT 커밋은 브랜치에 있고, 태그는 릴리즈 커밋을 가리킨다
+        assertThat(git("log", "--format=%s", "-n", "3", "release/0.5.6")).isEqualTo("chore: begin 0.5.7-SNAPSHOT\nrelease: v0.5.6\ninitial");
+        assertThat(git("rev-parse", "v0.5.6^{commit}")).isEqualTo(git("rev-parse", "release/0.5.6~1"));
+        assertThat(git("show", "v0.5.6:pom.xml")).contains("<version>0.5.6</version>");
+        // 원격: main 은 그대로, 브랜치와 태그가 올라갔다
+        assertThat(remoteGit("rev-list", "--count", "main")).isEqualTo("1");
+        assertThat(remoteGit("tag")).isEqualTo("v0.5.6");
+        assertThat(remoteGit("log", "--format=%s", "-n", "3", "release/0.5.6")).isEqualTo("chore: begin 0.5.7-SNAPSHOT\nrelease: v0.5.6\ninitial");
+
+        List<String> calls = ghCalls();
+        assertThat(calls.get(0)).isEqualTo("auth status");
+        assertThat(calls.get(1)).startsWith("release create v0.5.6 ").contains("rag-agent-0.5.6-launcher.jar.sha256 ")
+                .endsWith("--title 0.5.6 --generate-notes --verify-tag --draft");
+        assertThat(calls.get(2)).startsWith("pr create --base main --head release/0.5.6 --title release: v0.5.6 --body ")
+                .contains("Create a merge commit");
+        assertThat(calls).as("PR 이 병합되기 전에는 게시하지 않는다 — 초안으로 남는다").noneMatch(l -> l.startsWith("release edit"));
+        assertThat(r.out()).contains("still a DRAFT").contains("Create a merge commit").contains("release edit v0.5.6 --draft=false");
+    }
+
+    @Test
+    @DisplayName("--pr --no-publish: 릴리즈 브랜치에 커밋·태그까지 로컬에서 하고, 푸시·gh 는 하지 않고 PR 흐름의 명령을 알려 준다")
+    void prModeNoPublishStaysLocalOnTheReleaseBranch() throws Exception {
+        Result r = run(args(opt(Opt.PR), opt(Opt.NO_PUBLISH), opt(Opt.YES)));
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        assertThat(git("rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main");
+        assertThat(git("rev-list", "--count", "main")).isEqualTo("1");
+        assertThat(git("log", "--format=%s", "-n", "2", "release/0.5.6")).isEqualTo("chore: begin 0.5.7-SNAPSHOT\nrelease: v0.5.6");
+        assertThat(git("tag")).isEqualTo("v0.5.6");
+        assertThat(remoteGit("tag")).isEmpty();
+        assertThat(remoteGit("branch", "--list")).doesNotContain("release/0.5.6");
+        assertThat(ghCalls()).isEmpty();
+        assertThat(r.out()).contains("git push origin release/0.5.6 && git push origin v0.5.6")
+                .contains("release create v0.5.6").contains("--draft")
+                .contains("pr create --base main --head release/0.5.6")
+                .contains("release edit v0.5.6 --draft=false");
+    }
+
+    @Test
+    @DisplayName("--pr: 릴리즈 브랜치가 이미 있으면(로컬이든 원격이든) 빌드 전에 거절한다 — 이전 시도를 덮어쓰지 않는다")
+    void prModeRefusesAnExistingReleaseBranch() throws Exception {
+        git("branch", "release/0.5.6");
+        Result local = run(args(opt(Opt.PR), opt(Opt.YES)));
+
+        assertThat(local.exit()).isNotZero();
+        assertThat(local.out()).contains("release/0.5.6 already exists locally");
+        assertThat(mvnLog).doesNotExist();
+        assertThat(git("tag")).isEmpty();
+
+        git("branch", "-D", "release/0.5.6");
+        git("push", "-q", "origin", "main:refs/heads/release/0.5.6");
+        Result onOrigin = run(args(opt(Opt.PR), opt(Opt.YES)));
+
+        assertThat(onOrigin.exit()).isNotZero();
+        assertThat(onOrigin.out()).contains("release/0.5.6 already exists on origin");
+        assertThat(mvnLog).doesNotExist();
+        assertThat(git("tag")).isEmpty();
+        assertThat(git("rev-list", "--count", "main")).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("main 이 PR 로만 받는데 --pr 없이 돌리면 브랜치 푸시에서 멈추고, 상태와 이어 가는 방법(--pr · 브랜치 만들기)을 알려 준다")
+    void aProtectedMainStopsThePlainFlowAndTheMessageSaysWhatToDo() throws Exception {
+        protectMain();
+        Result r = run(args(opt(Opt.YES)));
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("pushing the branch failed").contains("only accepts pull requests")
+                .contains("git branch release/0.5.6 && git push origin release/0.5.6 v0.5.6").contains("--pr");
+        // 로컬에는 커밋과 태그가 있고, 원격에는 아무것도 올라가지 않았다
+        assertThat(git("rev-list", "--count", "main")).isEqualTo("3");
+        assertThat(git("tag")).isEqualTo("v0.5.6");
+        assertThat(remoteGit("rev-list", "--count", "main")).isEqualTo("1");
+        assertThat(remoteGit("tag")).isEmpty();
+        assertThat(ghCalls()).as("푸시가 막히면 릴리즈를 만들지 않는다").containsExactly("auth status");
     }
 
     @Test

@@ -35,7 +35,7 @@ import java.util.zip.ZipFile;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class ReleaseHarness {
 
-    enum Opt { BUILD_ONLY, NO_PUBLISH, SKIP_TESTS, ANY_BRANCH, YES }
+    enum Opt { BUILD_ONLY, NO_PUBLISH, SKIP_TESTS, ANY_BRANCH, YES, PR }
 
     static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("windows");
     private static final Path SCRIPTS = Path.of("scripts").toAbsolutePath();
@@ -273,7 +273,28 @@ abstract class ReleaseHarness {
             case SKIP_TESTS -> "--skip-tests";
             case ANY_BRANCH -> "--any-branch";
             case YES -> "--yes";
+            case PR -> "--pr";
         };
+    }
+
+    /**
+     * 원격을 "PR 로만 받는 main" 으로 만든다 — {@code refs/heads/main} 을 갱신하려는 푸시를 pre-receive 훅이 거절한다(GitHub 의 GH006 과 같은
+     * 모양). 다른 브랜치와 태그는 받는다. 이 테스트의 원격 복사본에만 걸린다.
+     */
+    void protectMain() throws IOException {
+        Path hook = remote.resolve("hooks").resolve("pre-receive");
+        Files.createDirectories(hook.getParent());
+        Files.writeString(hook, String.join("\n",
+                "#!/bin/sh",
+                "while read old new ref; do",
+                "  if [ \"$ref\" = \"refs/heads/main\" ]; then",
+                "    echo \"remote: error: GH006: Protected branch update failed for $ref.\" >&2",
+                "    exit 1",
+                "  fi",
+                "done",
+                "exit 0",
+                ""), StandardCharsets.UTF_8);
+        hook.toFile().setExecutable(true);
     }
 
     List<String> valueOpt(String name, String value) {

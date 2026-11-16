@@ -127,7 +127,7 @@ container system stop
 | 첨부 파일 3 (권장) | `rag-agent-X.Y.Z-launcher.jar`(+ `.sha256`) — 새로 설치할 때 시작하는 약 30KB 짜리 런처. `mvn package` 가 `target/rag-agent-X.Y.Z-launcher.jar` 로 만듭니다. 앱은 이 파일을 앱 jar 로 오인하지 않습니다 |
 | 상태 | **게시됨** — 초안(draft)도, 시험판(pre-release)도 아니어야 합니다. jar가 첨부되지 않은 릴리즈는 아예 알리지 않습니다 |
 
-> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
+> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요. **`main` 이 풀 리퀘스트로만 받는다면 `--pr`**: `main` 은 건드리지 않고 `release/X.Y.Z` 브랜치에 커밋·태그를 만들어 그 브랜치와 태그를 푸시하고, **초안** 릴리즈와 PR 을 만든 뒤 멈춥니다 — PR 을 **"Create a merge commit"** 으로 병합하고(스쿼시·리베이스는 태그가 가리키는 커밋이 `main` 이력에서 빠집니다) `gh release edit vX.Y.Z --draft=false` 로 게시하세요.
 
 아래는 `pom.xml`이 `0.5.7-SNAPSHOT`일 때 `0.5.7`을 릴리즈하는 순서입니다. 저장소 루트에서 실행하세요.
 
