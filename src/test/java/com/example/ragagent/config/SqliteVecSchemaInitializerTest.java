@@ -12,6 +12,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -61,6 +62,49 @@ class SqliteVecSchemaInitializerTest {
     }
 
     @Nested
+    @DisplayName("기존 vec_embeddings 차원 검사 — 임베딩 모델 교체 뒤 테이블을 비우지 않은 기동")
+    class ExistingDimension {
+        @Test
+        @DisplayName("embeddingTableDdl 이 만든 문장에서 차원을 읽는다 (sqlite_master 에 남는 모양, 대소문자·공백 무관)")
+        void parses() {
+            assertThat(SqliteVecSchemaInitializer.parseExistingDimension(
+                    SqliteVecSchemaInitializer.embeddingTableDdl(768))).isEqualTo(768);
+            assertThat(SqliteVecSchemaInitializer.parseExistingDimension(
+                    "CREATE VIRTUAL TABLE vec_embeddings USING vec0(embedding  float [ 1024 ] distance_metric=cosine)"))
+                    .isEqualTo(1024);
+        }
+
+        @Test
+        @DisplayName("문장이 없거나 모양을 모르면 null — 판정하지 않는다")
+        void unknownShape() {
+            assertThat(SqliteVecSchemaInitializer.parseExistingDimension(null)).isNull();
+            assertThat(SqliteVecSchemaInitializer.parseExistingDimension("")).isNull();
+            assertThat(SqliteVecSchemaInitializer.parseExistingDimension("CREATE TABLE t(a INT)")).isNull();
+        }
+
+        @Test
+        @DisplayName("같은 차원 · 테이블 없음 · 읽을 수 없음 → 메시지 없음(null)")
+        void noMessage() {
+            String ddl = SqliteVecSchemaInitializer.embeddingTableDdl(768);
+            assertThat(SqliteVecSchemaInitializer.dimensionMismatchMessage(ddl, 768)).isNull();
+            assertThat(SqliteVecSchemaInitializer.dimensionMismatchMessage(null, 768)).isNull();
+            assertThat(SqliteVecSchemaInitializer.dimensionMismatchMessage("CREATE TABLE t(a INT)", 768)).isNull();
+        }
+
+        @Test
+        @DisplayName("다른 차원 → 두 숫자와 해야 할 일(재생성 카드 · §7.3 · 설정만 틀렸을 때)을 담은 문장 — 던지지 않는다")
+        void mismatchMessage() {
+            String ddl = SqliteVecSchemaInitializer.embeddingTableDdl(768);
+            assertThat(SqliteVecSchemaInitializer.dimensionMismatchMessage(ddl, 1024))
+                    .contains("768차원")
+                    .contains("1024")
+                    .contains("임베딩 재생성")
+                    .contains("§7.3")
+                    .contains("EMBED_DIMENSIONS");
+        }
+    }
+
+    @Nested
     @DisplayName("init — DDL 실행")
     class Init {
         private AppProperties propsWithDim(Integer dim) {
@@ -98,6 +142,26 @@ class SqliteVecSchemaInitializerTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("app.embedding.dimensions");
             verify(jdbc, never()).execute(anyString());
+        }
+
+        @Test
+        @DisplayName("기존 vec_embeddings 가 다른 차원: 기동을 막지 않는다 — 재생성 카드가 고칠 수 있도록 DDL 은 평소대로 6개 실행")
+        void mismatchDoesNotBlockStartup() {
+            JdbcTemplate jdbc = mock(JdbcTemplate.class);
+            when(jdbc.queryForList(anyString(), eq(String.class)))
+                    .thenReturn(List.of(SqliteVecSchemaInitializer.embeddingTableDdl(768)));
+            new SqliteVecSchemaInitializer(jdbc, propsWithDim(1024)).init();   // 예외 없음
+            verify(jdbc, times(6)).execute(anyString());
+        }
+
+        @Test
+        @DisplayName("기존 vec_embeddings 가 같은 차원: 평소처럼 DDL 6개 실행")
+        void sameExistingDimensionProceeds() {
+            JdbcTemplate jdbc = mock(JdbcTemplate.class);
+            when(jdbc.queryForList(anyString(), eq(String.class)))
+                    .thenReturn(List.of(SqliteVecSchemaInitializer.embeddingTableDdl(1024)));
+            new SqliteVecSchemaInitializer(jdbc, propsWithDim(1024)).init();
+            verify(jdbc, times(6)).execute(anyString());
         }
     }
 

@@ -76,6 +76,68 @@
         </div>
     </div>
 
+    <!-- ── 임베딩 재생성 (sqlite-vec 전용 — EmbeddingRebuildService) ───────────────────────────
+         임베딩 모델을 바꾼 뒤 벡터를 앱 안에서 다시 만든다. 상태는 JSON 으로 받아 아래 스크립트가 그린다(페이지를 열 때 한 번 묻고,
+         작업이 도는 동안만 2초마다 다시 묻는다). 차원 불일치·벡터 없는 청크·진행 중이면 카드가 스스로 펼쳐진다. -->
+    <details class="card mb-4" id="embed-rebuild-card" th:if="${vectorStore.isSqliteVec()}">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-arrow-repeat me-2"></i>
+            <span class="fw-semibold small">임베딩 재생성</span>
+            <span id="erb-pill" class="badge ms-2 d-none"></span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                임베딩 모델을 바꾼 뒤 벡터를 다시 만듭니다
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div id="erb-alert" class="alert alert-warning py-2 d-none" role="alert"></div>
+            <div class="row g-3 text-center">
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">벡터 테이블 차원</div>
+                    <div class="fs-5 fw-semibold" id="erb-table-dim">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">설정 차원 (EMBED_DIMENSIONS)</div>
+                    <div class="fs-5 fw-semibold" id="erb-configured-dim">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">청크 수</div>
+                    <div class="fs-5 fw-semibold" id="erb-chunks">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">벡터 없는 청크</div>
+                    <div class="fs-5 fw-semibold" id="erb-missing">—</div>
+                </div>
+            </div>
+            <div id="erb-progress" class="mt-3 d-none">
+                <div class="d-flex justify-content-between mb-1">
+                    <span id="erb-phase">-</span><span id="erb-counts">-</span>
+                </div>
+                <div class="progress" style="height:.6rem;">
+                    <div class="progress-bar" id="erb-bar" role="progressbar" style="width:0%"></div>
+                </div>
+            </div>
+            <div id="erb-message" class="mt-2"></div>
+            <details id="erb-failures" class="mt-2 d-none">
+                <summary class="text-danger" id="erb-failures-title" style="cursor:pointer;">실패한 청크</summary>
+                <ul class="mb-0 mt-1" id="erb-failures-list"></ul>
+            </details>
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                <button type="button" class="btn btn-sm btn-primary d-none" id="erb-resume">이어서 임베딩</button>
+                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="erb-rebuild">처음부터 전체 재임베딩</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="erb-cancel">중단</button>
+            </div>
+            <div class="text-muted mt-3">
+                <strong>언제 쓰나</strong> — <code>EMBED_MODEL</code>·<code>EMBED_DIMENSIONS</code> 를 바꾸고 재기동한 뒤입니다. 벡터는 모델마다 서로
+                비교할 수 없어, 모델을 바꾸면 모든 청크의 벡터를 새로 만들어야 합니다.
+                <strong>처음부터</strong>는 벡터 테이블(<code>vec_embeddings</code>)을 지우고 설정한 차원으로 다시 만든 뒤 모든 청크를 임베딩합니다 —
+                끝날 때까지 벡터 검색이 비고 키워드(BM25) 검색만 동작합니다. <strong>이어서</strong>는 벡터가 없는 청크만 합니다(중단·실패 뒤).
+                청크 본문·손으로 고친 내용·태그·큐레이션·대화는 그대로이고 LLM 은 부르지 않습니다. 시작 전에 아래 「DB 백업」의 지금 백업을 권합니다.
+                절차 전체는 운영 매뉴얼 §7.3.
+            </div>
+        </div>
+    </details>
+
     <!-- ── 버전(sqlite-vec) / 컬렉션(chroma) 목록 · 문서 레지스트리 — 좌우 배치 ────────── -->
     <div class="row g-4 mb-4">
 
@@ -360,6 +422,59 @@
                 문서 원본·변환본·이미지 파일과 Chroma 백엔드의 벡터는 담지 않습니다. 복구는 앱을 멈추고 이 파일을
                 <code>memory.db</code> 로 바꾼 뒤 다시 띄웁니다 — 절차는 운영 매뉴얼 "DB 백업과 복구".
                 같은 디스크에 있으므로 디스크 고장에 대비하려면 이 폴더를 다른 곳으로도 옮겨 두세요.
+            </div>
+        </div>
+    </details>
+
+    <!-- ── 새 버전 알림 (UpdateCheckService) ───────────────────────────────────────────── -->
+    <!-- GitHub Releases 의 최신 정식 릴리즈를 지금 실행 중인 버전과 견준다. 알리기만 한다(내려받기·교체 없음). 기본 꺼짐 —
+         꺼져 있으면 GitHub 로 아무 요청도 나가지 않는다. 상태는 JSON 으로 받아 아래 스크립트가 그린다. -->
+    <details class="card mt-4" id="update-card">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-cloud-arrow-down me-2"></i>
+            <span class="fw-semibold small">새 버전</span>
+            <span id="upd-pill" class="badge bg-success ms-2 d-none">새 버전 있음</span>
+            <span id="upd-fail-pill" class="badge bg-danger ms-2 d-none">마지막 업데이트 실패</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                GitHub 릴리즈와 지금 버전을 비교 — 알림과 업데이트
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div>현재 <strong id="upd-current">-</strong></div>
+                <div>최신 <strong id="upd-latest">-</strong></div>
+                <div class="text-muted">저장소 <code id="upd-repo">-</code></div>
+                <div class="text-muted">확인 <span id="upd-schedule">-</span></div>
+                <div class="ms-auto">
+                    <button type="button" class="btn btn-sm btn-primary" id="upd-check">지금 확인</button>
+                </div>
+            </div>
+            <div id="upd-last" class="mt-2"></div>
+            <div id="upd-release" class="mt-2 d-none">
+                <div>
+                    <strong id="upd-name"></strong> <span class="text-muted" id="upd-published"></span>
+                    <a id="upd-link" class="ms-2 d-none" target="_blank" rel="noopener noreferrer">릴리즈 페이지 <i class="bi bi-box-arrow-up-right"></i></a>
+                </div>
+                <div class="text-muted mt-1" id="upd-jar"></div>
+                <pre id="upd-notes" class="border rounded p-2 mt-2 mb-0" style="white-space:pre-wrap; max-height:16rem; overflow:auto;"></pre>
+            </div>
+            <div class="mt-3 d-flex align-items-center gap-3 flex-wrap">
+                <button type="button" class="btn btn-sm btn-success d-none" id="upd-apply">새 버전으로 업데이트</button>
+                <span id="upd-apply-reason" class="text-muted"></span>
+            </div>
+            <div id="upd-progress" class="mt-2 d-none">
+                <div class="progress" style="height: 0.9rem;"><div id="upd-bar" class="progress-bar" role="progressbar" style="width: 0%"></div></div>
+                <div id="upd-phase" class="mt-1"></div>
+            </div>
+            <div id="upd-result" class="mt-2 d-none"></div>
+            <div id="upd-launcher" class="text-muted small mt-2 d-none"></div>
+            <div class="text-muted mt-2">
+                기본은 꺼져 있고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망용). 켜면(<code>UPDATE_CHECK_ENABLED=true</code>, 재기동)
+                기동 직후와 매일 정해진 시각(<code>UPDATE_CHECK_CRON</code>)에 GitHub Releases 의 최신 정식 릴리즈를 확인합니다 — 공개 저장소만, 토큰은 쓰지 않습니다.
+                jar 파일(<code>rag-agent-*.jar</code>)이 첨부된 릴리즈만 새 버전으로 알립니다. <strong>런처</strong>(<code>java -jar rag-agent-launcher.jar</code>)로 실행 중이면 [새 버전으로 업데이트] 가 jar 받기 → SHA-256 체크섬·구조 확인 → 업데이트 전 DB 백업 → 재시작·교체를 한 번에 하고, 새 버전이 정상 기동(헬스)하지 못하면 이전 버전과 그 백업 DB 로 <strong>자동으로 되돌립니다</strong>. 런처 없이 실행 중이면 알림만 합니다 — 직접 교체하세요(운영자 매뉴얼 §6.2.3).
+                런처 jar 자체는 자동으로 바뀌지 않습니다 — 새 버전이 더 새 런처를 요구하면 받은 뒤 DB 를 건드리기 전에 사유와 함께 멈추니, 그때 릴리즈의 런처 jar 로 교체하세요.
+                사내 프록시 뒤라면 <code>JAVA_OPTS</code> 에 <code>-Dhttps.proxyHost</code>/<code>-Dhttps.proxyPort</code> 를 주세요.
             </div>
         </div>
     </details>
@@ -2342,6 +2457,346 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
             .catch(status => { el('dbb-run').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
     });
     card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
+
+/* ── 새 버전 알림 (UpdateCheckService) ─────────────────────────────────────────────
+   서버가 상태를 통째로 돌려준다(설정 · 마지막 확인 · 최신 릴리즈). 카드를 열 때와 "지금 확인" 뒤에 그린다. 페이지를 열 때도 한 번 물어
+   새 버전이 있으면 카드 머리에 표시를 단다. 릴리즈 노트·이름은 GitHub 가 준 글자라 textContent 로만 넣는다(해석 없음). */
+(function () {
+    const card = document.getElementById('update-card');
+    if (!card) return;
+    const el = id => document.getElementById(id);
+    const fmtTime = iso => formatLocalTime(iso, 'second') || '-';
+    const fmtMb = n => (n / 1048576).toFixed(1) + ' MB';
+    let lastStatus = null;
+    let applyTimer = null;
+    let applyActive = false;    // 진행 중인 작업을 본 적이 있다 — 그 뒤의 연결 실패는 재시작이다
+                                // (RESTARTING 은 종료 전 1.5초뿐이라 폴링이 그 상태를 못 볼 수 있다)
+    let restartedAt = null;     // 재시작을 알아챈 시각
+    let downSince = null;       // 재시작 중 서버가 응답하지 않기 시작한 시각
+
+    function render(s) {
+        el('upd-repo').textContent = s.repo || '-';
+        if (s.configError) {
+            el('upd-schedule').textContent = '꺼짐 (설정 오류)';
+        } else if (!s.enabled) {
+            el('upd-schedule').textContent = '꺼짐 (UPDATE_CHECK_ENABLED=true 로 켜고 재기동)';
+        } else {
+            el('upd-schedule').textContent = '기동 직후 + ' + s.cron + ' (' + s.zone + ')';
+        }
+        el('upd-current').textContent = s.devBuild ? '개발 빌드 (비교하지 않음)' : (s.currentVersion || '-');
+        const latest = s.latest;
+        el('upd-latest').textContent = latest ? latest.version : '-';
+        el('upd-latest').className = s.updateAvailable ? 'text-success' : '';
+        el('upd-pill').classList.toggle('d-none', !s.updateAvailable);
+
+        const box = el('upd-last');
+        const last = s.last;
+        if (s.configError) {
+            box.textContent = s.configError;
+            box.className = 'mt-2 text-danger';
+        } else if (!s.enabled) {
+            box.textContent = '새 버전 확인이 꺼져 있습니다 — GitHub 로 아무 요청도 보내지 않습니다.';
+            box.className = 'mt-2 text-muted';
+        } else if (!last) {
+            box.textContent = '이번 기동 뒤 아직 확인하지 않았습니다.';
+            box.className = 'mt-2 text-muted';
+        } else if (!last.ok) {
+            box.textContent = '마지막 확인(' + fmtTime(last.checkedAt) + ', ' + last.trigger + ') 실패: ' + last.error;
+            box.className = 'mt-2 text-danger';
+        } else if (s.releaseWithoutJar) {
+            box.textContent = '릴리즈 ' + latest.version + ' 이(가) 게시됐지만 jar 파일이 첨부되지 않아 알리지 않습니다 — 파일이 올라오면 다음 확인에서 알립니다.';
+            box.className = 'mt-2 text-warning';
+        } else if (s.updateAvailable) {
+            box.textContent = '새 버전 ' + latest.version + ' 이(가) 있습니다 (확인 ' + fmtTime(last.checkedAt) + ', ' + last.trigger + ').';
+            box.className = 'mt-2 text-success';
+        } else if (s.devBuild) {
+            box.textContent = '확인했습니다(' + fmtTime(last.checkedAt) + ') — 개발 빌드는 버전을 비교하지 않습니다.';
+            box.className = 'mt-2 text-muted';
+        } else {
+            box.textContent = '최신 버전입니다 (확인 ' + fmtTime(last.checkedAt) + ', ' + last.trigger + ').';
+            box.className = 'mt-2 text-success';
+        }
+
+        const rel = el('upd-release');
+        if (latest) {
+            rel.classList.remove('d-none');
+            el('upd-name').textContent = latest.name || latest.tag;
+            el('upd-published').textContent = latest.publishedAt ? '(' + fmtTime(latest.publishedAt) + ')' : '';
+            const link = el('upd-link');
+            if (latest.url && /^https?:\/\//.test(latest.url)) {
+                link.href = latest.url;
+                link.classList.remove('d-none');
+            } else {
+                link.classList.add('d-none');
+            }
+            el('upd-jar').textContent = latest.jar
+                ? '첨부: ' + latest.jar.name + ' (' + (latest.jar.size / 1048576).toFixed(1) + ' MB)'
+                : '첨부된 jar 가 없습니다';
+            el('upd-notes').textContent = latest.notes || '(릴리즈 노트가 없습니다)';
+        } else {
+            rel.classList.add('d-none');
+        }
+        el('upd-check').disabled = !s.enabled || !!s.configError || !!s.checking;
+        lastStatus = s;
+        refreshApply();
+    }
+
+    function refresh() {
+        return fetch('/admin/update')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('upd-last').textContent = '상태를 불러오지 못했습니다'; });
+    }
+
+    /* 적용 — 서버가 진행 작업과 마지막 결과를 돌려준다. 작업이 도는 동안 폴링하고, 재시작으로 서버가 한 번 끊겼다가 다시 응답하면
+       페이지를 새로 고쳐 새 버전과 결과(성공/롤백)를 보인다. */
+    function renderApply(a) {
+        const s = lastStatus || {};
+        const available = !!s.updateAvailable;
+        const job = a.job;
+        const running = !!job && ['DOWNLOADING', 'VERIFYING', 'BACKING_UP', 'RESTARTING'].includes(job.phase);
+        const btn = el('upd-apply');
+        btn.classList.toggle('d-none', !available);
+        btn.disabled = !a.canApply || running;
+        el('upd-apply-reason').textContent = (available && !a.canApply && !running && a.reason) ? a.reason : '';
+
+        const prog = el('upd-progress');
+        if (job && (running || job.phase === 'FAILED')) {
+            prog.classList.remove('d-none');
+            const downloading = job.phase === 'DOWNLOADING' && job.bytesTotal > 0;
+            const pct = downloading ? Math.min(100, Math.round(job.bytesDone * 100 / job.bytesTotal)) : 100;
+            el('upd-bar').style.width = pct + '%';
+            el('upd-bar').className = 'progress-bar' + (job.phase === 'FAILED' ? ' bg-danger' : ' progress-bar-striped progress-bar-animated');
+            el('upd-phase').textContent = job.version + ' — ' + job.message
+                + (downloading ? ' (' + fmtMb(job.bytesDone) + ' / ' + fmtMb(job.bytesTotal) + ')' : '');
+            el('upd-phase').className = job.phase === 'FAILED' ? 'mt-1 text-danger' : 'mt-1';
+        } else {
+            prog.classList.add('d-none');
+        }
+
+        const res = a.lastResult;
+        const rbox = el('upd-result');
+        if (res) {
+            rbox.classList.remove('d-none');
+            rbox.textContent = res.message + (res.at ? ' (' + fmtTime(res.at) + ')' : '');
+            rbox.className = 'mt-2 ' + (res.status === 'ok' ? 'text-success' : 'text-danger');
+        } else {
+            rbox.classList.add('d-none');
+        }
+        el('upd-fail-pill').classList.toggle('d-none', !(res && res.status !== 'ok'));
+
+        /* 런처 버전 — 런처 jar 는 앱과 따로 교체하므로 어떤 것이 돌고 있는지 보인다(새 앱이 더 새 런처를 요구하면 업데이트가 사유와 함께 멈춘다) */
+        const lbox = el('upd-launcher');
+        if (a.supervised) {
+            lbox.classList.remove('d-none');
+            lbox.textContent = '런처 ' + (a.launcherVersion || '(버전 미상)') + ' · 프로토콜 ' + a.launcherProtocol;
+        } else {
+            lbox.classList.add('d-none');
+        }
+
+        if (running) {
+            applyActive = true;
+            if (job.phase === 'RESTARTING' && !restartedAt) restartedAt = Date.now();
+            clearTimeout(applyTimer);
+            applyTimer = setTimeout(pollApply, job.phase === 'DOWNLOADING' ? 1000 : 2000);
+        }
+    }
+
+    function refreshApply() {
+        return fetch('/admin/update/apply')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(renderApply)
+            .catch(() => { /* 적용 정보를 못 읽어도 확인 카드는 그대로 쓴다 */ });
+    }
+
+    function pollApply() {
+        fetch('/admin/update/apply')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(a => {
+                if (downSince) { location.reload(); return; }     // 꺼졌다가 다시 응답한다 — 새 버전이 떴다
+                renderApply(a);
+            })
+            .catch(() => {
+                if (!applyActive) return;                          // 적용 중이 아니면 일시 오류다
+                restartedAt = restartedAt || Date.now();
+                downSince = downSince || Date.now();
+                el('upd-progress').classList.remove('d-none');
+                el('upd-phase').className = 'mt-1';
+                const waited = Math.round((Date.now() - restartedAt) / 1000);
+                el('upd-phase').textContent = waited < 600
+                    ? '다시 시작하는 중… 새 버전이 뜨면 이 화면이 자동으로 새로 고쳐집니다 (' + waited + '초)'
+                    : '10분이 지나도 응답이 없습니다 — 런처 창의 로그와 data/updates/result.properties 를 확인하세요.';
+                clearTimeout(applyTimer);
+                applyTimer = setTimeout(pollApply, 2000);
+            });
+    }
+
+    el('upd-apply').addEventListener('click', () => {
+        const v = lastStatus && lastStatus.latest && lastStatus.latest.version;
+        if (!v) return;
+        if (!confirm(v + ' 로 업데이트합니다.\n\n'
+                + '· 새 버전을 받아 체크섬을 확인하고, 업데이트 전 DB 백업을 만든 뒤 앱을 다시 시작합니다.\n'
+                + '· 다시 뜨는 동안(보통 1~2분) 접속이 끊기고 진행 중인 대화는 중단됩니다.\n'
+                + '· 새 버전이 뜨지 못하면 이전 버전과 DB 로 자동으로 되돌립니다.\n\n'
+                + '계속할까요?')) return;
+        el('upd-apply').disabled = true;
+        fetch('/admin/update/apply?version=' + encodeURIComponent(v), { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(async r => {
+                if (!r.ok) {
+                    let detail = '';
+                    try { detail = (await r.json()).detail || ''; } catch (e) { /* 본문이 JSON 이 아니다 */ }
+                    throw new Error(detail || ('요청이 실패했습니다 (' + r.status + ')'));
+                }
+                return r.json();
+            })
+            .then(renderApply)
+            .catch(e => { showToast(e.message, 'danger'); refreshApply(); });
+    });
+
+    el('upd-check').addEventListener('click', () => {
+        el('upd-check').disabled = true;
+        fetch('/admin/update/check', { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(s => {
+                render(s);
+                const ok = s.last && s.last.ok;
+                showToast(!ok ? '확인에 실패했습니다' : (s.updateAvailable ? '새 버전이 있습니다: ' + s.latest.version : '최신 버전입니다'),
+                          !ok ? 'danger' : (s.updateAvailable ? 'success' : 'info'));
+            })
+            .catch(status => { el('upd-check').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
+    });
+    card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
+
+/* ── 임베딩 재생성 (EmbeddingRebuildService, sqlite-vec 전용) ──────────────────────────
+   서버가 상태를 통째로 돌려준다(차원 · 청크/벡터 수 · 작업). 페이지를 열 때 한 번 묻고, 작업이 도는 동안에만 2초마다 다시 묻는다. */
+(function () {
+    const card = document.getElementById('embed-rebuild-card');
+    if (!card) return;                                   // chroma 백엔드에는 카드가 없다
+    const el = id => document.getElementById(id);
+    const num = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString();
+    let timer = null;
+    let openedOnce = false;
+    let last = null;
+
+    function pill(text, cls) {
+        const p = el('erb-pill');
+        if (!text) { p.classList.add('d-none'); return; }
+        p.className = 'badge ms-2 ' + cls;
+        p.textContent = text;
+    }
+
+    function render(s) {
+        last = s;
+        const job = s.job;
+        const running = !!s.running;
+        el('erb-table-dim').textContent = num(s.tableDimension);
+        el('erb-configured-dim').textContent = num(s.configuredDimension);
+        el('erb-chunks').textContent = num(s.totalChunks);
+        el('erb-missing').textContent = num(s.missingVectors);
+        el('erb-table-dim').className = 'fs-5 fw-semibold' + (s.dimensionMismatch ? ' text-danger' : '');
+
+        const alertBox = el('erb-alert');
+        if (s.dimensionMismatch && !running) {
+            alertBox.textContent = '벡터 테이블은 ' + s.tableDimension + '차원인데 설정은 ' + s.configuredDimension + '차원입니다. '
+                + '임베딩 모델을 바꾼 것이라면 아래 「벡터 테이블을 다시 만들고 전체 재임베딩」을 누르세요. '
+                + '모델은 그대로인데 설정만 틀렸다면 EMBED_DIMENSIONS 를 ' + s.tableDimension + ' 로 되돌리고 재기동하세요. '
+                + '그 전까지 벡터 색인·검색은 실패합니다.';
+            alertBox.classList.remove('d-none');
+        } else {
+            alertBox.classList.add('d-none');
+        }
+
+        // 진행 표시
+        const box = el('erb-progress');
+        if (job) {
+            const processed = job.done + job.skipped + job.failed;
+            const pct = job.total > 0 ? Math.min(100, Math.round(processed * 100 / job.total)) : (job.state === 'DONE' ? 100 : 0);
+            box.classList.remove('d-none');
+            el('erb-phase').textContent = job.phase;
+            el('erb-counts').textContent = job.total > 0
+                ? processed.toLocaleString() + ' / ' + job.total.toLocaleString() + ' (성공 ' + job.done.toLocaleString()
+                    + (job.skipped ? ' · 건너뜀 ' + job.skipped.toLocaleString() : '') + ' · 실패 ' + job.failed.toLocaleString() + ')'
+                : '';
+            const bar = el('erb-bar');
+            bar.style.width = pct + '%';
+            bar.className = 'progress-bar' + (running ? ' progress-bar-striped progress-bar-animated'
+                : job.state === 'DONE' && !job.failed ? ' bg-success' : job.state === 'DONE' ? ' bg-warning' : ' bg-danger');
+            const msg = el('erb-message');
+            msg.textContent = job.message || '';
+            msg.className = 'mt-2 ' + (job.state === 'FAILED' ? 'text-danger' : job.state === 'DONE' && !job.failed ? 'text-success' : 'text-muted');
+        } else {
+            box.classList.add('d-none');
+            el('erb-message').textContent = '';
+        }
+        const fails = job && job.failures ? job.failures : [];
+        el('erb-failures').classList.toggle('d-none', fails.length === 0);
+        if (fails.length) {
+            el('erb-failures-title').textContent = '실패한 청크 ' + (job.failed > fails.length
+                ? job.failed.toLocaleString() + '개 중 ' + fails.length + '개' : fails.length + '개');
+            el('erb-failures-list').innerHTML = fails.map(f =>
+                '<li><code>' + escHtml(f.version) + '</code> <code>' + escHtml(f.id) + '</code> — ' + escHtml(f.reason || '') + '</li>').join('');
+        }
+
+        // 버튼 — 진행 중에는 시작 버튼을 숨기고 중단만, 아니면 상태에 맞는 시작 버튼
+        el('erb-cancel').classList.toggle('d-none', !running);
+        el('erb-cancel').disabled = !!(job && job.message && running && /중단을 요청/.test(job.message));
+        const canResume = !running && !s.dimensionMismatch && s.tableDimension !== null && s.missingVectors > 0;
+        el('erb-resume').classList.toggle('d-none', !canResume);
+        el('erb-resume').textContent = '이어서 임베딩 (' + num(s.missingVectors) + '개)';
+        const rebuild = el('erb-rebuild');
+        rebuild.textContent = s.dimensionMismatch ? '벡터 테이블을 다시 만들고 전체 재임베딩' : '처음부터 전체 재임베딩';
+        rebuild.className = 'btn btn-sm ' + (s.dimensionMismatch ? 'btn-danger' : 'btn-outline-danger') + (running ? ' d-none' : '');
+
+        // 머리 배지
+        if (running && job) {
+            const processed = job.done + job.skipped + job.failed;
+            pill('진행 중 ' + processed.toLocaleString() + (job.total ? '/' + job.total.toLocaleString() : ''), 'bg-primary');
+        } else if (s.dimensionMismatch) {
+            pill('차원 불일치', 'bg-danger');
+        } else if (s.missingVectors > 0) {
+            pill('벡터 ' + s.missingVectors.toLocaleString() + '개 없음', 'bg-warning text-dark');
+        } else {
+            pill(null);
+        }
+        if (!openedOnce && (running || s.dimensionMismatch || s.missingVectors > 0)) card.open = true;
+        openedOnce = true;
+
+        if (running && !timer) timer = setInterval(refresh, 2000);
+        if (!running && timer) { clearInterval(timer); timer = null; }
+    }
+
+    function refresh() {
+        return fetch('/admin/embedding-rebuild')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('erb-message').textContent = '상태를 불러오지 못했습니다'; el('erb-message').className = 'mt-2 text-danger'; });
+    }
+
+    function post(path, okMsg) {
+        return fetch(path, { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : r.json().catch(() => ({})).then(b => Promise.reject(b.detail || ('요청이 실패했습니다 (' + r.status + ')'))))
+            .then(s => { render(s); if (okMsg) showToast(okMsg, 'success'); })
+            .catch(msg => showToast(String(msg), 'danger'));
+    }
+
+    el('erb-rebuild').addEventListener('click', () => {
+        if (!last) return;
+        if (!confirm('벡터 테이블(vec_embeddings)을 지우고 ' + last.configuredDimension + '차원으로 다시 만든 뒤, 청크 ' + num(last.totalChunks)
+                + '개를 모두 다시 임베딩합니다.\n\n끝날 때까지 벡터 검색이 비어 있고(키워드 검색만 동작) 청크 수에 비례해 시간이 걸립니다. '
+                + '청크 본문·편집 내용·태그는 그대로입니다.\n\n계속할까요?')) return;
+        post('/admin/embedding-rebuild/start?mode=rebuild', '임베딩 재생성을 시작했습니다');
+    });
+    el('erb-resume').addEventListener('click', () => {
+        if (!last) return;
+        if (!confirm('벡터가 없는 청크 ' + num(last.missingVectors) + '개를 다시 임베딩합니다. 계속할까요?')) return;
+        post('/admin/embedding-rebuild/start?mode=resume', '이어서 임베딩을 시작했습니다');
+    });
+    el('erb-cancel').addEventListener('click', () => post('/admin/embedding-rebuild/cancel', null));
+
     refresh();
 })();
 </script>

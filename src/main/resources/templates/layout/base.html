@@ -107,6 +107,9 @@
                          구분한다. -->
                     <span id="chunk-report-badge" class="badge bg-warning text-dark ms-1 d-none"
                           title="내용 오류가 신고된 청크">0</span>
+                    <!-- 새 버전 알림 — 서버가 확인해 둔 결과만 읽는다(GitHub 로 가지 않는다). 새 버전이 없으면 감춘다. -->
+                    <span id="update-badge" class="badge bg-success ms-1 d-none"
+                          title="새 버전이 있습니다">NEW</span>
                 </a>
             </li>
             <!-- 설정은 자주 열지 않으므로 맨 끝에 둔다. -->
@@ -481,6 +484,22 @@ const I18N = {
         // 관리자에게만 존재하는 엘리먼트 — 없으면 폴링도 시작되지 않는다.
         pollBadge(document.getElementById('pending-submission-badge'), '/admin/submissions/pending-count');
         pollBadge(document.getElementById('chunk-report-badge'), '/admin/chunk-reports/open-count');
+        // 새 버전 — 관리자에게만 있는 엘리먼트. 서버가 기동 때와 정해진 시각에 확인해 둔 결과를 읽을 뿐이다.
+        (function () {
+            const badge = document.getElementById('update-badge');
+            if (!badge) return;
+            function refreshUpdate() {
+                fetch('/admin/update/available')
+                    .then(r => r.ok ? r.json() : Promise.reject())
+                    .then(d => {
+                        badge.classList.toggle('d-none', !d.available);
+                        if (d.available && d.version) badge.title = '새 버전 ' + d.version + ' 이(가) 있습니다';
+                    })
+                    .catch(() => badge.classList.add('d-none'));
+            }
+            refreshUpdate();
+            setInterval(refreshUpdate, 60000);
+        })();
     })();
 
     /* ── 이미지 마커 렌더링 ────────────────────────────────────────────────────

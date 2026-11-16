@@ -20,6 +20,8 @@
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>2.0.2</spring-ai.version>
+        <!-- 앱 jar 매니페스트 Min-Launcher-Protocol — 이 버전이 요구하는 최소 런처 세대(아래 maven-jar-plugin default-jar 설명) -->
+        <min.launcher.protocol>1</min.launcher.protocol>
     </properties>
 
     <dependencyManagement>
@@ -269,6 +271,49 @@
                         <goals>
                             <goal>build-info</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- 런처 jar — com.example.ragagent.launcher 패키지(JDK 만 쓴다)만 담은 작은 jar 를 앱 jar 옆에 하나 더 만든다.
+                 rag-agent-<버전>-launcher.jar. 앱을 자식 프로세스로 띄우고 업데이트 교체·헬스 확인·롤백을 맡는다(OPERATOR_MANUAL 6.2.3).
+                 앱 jar 는 spring-boot repackage 가 그대로 만들고 이 jar 는 건드리지 않는다. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>launcher-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>launcher</classifier>
+                            <includes>
+                                <include>com/example/ragagent/launcher/**</include>
+                            </includes>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.example.ragagent.launcher.Launcher</mainClass>
+                                    <!-- Implementation-Version = 이 런처의 버전(런처의 version 옵션 · /admin 카드가 보인다) -->
+                                    <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                                </manifest>
+                            </archive>
+                        </configuration>
+                    </execution>
+                    <!-- 앱 jar(spring-boot repackage 가 이 jar 를 다시 싸도 매니페스트 속성은 남는다) — 이 버전을 올리려면 런처가 이 프로토콜
+                         이상이어야 한다는 선언. 런처·앱이 받은 jar 에서 읽는다. 기본은 1(첫 런처부터 지키는 기준선) — 앱↔런처 약속이 호환되지 않게
+                         바뀌어 Launcher.PROTOCOL 을 올린 릴리즈에서만 같이 올린다(LauncherProtocolConventionTest 가 pom 과 코드를 맞춘다). -->
+                    <execution>
+                        <id>default-jar</id>
+                        <configuration>
+                            <archive>
+                                <manifestEntries>
+                                    <Min-Launcher-Protocol>${min.launcher.protocol}</Min-Launcher-Protocol>
+                                </manifestEntries>
+                            </archive>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
