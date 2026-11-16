@@ -76,6 +76,68 @@
         </div>
     </div>
 
+    <!-- ── 임베딩 재생성 (sqlite-vec 전용 — EmbeddingRebuildService) ───────────────────────────
+         임베딩 모델을 바꾼 뒤 벡터를 앱 안에서 다시 만든다. 상태는 JSON 으로 받아 아래 스크립트가 그린다(페이지를 열 때 한 번 묻고,
+         작업이 도는 동안만 2초마다 다시 묻는다). 차원 불일치·벡터 없는 청크·진행 중이면 카드가 스스로 펼쳐진다. -->
+    <details class="card mb-4" id="embed-rebuild-card" th:if="${vectorStore.isSqliteVec()}">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-arrow-repeat me-2"></i>
+            <span class="fw-semibold small">임베딩 재생성</span>
+            <span id="erb-pill" class="badge ms-2 d-none"></span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                임베딩 모델을 바꾼 뒤 벡터를 다시 만듭니다
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div class="card-body small">
+            <div id="erb-alert" class="alert alert-warning py-2 d-none" role="alert"></div>
+            <div class="row g-3 text-center">
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">벡터 테이블 차원</div>
+                    <div class="fs-5 fw-semibold" id="erb-table-dim">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">설정 차원 (EMBED_DIMENSIONS)</div>
+                    <div class="fs-5 fw-semibold" id="erb-configured-dim">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">청크 수</div>
+                    <div class="fs-5 fw-semibold" id="erb-chunks">—</div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">벡터 없는 청크</div>
+                    <div class="fs-5 fw-semibold" id="erb-missing">—</div>
+                </div>
+            </div>
+            <div id="erb-progress" class="mt-3 d-none">
+                <div class="d-flex justify-content-between mb-1">
+                    <span id="erb-phase">-</span><span id="erb-counts">-</span>
+                </div>
+                <div class="progress" style="height:.6rem;">
+                    <div class="progress-bar" id="erb-bar" role="progressbar" style="width:0%"></div>
+                </div>
+            </div>
+            <div id="erb-message" class="mt-2"></div>
+            <details id="erb-failures" class="mt-2 d-none">
+                <summary class="text-danger" id="erb-failures-title" style="cursor:pointer;">실패한 청크</summary>
+                <ul class="mb-0 mt-1" id="erb-failures-list"></ul>
+            </details>
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                <button type="button" class="btn btn-sm btn-primary d-none" id="erb-resume">이어서 임베딩</button>
+                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="erb-rebuild">처음부터 전체 재임베딩</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="erb-cancel">중단</button>
+            </div>
+            <div class="text-muted mt-3">
+                <strong>언제 쓰나</strong> — <code>EMBED_MODEL</code>·<code>EMBED_DIMENSIONS</code> 를 바꾸고 재기동한 뒤입니다. 벡터는 모델마다 서로
+                비교할 수 없어, 모델을 바꾸면 모든 청크의 벡터를 새로 만들어야 합니다.
+                <strong>처음부터</strong>는 벡터 테이블(<code>vec_embeddings</code>)을 지우고 설정한 차원으로 다시 만든 뒤 모든 청크를 임베딩합니다 —
+                끝날 때까지 벡터 검색이 비고 키워드(BM25) 검색만 동작합니다. <strong>이어서</strong>는 벡터가 없는 청크만 합니다(중단·실패 뒤).
+                청크 본문·손으로 고친 내용·태그·큐레이션·대화는 그대로이고 LLM 은 부르지 않습니다. 시작 전에 아래 「DB 백업」의 지금 백업을 권합니다.
+                절차 전체는 운영 매뉴얼 §7.3.
+            </div>
+        </div>
+    </details>
+
     <!-- ── 버전(sqlite-vec) / 컬렉션(chroma) 목록 · 문서 레지스트리 — 좌우 배치 ────────── -->
     <div class="row g-4 mb-4">
 
@@ -2342,6 +2404,135 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
             .catch(status => { el('dbb-run').disabled = false; showToast('요청이 실패했습니다 (' + status + ')', 'danger'); });
     });
     card.addEventListener('toggle', () => { if (card.open) refresh(); });
+    refresh();
+})();
+
+/* ── 임베딩 재생성 (EmbeddingRebuildService, sqlite-vec 전용) ──────────────────────────
+   서버가 상태를 통째로 돌려준다(차원 · 청크/벡터 수 · 작업). 페이지를 열 때 한 번 묻고, 작업이 도는 동안에만 2초마다 다시 묻는다. */
+(function () {
+    const card = document.getElementById('embed-rebuild-card');
+    if (!card) return;                                   // chroma 백엔드에는 카드가 없다
+    const el = id => document.getElementById(id);
+    const num = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString();
+    let timer = null;
+    let openedOnce = false;
+    let last = null;
+
+    function pill(text, cls) {
+        const p = el('erb-pill');
+        if (!text) { p.classList.add('d-none'); return; }
+        p.className = 'badge ms-2 ' + cls;
+        p.textContent = text;
+    }
+
+    function render(s) {
+        last = s;
+        const job = s.job;
+        const running = !!s.running;
+        el('erb-table-dim').textContent = num(s.tableDimension);
+        el('erb-configured-dim').textContent = num(s.configuredDimension);
+        el('erb-chunks').textContent = num(s.totalChunks);
+        el('erb-missing').textContent = num(s.missingVectors);
+        el('erb-table-dim').className = 'fs-5 fw-semibold' + (s.dimensionMismatch ? ' text-danger' : '');
+
+        const alertBox = el('erb-alert');
+        if (s.dimensionMismatch && !running) {
+            alertBox.textContent = '벡터 테이블은 ' + s.tableDimension + '차원인데 설정은 ' + s.configuredDimension + '차원입니다. '
+                + '임베딩 모델을 바꾼 것이라면 아래 「벡터 테이블을 다시 만들고 전체 재임베딩」을 누르세요. '
+                + '모델은 그대로인데 설정만 틀렸다면 EMBED_DIMENSIONS 를 ' + s.tableDimension + ' 로 되돌리고 재기동하세요. '
+                + '그 전까지 벡터 색인·검색은 실패합니다.';
+            alertBox.classList.remove('d-none');
+        } else {
+            alertBox.classList.add('d-none');
+        }
+
+        // 진행 표시
+        const box = el('erb-progress');
+        if (job) {
+            const processed = job.done + job.skipped + job.failed;
+            const pct = job.total > 0 ? Math.min(100, Math.round(processed * 100 / job.total)) : (job.state === 'DONE' ? 100 : 0);
+            box.classList.remove('d-none');
+            el('erb-phase').textContent = job.phase;
+            el('erb-counts').textContent = job.total > 0
+                ? processed.toLocaleString() + ' / ' + job.total.toLocaleString() + ' (성공 ' + job.done.toLocaleString()
+                    + (job.skipped ? ' · 건너뜀 ' + job.skipped.toLocaleString() : '') + ' · 실패 ' + job.failed.toLocaleString() + ')'
+                : '';
+            const bar = el('erb-bar');
+            bar.style.width = pct + '%';
+            bar.className = 'progress-bar' + (running ? ' progress-bar-striped progress-bar-animated'
+                : job.state === 'DONE' && !job.failed ? ' bg-success' : job.state === 'DONE' ? ' bg-warning' : ' bg-danger');
+            const msg = el('erb-message');
+            msg.textContent = job.message || '';
+            msg.className = 'mt-2 ' + (job.state === 'FAILED' ? 'text-danger' : job.state === 'DONE' && !job.failed ? 'text-success' : 'text-muted');
+        } else {
+            box.classList.add('d-none');
+            el('erb-message').textContent = '';
+        }
+        const fails = job && job.failures ? job.failures : [];
+        el('erb-failures').classList.toggle('d-none', fails.length === 0);
+        if (fails.length) {
+            el('erb-failures-title').textContent = '실패한 청크 ' + (job.failed > fails.length
+                ? job.failed.toLocaleString() + '개 중 ' + fails.length + '개' : fails.length + '개');
+            el('erb-failures-list').innerHTML = fails.map(f =>
+                '<li><code>' + escHtml(f.version) + '</code> <code>' + escHtml(f.id) + '</code> — ' + escHtml(f.reason || '') + '</li>').join('');
+        }
+
+        // 버튼 — 진행 중에는 시작 버튼을 숨기고 중단만, 아니면 상태에 맞는 시작 버튼
+        el('erb-cancel').classList.toggle('d-none', !running);
+        el('erb-cancel').disabled = !!(job && job.message && running && /중단을 요청/.test(job.message));
+        const canResume = !running && !s.dimensionMismatch && s.tableDimension !== null && s.missingVectors > 0;
+        el('erb-resume').classList.toggle('d-none', !canResume);
+        el('erb-resume').textContent = '이어서 임베딩 (' + num(s.missingVectors) + '개)';
+        const rebuild = el('erb-rebuild');
+        rebuild.textContent = s.dimensionMismatch ? '벡터 테이블을 다시 만들고 전체 재임베딩' : '처음부터 전체 재임베딩';
+        rebuild.className = 'btn btn-sm ' + (s.dimensionMismatch ? 'btn-danger' : 'btn-outline-danger') + (running ? ' d-none' : '');
+
+        // 머리 배지
+        if (running && job) {
+            const processed = job.done + job.skipped + job.failed;
+            pill('진행 중 ' + processed.toLocaleString() + (job.total ? '/' + job.total.toLocaleString() : ''), 'bg-primary');
+        } else if (s.dimensionMismatch) {
+            pill('차원 불일치', 'bg-danger');
+        } else if (s.missingVectors > 0) {
+            pill('벡터 ' + s.missingVectors.toLocaleString() + '개 없음', 'bg-warning text-dark');
+        } else {
+            pill(null);
+        }
+        if (!openedOnce && (running || s.dimensionMismatch || s.missingVectors > 0)) card.open = true;
+        openedOnce = true;
+
+        if (running && !timer) timer = setInterval(refresh, 2000);
+        if (!running && timer) { clearInterval(timer); timer = null; }
+    }
+
+    function refresh() {
+        return fetch('/admin/embedding-rebuild')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(render)
+            .catch(() => { el('erb-message').textContent = '상태를 불러오지 못했습니다'; el('erb-message').className = 'mt-2 text-danger'; });
+    }
+
+    function post(path, okMsg) {
+        return fetch(path, { method: 'POST', headers: { ...getCsrfHeaders() } })
+            .then(r => r.ok ? r.json() : r.json().catch(() => ({})).then(b => Promise.reject(b.detail || ('요청이 실패했습니다 (' + r.status + ')'))))
+            .then(s => { render(s); if (okMsg) showToast(okMsg, 'success'); })
+            .catch(msg => showToast(String(msg), 'danger'));
+    }
+
+    el('erb-rebuild').addEventListener('click', () => {
+        if (!last) return;
+        if (!confirm('벡터 테이블(vec_embeddings)을 지우고 ' + last.configuredDimension + '차원으로 다시 만든 뒤, 청크 ' + num(last.totalChunks)
+                + '개를 모두 다시 임베딩합니다.\n\n끝날 때까지 벡터 검색이 비어 있고(키워드 검색만 동작) 청크 수에 비례해 시간이 걸립니다. '
+                + '청크 본문·편집 내용·태그는 그대로입니다.\n\n계속할까요?')) return;
+        post('/admin/embedding-rebuild/start?mode=rebuild', '임베딩 재생성을 시작했습니다');
+    });
+    el('erb-resume').addEventListener('click', () => {
+        if (!last) return;
+        if (!confirm('벡터가 없는 청크 ' + num(last.missingVectors) + '개를 다시 임베딩합니다. 계속할까요?')) return;
+        post('/admin/embedding-rebuild/start?mode=resume', '이어서 임베딩을 시작했습니다');
+    });
+    el('erb-cancel').addEventListener('click', () => post('/admin/embedding-rebuild/cancel', null));
+
     refresh();
 })();
 </script>

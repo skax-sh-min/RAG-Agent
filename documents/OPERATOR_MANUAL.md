@@ -43,6 +43,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다. 화면에서 하�
 7. [벡터 스토어 운영 참고](#7-벡터-스토어-운영-참고)
    - 7.1 [백엔드별 표시 차이 (레이아웃·기능은 동일)](#71-백엔드별-표시-차이-레이아웃기능은-동일)
    - 7.2 [키워드 축 가중치를 0.5로 두는 이유 (한/영 혼재 코퍼스)](#72-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스)
+   - 7.3 [임베딩 모델 교체 — 기존 데이터가 있을 때 (sqlite-vec)](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
    - 9.1 [git 훅 설치](#91-git-훅-설치)
@@ -204,8 +205,8 @@ copy .env.example .env
 | `GEMINI_MODEL` | — | `gemini-3.5-flash-lite` | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 두 provider는 **기본값까지 같은 모델**(`gemini-3.5-flash-lite`)을 서로 다른 키(`GEMINI_API_KEY1`/`2`)로 부르는 로드밸런싱 쌍이라(둘 다 priority 2), 이 변수 하나로 둘을 함께 바꾼다. 서로 다른 모델을 쓰려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 — 그러면 같은 priority 안에서 두 모델이 least-in-flight 로 번갈아 뽑힌다 |
 | `EMBED_BASE_URLS` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. **`;` 로 여러 주소**를 적을 수 있다(`http://gpu-a:1234/v1;http://gpu-b:1234/v1` — §6.21 E1: 같은 모델·차원의 복제본에 least-in-flight 로드밸런싱 + **장애 전환**, 닿지 않는 주소는 30초 건너뛰고 같은 호출을 다음 주소로. **모두 `EMBED_MODEL` 을 같은 차원으로 서빙해야 함** — 섞이면 벡터 인덱스 손상. 상세는 아래 "임베딩 병렬화"). 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정. 예전 이름 `EMBED_BASE_URL`(단일 주소)도 이 변수가 없을 때는 읽는다 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
-| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
-| `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
+| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 그냥 바꾸지 마세요** — 벡터 차원이 달라지면 기존 검색이 깨지고, 차원이 같아도 옛 벡터와 새 벡터는 서로 비교할 수 없습니다. 바꾸려면 **전체를 다시 임베딩**해야 합니다 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` 만 DROP — 차원이 DDL에 고정되며 `EMBED_DIMENSIONS`도 함께 변경). **sqlite-vec 은 `/admin` 의 「임베딩 재생성」 카드로 앱 안에서 합니다(백업 → 설정 변경·재기동 → 카드 → 검증 → 롤백 — [§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec))** — 디렉터리 동기화·재업로드로는 다시 임베딩되지 않습니다 |
+| `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast). **이미 만들어진 `vec_embeddings` 의 차원과 다르면** 기동 로그에 ERROR 가 남고(앱은 뜹니다) 벡터 색인·검색이 실패합니다 — 모델을 바꿨다면 `/admin` 의 「임베딩 재생성」 카드로 다시 만드세요([§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec)) |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정.<br>Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
@@ -2211,6 +2212,171 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 **언제 다시 올리나**: 코퍼스가 **단일 언어**이고 질문도 문서와 같은 표기를 쓰며, 파일명·오류코드 같은 정확 매칭이 의미 검색보다 중요하다면 `1.0`으로 되돌릴 만합니다. `/settings`에서 핫 수정되므로 재기동 없이 바꿔 가며 [관리자 매뉴얼 §4.7](ADMIN_MANUAL.md#47-검색-진단-수치--검색-튜닝-근거-보기) 패널의 `axisRanks`로 확인하세요.
 
+### 7.3 임베딩 모델 교체 — 기존 데이터가 있을 때 (sqlite-vec)
+
+`EMBED_MODEL` 을 바꾸면 **이미 색인된 모든 청크의 벡터를 새 모델로 다시 만들어야** 합니다. 이유는 둘입니다.
+
+- **차원이 다르면 동작 자체가 안 됩니다.** `vec_embeddings` 는 `FLOAT[N]` 의 N 이 DDL 에 박혀 있어, 다른 차원의 벡터는 색인도 검색도 `Dimension mismatch for inserted vector … Expected 768 dimensions but received 1024` 로 실패합니다.
+- **차원이 같아도 안 됩니다.** 모델마다 벡터 공간이 달라서 옛 모델로 만든 벡터와 새 모델로 만든 질문 벡터는 거리를 재도 의미가 없습니다(검색이 조용히 엉뚱해집니다).
+
+**앱 안에서 합니다** — `/admin` 의 **「임베딩 재생성」** 카드(sqlite-vec 백엔드에서만 보입니다)가 벡터 테이블을 새 차원으로 다시 만들고 모든 청크를 다시 임베딩합니다. SQLite 를 직접 열거나 스크립트를 돌릴 필요가 없습니다(그 길은 이 절 끝의 「화면을 쓸 수 없을 때」).
+
+> ⚠️ **해서는 안 되는 것 셋**
+> 1. **디렉터리 동기화(`/api/v1/documents/sync`)나 문서 재업로드로 해결하려는 것** — 동기화는 `doc_registry` 의 SHA-256·버전만 보고 "이미 색인됨"으로 건너뜁니다. 벡터만 지워도 레지스트리가 남아 있으면 **0건이 색인되고** 검색은 계속 비어 있습니다.
+> 2. **`doc_registry` 를 지워 동기화를 강제하는 것** — 모든 문서를 파일 변환·LLM 교정·이미지 설명부터 처음부터 다시 돌리고, 태그·표시 이름·손으로 고친 청크가 사라집니다.
+> 3. **`memory.db` 를 통째로 지우는 것(§4.6)** — 대화·계정·설정·큐레이션·지식 제안까지 전부 지워집니다.
+
+카드가 하는 일은 **벡터 테이블(`vec_embeddings`)만** 새로 만드는 것이고 나머지는 그대로 둡니다.
+
+| | 바뀌는가 | 비고 |
+|---|---|---|
+| `vec_embeddings` (벡터) | **지우고 새 차원으로 다시 만듦** | 카드의 「처음부터」가 지우고 설정한 차원으로 다시 만든 뒤 채움 |
+| `vec_document_chunks` (청크 본문·메타데이터) | 유지 | 청크 id·편집 내용 그대로 |
+| `chunk_fts` · `chunk_fts_key` (BM25) | 유지 | 벡터와 무관 — 재임베딩이 청크마다 같은 내용으로 다시 쓸 뿐 |
+| `doc_registry` · 태그 · 표시 이름 | 유지 | |
+| 큐레이션 Q&A · 지식 제안 · 대화 이력 | 유지 | 큐레이션 청크의 벡터도 함께 다시 만듦(질문 + 본문 규칙으로) |
+| 쿼리 임베딩 캐시 | 자동 초기화 | 메모리 전용 — 재기동하면 비워짐 |
+
+**영향**: 「처음부터」를 누른 순간부터 끝날 때까지 **벡터 축 검색이 비어 있고** BM25 키워드 축만 동작합니다(답변 품질이 눈에 띄게 떨어집니다). 옛 모델 벡터와 새 모델 벡터가 섞인 순위는 어느 쪽도 의미가 없어서 옛 벡터를 먼저 지우는 쪽을 택했습니다. 점검 시간을 잡고 진행하세요. 소요 시간은 청크당 임베딩 호출 한 번 × 청크 수입니다(직렬 — SQLite 풀이 1개라 병렬로 얻을 것이 없습니다).
+
+#### 0) 사전 확인 — 새 모델이 실제로 내는 차원
+
+새 모델을 임베딩 서버에 로드해 두고, **실제 출력 차원**을 직접 잽니다(모델 카드의 숫자를 믿지 말고). `EMBED_DIMENSIONS` 가 이 값과 다르면 3단계의 재임베딩이 전부 `Dimension mismatch` 로 실패합니다(카드가 연속 20개 실패에서 멈추고 알려 주긴 하지만, 먼저 재는 편이 빠릅니다).
+
+```bash
+curl -s http://<임베딩 서버>/v1/embeddings -H "Content-Type: application/json" \
+  -d '{"model":"<새 모델 id>","input":"차원 확인"}' \
+  | python -c "import sys,json; print(len(json.load(sys.stdin)['data'][0]['embedding']))"
+```
+
+```powershell
+# Windows PowerShell
+(Invoke-RestMethod -Method Post -Uri "http://<임베딩 서버>/v1/embeddings" -ContentType "application/json" `
+  -Body '{"model":"<새 모델 id>","input":"차원 확인"}').data[0].embedding.Count
+```
+
+API 키가 필요한 서버면 `-H "Authorization: Bearer <EMBED_API_KEY>"` 를 더합니다. 이 숫자가 새 `EMBED_DIMENSIONS` 입니다. 함께 확인할 것:
+
+- **입력 한도**: 새 모델의 최대 입력(토큰)이 옛 모델보다 작으면, 긴 청크는 서버가 `input (N tokens) is too large` 로 거절합니다. 앱은 입력을 줄여 최대 8번 다시 보내므로 그 청크는 **앞부분만으로 임베딩**됩니다(끝까지 줄여도 안 되면 그 청크의 재임베딩이 실패). 한도가 크게 줄었다면 `EMBED_MAX_CHUNK_CHARS` 와 §8 「임베딩 서버 배치/토큰 초과」를 먼저 보세요.
+- **접두사**: `query:`/`passage:`, `search_query:`/`search_document:` 처럼 질의·문서 접두사를 요구하는 모델이라면 **앱은 접두사를 붙이지 않습니다** — 접두사 없이도 쓸 만한지 4단계에서 품질로 확인하세요.
+- **여러 임베딩 서버**(`EMBED_BASE_URLS` 에 `;`)를 쓴다면 **모든 주소가 같은 새 모델을 같은 차원으로** 서빙해야 합니다.
+
+#### 1) 백업
+
+`/admin` 의 **"DB 백업"** 카드 → **[지금 백업]**([§6.2.2](#622-db-백업과-복구)) — 앱이 실행 중일 때 하면 됩니다. 카드에 새 사본 이름(`memory-yyyyMMdd-HHmmss.db`)이 보이는지 확인하세요. 이 사본에는 **옛 벡터가 들어 있어** 5단계 롤백의 기준점입니다. 문서 원본·변환 MD(`data/documents/`·`data/converted/`)는 이 절차가 건드리지 않습니다.
+
+#### 2) 설정을 바꾸고 재기동
+
+앱을 멈추고 `.env`(또는 환경변수)에서 아래를 바꾼 뒤 다시 띄웁니다.
+
+```bash
+docker compose stop app      # Docker (로컬 실행이면 실행 터미널에서 Ctrl+C)
+```
+
+```bash
+EMBED_MODEL=<새 모델 id>          # 서버 /v1/models 의 id 와 같게 쓰는 것을 권장(설정값이 서버 id 에 부분 포함돼도 풀리지만 모호하면 의도와 다른 모델이 잡힙니다)
+EMBED_DIMENSIONS=<0단계에서 잰 차원>
+# 서버·키가 바뀌면 함께: EMBED_BASE_URLS / EMBED_API_KEY, 입력 한도가 줄었다면 EMBED_MAX_CHUNK_CHARS
+```
+
+```bash
+docker compose up -d         # Docker — .env 를 바꿨으니 컨테이너가 새 환경으로 다시 만들어집니다
+```
+
+**차원이 달라졌어도 앱은 뜹니다.** 기동 로그에 아래 ERROR 한 줄이 남고(벡터 색인·검색은 3단계가 끝날 때까지 실패), 그 밖의 기능은 정상입니다.
+
+```
+[SQLITE-VEC] 벡터 테이블(vec_embeddings)은 768차원으로 만들어져 있는데 app.embedding.dimensions(EMBED_DIMENSIONS)는 1024 입니다. … /admin 의 「임베딩 재생성」 카드에서 …
+```
+
+기동 직후 `[EMBED STARTUP]` 경고(임베딩 서버에 닿지 않음 / 서버가 설정한 모델을 목록에 올리지 않음)가 있으면 3단계 전에 고치세요 — 기동은 막지 않는 경고입니다.
+
+#### 3) `/admin` 「임베딩 재생성」 카드에서 다시 만들기
+
+`/admin` → **Vector Store 상태 카드 바로 아래**의 「임베딩 재생성」 카드. 아래 중 하나라도 해당하면 카드가 **스스로 펼쳐지고** 머리에 배지가 붙습니다.
+
+| 배지 | 뜻 | 보이는 버튼 |
+|---|---|---|
+| 🔴 **차원 불일치** | 벡터 테이블 차원 ≠ `EMBED_DIMENSIONS` — 모델(차원)을 바꾸고 재기동한 상태 | **벡터 테이블을 다시 만들고 전체 재임베딩** |
+| 🟡 **벡터 N개 없음** | 차원은 맞는데 벡터가 없는 청크가 있음 — 중단·실패 뒤, 또는 DB 를 손본 뒤 | **이어서 임베딩 (N개)** · 처음부터 전체 재임베딩 |
+| (배지 없음) | 이상 없음 | 처음부터 전체 재임베딩 |
+| 🔵 **진행 중 x/y** | 작업이 돌고 있음 | **중단** |
+
+> ⚠️ **차원이 같은 모델로 바꾼 경우** (예: 1024차원 모델끼리) 카드는 아무것도 경고하지 않습니다 — 앱이 알 수 있는 것은 테이블 차원뿐입니다. 이때도 벡터는 옛 모델의 것이므로 카드를 열어 **「처음부터 전체 재임베딩」을 직접 눌러야** 합니다.
+
+**누르는 순서**
+
+1. **「벡터 테이블을 다시 만들고 전체 재임베딩」**(차원이 같으면 「처음부터 전체 재임베딩」)을 누르고 확인 대화상자(`설정 차원 · 청크 수 · 벡터 검색이 비는 것`)에서 계속을 누릅니다.
+2. 서버가 `vec_embeddings` 를 지우고 설정한 차원으로 다시 만든 뒤, 청크를 **하나씩** 다시 임베딩합니다. 카드에 단계 · `처리 / 전체 (성공 · 건너뜀 · 실패)` · 진행 막대가 2초마다 갱신됩니다. 페이지를 새로고침하거나 다른 탭에서 열어도 같은 진행이 보입니다(상태는 서버 메모리에 있습니다).
+3. 끝나면 초록 막대와 「모든 청크를 다시 임베딩했습니다」가 뜨고 「벡터 없는 청크」가 0 이 됩니다. 노란 막대(실패가 섞인 완료)이면 아래 「실패했을 때」.
+
+**카드가 하는 일(청크 하나)** — 관리자 화면의 청크 「재인덱싱」 버튼과 **같은 코드**입니다. 저장된 청크 본문 + `chunk_context` 로 검색 텍스트를 다시 만들어 새 모델로 임베딩하고 **같은 청크 id 로** 벡터를 쓰며 FTS 를 갱신합니다. 그래서:
+
+- **LLM 을 부르지 않습니다**(키워드·맥락 재생성 없음).
+- **손으로 고친 청크 · 태그 · 문서 레지스트리 · 질문 재사용 이력이 그대로**입니다(청크 id·본문 해시가 바뀌지 않음).
+- **큐레이션 청크**(좋아요·승인된 지식 제안)도 함께 처리됩니다(질문 + 본문 규칙, 한 행이 여러 조각이면 첫 조각에서 행 전체를 다시 쓰고 나머지는 「건너뜀」).
+- **스캔 PDF 등 변환 MD 가 없는 문서**도 됩니다(청크 본문에서 다시 만들 뿐 MD 를 읽지 않습니다).
+- 문서 단위 `↺ 재인덱싱`(MD 에서 청크를 새로 자르고 키워드를 LLM 으로 다시 뽑음 — 편집 청크 손실)과는 다른 도구입니다. 청크 분할 전략을 바꿀 때만 그쪽을 쓰세요.
+
+**중단과 재개**
+
+- **중단**은 지금 임베딩 중인 청크 하나까지 끝내고 멈춥니다(스레드를 끊지 않습니다 — 임베딩 호출·DB 쓰기 도중에 끊어 반쯤 쓴 상태를 남기지 않으려고).
+- 중단·실패·앱 재기동 뒤에는 카드의 **이어서 임베딩 (N개)** 가 **벡터가 없는 청크만** 합니다. 진행 상태는 메모리에만 있으므로 재기동하면 사라지지만, 이어 하기는 DB 의 "벡터 없는 청크"에서 다시 계산하니 잃는 것이 없습니다. (「처음부터」를 중간에 중단한 뒤에는 차원이 이미 맞으므로 「이어서」가 나옵니다.)
+- 작업은 **앱 전체에서 하나**입니다. 도는 중에 다른 시작 요청은 거절(409)됩니다.
+
+**실패했을 때**
+
+| 상황 | 카드에 보이는 것 | 조치 |
+|---|---|---|
+| 임베딩 서버가 죽음·모델 이름 틀림·차원 틀림 | **연속 20개가 실패하면 멈추고** 「연속 20개가 실패해 멈췄습니다 …」(빨간 막대) | 앱 로그(`reindexChunk embed failed …`, `Dimension mismatch …`)로 원인을 고치고 **이어서 임베딩** |
+| 일부 청크만 실패 | 끝에 「끝났지만 N개가 실패했습니다」(노란 막대) + **실패한 청크** 목록(최대 20개 예시: 버전 · 청크 id · 사유) | 원인을 고친 뒤 **이어서 임베딩** — 실패한 청크만 다시 합니다 |
+| `EMBED_DIMENSIONS` 가 모델의 실제 차원과 다름 | 전부 `Dimension mismatch` 로 실패 → 연속 20개에서 멈춤 | 앱 재기동(`EMBED_DIMENSIONS` 수정) 후 「차원 불일치」가 다시 뜨면 **벡터 테이블을 다시 만들고 전체 재임베딩** |
+| 「건너뜀」이 있음 | 실패가 아님 — 작업 중 지워진 청크, 또는 이미 한 큐레이션 행의 나머지 조각 | 조치 없음 |
+
+작업 시작·중단은 감사 로그에 `admin.embedding-rebuild.start` / `admin.embedding-rebuild.cancel` 로 남습니다(`mode`, 차원, 청크 수).
+
+#### 4) 검증
+
+1. 카드의 **「벡터 없는 청크」가 0**, 「벡터 테이블 차원」이 새 값이고 「배지」가 사라졌는지 봅니다. 청크 수가 작업 전과 같아야 합니다.
+2. **검색 품질**: 모델 교체 전에 답이 잘 나오던 질문 몇 개를 채팅에 던져 출처가 제대로 오는지 보고, `/admin` 검색 진단 패널의 축별 순위([관리자 매뉴얼 §4.7](ADMIN_MANUAL.md#47-검색-진단-수치--검색-튜닝-근거-보기))를 확인합니다. 골든셋이 있다면 [§6.4](#64-검색-품질-평가-하네스-개발자용) 하네스로 recall@k 를 교체 전과 비교하세요.
+3. **임계값 재조정**: `SEARCH_SIMILARITY_THRESHOLD`(기본 0.3)와 `SEARCH_CURATED_QA_MIN_SIMILARITY`(기본 0.5)는 **옛 모델의 코사인 유사도 분포**에 맞춘 값입니다. 모델마다 분포가 달라, 검색 결과가 갑자기 적어지거나(분포가 낮은 모델) 무관한 청크가 섞이면(분포가 높은 모델) `/settings` 에서 조정하세요(핫 수정 — 재기동 불필요). 한 번에 하나씩 바꾸세요([§7.2](#72-키워드-축-가중치를-05로-두는-이유-한영-혼재-코퍼스) 끝의 주의와 같습니다).
+
+#### 5) 롤백
+
+새 모델이 마음에 들지 않을 때:
+
+- **같은 절차를 옛 모델로 되돌려 실행**(2→4단계, `EMBED_MODEL`/`EMBED_DIMENSIONS` 를 옛 값으로) — 교체 이후 쌓인 대화·문서를 잃지 않는 방법입니다.
+- **1단계의 백업으로 복원** — 앱 중지 → [§6.2.2 복구](#622-db-백업과-복구) 절차로 `memory.db` 를 사본으로 교체 → **`.env` 도 옛 `EMBED_MODEL`/`EMBED_DIMENSIONS` 로 되돌린 뒤** 기동. 사본 이후의 대화·업로드는 사라지고(문서는 동기화로 다시 색인), 옛 벡터가 그대로 살아 있습니다. 설정을 안 되돌리면 「차원 불일치」가 다시 뜹니다.
+
+#### 화면을 쓸 수 없을 때 (CLI 스크립트 — Python 3 필요)
+
+관리자 화면에 들어갈 수 없거나 자동화가 필요할 때만 씁니다. 두 스크립트는 같은 일을 DB 와 HTTP 로 합니다. **앱을 멈춘 상태에서** 1) 벡터 테이블을 지우고, 앱을 띄운 뒤 2) 청크 재임베딩을 돌립니다.
+
+```bash
+# 1) 앱을 멈춘 상태 — vec0 를 로드해 vec_embeddings 만 지운다(--yes 없으면 상태만 출력)
+python scripts/drop_vec_embeddings.py --db data/memory.db --vec0 lib/win64/vec0.dll --yes
+
+# 2) 앱을 띄운 뒤 — 청크마다 POST /admin/chunks/{id}/reindex (벡터 없는 청크만, 중단돼도 같은 명령으로 이어서)
+python scripts/reembed_all_chunks.py --db data/memory.db --vec0 lib/win64/vec0.dll
+```
+
+- `--db`: 앱의 SQLite 파일 — 기본 `DATA_DIR/memory.db`, 옛 `SQLITE_VEC_DB_PATH` 를 쓰는 배포는 그 경로([§6.2.1](#621-sqlite-파일별-테이블-구성)). `--vec0`: `SQLITE_VEC_EXTENSION_PATH` 와 같은 파일.
+- 로그인이 필요한 배포(전체 인증 · management-only)는 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 환경변수를 줍니다(인자로 받지 않습니다). 평문 no-auth 는 계정이 필요 없습니다. 요청 한도(`default` 버킷 분당 120)의 `429` 는 `Retry-After` 만큼 쉬고 다시 보냅니다.
+- `sqlite3` CLI 로 지우려면 확장을 먼저 로드합니다: `sqlite3 data/memory.db` → `.load /opt/sqlite-vec/vec0` → `DROP TABLE vec_embeddings;`. **확장 없이 지우면 `no such module: vec0`** 입니다.
+- 지운 뒤 앱을 띄우면 테이블이 새 차원으로 자동으로 다시 만들어지고, 카드는 「벡터 N개 없음」으로 보입니다 — 화면과 스크립트는 **섞어 써도 됩니다**(스크립트로 하다 멈췄다면 카드의 「이어서」로 마저 할 수 있습니다).
+
+#### 자주 막히는 곳
+
+| 증상 | 원인·조치 |
+|---|---|
+| 기동 로그에 `…N차원으로 만들어져 있는데 …M 입니다` ERROR | 모델(차원)을 바꾸고 재생성하지 않은 상태 — 앱은 뜹니다. 3단계. 모델은 그대로고 `EMBED_DIMENSIONS` 가 틀렸다면 메시지의 N 으로 되돌리고 재기동 |
+| 카드가 안 보임 | chroma 백엔드(카드는 sqlite-vec 전용) — chroma 는 컬렉션을 삭제하고 전체를 재인덱싱합니다 |
+| 「처음부터」 직후 `no such module: vec0` 로 실패 | vec0 확장이 로드되지 않은 연결 — `SQLITE_VEC_EXTENSION_PATH` 를 확인(기동 로그 `[SQLITE-VEC] extension loaded`) |
+| 버튼을 눌렀더니 「이미 진행 중」(409) | 다른 관리자·탭이 돌린 작업이 있음 — 카드에 그 진행이 보입니다. 끝나길 기다리거나 「중단」 |
+| 재기동했더니 카드의 진행 표시가 사라짐 | 정상 — 진행 상태는 메모리에만 있습니다. 「벡터 N개 없음」과 「이어서」로 이어서 하면 됩니다 |
+| 끝났는데 검색 결과가 이상하게 적거나 많음 | 7.3-4 의 임계값 재조정. 접두사가 필요한 모델이면 품질이 낮을 수 있습니다(0단계) |
+| 동기화를 돌렸는데 아무것도 색인되지 않음 | 위 ⚠️ 1번 — 동기화는 이 작업의 도구가 아닙니다. 카드를 쓰세요 |
+
 ---
 
 ## 8. 문제 해결
@@ -2234,6 +2400,7 @@ curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 40
 | Chroma 연결 실패 | Chroma 컨테이너 실행 확인 (`docker ps` 또는 `container ls`) |
 | 포트 충돌 | `lsof -i :8080`으로 점유 프로세스 확인 후 종료 |
 | JDK 버전 | `java -version` → 21 이상인지 확인 |
+| 기동 로그의 `[SQLITE-VEC] 벡터 테이블(vec_embeddings)은 N차원으로 만들어져 있는데 app.embedding.dimensions(EMBED_DIMENSIONS)는 M 입니다` ERROR (앱은 뜬다 — 벡터 색인·검색만 실패) | 임베딩 모델을 바꾸고 벡터 테이블을 다시 만들지 않은 상태(또는 `EMBED_DIMENSIONS` 오타). 모델을 바꾼 것이면 `/admin` 의 「임베딩 재생성」 카드에서 [§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec) 3단계를, 모델은 그대로이고 설정만 틀렸으면 `EMBED_DIMENSIONS` 를 N 으로 되돌리고 재기동 |
 | `OpenAI API key must be set` (`openAiApi`/`OpenAiAudioSpeechModel` 등 빈 생성 실패) | 앱은 채팅·임베딩 모델과 SDK 클라이언트를 전부 직접 만들고(`LlmConfig`/`EmbeddingBeanConfig`) Spring AI의 OpenAI 자동설정 빈은 **하나도 쓰지 않는다**. 자동설정을 켜두면 각 autoconfig가 기동 시 `openAiApi` 빈을 무조건 만들고 `spring.ai.openai.api-key`에 `Assert.hasText`를 걸어, `LOCAL_LLM_KEY`가 비어 있으면 죽는다(채팅·임베딩 자동설정도 마찬가지 — 모델 빈은 `@ConditionalOnMissingBean`으로 스킵되지만 `openAiApi` 빈은 아님). `application.properties`의 `spring.autoconfigure.exclude`에 **OpenAI 모델 자동설정 6종**(`OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration)이 모두 제외돼 있어야 한다. 이 줄이 지워졌는지 확인 |
 
 ---
