@@ -54,7 +54,9 @@ class UpdateControllerWebMvcTest {
         UpdateCheckService.Release latest = new UpdateCheckService.Release(
                 "v0.5.7", "0.5.7", "Release 0.5.7", "notes", "https://github.com/o/n/releases/tag/v0.5.7", Instant.parse("2026-11-16T00:00:00Z"),
                 new UpdateCheckService.Asset("rag-agent-0.5.7.jar", 1000L,
-                        "https://github.com/o/n/releases/download/v0.5.7/rag-agent-0.5.7.jar"));
+                        "https://github.com/o/n/releases/download/v0.5.7/rag-agent-0.5.7.jar"),
+                new UpdateCheckService.Asset("rag-agent-0.5.7.jar.sha256", 100L,
+                        "https://github.com/o/n/releases/download/v0.5.7/rag-agent-0.5.7.jar.sha256"));
         return new UpdateCheckService.Status(true, "0 0 9 * * *", "Asia/Seoul", "o/n", "0.5.6", false, false,
                 new UpdateCheckService.CheckResult("manual", Instant.parse("2026-11-16T01:00:00Z"), true, null),
                 latest, available, false, null);

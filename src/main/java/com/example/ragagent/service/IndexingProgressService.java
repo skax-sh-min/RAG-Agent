@@ -84,6 +84,11 @@ public class IndexingProgressService {
         return UUID.randomUUID().toString();
     }
 
+    /** 지금 돌고 있는 인덱싱 작업 수 — 앱을 재시작하는 업데이트가 작업을 끊지 않도록 시작 전에 본다. */
+    public int activeWorkerCount() {
+        return workers.size();
+    }
+
     /** §6.16.1 — records the worker thread for a task so {@link #cancel(String)} can interrupt it. */
     public void registerWorker(String taskId, Thread worker) {
         workers.put(taskId, worker);

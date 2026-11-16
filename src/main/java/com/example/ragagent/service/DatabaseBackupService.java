@@ -151,6 +151,21 @@ public class DatabaseBackupService {
         }
     }
 
+    /**
+     * 앱이 지금 쓰는 SQLite 파일의 절대 경로 — 업데이트가 실패해 되돌릴 때 감독 스크립트가 백업을 이 자리에 복원한다.
+     * DataSource 가 실제로 연 파일에서 읽는다({@link com.example.ragagent.config.DataSourceConfig#sqliteFilePath}).
+     */
+    public Path databaseFile() {
+        String path = com.example.ragagent.config.DataSourceConfig.sqliteFilePath(dataSource);
+        if (path == null) throw new IllegalStateException("SQLite 파일 경로를 알 수 없다: " + dataSource.getClass().getName());
+        return Path.of(path).toAbsolutePath();
+    }
+
+    /** 백업 폴더 안의 파일 하나의 절대 경로 — {@link RunResult#file()} 의 이름을 넣는다. */
+    public Path backupFile(String name) {
+        return dir.resolve(name).toAbsolutePath();
+    }
+
     public Status status() {
         return new Status(enabled, cron, zone.getId(), keep, dir.toAbsolutePath().toString(), running, last, listBackups());
     }

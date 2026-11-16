@@ -70,7 +70,8 @@ class UpdateCheckServiceTest {
         return "{\"tag_name\":\"" + tag + "\",\"name\":\"Release " + tag + "\",\"body\":\"- fix A\\n- fix B\","
                 + "\"html_url\":\"https://github.com/owner/name/releases/tag/" + tag + "\","
                 + "\"published_at\":\"2026-11-16T01:02:03Z\",\"draft\":false,\"prerelease\":false,"
-                + "\"assets\":[" + asset("rag-agent-" + tag.replaceFirst("^v", "") + ".jar", tag, 1234, "uploaded") + "]}";
+                + "\"assets\":[" + asset("rag-agent-" + tag.replaceFirst("^v", "") + ".jar", tag, 1234, "uploaded") + ","
+                + asset("rag-agent-" + tag.replaceFirst("^v", "") + ".jar.sha256", tag, 100, "uploaded") + "]}";
     }
 
     private static String asset(String name, String tag, long size, String state) {
@@ -398,6 +399,22 @@ class UpdateCheckServiceTest {
         assertThat(local.safeDownloadUrl("http://127.0.0.1:8888/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
         assertThat(service("0.5.6", true, REPO, "https://api.github.com")
                 .safeDownloadUrl("http://127.0.0.1:9999/owner/name/releases/download/v1/rag-agent-1.0.0.jar")).isNull();
+    }
+
+    @Test
+    @DisplayName("체크섬 파일(<jar>.sha256)은 그 jar 의 것만 인정한다 — 없거나 4KB 를 넘거나 다른 jar 의 것이면 null")
+    void checksumAssetIsPickedPerJar() {
+        String jar = asset("rag-agent-0.5.7.jar", "v0.5.7", 1000, "uploaded");
+        String sum = asset("rag-agent-0.5.7.jar.sha256", "v0.5.7", 100, "uploaded");
+
+        assertThat(parse(releaseWithAssets("v0.5.7", jar + "," + sum)).checksum().name()).isEqualTo("rag-agent-0.5.7.jar.sha256");
+        assertThat(parse(releaseWithAssets("v0.5.7", jar)).checksum()).isNull();
+        assertThat(parse(releaseWithAssets("v0.5.7", jar + "," + asset("rag-agent-0.5.7.jar.sha256", "v0.5.7", 5000, "uploaded"))).checksum()).isNull();
+        assertThat(parse(releaseWithAssets("v0.5.7", jar + "," + asset("rag-agent-0.5.6.jar.sha256", "v0.5.7", 100, "uploaded"))).checksum()).isNull();
+        assertThat(parse(releaseWithAssets("v0.5.7", jar + "," + asset("rag-agent-0.5.7.jar.sha256", "v0.5.7", 100, "open"))).checksum()).isNull();
+        // jar 가 없으면 체크섬만 있어도 의미가 없다
+        assertThat(parse(releaseWithAssets("v0.5.7", sum)).jar()).isNull();
+        assertThat(parse(releaseWithAssets("v0.5.7", sum)).checksum()).isNull();
     }
 
     @Test

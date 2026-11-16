@@ -51,6 +51,7 @@ public class UpdateCheckService {
 
     static final int MAX_BODY_BYTES = 1_048_576;
     static final int MAX_NOTES_CHARS = 4_000;
+    static final int MAX_CHECKSUM_BYTES = 4_096;
     /** 수동 확인 연타가 GitHub 의 비인증 한도(시간당 60회)를 태우지 않게 — 이 간격 안의 수동 확인은 직전 결과를 그대로 돌려준다. */
     static final Duration MANUAL_MIN_INTERVAL = Duration.ofSeconds(10);
     private static final Pattern REPO = Pattern.compile("[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}");
@@ -61,9 +62,11 @@ public class UpdateCheckService {
 
     /**
      * 최신 릴리즈 하나. {@code version} 은 접두 {@code v} 를 뗀 표기, {@code url} 은 안전하다고 본 링크일 때만(아니면 null).
-     * {@code jar} 는 첨부된 앱 jar — 없으면 null(그 릴리즈는 알리지 않는다).
+     * {@code jar} 는 첨부된 앱 jar — 없으면 null(그 릴리즈는 알리지 않는다). {@code checksum} 은 그 jar 의 {@code <jar 이름>.sha256} —
+     * 없으면 null(알리기는 하지만 자동 업데이트는 할 수 없다).
      */
-    public record Release(String tag, String version, String name, String notes, String url, Instant publishedAt, Asset jar) {}
+    public record Release(String tag, String version, String name, String notes, String url, Instant publishedAt,
+                          Asset jar, Asset checksum) {}
 
     /** 마지막 확인의 결과. {@code error} 가 있으면 실패다. */
     public record CheckResult(String trigger, Instant checkedAt, boolean ok, String error) {}
@@ -250,10 +253,25 @@ public class UpdateCheckService {
                 // 표시용일 뿐이다 — 읽지 못하면 비워 둔다
             }
         }
+        Asset jar = pickJar(root.path("assets"), version.text());
+        Asset checksum = jar == null ? null : pickChecksum(root.path("assets"), jar.name());
         return new Release(abbreviate(tag, 64), version.text(),
                 abbreviate(root.path("name").asText(""), 200),
                 abbreviate(root.path("body").asText(""), MAX_NOTES_CHARS),
-                safeUrl(root.path("html_url").asText("")), published, pickJar(root.path("assets"), version.text()));
+                safeUrl(root.path("html_url").asText("")), published, jar, checksum);
+    }
+
+    /** 그 jar 의 체크섬 파일({@code <jar 이름>.sha256}) — 작은 텍스트 파일이므로 4KB 를 넘으면 인정하지 않는다. 없으면 null. */
+    Asset pickChecksum(JsonNode assets, String jarName) {
+        if (assets == null || !assets.isArray()) return null;
+        for (JsonNode a : assets) {
+            if (!(jarName + ".sha256").equals(a.path("name").asText(""))) continue;
+            if (!"uploaded".equals(a.path("state").asText("uploaded"))) continue;
+            long size = a.path("size").asLong(0);
+            String url = safeDownloadUrl(a.path("browser_download_url").asText(""));
+            if (size > 0 && size <= MAX_CHECKSUM_BYTES && url != null) return new Asset(jarName + ".sha256", size, url);
+        }
+        return null;
     }
 
     /**

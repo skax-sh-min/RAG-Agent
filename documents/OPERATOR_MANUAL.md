@@ -2088,7 +2088,7 @@ cp data/db-backups/memory-20261013-033000.db data/memory.db
 
 #### 6.2.3 새 버전 알림 (GitHub Releases)
 
-GitHub 에 새 릴리즈가 올라왔는지 **관리자에게 알려 주는** 기능입니다. **알리기만 합니다** — 새 버전을 내려받거나 바꾸지 않으므로 업데이트는 직접 합니다. **기본은 꺼짐**이고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망 배포용).
+GitHub 에 새 릴리즈가 올라왔는지 **관리자에게 알리고**, **감독 스크립트로 실행 중이면 버튼 한 번으로 업데이트**까지 하는 기능입니다. **기본은 꺼짐**이고, 꺼져 있는 동안은 밖으로 아무 요청도 나가지 않습니다(폐쇄망 배포용). 감독 스크립트 없이 실행 중이면(Docker·IDE·`mvn spring-boot:run` 등) 알림만 하고 교체는 직접 합니다.
 
 | 설정 | 환경변수 | 기본값 | 설명 |
 |---|---|---|---|
@@ -2102,7 +2102,49 @@ GitHub 에 새 릴리즈가 올라왔는지 **관리자에게 알려 주는** �
 - **로그**: `[UPDATE-CHECK]` — 기동·정기 확인마다 한 줄(`최신 X / 현재 Y → 새 버전이 있다`), 실패는 WARN. 설정이 틀리면(`repo` 가 `owner/name` 이 아님 · `api-base` 가 https 가 아님) **기동은 막지 않고** ERROR 한 줄과 카드의 사유로 이 기능만 끕니다.
 - **사내 프록시 뒤라면** JVM 의 프록시 설정을 줍니다: `JAVA_OPTS=-Dhttps.proxyHost=proxy.example.com -Dhttps.proxyPort=8080`. 프록시가 TLS 를 가로채면 그 CA 를 JVM 이 신뢰해야 합니다.
 - **GitHub 에 접속할 수 없을 때**: 카드에 `GitHub 에 접속하지 못했습니다 (…)` 가 보이고 마지막으로 성공한 확인 결과는 그대로 남습니다. 앱 동작에는 영향이 없습니다.
-- **릴리즈를 올리는 쪽**: 태그 이름을 `v0.5.7` 모양으로 하고 GitHub 의 **Releases** 에 정식(draft·prerelease 아님) 릴리즈로 게시하면 됩니다. 릴리즈에는 **jar 를 첨부**하세요(Maven 이 만드는 `target/rag-agent-0.5.7.jar` 그대로). 릴리즈를 게시한 뒤에는 `pom.xml` 의 버전을 다음 `-SNAPSHOT` 으로 올리세요 — 그렇지 않으면 방금 만든 빌드에도 "새 버전" 이 뜹니다.
+- **릴리즈를 올리는 쪽**: (jar·체크섬 파일 규칙은 아래 「한 번에 업데이트하기」) 태그 이름을 `v0.5.7` 모양으로 하고 GitHub 의 **Releases** 에 정식(draft·prerelease 아님) 릴리즈로 게시하면 됩니다. 릴리즈에는 **jar 를 첨부**하세요(Maven 이 만드는 `target/rag-agent-0.5.7.jar` 그대로). 릴리즈를 게시한 뒤에는 `pom.xml` 의 버전을 다음 `-SNAPSHOT` 으로 올리세요 — 그렇지 않으면 방금 만든 빌드에도 "새 버전" 이 뜹니다.
+
+##### 한 번에 업데이트하기 (감독 스크립트)
+
+**왜 감독 스크립트가 필요한가**: 실행 중인 JVM 은 자기 jar 를 바꿀 수 없고(Windows 는 파일이 잠깁니다), 바꾸다 실패하면 되돌릴 사람이 없습니다. 그래서 앱은 **받기·검증·DB 백업까지만** 하고 종료 코드 `42` 로 끝나며, 교체·재기동·롤백은 앱 밖에서 도는 감독 스크립트가 맡습니다.
+
+| 환경 | 시작 명령 (설치 폴더에서) |
+|---|---|
+| Linux · macOS | `sh scripts/rag-agent-supervisor.sh` |
+| Windows | `scripts\windows_run_supervised.cmd` (= `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\rag-agent-supervisor.ps1`) |
+
+- **설치 폴더 구성**: `rag-agent.jar`(실행하는 jar) · `.env` · `data/` · `lib/`(sqlite-vec 확장). 스크립트는 `scripts` 폴더에서 실행해도 한 단계 위로 올라가 같은 폴더를 씁니다. `rag-agent.jar` 가 없고 `target/rag-agent-*.jar` 가 있으면 가장 최근 빌드를 복사해 씁니다(소스 체크아웃의 첫 실행).
+- **`.env`**: 다른 실행 스크립트와 같은 규칙입니다(셸 판은 셸이 읽으므로 값에 공백이 있으면 따옴표, PowerShell 판은 `KEY=VALUE` 줄을 읽고 바깥 따옴표 한 쌍을 벗깁니다). 스크립트는 앱에 `RAG_SUPERVISED=1` 과 `UPDATE_DIR`(기본 `{DATA_DIR}/updates`)을 넘깁니다 — **직접 설정하지 마세요**. 감독 스크립트 밖에서 실행하면 이 값이 없어 업데이트 버튼이 꺼집니다.
+- **다른 일**: 앱이 비정상 종료하면 다시 띄웁니다(`RAG_CRASH_WINDOW` 초 안에 `RAG_CRASH_LIMIT` 번 죽으면 포기하고 종료 코드 1). Ctrl+C·SIGTERM 은 앱에 전달해 정상 종료합니다.
+
+| 스크립트 설정(환경변수·`.env`) | 기본값 | 설명 |
+|---|---|---|
+| `JAVA_BIN` · `JAVA_OPTS` | `java` · 없음 | 실행 파일과 JVM 옵션(예: `-Xmx3g -Dhttps.proxyHost=…`) |
+| `RAG_JAR` | `./rag-agent.jar` | 실행하는 jar |
+| `RAG_HEALTH_URL` | `http://127.0.0.1:{SERVER_PORT}/api/v1/health` | 새 버전이 떴는지 묻는 주소(200 이면 정상). 프록시·다른 주소로 열려 있으면 바꾸세요 |
+| `RAG_HEALTH_TIMEOUT` · `RAG_HEALTH_INTERVAL` | `180` · `2` | 새 버전이 이 시간(초) 안에 정상 응답하지 못하면 롤백 |
+| `RAG_RESTART_DELAY` · `RAG_CRASH_LIMIT` · `RAG_CRASH_WINDOW` | `5` · `5` · `300` | 비정상 종료 뒤 재시작 대기(초) · 포기 기준 |
+
+**버튼을 누르면 일어나는 일** (`/admin` 「새 버전」 카드의 **[새 버전으로 업데이트]** — 확인창에서 버전을 보여 주며, 화면에서 본 버전이 아니면 서버가 거절합니다):
+
+| 단계 | 하는 일 | 실패하면 |
+|---|---|---|
+| 1. 받기 | 릴리즈의 `.sha256` 파일과 jar 를 `UPDATE_DIR` 에 받습니다. 크기는 릴리즈가 알린 값과 **정확히 같아야** 합니다(빈 공간 확인 포함) | 지우고 멈춤 — 아무것도 바뀌지 않음 |
+| 2. 검증 | **SHA-256 이 체크섬 파일과 같은지**, jar 가 이 앱의 것인지(매니페스트 `Start-Class`), **jar 안의 빌드 버전이 릴리즈 태그와 같은지** | 지우고 멈춤 |
+| 3. 백업 | `/admin` 「DB 백업」과 같은 방식으로 `pre-update-{버전}` 백업 | **멈춤** — 되돌릴 지점 없이는 올리지 않음(마이그레이션은 앞으로만 감) |
+| 4. 재시작 | `pending.properties` 를 쓰고 종료 코드 42 로 끝남 → 감독 스크립트가 SHA-256 을 **다시** 확인하고 jar 를 바꿈(이전 jar 는 `rag-agent.jar.prev`) → 새 버전 기동 | 체크섬이 다르거나 파일이 없으면 교체하지 않고 지금 jar 로 계속(결과 `rejected`) |
+| 5. 시험(trial) | 새 버전이 `RAG_HEALTH_TIMEOUT` 안에 헬스에 200 으로 답하는지 봄 | **롤백** — 아래 |
+
+- **자동 롤백**: 새 버전이 기동 중에 죽거나 제한 시간 안에 응답하지 않으면 스크립트가 ① `rag-agent.jar.prev` 를 `rag-agent.jar` 로 되돌리고 ② **업데이트 전 DB 백업을 `memory.db` 에 복원**(`-wal`·`-shm` 도 지움)한 뒤 ③ 이전 버전을 다시 띄웁니다. DB 까지 되돌리는 이유는 새 버전이 기동하면서 마이그레이션(Flyway)을 이미 적용했을 수 있고, 마이그레이션은 앞으로만 가서 이전 jar 가 그 DB 로는 뜨지 못할 수 있기 때문입니다. 새 버전이 한 번도 정상 응답하지 못했으니 사용자 요청을 받은 적이 없어 **잃는 데이터가 없습니다**.
+- **롤백이 하지 않는 것**: 새 버전이 **한 번이라도 정상 응답한 뒤**의 문제(동작이 이상하다 등)는 자동으로 되돌리지 않습니다 — 그때부터는 사용자 데이터가 쌓이기 때문입니다. 직접 되돌리려면 앱을 멈추고 `rag-agent.jar.prev` 를 `rag-agent.jar` 로 복사한 뒤, 업데이트 이후 데이터를 포기해도 되는 경우에만 DB 를 [§6.2.2](#622-db-백업과-복구) 로 복원하세요.
+- **결과 확인**: 카드에 마지막 결과가 보입니다(성공은 지금 실행 중인 버전과 같을 때만, 롤백·거절은 다음 시도까지). 원본은 `{UPDATE_DIR}/result.properties`(`status=ok|rolled-back|rejected`, `reason`, `dbRestored`)이고 스크립트 로그에는 `[supervisor]` 줄이 남습니다. 앱 로그는 `[UPDATE-APPLY]`, 감사 로그는 `admin.update.apply`.
+- **시작할 수 없는 경우**(카드가 사유를 보입니다): 감독 스크립트 아래가 아님 · 릴리즈에 체크섬 파일이 없음 · 문서 인덱싱 또는 임베딩 재생성 진행 중(재시작이 작업을 끊습니다) · 이전 요청이 처리되지 않고 남아 있음 · 이미 진행 중.
+- **업데이트하는 동안**: 다시 뜰 때까지(보통 1~2분) 접속이 끊기고 진행 중인 대화는 중단됩니다. 화면은 서버가 한 번 끊겼다가 다시 응답하면 자동으로 새로 고쳐집니다.
+- **신뢰 범위**: 체크섬 파일은 **같은 릴리즈에 올라온** 것이라 손상·전송 중 끊김·CDN 변조는 막지만 **GitHub 계정이 탈취된 경우**(악성 jar 와 그 해시를 함께 올림)는 막지 못합니다(서명 검증은 하지 않습니다). 그래서 업데이트는 관리자가 버전을 확인하고 누를 때만 일어나고 감사 로그에 남습니다.
+- **Docker**: 자동 업데이트를 지원하지 않습니다 — 컨테이너가 스스로 갱신하려면 Docker 소켓(사실상 호스트 root 권한)이 필요해 비-root 로 굳힌 이미지와 맞지 않습니다. 알림만 보이니 `docker compose pull && docker compose up -d` 로 갱신하세요.
+- **릴리즈 쪽 규칙**: 릴리즈에 `rag-agent-{버전}.jar` 와 **`rag-agent-{버전}.jar.sha256`**(`sha256sum` 출력 형식 — `<해시>  <파일명>`) 두 파일을 첨부합니다. 체크섬 파일 만들기: Linux·macOS `sha256sum rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256`(macOS 는 `shasum -a 256`), Windows PowerShell `((Get-FileHash -Algorithm SHA256 rag-agent-0.5.7.jar).Hash.ToLower() + "  rag-agent-0.5.7.jar") | Set-Content -Encoding ascii rag-agent-0.5.7.jar.sha256`. 태그 버전과 jar 안의 `build.version`(= `pom.xml` 버전)이 같아야 합니다.
+- **GHE 등 `github.com` 이 아닌 저장소**: 알림은 되지만 내려받기 주소가 `https://github.com/{저장소}/releases/download/` 가 아니므로 jar 로 인정되지 않아 알리지 않습니다.
+- **문제 해결**: 「감독 스크립트로 실행 중이 아니라…」→ 위 표의 명령으로 다시 시작(IDE·`mvn`·Docker 는 불가). 롤백이 났는데 이유를 모르겠다면 스크립트 로그의 새 버전 기동 오류와 `result.properties` 의 `reason` 을 보세요(`exited-early` = 기동 중 종료, `unhealthy-timeout` = 응답 없음 — 느린 PC 면 `RAG_HEALTH_TIMEOUT` 을 늘리세요). 헬스가 200 이 아니라 막히면 `RAG_HEALTH_URL` 을 확인하세요.
 
 ### 6.3 성능
 
