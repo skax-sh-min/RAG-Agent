@@ -108,6 +108,99 @@ container system stop
 
 > 코드를 고칠 때: [CLAUDE.md](CLAUDE.md)가 안정적인 지도(스택·파일 역할·규약·하드 제약)이고, [documents/PITFALLS.md](documents/PITFALLS.md)에 각 규칙의 근거와 **실제로 깨졌던 기록**이 있습니다 — 거기 이름이 나온 파일을 고치기 전에 해당 항목을 읽으세요. 테이블·컬럼과 벡터 저장 구조는 [documents/DATABASE.md](documents/DATABASE.md)에 정리돼 있습니다. 호출 지점별 생각 수준의 출하값을 어떻게 쟀는지는 [documents/THINKING_EVALUATION.md](documents/THINKING_EVALUATION.md)에 있습니다.
 
+## 릴리즈 방법 (수작업)
+
+설치된 앱은 **GitHub의 최신 릴리즈**로 새 버전을 알아채고, 그 릴리즈로 스스로 업데이트할 수 있습니다(선택 기능 — [OPERATOR_MANUAL.md §6.2.3](documents/OPERATOR_MANUAL.md#623-새-버전-알림-github-releases) 참조). 릴리즈가 아래 모양이어야 앱이 인식합니다.
+
+| 항목 | 규칙 |
+|---|---|
+| 태그 | `vX.Y.Z` — 예: `v0.5.7`, 릴리즈 커밋에 붙입니다 |
+| jar 안의 버전 | `X.Y.Z` — 태그에서 `v`를 뗀 값. jar에는 빌드 때의 `pom.xml` 버전(`build.version`)이 들어 있고, 이것이 태그와 다르면 앱이 **업데이트를 거절**합니다 |
+| 첨부 파일 1 | `rag-agent-X.Y.Z.jar` — Maven이 만든 파일 그대로 |
+| 첨부 파일 2 | `rag-agent-X.Y.Z.jar.sha256` — `sha256sum` 형식, `<해시 64자>  rag-agent-X.Y.Z.jar`. 없으면 앱이 릴리즈를 알리기는 하지만 업데이트는 못 합니다 |
+| 상태 | **게시됨** — 초안(draft)도, 시험판(pre-release)도 아니어야 합니다. jar가 첨부되지 않은 릴리즈는 아예 알리지 않습니다 |
+
+> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 두 파일을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
+
+아래는 `pom.xml`이 `0.5.7-SNAPSHOT`일 때 `0.5.7`을 릴리즈하는 순서입니다. 저장소 루트에서 실행하세요.
+
+**1. 준비** — 최신 `main`에서, 작업 트리가 깨끗해야 합니다:
+
+```bash
+git switch main && git pull
+git status          # "nothing to commit, working tree clean" 이어야 함
+```
+
+**2. 릴리즈 버전 설정** — `pom.xml`에서 프로젝트 자신의 `<version>`(`<artifactId>rag-agent</artifactId>` 바로 다음 줄이며, Spring Boot 부모의 버전이 *아닙니다*)을 `0.5.7-SNAPSHOT`에서 `0.5.7`로 바꿉니다.
+
+**3. 테스트 포함 빌드**
+
+```bash
+mvn clean package            # → target/rag-agent-0.5.7.jar
+```
+
+jar에 올바른 버전이 들어갔는지 확인합니다:
+
+```bash
+# Linux / macOS / Git Bash
+unzip -p target/rag-agent-0.5.7.jar META-INF/build-info.properties | grep build.version     # build.version=0.5.7
+```
+```bat
+:: Windows 10 이상 cmd
+tar -xOf target\rag-agent-0.5.7.jar META-INF/build-info.properties | findstr build.version
+```
+
+**4. 체크섬 파일 만들기** — 파일 이름에 경로가 붙지 않도록 jar가 있는 폴더 안에서 만듭니다:
+
+```bash
+# Linux / Git Bash   (macOS: shasum -a 256 rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256)
+cd target
+sha256sum rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256
+```
+```bat
+:: Git Bash 없는 Windows cmd   (.cmd 파일 안에서는 %h 대신 %%h)
+cd target
+for /f %h in ('certutil -hashfile rag-agent-0.5.7.jar SHA256 ^| findstr /r "^[0-9a-f]*$"') do @echo %h  rag-agent-0.5.7.jar> rag-agent-0.5.7.jar.sha256
+```
+
+`cmd` 방식은 줄 끝이 CRLF로 끝납니다 — 앱은 이를 받아들이지만 `sha256sum -c`는 받아들이지 못합니다. 두 방식의 해시는 같습니다. 5단계 전에 저장소 루트로 돌아오세요(`cd ..`) — 7단계에서 올릴 두 파일은 `target/`에 있습니다.
+
+**5. 커밋·태그, 그리고 개발 이어가기**
+
+```bash
+git commit -am "release: v0.5.7"              # 이 커밋의 pom.xml 은 0.5.7
+git tag -a v0.5.7 -m "Release 0.5.7"
+
+# 이제 pom.xml 을 0.5.8-SNAPSHOT 으로 바꿉니다 — 안 바꾸면 이후 main 에서 만든 빌드가 계속 0.5.7 이라고 자처합니다
+git commit -am "chore: begin 0.5.8-SNAPSHOT"
+```
+
+> `main`이 풀 리퀘스트로만 받는다면, 릴리즈 커밋을 브랜치에 만들어 머지하고, **`0.5.7`이 들어 있는 머지된 커밋**에 태그를 붙인 뒤, 버전 올리기는 두 번째 풀 리퀘스트로 하세요.
+
+**6. 푸시**
+
+```bash
+git push origin main
+git push origin v0.5.7
+```
+
+**7. GitHub에서 게시** — *Releases → Draft a new release*: 이미 푸시한 태그 `v0.5.7`을 고르고, 제목은 `0.5.7`, *Generate release notes*로 릴리즈 노트를 만든 뒤(필요하면 고칩니다), `rag-agent-0.5.7.jar`와 `rag-agent-0.5.7.jar.sha256` **두 파일을 모두** 끌어다 놓고, **두 업로드가 끝날 때까지 기다린** 다음, *pre-release*는 체크하지 않은 채 *Publish release*를 누릅니다.
+
+**8. 확인** — 릴리즈 페이지에 두 파일이 보여야 합니다. `UPDATE_CHECK_ENABLED=true`인 앱은 다음 확인(기동 직후 또는 매일 정해진 시각)이나 관리자가 `/admin`에서 *지금 확인*을 눌렀을 때 알립니다. 앱이 보는 응답은 다음으로 볼 수 있습니다:
+
+```bash
+curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
+# "tag_name": "v0.5.7" 이고, 두 첨부 파일 모두 "state": "uploaded"
+```
+
+**잘못됐을 때**
+
+| 상황 | 할 일 |
+|---|---|
+| 로컬에서 태그만 붙임, 푸시 전 | `git tag -d v0.5.7` 후 고쳐서 다시 태그 |
+| 태그는 푸시했고 릴리즈는 게시 전 | GitHub에서 초안 삭제 → `git push origin :refs/tags/v0.5.7`, `git tag -d v0.5.7` → 5단계부터 다시 |
+| 이미 게시함 | **태그를 옮기거나 파일을 바꿔치기하지 마세요** — 앱이 이미 받아 옛 체크섬으로 확인했을 수 있습니다. 수정한 `0.5.8`을 새로 게시하고, 잘못된 릴리즈는 게시 취소하거나 삭제해 더는 알리지 않게 합니다 |
+
 ## 환경 변수
 
 ### 연결 / 인증

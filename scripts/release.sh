@@ -1,0 +1,284 @@
+#!/bin/sh
+# release.sh - build, verify and publish a RAG Agent release from this machine (no GitHub Actions needed).
+# (Windows: scripts\windows_release.cmd runs this very script through Git for Windows' bash - same steps, same options.)
+#
+# What it does, in this order:
+#   1. preflight   clean working tree, on main, not behind origin, tag not taken, mvn + Java 21, gh logged in.
+#                  Nothing has been changed yet - a failure here costs nothing.
+#   2. build       sets the pom version to the release version and runs "mvn clean package" (tests included unless
+#                  --skip-tests). A failure puts pom.xml back.
+#   3. verify      jar build.version must equal the release version (the app refuses an update whose jar disagrees
+#                  with the tag), Start-Class must be the app's. Writes the artifacts to target/release/:
+#                    rag-agent-<v>.jar            the file the running apps download
+#                    rag-agent-<v>.jar.sha256     sha256sum format - without it apps announce the release but cannot update
+#   4. git         commit "release: v<v>", annotated tag v<v>, then bump the pom to the next -SNAPSHOT and commit that
+#                  (otherwise the freshly released build would keep announcing itself as an update).
+#   5. publish     pushes the branch and the tag, creates the GitHub release as a DRAFT with both files and publishes it
+#                  once the upload is done, so nobody can see a half-uploaded release.
+#
+# Usage:  scripts/release.sh [VERSION] [options]
+#   VERSION         release version X.Y.Z. Default: the pom version without -SNAPSHOT.
+#   --build-only    stop after step 3: artifacts are built and verified, pom.xml is restored, git is untouched.
+#   --no-publish    do steps 1-4 locally; print the push / gh commands instead of running them.
+#   --skip-tests    pass -DskipTests to Maven (the full suite takes minutes).
+#   --next X.Y.Z-SNAPSHOT   version to continue with. Default: patch + 1.
+#   --notes-file F  release notes from file F. Default: let GitHub generate them from the merged work.
+#   --any-branch    allow releasing from a branch other than main.
+#   -y, --yes       do not ask for confirmation.
+#   -h, --help
+# Environment: RELEASE_MVN, RELEASE_GH (command names/paths), RELEASE_BRANCH (default main).
+# Publishing needs the GitHub CLI (https://cli.github.com, "gh auth login"); without it use --no-publish and upload the two
+# files from target/release/ on the release page by hand.
+
+POM="pom.xml"
+RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
+GH="${RELEASE_GH:-gh}"
+POM_DIRTY=0
+
+die() { echo "release: ERROR: $*" >&2; exit 1; }
+info() { echo "release: $*"; }
+
+usage() { sed -n '2,/^POM=/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+restore_pom() {
+  if [ "$POM_DIRTY" -eq 1 ]; then
+    git checkout -- "$POM" 2>/dev/null
+    POM_DIRTY=0
+    info "pom.xml restored"
+  fi
+}
+
+# --- pom --------------------------------------------------------------------------------------------------------------
+
+# Git Bash's sed and awk read files in "text mode" and silently DROP the CR of CRLF line endings (measured: a 80-byte CRLF file
+# came back as 67 bytes), which would turn a one-line version change into a whole-file diff. GNU sed's -b stops that; BSD sed
+# (macOS) has no -b and does not need it.
+if printf x | sed -b p >/dev/null 2>&1; then SED="sed -b"; else SED="sed"; fi
+
+# the project's own <version>: the line right after <artifactId>rag-agent</artifactId> (the parent's version comes before it)
+pom_version() {
+  $SED -n '/<artifactId>rag-agent<\/artifactId>/{n;s|.*<version>\([^<]*\)</version>.*|\1|p;}' "$POM" | tr -d '\r' | head -n 1
+}
+
+set_pom_version() {  # set_pom_version <new>
+  tmp="$POM.tmp.$$"
+  $SED "/<artifactId>rag-agent<\/artifactId>/{n;s|<version>[^<]*</version>|<version>$1</version>|;}" "$POM" > "$tmp" || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$POM" && rm -f "$tmp"
+  [ "$(pom_version)" = "$1" ]
+}
+
+# --- versions ---------------------------------------------------------------------------------------------------------
+
+is_release_version() { echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; }
+is_snapshot_version() { echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT$'; }
+
+strip_snapshot() { echo "${1%-SNAPSHOT}"; }
+
+next_snapshot() {  # X.Y.Z -> X.Y.(Z+1)-SNAPSHOT
+  major=${1%%.*}
+  rest=${1#*.}
+  minor=${rest%%.*}
+  patch=${rest#*.}
+  echo "$major.$minor.$((patch + 1))-SNAPSHOT"
+}
+
+# --- files ------------------------------------------------------------------------------------------------------------
+
+# The file goes in through stdin on purpose: given a NAME, GNU sha256sum prefixes the hash with a backslash when the
+# name contains one (a Windows path).
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum < "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 < "$1" | cut -d' ' -f1
+  else
+    openssl dgst -sha256 < "$1" | sed 's/^.*= //'
+  fi
+}
+
+# print one entry of a zip/jar to stdout
+jar_entry() {  # jar_entry <jar> <entry>
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -p "$1" "$2" 2>/dev/null
+  else
+    d="$(mktemp -d)" || return 1
+    (cd "$d" && jar xf "$OLDPWD/$1" "$2" 2>/dev/null) && cat "$d/$2"
+    rm -rf "$d"
+  fi
+}
+
+jar_build_version() { jar_entry "$1" META-INF/build-info.properties | tr -d '\r' | sed -n 's/^build\.version=//p' | head -n 1; }
+jar_start_class() { jar_entry "$1" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Start-Class: //p' | head -n 1; }
+
+confirm() {  # confirm <question>
+  [ "$YES" -eq 1 ] && return 0
+  printf '%s [y/N] ' "$1"
+  read -r answer || answer=""
+  case "$answer" in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
+}
+
+# --- main -------------------------------------------------------------------------------------------------------------
+
+main() {
+  VERSION=""
+  NEXT=""
+  BUILD_ONLY=0
+  NO_PUBLISH=0
+  YES=0
+  SKIP_TESTS=0
+  ANY_BRANCH=0
+  NOTES_FILE=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --build-only) BUILD_ONLY=1 ;;
+      --no-publish) NO_PUBLISH=1 ;;
+      --skip-tests) SKIP_TESTS=1 ;;
+      --any-branch) ANY_BRANCH=1 ;;
+      -y | --yes) YES=1 ;;
+      --next) shift; NEXT="${1:-}" ;;
+      --notes-file) shift; NOTES_FILE="${1:-}" ;;
+      -h | --help) usage; exit 0 ;;
+      -*) die "unknown option: $1 (see --help)" ;;
+      *) [ -z "$VERSION" ] || die "more than one version given"; VERSION="$1" ;;
+    esac
+    shift
+  done
+
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)" || exit 1
+  cd "$ROOT" || exit 1
+  trap 'restore_pom' EXIT
+  trap 'restore_pom; exit 130' INT TERM
+
+  PUBLISH=1
+  if [ "$BUILD_ONLY" -eq 1 ] || [ "$NO_PUBLISH" -eq 1 ]; then PUBLISH=0; fi
+
+  # ---- 1. preflight -----------------------------------------------------------------------------------------------
+  command -v git >/dev/null 2>&1 || die "git not found"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$ROOT is not a git working tree"
+  [ -f "$POM" ] || die "$POM not found in $ROOT"
+
+  if [ -n "${RELEASE_MVN:-}" ]; then
+    MVN="$RELEASE_MVN"
+  elif command -v mvn >/dev/null 2>&1; then
+    MVN="mvn"
+  elif [ -x ./mvnw ]; then
+    MVN="./mvnw"
+  else
+    die "Maven not found (install Maven 3.9+ or use the mvnw wrapper)"
+  fi
+  java_major=$("$MVN" -v 2>&1 | sed -n 's/^Java version: \([0-9][0-9]*\).*/\1/p' | head -n 1)
+  [ -n "$java_major" ] || die "could not read the Java version from '$MVN -v'"
+  [ "$java_major" -ge 21 ] || die "Java 21+ is required to build (Maven runs on Java $java_major)"
+  if [ "$PUBLISH" -eq 1 ]; then
+    command -v "$GH" >/dev/null 2>&1 || die "GitHub CLI '$GH' not found - install it (https://cli.github.com) or use --no-publish and upload target/release/* by hand"
+    "$GH" auth status >/dev/null 2>&1 || die "GitHub CLI is not logged in - run: $GH auth login"
+  fi
+
+  BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  [ "$BRANCH" != "HEAD" ] || die "detached HEAD - check out a branch first"
+  if [ "$BRANCH" != "$RELEASE_BRANCH" ] && [ "$ANY_BRANCH" -ne 1 ]; then
+    die "on branch '$BRANCH', releases are made from '$RELEASE_BRANCH' (use --any-branch to override)"
+  fi
+  [ -z "$(git status --porcelain)" ] || die "working tree is not clean - commit or stash first (a stray file would end up in the jar):
+$(git status --short)"
+
+  git fetch --quiet origin || die "git fetch origin failed"
+  if git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+    behind=$(git rev-list --count "HEAD..origin/$BRANCH")
+    [ "$behind" -eq 0 ] || die "branch is $behind commit(s) behind origin/$BRANCH - pull first"
+    ahead=$(git rev-list --count "origin/$BRANCH..HEAD")
+    [ "$ahead" -eq 0 ] || info "note: $ahead local commit(s) not on origin yet - they are pushed together with the release"
+  fi
+
+  CURRENT=$(pom_version)
+  [ -n "$CURRENT" ] || die "could not read the project version from $POM"
+  if [ -z "$VERSION" ]; then
+    is_snapshot_version "$CURRENT" || die "pom version is '$CURRENT' (not X.Y.Z-SNAPSHOT) - pass the release version explicitly"
+    VERSION=$(strip_snapshot "$CURRENT")
+  fi
+  is_release_version "$VERSION" || die "release version must look like 1.2.3 (got '$VERSION')"
+  [ -n "$NEXT" ] || NEXT=$(next_snapshot "$VERSION")
+  is_snapshot_version "$NEXT" || die "--next must look like 1.2.4-SNAPSHOT (got '$NEXT')"
+  if [ -n "$NOTES_FILE" ]; then [ -f "$NOTES_FILE" ] || die "notes file not found: $NOTES_FILE"; fi
+
+  TAG="v$VERSION"
+  JAR_NAME="rag-agent-$VERSION.jar"
+  if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then die "tag $TAG already exists locally"; fi
+  if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then die "tag $TAG already exists on origin"; fi
+
+  info "releasing $VERSION from '$BRANCH' (pom is $CURRENT, next will be $NEXT)"
+
+  # ---- 2. build ---------------------------------------------------------------------------------------------------
+  set_pom_version "$VERSION" || { git checkout -- "$POM" 2>/dev/null; die "could not set the pom version"; }
+  POM_DIRTY=1
+  if [ "$SKIP_TESTS" -eq 1 ]; then
+    info "building (tests skipped): $MVN -B clean package -DskipTests"
+    "$MVN" -B clean package -DskipTests || die "build failed"
+  else
+    info "building with tests: $MVN -B clean package   (this takes a few minutes)"
+    "$MVN" -B clean package || die "build failed"
+  fi
+
+  # ---- 3. verify + artifacts --------------------------------------------------------------------------------------
+  OUT="target/release"
+  rm -rf "$OUT"
+  mkdir -p "$OUT" || die "cannot create $OUT"
+  [ -f "target/$JAR_NAME" ] || die "the build did not produce target/$JAR_NAME"
+  cp "target/$JAR_NAME" "$OUT/$JAR_NAME" || die "cannot copy the jar"
+  built=$(jar_build_version "$OUT/$JAR_NAME")
+  [ "$built" = "$VERSION" ] || die "the jar says build.version='$built', expected '$VERSION' - not releasing"
+  start=$(jar_start_class "$OUT/$JAR_NAME")
+  [ "$start" = "com.example.ragagent.RagAgentApplication" ] || die "unexpected Start-Class '$start' in the jar - not releasing"
+  sum=$(sha256_of "$OUT/$JAR_NAME")
+  printf '%s  %s\n' "$sum" "$JAR_NAME" > "$OUT/$JAR_NAME.sha256" || die "cannot write the checksum file"
+  [ "$(sha256_of "$OUT/$JAR_NAME")" = "$sum" ] || die "checksum changed while writing"
+  size=$(wc -c < "$OUT/$JAR_NAME" | tr -d ' ')
+  info "built and verified: $OUT/$JAR_NAME ($size bytes, sha256 $(echo "$sum" | cut -c1-16)...)"
+
+  if [ "$BUILD_ONLY" -eq 1 ]; then
+    restore_pom
+    info "--build-only: git was not touched; artifacts are in $OUT/"
+    exit 0
+  fi
+
+  # ---- 4. git -----------------------------------------------------------------------------------------------------
+  if [ "$PUBLISH" -eq 1 ]; then
+    confirm "Commit, tag $TAG, bump to $NEXT, push '$BRANCH' + $TAG to origin and publish the GitHub release?" || die "aborted (nothing committed)"
+  else
+    confirm "Commit, tag $TAG and bump to $NEXT locally (nothing is pushed)?" || die "aborted (nothing committed)"
+  fi
+  git add "$POM" && git commit -q -m "release: $TAG" || die "git commit failed (is user.name / user.email set?)"
+  POM_DIRTY=0
+  git tag -a "$TAG" -m "Release $VERSION" || die "git tag failed - the release commit is already made, tag it by hand: git tag -a $TAG -m 'Release $VERSION'"
+  set_pom_version "$NEXT" || die "could not set the next version - set the pom to $NEXT by hand and commit"
+  git add "$POM" && git commit -q -m "chore: begin $NEXT" || die "git commit failed for the version bump - commit the pom ($NEXT) by hand"
+  info "committed release: $TAG, now on $NEXT"
+
+  if [ "$PUBLISH" -eq 0 ]; then
+    info "not publishing (--no-publish). To finish by hand:"
+    echo "  git push origin $BRANCH && git push origin $TAG"
+    echo "  $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 --title $VERSION --generate-notes --verify-tag"
+    echo "  (or upload both files from $OUT/ on the release page of tag $TAG)"
+    exit 0
+  fi
+
+  # ---- 5. publish -------------------------------------------------------------------------------------------------
+  git push origin "$BRANCH" || die "pushing the branch failed. The release is committed and tagged locally; fix the push, then: git push origin $BRANCH && git push origin $TAG && (gh release create ... see --no-publish output)"
+  git push origin "$TAG" || die "pushing the tag failed. Retry: git push origin $TAG, then create the release (files are in $OUT/)"
+  if [ -n "$NOTES_FILE" ]; then
+    notes_args="--notes-file $NOTES_FILE"
+  else
+    notes_args="--generate-notes"
+  fi
+  # shellcheck disable=SC2086
+  "$GH" release create "$TAG" "$OUT/$JAR_NAME" "$OUT/$JAR_NAME.sha256" --title "$VERSION" $notes_args --verify-tag --draft \
+    || die "creating the draft release failed. The branch and tag are pushed; retry: $GH release create $TAG $OUT/$JAR_NAME $OUT/$JAR_NAME.sha256 --title $VERSION $notes_args --verify-tag --draft"
+  "$GH" release edit "$TAG" --draft=false \
+    || die "the draft release $TAG was created with both files but not published - publish it on GitHub (Releases > Draft) or: $GH release edit $TAG --draft=false"
+  info "published $TAG: $(git remote get-url origin 2>/dev/null)"
+}
+
+# `RELEASE_LIB_ONLY=1 . scripts/release.sh` loads the functions without running anything (the tests do that).
+if [ -z "${RELEASE_LIB_ONLY:-}" ]; then
+  main "$@"
+fi

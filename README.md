@@ -106,6 +106,99 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for chat and document usage, [ADM
 
 > Contributors: [CLAUDE.md](CLAUDE.md) is the stable map (stack, file roles, conventions, hard constraints); [documents/PITFALLS.md](documents/PITFALLS.md) holds the reasoning behind each rule and the record of what broke — read the matching entry before changing a file it names. Tables, columns and the vector-store layout are described in [documents/DATABASE.md](documents/DATABASE.md); how the per-call-site thinking defaults were measured is in [documents/THINKING_EVALUATION.md](documents/THINKING_EVALUATION.md).
 
+## Releasing a new version (manual)
+
+Installed apps learn about a new version from the **latest GitHub release** and can update themselves from it (opt-in — see [OPERATOR_MANUAL.md §6.2.3](documents/OPERATOR_MANUAL.md#623-새-버전-알림-github-releases)). A release is only picked up if it looks like this:
+
+| What | Rule |
+|---|---|
+| Tag | `vX.Y.Z` — e.g. `v0.5.7`, on the release commit |
+| Version inside the jar | `X.Y.Z` — the tag without the `v`. The jar carries the `pom.xml` version it was built with (`build.version`), and the app **refuses to update** when that differs from the tag |
+| Asset 1 | `rag-agent-X.Y.Z.jar` — Maven's output file, unchanged |
+| Asset 2 | `rag-agent-X.Y.Z.jar.sha256` — `sha256sum` format, `<64 hex digits>  rag-agent-X.Y.Z.jar`. Without it apps announce the release but cannot update from it |
+| State | **published** — not a draft, not a pre-release. A release without the jar attached is not announced at all |
+
+> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the two files and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
+
+The steps below release `0.5.7` while `pom.xml` says `0.5.7-SNAPSHOT`. Run them from the repository root.
+
+**1. Prepare** — be on an up-to-date `main` with a clean working tree:
+
+```bash
+git switch main && git pull
+git status          # must say: nothing to commit, working tree clean
+```
+
+**2. Set the release version** — in `pom.xml` change the project's own `<version>` (the one right after `<artifactId>rag-agent</artifactId>`, *not* the Spring Boot parent's) from `0.5.7-SNAPSHOT` to `0.5.7`.
+
+**3. Build with tests**
+
+```bash
+mvn clean package            # → target/rag-agent-0.5.7.jar
+```
+
+Check that the jar carries the right version:
+
+```bash
+# Linux / macOS / Git Bash
+unzip -p target/rag-agent-0.5.7.jar META-INF/build-info.properties | grep build.version     # build.version=0.5.7
+```
+```bat
+:: Windows 10+ cmd
+tar -xOf target\rag-agent-0.5.7.jar META-INF/build-info.properties | findstr build.version
+```
+
+**4. Create the checksum file** — inside the folder that holds the jar, so the file name carries no path:
+
+```bash
+# Linux / Git Bash   (macOS: shasum -a 256 rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256)
+cd target
+sha256sum rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256
+```
+```bat
+:: Windows cmd without Git Bash   (inside a .cmd file write %%h instead of %h)
+cd target
+for /f %h in ('certutil -hashfile rag-agent-0.5.7.jar SHA256 ^| findstr /r "^[0-9a-f]*$"') do @echo %h  rag-agent-0.5.7.jar> rag-agent-0.5.7.jar.sha256
+```
+
+The `cmd` variant ends its line with CRLF — the app accepts that, but `sha256sum -c` does not. Both variants produce the same hash. Go back to the repository root (`cd ..`) before step 5 — the two files you upload in step 7 are in `target/`.
+
+**5. Commit, tag, and keep developing**
+
+```bash
+git commit -am "release: v0.5.7"              # pom.xml says 0.5.7 in this commit
+git tag -a v0.5.7 -m "Release 0.5.7"
+
+# now set pom.xml to 0.5.8-SNAPSHOT, so later builds from main do not call themselves 0.5.7
+git commit -am "chore: begin 0.5.8-SNAPSHOT"
+```
+
+> If `main` only accepts pull requests, put the release commit on a branch, merge it, tag **the merged commit that contains `0.5.7`**, and do the version bump in a second pull request.
+
+**6. Push**
+
+```bash
+git push origin main
+git push origin v0.5.7
+```
+
+**7. Publish on GitHub** — *Releases → Draft a new release*: choose the existing tag `v0.5.7`, title `0.5.7`, click *Generate release notes* (edit as needed), drag **both** `rag-agent-0.5.7.jar` and `rag-agent-0.5.7.jar.sha256` onto the page, **wait until both uploads have finished**, leave *pre-release* unchecked, then *Publish release*.
+
+**8. Verify** — the release page lists both files. Apps with `UPDATE_CHECK_ENABLED=true` announce it at their next check (start-up or the daily one), or when an admin presses *Check now* on `/admin`. A quick look at what they see:
+
+```bash
+curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
+# "tag_name": "v0.5.7" and both assets with "state": "uploaded"
+```
+
+**If something went wrong**
+
+| Situation | What to do |
+|---|---|
+| Tagged locally, nothing pushed | `git tag -d v0.5.7`, fix, tag again |
+| Tag pushed, release not published | delete the draft on GitHub, then `git push origin :refs/tags/v0.5.7` and `git tag -d v0.5.7`, and redo from step 5 |
+| Already published | **Do not move the tag or replace the files** — apps may already have downloaded them and checked them against the old checksum. Publish `0.5.8` with the fix, and unpublish or delete the bad release so it is no longer announced |
+
 ## Environment Variables
 
 ### Connection / Authentication

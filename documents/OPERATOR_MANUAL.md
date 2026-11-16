@@ -38,6 +38,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다. 화면에서 하�
       - 6.2.1 [SQLite 파일별 테이블 구성](#621-sqlite-파일별-테이블-구성)
       - 6.2.2 [DB 백업과 복구](#622-db-백업과-복구)
       - 6.2.3 [새 버전 알림 (GitHub Releases)](#623-새-버전-알림-github-releases)
+      - 6.2.4 [릴리즈 만들기 (로컬 스크립트)](#624-릴리즈-만들기-로컬-스크립트)
    - 6.3 [성능](#63-성능)
    - 6.4 [검색 품질 평가 하네스 (개발자용)](#64-검색-품질-평가-하네스-개발자용)
    - 6.5 [청크 분할 전략 (크기 기준 병합 / 소제목 최대 분할)](#65-청크-분할-전략-크기-기준-병합--소제목-최대-분할)
@@ -2145,6 +2146,40 @@ GitHub 에 새 릴리즈가 올라왔는지 **관리자에게 알리고**, **감
 - **릴리즈 쪽 규칙**: 릴리즈에 `rag-agent-{버전}.jar` 와 **`rag-agent-{버전}.jar.sha256`**(`sha256sum` 출력 형식 — `<해시>  <파일명>`) 두 파일을 첨부합니다. 체크섬 파일 만들기: Linux·macOS `sha256sum rag-agent-0.5.7.jar > rag-agent-0.5.7.jar.sha256`(macOS 는 `shasum -a 256`), Windows PowerShell `((Get-FileHash -Algorithm SHA256 rag-agent-0.5.7.jar).Hash.ToLower() + "  rag-agent-0.5.7.jar") | Set-Content -Encoding ascii rag-agent-0.5.7.jar.sha256`. 태그 버전과 jar 안의 `build.version`(= `pom.xml` 버전)이 같아야 합니다.
 - **GHE 등 `github.com` 이 아닌 저장소**: 알림은 되지만 내려받기 주소가 `https://github.com/{저장소}/releases/download/` 가 아니므로 jar 로 인정되지 않아 알리지 않습니다.
 - **문제 해결**: 「감독 스크립트로 실행 중이 아니라…」→ 위 표의 명령으로 다시 시작(IDE·`mvn`·Docker 는 불가). 롤백이 났는데 이유를 모르겠다면 스크립트 로그의 새 버전 기동 오류와 `result.properties` 의 `reason` 을 보세요(`exited-early` = 기동 중 종료, `unhealthy-timeout` = 응답 없음 — 느린 PC 면 `RAG_HEALTH_TIMEOUT` 을 늘리세요). 헬스가 200 이 아니라 막히면 `RAG_HEALTH_URL` 을 확인하세요.
+
+#### 6.2.4 릴리즈 만들기 (로컬 스크립트)
+
+앱이 알리고 업데이트하는 대상([§6.2.3](#623-새-버전-알림-github-releases))은 GitHub 릴리즈입니다. 릴리즈는 **이 PC 에서** 만듭니다(GitHub Actions 를 쓰지 않으므로 빌드 비용이 들지 않고, 서명 키 같은 비밀이 GitHub 에 올라가지 않습니다). 손으로 하는 절차는 [README 「릴리즈 방법 (수작업)」](../README.kr.md#릴리즈-방법-수작업)에 있고, 아래 스크립트는 같은 일을 순서대로 하면서 **실수를 막는 검사**를 더한 것입니다.
+
+| 환경 | 명령 (저장소 루트에서) |
+|---|---|
+| Linux · macOS · Git Bash | `sh scripts/release.sh [버전] [옵션]` |
+| Windows | `scripts\windows_release.cmd [버전] [옵션]` — Git for Windows 의 bash 로 같은 `release.sh` 를 실행합니다(WSL 의 bash 는 쓰지 않습니다). 다른 bash 를 쓰려면 `RELEASE_BASH` |
+
+필요한 것: git, Maven 3.9+ 와 **Java 21**, `unzip`(또는 JDK 의 `jar`), 게시하려면 [GitHub CLI](https://cli.github.com)(`gh auth login` 한 번 — Windows: `winget install GitHub.cli`). Windows 는 Git for Windows.
+
+| 옵션 | 뜻 |
+|---|---|
+| `버전` | 릴리즈 버전 `X.Y.Z`. 생략하면 pom 버전에서 `-SNAPSHOT` 을 뗀 값 |
+| `--build-only` | **빌드·검증까지만** — 산출물을 `target/release/` 에 만들고 pom 은 되돌리며 git 은 건드리지 않습니다. 처음에는 이걸로 시험하세요 |
+| `--no-publish` | 커밋·태그·다음 SNAPSHOT 까지 로컬에서만 하고, 푸시·게시 명령은 출력만 합니다(`gh` 없이 쓸 때) |
+| `--skip-tests` | Maven 에 `-DskipTests` (전체 테스트는 몇 분 걸립니다) |
+| `--next X.Y.Z-SNAPSHOT` | 이어 갈 버전. 기본은 patch + 1 (0.5.9 → 0.5.10-SNAPSHOT) |
+| `--notes-file 파일` | 릴리즈 노트 파일. 기본은 GitHub 이 자동 생성 |
+| `--any-branch` | `main` 이 아닌 브랜치에서 릴리즈(기본은 거절, `RELEASE_BRANCH` 로 기준 브랜치 변경) |
+| `-y`, `--yes` | 확인 질문 생략 |
+
+**순서** (각 단계는 앞 단계가 통과해야 갑니다):
+
+1. **사전 점검** — 작업 트리가 깨끗한가(새 파일도 — jar 에 섞여 들어갑니다) · `main` 인가 · 원격보다 뒤처지지 않았나 · 태그가 비어 있나(로컬·원격) · Maven 이 Java 21 로 도는가 · `gh` 로그인. **아직 아무것도 바뀌지 않았습니다.**
+2. **빌드** — pom 의 버전을 릴리즈 버전으로 바꾸고 `mvn clean package`. 실패하면 pom 을 되돌립니다.
+3. **검증·산출물** — jar 안의 `build.version` 이 릴리즈 버전과 같고 `Start-Class` 가 이 앱의 것인지 확인합니다(앱도 같은 검사로 어긋난 릴리즈의 업데이트를 거절합니다). `target/release/` 에 `rag-agent-X.Y.Z.jar` 와 `rag-agent-X.Y.Z.jar.sha256`(`sha256sum` 형식)을 만듭니다.
+4. **git** — 확인 질문 뒤에 `release: vX.Y.Z` 커밋 → 주석 태그 `vX.Y.Z` → pom 을 다음 SNAPSHOT 으로 올려 `chore: begin …` 커밋(안 올리면 이후 빌드가 계속 방금 릴리즈한 버전이라 자처합니다).
+5. **게시** — 브랜치와 태그를 푸시하고, **초안(draft)** 릴리즈에 두 파일을 올린 뒤 **업로드가 끝나면 게시**합니다(반쯤 올라간 릴리즈가 보이지 않게 — 앱은 업로드가 끝난 jar 가 있는 릴리즈만 알립니다).
+
+**중간에 멈췄을 때**: 사전 점검·빌드·검증 실패는 아무 흔적도 남기지 않습니다(pom 복원). 커밋 뒤에 실패하면 스크립트가 **어디까지 됐고 다음에 무엇을 칠지** 출력합니다 — 푸시 실패는 같은 푸시를, 초안 생성 실패는 출력된 `gh release create …` 를 다시, 게시 실패는 GitHub 의 Releases › Draft 에서 게시하면 됩니다. 산출물은 `target/release/` 에 남아 있습니다.
+
+**한계**: 서명은 하지 않습니다(체크섬은 같은 릴리즈의 파일이라 손상·변조는 막지만 계정 탈취는 못 막습니다 — [§6.2.3](#623-새-버전-알림-github-releases)). 이미 게시한 릴리즈의 태그를 옮기거나 파일을 바꾸지 마세요 — 고친 새 버전을 게시합니다.
 
 ### 6.3 성능
 
