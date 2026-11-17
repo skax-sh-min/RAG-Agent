@@ -3,7 +3,10 @@ package com.example.ragagent.tool.change;
 import com.example.ragagent.tool.ToolAccess;
 import com.example.ragagent.tool.ToolCaller;
 import com.example.ragagent.tool.ToolGuard;
+import com.example.ragagent.workflow.EditIntent;
+import com.example.ragagent.workflow.KnowledgeEditWorkflow;
 import com.example.ragagent.workflow.MaintenanceWorkflow;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -26,25 +29,47 @@ public class ChangeRequestTool {
 
     private final MaintenanceWorkflow workflow;
     private final ToolGuard guard;
+    /** 자연어 수정 워크플로(6c) — 없으면 지시문만의 요청도 글자 치환 워크플로가 받는다(예전 동작). */
+    private final KnowledgeEditWorkflow knowledgeEdit;
 
-    public ChangeRequestTool(MaintenanceWorkflow workflow, ToolGuard guard) {
+    @Autowired
+    public ChangeRequestTool(MaintenanceWorkflow workflow, ToolGuard guard, KnowledgeEditWorkflow knowledgeEdit) {
         this.workflow = workflow;
         this.guard = guard;
+        this.knowledgeEdit = knowledgeEdit;
+    }
+
+    /** 자연어 수정 없이 — 테스트용. */
+    public ChangeRequestTool(MaintenanceWorkflow workflow, ToolGuard guard) {
+        this(workflow, guard, null);
     }
 
     @Tool(name = "requestDocumentChange",
-            description = "Request a change to document text (administrators only). Only creates proposals for review; "
-                    + "nothing is written until an administrator approves. Returns a job id.")
+            description = "Request a change to document knowledge (administrators only). Only creates proposals for review; "
+                    + "nothing is written until an administrator approves. Give from/to for a literal replacement, or just the instruction "
+                    + "in natural language (e.g. 'Feature A is no longer used', 'delete the content about B', 'add a caution about B: ...'); "
+                    + "type/subject/content skip the interpretation. Returns a job id.")
     public Started requestDocumentChange(
-            @ToolParam(description = "What should be changed, e.g. 'replace PostgreSQL with Oracle' (required)") String instruction,
+            @ToolParam(description = "What should be changed, e.g. 'replace PostgreSQL with Oracle' or 'Feature A is no longer used' (required)") String instruction,
             @ToolParam(required = false, description = "Exact text to replace, for literal replacement") String from,
             @ToolParam(required = false, description = "Replacement text, for literal replacement") String to,
             @ToolParam(required = false, description = "True to also let the model propose related changes beyond the literal replacement (drivers, ports, SQL syntax); costs one model call per chunk and every such proposal needs review") Boolean semantic,
             @ToolParam(required = false, description = "True to also replace spellings that differ from the text only in letter case (ORACLE, oracle), shaped to the matched case; may change identifiers or string constants, so review the diff") Boolean caseVariants,
+            @ToolParam(required = false, description = "deprecate | remove | add_note | revise — set to skip interpreting the instruction") String type,
+            @ToolParam(required = false, description = "The feature, function or term the change is about (with type)") String subject,
+            @ToolParam(required = false, description = "add_note: the caution to add; revise: the new description (with type)") String content,
+            @ToolParam(required = false, description = "deprecate: the alternative to use instead, if any") String replacement,
             ToolContext context) {
         ToolCaller caller = ToolCaller.from(context);
         guard.require(caller, ToolAccess.ADMIN, "requestDocumentChange");
         try {
+            boolean literal = from != null && !from.isBlank() && to != null && !to.isBlank();
+            boolean typed = type != null && !type.isBlank() && !EditIntent.REPLACE.equals(type.strip());
+            if (knowledgeEdit != null && (typed || !literal)) {
+                EditIntent intent = typed ? new EditIntent(type, subject, content, replacement, null, null) : null;
+                KnowledgeEditWorkflow.Started s = knowledgeEdit.start(caller.userId(), instruction, intent, Locale.KOREAN);
+                return new Started(s.jobId(), s.status());
+            }
             MaintenanceWorkflow.Started s = workflow.start(caller.userId(), instruction, from, to, Boolean.TRUE.equals(semantic), Boolean.TRUE.equals(caseVariants), Locale.KOREAN);
             return new Started(s.jobId(), s.status());
         } catch (IllegalStateException busy) {

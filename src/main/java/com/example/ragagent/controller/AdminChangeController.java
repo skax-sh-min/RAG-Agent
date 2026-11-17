@@ -5,6 +5,8 @@ import com.example.ragagent.repository.ChangeProposalRepository;
 import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.ChunkDiff;
 import com.example.ragagent.workflow.ChangeApplyService;
+import com.example.ragagent.workflow.EditIntent;
+import com.example.ragagent.workflow.KnowledgeEditWorkflow;
 import com.example.ragagent.workflow.MaintenanceWorkflow;
 import com.example.ragagent.workflow.UnifiedDiffFormatter;
 import org.slf4j.Logger;
@@ -60,6 +62,14 @@ public class AdminChangeController {
         this.currentUser = currentUser;
     }
 
+    /** 자연어 수정 워크플로(6c) — 세터 주입(슬라이스 테스트의 생성자를 흔들지 않게). 없으면 지시문만의 요청도 글자 치환으로 간다. */
+    private KnowledgeEditWorkflow knowledgeEdit;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKnowledgeEdit(KnowledgeEditWorkflow knowledgeEdit) {
+        this.knowledgeEdit = knowledgeEdit;
+    }
+
     @GetMapping("/admin/change-jobs")
     public String list(@RequestParam(required = false) String error,
                        @RequestParam(required = false) String from,
@@ -72,20 +82,58 @@ public class AdminChangeController {
         return "admin-change-jobs";
     }
 
+    /**
+     * 유지보수 요청. 갈래는 셋이다(AGENT_MCP_DESIGN §10.6):
+     * <ul>
+     *   <li>바꿀 말·새 말을 직접 주면(유형이 비었거나 {@code replace}) — 지금의 글자 치환 워크플로(옵션 둘 포함).</li>
+     *   <li>유형을 직접 고르면({@code deprecate}·{@code remove}·{@code add_note}·{@code revise}) — 그 의도로 자연어 수정 워크플로(해석 단계 없음).</li>
+     *   <li>지시문만 주면(유형 "자동") — 자연어 수정 워크플로가 LLM 으로 해석한다. 글자 바꾸기로 해석되면 글자 치환으로 넘어간다(옵션은 꺼진 채).</li>
+     * </ul>
+     */
     @PostMapping("/admin/change-requests")
-    public String request(@RequestParam String instruction,
+    public String request(@RequestParam(required = false, defaultValue = "") String instruction,
                           @RequestParam(required = false) String from,
                           @RequestParam(required = false) String to,
                           @RequestParam(required = false, defaultValue = "false") boolean semantic,
-                          @RequestParam(required = false, defaultValue = "false") boolean caseVariants) {
+                          @RequestParam(required = false, defaultValue = "false") boolean caseVariants,
+                          @RequestParam(required = false, defaultValue = "") String type,
+                          @RequestParam(required = false) String subject,
+                          @RequestParam(required = false) String content,
+                          @RequestParam(required = false) String replacement) {
         try {
-            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
-                    LocaleContextHolder.getLocale());
-            return "redirect:/admin/change-jobs/" + s.jobId();
+            String t = type.strip();
+            boolean literal = from != null && !from.isBlank() && to != null && !to.isBlank();
+            long jobId;
+            if (literal && (t.isEmpty() || EditIntent.REPLACE.equals(t))) {
+                jobId = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
+                        LocaleContextHolder.getLocale()).jobId();
+            } else if (EditIntent.REPLACE.equals(t)) {
+                return "redirect:/admin/change-jobs?error=invalid";   // 글자 바꾸기를 골랐는데 바꿀 말·새 말이 없다
+            } else if (knowledgeEdit == null) {
+                jobId = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
+                        LocaleContextHolder.getLocale()).jobId();
+            } else {
+                EditIntent intent = t.isEmpty() ? null : new EditIntent(t, subject, content, replacement, null, null);
+                jobId = knowledgeEdit.start(currentUser.userId(), instruction, intent, LocaleContextHolder.getLocale()).jobId();
+            }
+            return "redirect:/admin/change-jobs/" + jobId;
         } catch (IllegalStateException busy) {
             return "redirect:/admin/change-jobs?error=busy";
         } catch (IllegalArgumentException bad) {
             return "redirect:/admin/change-jobs?error=invalid";
+        }
+    }
+
+    /** 자연어 수정 작업의 리포트에서 고른 청크(추가 적용 후보·언급만)로 수정안을 더한다. */
+    @PostMapping("/admin/change-jobs/{id}/chunks/propose")
+    public String proposeChunks(@PathVariable long id, @RequestParam(required = false) List<String> chunkIds) {
+        requireMaintenanceJob(id);
+        if (knowledgeEdit == null || chunkIds == null || chunkIds.isEmpty()) return "redirect:/admin/change-jobs/" + id;
+        try {
+            int n = knowledgeEdit.proposeForChunks(id, chunkIds, LocaleContextHolder.getLocale());
+            return "redirect:/admin/change-jobs/" + id + (n == 0 ? "?notice=nothing" : "");
+        } catch (IllegalArgumentException e) {
+            return "redirect:/admin/change-jobs/" + id + "?notice=nothing";
         }
     }
 
@@ -176,13 +224,31 @@ public class AdminChangeController {
         }
         model.addAttribute("job", job);
         model.addAttribute("running", ChangeJobRepository.RUNNING.equals(job.status()) || inProgress);
-        model.addAttribute("report", parse(job));
+        KnowledgeEditWorkflow.Report editReport = parseEditReport(job);
+        model.addAttribute("editReport", editReport);
+        // 자연어 수정 작업의 리포트는 글자 치환 리포트 모양으로 읽으면 바꿀 말이 비어 "null → null" 로 그려진다 — 둘 중 하나만 싣는다.
+        model.addAttribute("report", editReport == null ? parse(job) : null);
+        java.util.Set<String> proposed = new java.util.HashSet<>();
+        for (List<ProposalView> vs : byDoc.values()) for (ProposalView v : vs) proposed.add(v.proposal().chunkId());
+        model.addAttribute("proposedChunks", proposed);
         model.addAttribute("docs", docs);
         model.addAttribute("anyApplied", anyApplied);
     }
 
     private static long count(List<ProposalView> views, String status) {
         return views.stream().filter(v -> status.equals(v.proposal().status())).count();
+    }
+
+    /** 자연어 수정 작업의 리포트 — 의도의 {@code mode} 가 {@code nl} 일 때만. */
+    static KnowledgeEditWorkflow.Report parseEditReport(ChangeJobRepository.Job job) {
+        if (job.intentJson() == null || !job.intentJson().contains("\"nl\"")) return null;
+        if (job.summaryJson() == null || job.summaryJson().isBlank()) return null;
+        try {
+            return MAPPER.readValue(job.summaryJson(), KnowledgeEditWorkflow.Report.class);
+        } catch (RuntimeException e) {
+            log.warn("[KNOWLEDGE-EDIT] 리포트를 읽지 못했다 job={}: {}", job.id(), e.getMessage());
+            return null;
+        }
     }
 
     static MaintenanceWorkflow.Report parse(ChangeJobRepository.Job job) {

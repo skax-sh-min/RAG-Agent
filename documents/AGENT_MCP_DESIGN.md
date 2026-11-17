@@ -960,7 +960,7 @@ classDiagram
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b 구현(2026-11-17, 종단 확인·실제 MCP 클라이언트 확인 남음) · 6c·6d 설계(§10.12).
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 미실시** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 설계(§10.12).
 
 ### Phase 0. 선결 결함과 검색 기준선
 
@@ -1242,7 +1242,9 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 >
 > **구현: 6a (2026-11-17)** — V16 · 관리자 고치기·빼기(`ChangeApplyService.editProposal`/`withdrawProposal`, `fragments/change-proposal-card.html`) · 줄 구간 MD 되쓰기(`MarkdownWriteBack.applyEdits`) · `applyChunkDelete` · `applyChunkEdit` 의 `image_paths` 동기화 · 감사 로그 `change.*`. 설계와 다른 곳: 청크 삭제의 MD 되쓰기는 줄 비교가 아니라 본문 덩어리 찾기이고(PITFALLS "자연어 지식 수정 6a"), 겹침 짝의 해시 사전 대조는 짝이 있는 수정안만 한다.
 >
-> **구현: 6b (2026-11-17)** — `AnchoredEdit`(작업 넷, G1·G2·G5·G6·G7) · `ChangeProposalService.proposeExternal`/`jobSummary` · `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`, 모두 ADMIN) · `getChunkContext` 출력에 `contentHash`·`heading`·`chunkContext`. 설계와 다른 곳: 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 G3·G4·G10(지시문이 있어야 하는 가드)을 걸지 않는다 · `newText` 는 크기 상한이 2만 자(G5 의 `revise` 30% 대신). 수정안을 만드는 앱 안 워크플로(6c)는 아직 없다.
+> **구현: 6b (2026-11-17)** — `AnchoredEdit`(작업 넷, G1·G2·G5·G6·G7) · `ChangeProposalService.proposeExternal`/`jobSummary` · `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`, 모두 ADMIN) · `getChunkContext` 출력에 `contentHash`·`heading`·`chunkContext`. 설계와 다른 곳: 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 G3·G4·G10(지시문이 있어야 하는 가드)을 걸지 않는다 · `newText` 는 크기 상한이 2만 자(G5 의 `revise` 30% 대신).
+>
+> **구현: 6c (2026-11-17)** — `EditIntent`(해석·근거 검사) · `EditGuards`(G3·G4·G10) · `KnowledgeEditWorkflow`(①③④⑤⑥⑦⑧⑩, `proposeForChunks`) · `/admin/change-jobs` 의 유형 선택·자연어 리포트·추가 적용 후보 · 채팅 되묻기(`ToolDispatchService.askNaturalLanguage`, `Pending` 에 해석 저장) · `requestDocumentChange` 의 자연어·`type` 인자. **설계와 다른 곳**: ① **사전 평가 없이 구현했다**(사용자 요청 — 판단표로 범위를 줄이지 않고 네 유형 모두 열려 있다. `KnowledgeEditEvaluationTest` 는 아직 없다) ② 청크 삭제 승격은 남은 본문 **10자 미만**(설계 40자 — G3 을 지나 남은 무관한 문장까지 지우게 되어 줄였다) ③ 겹침 짝(⑨)은 만들지 않았다(기본 `chunk_overlap=0`) ④ `revise` 의 G5(바뀐 글자 30%)는 걸지 않았다 — G3·G4 와 `AnchoredEdit` 의 바꾸기 2,000자 상한만 ⑤ 지우기 요청에서 일부 작업이 버려져도 남은 작업으로 수정안을 만든다(외부 제안과 달리 — 사람이 검토하고 리포트에 사유가 남는다) ⑥ 의도 해석의 `unclear` 는 작업 실패로 끝난다.
 
 **왜 하는가.** 지식 오류를 고치려면 지금 운영자가 일곱 단계를 손으로 한다 — 관련 청크 검색 → 내용 확인 → 대상 선정 → 수정 → 저장 → 임베딩 재생성 → 인덱스 갱신. 유지보수 워크플로(§5.5)가 이 중 대부분을 자동으로 하지만 **글자 치환(A → B)만** 받는다. "A 기능은 더 이상 사용되지 않음", "B 기능에 대한 내용을 삭제", "B 에 C 와 같은 주의 사항 추가", "이 문단의 설명을 고쳐" 같은 지시는 치환으로 표현되지 않는다. 의미 변경 옵션(`semantic`)은 치환 결과를 LLM 이 통째 다시 쓰는 방식이라 실측에서 9청크 중 1개만 가드를 통과했다(PITFALLS "의미 변경 수정안").
 

@@ -61,7 +61,8 @@ public class ToolPlanService {
      * 끈 채로 시작한다). 모델이 지어서 채워도 {@link ToolDispatchService} 가 읽지 않는다.
      */
     static final java.util.Map<String, Set<String>> CHAT_HIDDEN_PARAMS =
-            java.util.Map.of(ToolDispatchService.CHANGE_TOOL, Set.of("semantic", "caseVariants"));
+            java.util.Map.of(ToolDispatchService.CHANGE_TOOL,
+                    Set.of("semantic", "caseVariants", "type", "subject", "content", "replacement"));
 
     /** 이 턴의 선택 결과와 그 호출의 토큰 — 그래프 바깥의 호출이라 호출부가 상태에 더한다({@code QuestionCondenser.Condensed} 와 같은 이유). */
     public record Planned(ToolPlan plan, int inputTokens, int outputTokens, boolean called) {
@@ -135,7 +136,15 @@ public class ToolPlanService {
             Optional<PendingChangeConfirmations.Pending> confirmed = pending.resolve(userId, threadId, question);
             if (confirmed.isPresent()) {
                 PendingChangeConfirmations.Pending c = confirmed.get();
-                String args = MAPPER.createObjectNode().put("instruction", c.instruction()).put("from", c.from()).put("to", c.to()).toString();
+                tools.jackson.databind.node.ObjectNode node = MAPPER.createObjectNode().put("instruction", c.instruction());
+                if (c.from() != null) node.put("from", c.from());
+                if (c.to() != null) node.put("to", c.to());
+                // 자연어 수정은 되물을 때 보여 준 해석을 그대로 싣는다 — 확정 뒤 다시 해석하면 사용자가 "네" 한 것과 다른 일이 시작될 수 있다.
+                if (c.type() != null) node.put("type", c.type());
+                if (c.subject() != null) node.put("subject", c.subject());
+                if (c.content() != null) node.put("content", c.content());
+                if (c.replacement() != null) node.put("replacement", c.replacement());
+                String args = node.toString();
                 log.info("[TOOL-PLAN] 유지보수 되묻기 확정 user={} thread={}", userId, threadId);
                 return new Planned(new ToolPlan(ToolDispatchService.CHANGE_TOOL, args, true), 0, 0, false);
             }

@@ -79,6 +79,11 @@ public class ChangeJobRepository {
         return id;
     }
 
+    /** 해석된 의도를 남긴다(V16) — 자연어 지식 수정 작업이 해석을 마친 뒤 한 번. */
+    public void setIntent(long id, String intentJson) {
+        jdbc.update("UPDATE change_job SET intent_json = ?, updated_at = ? WHERE id = ?", intentJson, DbTimestamp.now(), id);
+    }
+
     /** 끝난 작업의 리포트를 저장한다 — {@code running} 인 작업만 바꾼다(재기동이 이미 {@code interrupted} 로 돌린 것을 되살리지 않는다). */
     public boolean finish(long id, String status, String summaryJson, String error) {
         return jdbc.update("""
