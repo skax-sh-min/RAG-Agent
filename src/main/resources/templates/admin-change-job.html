@@ -72,18 +72,9 @@
                     </form>
                 </div>
             </div>
-            <div class="card mb-2" th:each="v : ${d.views}">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><span class="text-muted small" th:text="${v.proposal.chunkId}">id</span>
-                        <span class="badge ms-1" th:classappend="${v.proposal.kind == 'semantic'} ? 'bg-warning text-dark' : 'bg-light text-dark border'"
-                              th:text="#{'maint.kind.' + ${v.proposal.kind}}">literal</span></span>
-                    <span class="badge bg-secondary" th:text="#{'maint.status.' + ${v.proposal.status}}">pending</span>
-                </div>
-                <div class="card-body">
-                    <pre class="small mb-0" style="white-space:pre-wrap" th:text="${v.diff}">diff</pre>
-                    <p class="small text-muted mt-2 mb-0" th:if="${v.tooLarge}" th:text="#{maint.diff.too-large}">too large</p>
-                </div>
-            </div>
+            <th:block th:each="v : ${d.views}">
+                <div th:replace="~{fragments/change-proposal-card :: card}"></div>
+            </th:block>
         </div>
     </div>
 </section>

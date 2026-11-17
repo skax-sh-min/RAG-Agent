@@ -69,6 +69,50 @@ class AdminServiceApplyChunkEditTest {
     }
 
     @Test
+    @DisplayName("본문에서 그림 마커를 지우면 image_paths 에서도 빠진다 — 화면 편집과 같은 규칙(AGENT_MCP_DESIGN §10.8)")
+    void syncsImagePathsWithTheMarkers() {
+        Map<String, String> meta = new HashMap<>();
+        meta.put(MetaKey.DOC_ID, "d1");
+        meta.put(MetaKey.VERSION, "latest");
+        meta.put(MetaKey.IMAGE_PATHS, "images/a/1.png,images/a/2.png,images/scan/9.png");
+        String before = "설명\n[이미지: images/a/1.png]\n본문\n[이미지: images/a/2.png]";
+        doReturn(new AdminService.ChunkRow("c1", before, before, meta)).when(svc).getChunk("latest", "c1");
+
+        AdminService.ApplyOutcome out = svc.applyChunkEdit("latest", "c1", "설명\n[이미지: images/a/1.png]\n본문", Map.of(),
+                TextHash.sha256(before));
+
+        assertThat(out).isEqualTo(AdminService.ApplyOutcome.APPLIED);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> docs = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(anyString(), eq("latest"), docs.capture());
+        // 지운 마커의 그림만 빠지고, 본문에 마커가 없던 그림(스캔 PDF 처럼 메타데이터에만 있는 것)은 남는다.
+        assertThat(docs.getValue().get(0).getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("images/a/1.png,images/scan/9.png");
+    }
+
+    @Test
+    @DisplayName("청크 삭제 적용 — 해시가 맞을 때만 deleteChunk, 다르면 STALE 이고 아무것도 지우지 않는다")
+    void appliesChunkDeleteOnlyWhenTheHashMatches() {
+        chunk("PostgreSQL 에 대한 설명", null);
+        doReturn(new AdminService.DeleteResult("d1", 3)).when(svc).deleteChunk("latest", "c1");
+
+        assertThat(svc.applyChunkDelete("latest", "c1", "다른 해시")).isEqualTo(AdminService.ApplyOutcome.STALE);
+        verify(svc, never()).deleteChunk(anyString(), anyString());
+
+        assertThat(svc.applyChunkDelete("latest", "c1", TextHash.sha256("PostgreSQL 에 대한 설명")))
+                .isEqualTo(AdminService.ApplyOutcome.APPLIED);
+        verify(svc).deleteChunk("latest", "c1");
+    }
+
+    @Test
+    @DisplayName("큐레이션 청크는 지우지 않는다 — CURATED")
+    void neverDeletesCuratedChunks() {
+        chunk("Q&A 본문", "curated_qa");
+
+        assertThat(svc.applyChunkDelete("latest", "c1", TextHash.sha256("Q&A 본문"))).isEqualTo(AdminService.ApplyOutcome.CURATED);
+        verify(svc, never()).deleteChunk(anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("성공 — 새 본문·바뀐 맥락/키워드로 임베딩·저장하고 FTS 를 갈고 재사용 표시를 갱신한다")
     void appliesInPlace() {
         chunk("PostgreSQL 에 접속한다.", null);

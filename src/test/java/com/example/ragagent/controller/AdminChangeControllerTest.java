@@ -86,6 +86,40 @@ class AdminChangeControllerTest {
     }
 
     @Test
+    @DisplayName("고치기 — 관리자·CSRF 만, 거절되면 사유와 입력값을 담은 카드를 200 으로 돌려준다(입력이 사라지지 않게)")
+    void editReturnsTheCardWithTheReason() throws Exception {
+        when(jobs.find(5)).thenReturn(Optional.of(job(5, ChangeJobRepository.KIND_MAINTENANCE, "done", null)));
+        when(proposals.find(1)).thenReturn(Optional.of(proposal()));
+        when(applyService.editProposal(5, 1, "Oracle <b>19c</b>", "root")).thenReturn("이미지 마커가 바뀜 — 그대로 두어야 합니다");
+
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/edit").with(user(USER)).with(csrf()).param("afterText", "x"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/edit").with(user(ADMIN)).param("afterText", "x"))
+                .andExpect(status().isForbidden());   // CSRF 없음
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/edit").with(user(ADMIN)).with(csrf()).param("afterText", "Oracle <b>19c</b>"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("id=\"proposal-1\"")))
+                .andExpect(content().string(containsString("이미지 마커가 바뀜")))
+                .andExpect(content().string(containsString("Oracle &lt;b&gt;19c&lt;/b&gt;")))   // 입력값은 이스케이프된다
+                .andExpect(content().string(not(containsString("<b>19c</b>"))));
+        verify(applyService, never()).editProposal(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), eq("x"), any());
+    }
+
+    @Test
+    @DisplayName("빼기 — 204 와 HX-Refresh, 유지보수 작업이 아니면 404")
+    void withdrawRefreshesThePage() throws Exception {
+        when(jobs.find(5)).thenReturn(Optional.of(job(5, ChangeJobRepository.KIND_MAINTENANCE, "done", null)));
+        when(jobs.find(6)).thenReturn(Optional.of(job(6, ChangeJobRepository.KIND_IMPACT, "done", null)));
+
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/withdraw").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().string("HX-Refresh", "true"));
+        verify(applyService).withdrawProposal(5, 1, "root");
+        mvc.perform(post("/admin/change-jobs/6/proposals/1/withdraw").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     @DisplayName("요청은 CSRF 토큰이 있어야 하고, 성공하면 작업 화면으로 넘어간다")
     void requestRequiresCsrfAndRedirects() throws Exception {
         when(workflow.start(eq("root"), eq("PostgreSQL 을 Oracle 로"), eq("PostgreSQL"), eq("Oracle"), eq(false), eq(false), any()))

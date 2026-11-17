@@ -58,7 +58,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 
 ### 2.1 운영 테이블의 스키마는 Flyway 에만 있다 — 검색 색인은 예외
 
-- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b) · `V14__agent_tool_call.sql`(`agent_tool_call`, PLAN §6.33 5단계) · `V15__history_question.sql`(`conversation_turns.history_question` + 옛 `clarified_question` 의 원문 사본을 빈 문자열로). 저장소 클래스는 DDL 을 실행하지 않습니다.
+- 운영 테이블(§1 표에서 검색 색인·벡터를 뺀 전부)의 스키마는 Flyway 마이그레이션에만 있습니다: `V1__baseline.sql`(대화·이미지 캐시·사용량·대화 메타의 **처음 모양**) · `V2__users.sql`(계정) · `V3__thread_tags.sql`(`thread_meta.tags`) · **`V4__Consolidate_runtime_schema`**(나머지 테이블 전부와 그 뒤에 생긴 컬럼·인덱스) · `V5__embedding_usage_single_name.sql`(스키마 변경 없음 — `llm_usage` 의 `embed:<모델>` 행을 날짜별로 합쳐 `embed` 로, §6.1) · `V6__clarified_question.sql`(`conversation_turns.clarified_question`, §4.1) · `V7__purge_orphan_turn_refs.sql`(스키마 변경 없음 — 턴이 지워졌는데 남은 `turn_source_ref`·`turn_image_ref` 행을 한 번 지운다) · `V8__thread_follow_up.sql`(`thread_follow_up`, §4.6) · **`V9__Local_timestamps_to_utc`**(Java, 스키마 변경 없음 — 서버 로컬 시각이던 `thread_meta`·`curated_qa`·`curated_submission`·`chunk_report`의 시각을 UTC로, §2.4. JVM 의 시간대가 필요해 SQL 이 아니다) · `V10__llm_provider_override.sql`(§6.3.1) · `V11__turn_exclude_history.sql`(`conversation_turns.exclude_history`, PLAN §6.31) · `V12__change_job.sql`(`change_job`, PLAN §6.33 4a) · `V13__change_proposal.sql`(`change_proposal`, PLAN §6.33 4b) · `V14__agent_tool_call.sql`(`agent_tool_call`, PLAN §6.33 5단계) · `V15__history_question.sql`(`conversation_turns.history_question` + 옛 `clarified_question` 의 원문 사본을 빈 문자열로) · `V16__knowledge_edit.sql`(`change_job.intent_json` + `change_proposal` 의 편집·검토 칸 일곱, AGENT_MCP_DESIGN §10.11). 저장소 클래스는 DDL 을 실행하지 않습니다.
 - V4 는 SQL 파일이 아니라 **Java 마이그레이션**(`src/main/java/db/migration/`)입니다. V4 이전에는 저장소들이 기동할 때마다 `CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER TABLE … ADD COLUMN` 으로 스키마를 만들어서, 옛 DB 가 여러 모양일 수 있습니다(옛 버전 앱이 만들어 최근 컬럼이 빠진 파일 등). SQLite 에는 `ADD COLUMN IF NOT EXISTS` 가 없어 V4 가 테이블·컬럼 존재를 확인하며 빠진 것만 만들고, 어느 상태에서 출발해도 같은 결과가 됩니다(`FlywaySchemaConvergenceTest`). 옛 DDL 은 `src/test/resources/db/pre-v4-runtime-ddl.sql` 에 기록으로 남아 있습니다.
 - 벡터 테이블은 `SqliteVecSchemaInitializer`가 `ApplicationReadyEvent` 때 만듭니다(벡터 차원이 설정값이라 정적 SQL로 쓸 수 없음). FTS 테이블은 `KeywordSearchRepository`가 만듭니다. 둘 다 다시 만들 수 있는 색인이라 Flyway 밖에 둡니다. `vec_embeddings` 는 `CREATE … IF NOT EXISTS` 라 **이미 있는 테이블의 차원은 바꾸지 못하므로**, 기동 때 `sqlite_master` 의 `FLOAT[N]` 을 설정(`app.embedding.dimensions`)과 대조해 다르면 ERROR 로 크게 알립니다(앱은 뜹니다 — 고치는 도구가 `/admin` 의 「임베딩 재생성」 카드에 있어서 기동을 막으면 닿을 수 없습니다). 그 카드(`EmbeddingRebuildService`)가 `vec_embeddings` 만 지우고 새 차원으로 다시 만든 뒤 청크를 다시 임베딩합니다. 절차는 [OPERATOR_MANUAL §7.3](OPERATOR_MANUAL.md#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec) 입니다.
 - 테이블을 **다시 짓는** 경우가 둘 있습니다: `curated_qa`(좋아요 시절 옛 스키마면 V4 가 `source_turn_id`를 nullable로 바꾸려고 `curated_qa_new`로 복사 후 이름 변경), `chunk_fts`(옛 스키마면 trigram 토크나이저·`doc_tags`·`chapter`를 갖춘 테이블로 재생성, rowid 보존).
@@ -366,6 +366,7 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `status` | TEXT | NOT NULL | `running` / `done` / `failed` / `interrupted`(기동 때 `running` 으로 남은 작업을 `markRunningInterrupted` 가 바꾼다) |
 | `summary_json` | TEXT | | 리포트 — 끝날 때 한 번 쓴다(판정한 청크와 **검증된** 인용, 판정하지 못한 나머지, 한계 `tooShort`·`truncated`·`unjudged`, 유지보수는 수정안 수·큐레이션 수동 처리 수·`caseVariantChunks`·`semanticSkipped`). 읽는 곳은 `LenientJson.MAPPER` — 리포트에 필드가 늘어도 옛 작업이 읽혀야 한다 |
 | `error` | TEXT | | 실패 사유 |
+| `intent_json` | TEXT | | (V16) 자연어 지식 수정의 해석된 의도 `{mode, type, subject, content, replacement}` — 재현·감사용. 글자 치환 작업과 V16 이전 작업은 NULL. 아직 쓰는 코드는 없다(AGENT_MCP_DESIGN §10.6, 6c) |
 | `created_at`, `updated_at` | TEXT | NOT NULL | UTC |
 
 인덱스: `idx_change_job_user(requested_by, created_at)`
@@ -380,15 +381,20 @@ DB 파일은 **하나**입니다 — `{DATA_DIR}/memory.db` (SQLite, WAL, 커넥
 | `job_id` | INTEGER | NOT NULL | 만든 `change_job` |
 | `doc_id`, `filename` | TEXT | NOT NULL | 청크가 속한 문서 — 승인·거절·적용이 문서 단위(일부 청크만 고치면 이웃 청크와 겹침 구간이 어긋난다) |
 | `chunk_id` | TEXT | NOT NULL | 벡터 스토어 청크 id (제자리 수정이라 유지된다) |
-| `kind` | TEXT | NOT NULL | `literal`(결정적 치환) / `semantic`(LLM 의미 변경 제안) |
-| `before_text`, `after_text` | TEXT | NOT NULL | 청크 본문 전·후 |
+| `kind` | TEXT | NOT NULL | `literal`(결정적 치환) / `semantic`(LLM 의미 변경 제안) / `edit`(원문 인용에 고정된 편집, V16) / `delete_chunk`(청크 통째 삭제 — `after_text` 는 빈 문자열, V16) |
+| `before_text`, `after_text` | TEXT | NOT NULL | 청크 본문 전·후. `after_text` 는 관리자가 고치면(`pending` 동안만) 고친 본문으로 바뀐다 |
 | `before_hash` | TEXT | NOT NULL | `before_text` 의 SHA-256 — 적용 때 살아 있는 청크와 대조해 다르면 `stale` |
 | `before_context`, `after_context`, `before_keywords`, `after_keywords` | TEXT | | `chunk_context`·`excerpt_keywords` 전·후 — 검색 텍스트가 `chunk_context + 본문` 이라 본문만 바꾸면 옛 말로 계속 찾힌다 |
 | `rationale` | TEXT | NOT NULL, `''` | 사유(의미 변경이면 모델의 이유) |
-| `status` | TEXT | NOT NULL, `'pending'` | `pending` / `approved` / `rejected` / `applied` / `stale` / `failed`. 전이는 compare-and-set 뿐(`ChangeProposalRepository.transition`) |
-| `md_status` | TEXT | | 변환 MD 되쓰기 결과(적용 때 문서 단위로 채움) — `applied` / `MD_PARTIAL` / `MD_CONFLICT` / `MD_MISSING` |
-| `reviewed_by`, `reviewed_at`, `applied_at` | TEXT | | 승인·거절한 관리자와 시각 · 적용 시각 |
+| `status` | TEXT | NOT NULL, `'pending'` | `pending` / `approved` / `rejected` / `applied` / `stale` / `failed` / `withdrawn`(관리자가 승인 전에 뺌, V16). 전이는 compare-and-set 뿐(`ChangeProposalRepository.transition`·`withdraw`) |
+| `md_status` | TEXT | | 변환 MD 되쓰기 결과(적용 때 문서 단위로 채움) — `applied` / `MD_CONFLICT` / `MD_MISSING` / `MD_PARTIAL`(V16 이전 작업에만 남는다 — 이제 의미 변경도 줄 구간 대조로 되쓴다) |
+| `reviewed_by`, `reviewed_at`, `applied_at` | TEXT | | 승인·거절·뺀 관리자와 시각 · 적용 시각 |
 | `created_at` | TEXT | NOT NULL | UTC |
+| `ops_json` | TEXT | | (V16) 수정안을 만든 앵커 편집 목록 — 표시·감사용. 적용과 MD 되쓰기는 `before_text`/`after_text` 로 한다 |
+| `target_role`, `evidence_quote` | TEXT | | (V16) 판정 역할(`describes`·`mentions`)과 그 근거 인용 |
+| `group_key` | TEXT | | (V16) 겹침 짝 — 같은 작업의 같은 값은 함께 빠지고, 적용 때 하나라도 낡았으면 함께 `stale` |
+| `machine_after_text` | TEXT | | (V16) 관리자가 처음 고치기 전의 기계 수정안 — 한 번만 쓴다. NULL 이면 고친 적 없음 |
+| `edited_by`, `edited_at` | TEXT | | (V16) 마지막으로 고친 관리자와 시각(UTC) |
 
 인덱스: `idx_change_proposal_job(job_id, doc_id)`, `idx_change_proposal_chunk(chunk_id)`
 

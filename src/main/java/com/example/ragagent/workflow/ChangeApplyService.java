@@ -13,9 +13,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 승인된 수정안을 <b>문서 단위로</b> 코퍼스에 적용한다(§6.33 4b-2) — 이 앱에서 유지보수 워크플로가 청크·벡터·FTS·변환 MD 를 쓰는 <b>유일한</b> 자리다.
@@ -39,8 +43,14 @@ public class ChangeApplyService {
     /** 저장된 리포트 blob 을 읽는다 — 리포트에 필드가 늘어도 이미 만들어진 작업의 옛 리포트가 읽혀야 한다(Jackson 3 는 빠진 기본형 필드를 오류로 본다). */
     private static final tools.jackson.databind.ObjectMapper MAPPER = com.example.ragagent.llm.LenientJson.MAPPER;
 
-    /** 글자 치환은 변환 MD 에 반영됐지만 이 문서의 의미 변경 수정안은 청크에만 있다(MD 에 되쓸 수 없다). */
+    /**
+     * 글자 치환은 변환 MD 에 반영됐지만 이 문서의 의미 변경 수정안은 청크에만 있다 — <b>옛 작업의 값으로만 남는다.</b> 6a(AGENT_MCP_DESIGN §10.8)
+     * 부터 의미 변경은 줄 구간 대조로 MD 에 되쓰므로 새로 이 값을 쓰지 않는다(화면은 옛 행을 그리려고 문구를 유지한다).
+     */
     public static final String MD_PARTIAL = "MD_PARTIAL";
+
+    /** 관리자가 고친 본문의 길이 상한 — 청크 하나의 크기를 크게 넘는 붙여넣기를 막는다. */
+    static final int MAX_EDITED_CHARS = 20_000;
 
     /** 한 문서의 적용 결과. {@code error} 가 있으면 아무것도 적용하지 않았다(백업 실패·잠금 충돌 등). */
     public record DocResult(String docId, int applied, int stale, int failed, String mdStatus, String error) {
@@ -56,6 +66,13 @@ public class ChangeApplyService {
     private final AppProperties props;
     /** 문서 단위 쓰기 잠금 — 같은 문서의 {@code ↺ 재인덱싱}({@code DocumentIndexer}) 과 공유한다. */
     private final DocumentWriteLocks writeLocks;
+    /** 감사 로그 — 세터 주입(생성자가 둘이고 테스트가 직접 부른다). 없으면 기록하지 않는다. */
+    private com.example.ragagent.audit.AuditLogger auditLogger;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditLogger(com.example.ragagent.audit.AuditLogger auditLogger) {
+        this.auditLogger = auditLogger;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ChangeApplyService(ChangeProposalRepository proposals, ChangeJobRepository jobs, AdminService adminService,
@@ -83,13 +100,25 @@ public class ChangeApplyService {
         int approved = proposals.transitionDocument(jobId, docId, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer);
         boolean leftover = !proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED).isEmpty();
         if (approved == 0 && !leftover) return 0;
+        auditDocument("change.approve", jobId, docId, reviewer, approved);
         Thread.ofVirtual().name("change-apply-" + jobId).start(MdcPropagation.wrap(() -> applyApproved(jobId, docId, reviewer)));
         return approved;
     }
 
     /** 한 문서의 {@code pending} 수정안을 모두 거절한다(코퍼스는 그대로). */
     public int reject(long jobId, String docId, String reviewer) {
-        return proposals.transitionDocument(jobId, docId, ChangeProposalRepository.PENDING, ChangeProposalRepository.REJECTED, reviewer);
+        int n = proposals.transitionDocument(jobId, docId, ChangeProposalRepository.PENDING, ChangeProposalRepository.REJECTED, reviewer);
+        if (n > 0) auditDocument("change.reject", jobId, docId, reviewer, n);
+        return n;
+    }
+
+    private void auditDocument(String action, long jobId, String docId, String reviewer, int count) {
+        if (auditLogger == null) return;
+        try {
+            auditLogger.log(action, docId, Map.of("job", jobId, "reviewer", String.valueOf(reviewer), "count", count));
+        } catch (Exception e) {
+            log.debug("[APPLY] 감사 기록 실패: {}", e.getMessage());
+        }
     }
 
     /** 승인된 수정안을 적용한다(동기) — {@link #approveAndApply} 의 몸체이자 테스트의 입구. 어떤 예외도 던지지 않고 결과에 담는다. */
@@ -101,9 +130,13 @@ public class ChangeApplyService {
             List<ChangeProposalRepository.Proposal> todo = proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED);
             if (todo.isEmpty()) return DocResult.error(docId, "적용할 승인된 수정안이 없습니다");
             MaintenanceWorkflow.Report report = report(jobId);
-            if (report == null) return DocResult.error(docId, "작업 리포트를 읽지 못했습니다");
-            // 수정안을 만든 때와 같은 규칙(대소문자 변형 포함 여부까지) — 제목·남은 말 검사·MD 되쓰기가 모두 이것을 쓴다.
-            TermReplacement rule = new TermReplacement(report.from(), report.to(), report.caseVariants());
+            // 수정안을 만든 때와 같은 치환 규칙(대소문자 변형 포함 여부까지) — 제목·남은 말 검사·발생 수 대조 MD 되쓰기가 이것을 쓴다.
+            // 치환 규칙이 없는 작업(자연어 수정·외부 제안)도 있으므로 없을 수 있다.
+            TermReplacement rule = report == null || report.from() == null || report.to() == null ? null
+                    : new TermReplacement(report.from(), report.to(), report.caseVariants());
+            // 발생 수 대조는 "기계가 낸 글자 치환"에만 맞다. 의미 변경·앵커 편집·관리자가 고친 것·청크 삭제가 하나라도 있으면 줄 구간 대조로 되쓴다.
+            boolean literalOnly = todo.stream().allMatch(p -> ChangeProposalRepository.KIND_LITERAL.equals(p.kind()) && !p.edited());
+            if (literalOnly && rule == null) return DocResult.error(docId, "작업 리포트를 읽지 못했습니다");
 
             DatabaseBackupService.RunResult backup = backups.run("pre-change-" + jobId);
             if (!backup.ok()) {
@@ -113,28 +146,23 @@ public class ChangeApplyService {
             }
 
             String collection = adminService.collectionFor(MaintenanceWorkflow.VERSION);
+            // 겹침 짝은 쓰기 전에 해시를 먼저 대조한다 — 한쪽만 적용되면 겹침 구간이 어긋나므로 하나라도 낡았으면 짝 전체를 쓰지 않는다.
+            Set<String> staleGroups = staleGroups(collection, todo);
             int applied = 0, stale = 0, failed = 0, appliedOccurrences = 0;
+            List<MarkdownWriteBack.Edit> appliedEdits = new ArrayList<>();
             for (ChangeProposalRepository.Proposal p : todo) {
-                Map<String, String> metaChanges = new HashMap<>();
-                if (p.afterContext() != null) metaChanges.put(MetaKey.CHUNK_CONTEXT, p.afterContext());
-                if (p.afterKeywords() != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, p.afterKeywords());
-                // 섹션 제목에도 같은 치환 — 본문에서 바꾼 말이 제목에 있으면 제목만 옛 이름으로 남는다(종단 확인에서 드러난 것).
-                String heading = currentHeading(collection, p.chunkId());
-                if (heading != null && rule.matches(heading)) {
-                    metaChanges.put(MetaKey.HEADING, rule.apply(heading));
-                }
                 AdminService.ApplyOutcome outcome;
-                try {
-                    outcome = adminService.applyChunkEdit(collection, p.chunkId(), p.afterText(), metaChanges, p.beforeHash());
-                } catch (Exception e) {
-                    log.warn("[APPLY] 청크 적용 중 예외 chunk={}: {}", p.chunkId(), e.getMessage());
-                    outcome = AdminService.ApplyOutcome.EMBED_FAILED;
+                if (p.groupKey() != null && staleGroups.contains(p.groupKey())) {
+                    outcome = AdminService.ApplyOutcome.STALE;
+                } else {
+                    outcome = applyOne(collection, p, rule);
                 }
                 switch (outcome) {
                     case APPLIED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.APPLIED, null);
                         applied++;
-                        appliedOccurrences += rule.count(p.beforeText());
+                        if (rule != null) appliedOccurrences += rule.count(p.beforeText());
+                        appliedEdits.add(new MarkdownWriteBack.Edit(p.beforeText(), p.afterText()));
                     }
                     case STALE, NOT_FOUND, CURATED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.STALE, null);
@@ -145,19 +173,21 @@ public class ChangeApplyService {
                         failed++;
                     }
                 }
+                audit("change.apply", p, Map.of("result", outcome.name(), "reviewer", String.valueOf(reviewer)));
             }
 
             String md = null;
             if (applied > 0) {
-                boolean clean = adminService.getAllChunks(collection, docId).stream()
-                        .noneMatch(c -> c.fullText() != null && rule.matches(c.fullText()));
-                MarkdownWriteBack.Result r = MarkdownWriteBack.apply(Path.of(props.dataDir()).resolve("converted"),
-                        docId, rule, appliedOccurrences, clean);
+                Path convertedDir = Path.of(props.dataDir()).resolve("converted");
+                MarkdownWriteBack.Result r;
+                if (literalOnly) {
+                    boolean clean = adminService.getAllChunks(collection, docId).stream()
+                            .noneMatch(c -> c.fullText() != null && rule.matches(c.fullText()));
+                    r = MarkdownWriteBack.apply(convertedDir, docId, rule, appliedOccurrences, clean);
+                } else {
+                    r = MarkdownWriteBack.applyEdits(convertedDir, docId, appliedEdits);
+                }
                 md = r.status();
-                // 의미 변경은 변환 MD 에 되쓸 수 없다 — 글자 치환만 MD 에 들어갔으니, 그 문서의 의미 변경은 재인덱싱하면 되돌아간다.
-                boolean anySemanticApplied = todo.stream().anyMatch(p -> ChangeProposalRepository.KIND_SEMANTIC.equals(p.kind())
-                        && proposals.find(p.id()).map(x -> ChangeProposalRepository.APPLIED.equals(x.status())).orElse(false));
-                if (anySemanticApplied && MarkdownWriteBack.APPLIED.equals(md)) md = MD_PARTIAL;
                 proposals.setMdStatus(jobId, docId, md);
                 log.info("[APPLY] 완료 job={} doc={} 적용={} stale={} 실패={} md={} ({})", jobId, docId, applied, stale, failed, md, r.detail());
             } else {
@@ -169,6 +199,93 @@ public class ChangeApplyService {
             return DocResult.error(docId, String.valueOf(e.getMessage()));
         } finally {
             lease.close();
+        }
+    }
+
+    /** 수정안 하나를 쓴다 — 청크 삭제는 {@link AdminService#applyChunkDelete}, 나머지는 {@link AdminService#applyChunkEdit}. 예외는 실패로 바꾼다. */
+    private AdminService.ApplyOutcome applyOne(String collection, ChangeProposalRepository.Proposal p, TermReplacement rule) {
+        try {
+            if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) {
+                return adminService.applyChunkDelete(collection, p.chunkId(), p.beforeHash());
+            }
+            Map<String, String> metaChanges = new HashMap<>();
+            if (p.afterContext() != null) metaChanges.put(MetaKey.CHUNK_CONTEXT, p.afterContext());
+            if (p.afterKeywords() != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, p.afterKeywords());
+            // 섹션 제목에도 같은 치환 — 본문에서 바꾼 말이 제목에 있으면 제목만 옛 이름으로 남는다(종단 확인에서 드러난 것).
+            if (rule != null) {
+                String heading = currentHeading(collection, p.chunkId());
+                if (heading != null && rule.matches(heading)) {
+                    metaChanges.put(MetaKey.HEADING, rule.apply(heading));
+                }
+            }
+            return adminService.applyChunkEdit(collection, p.chunkId(), p.afterText(), metaChanges, p.beforeHash());
+        } catch (Exception e) {
+            log.warn("[APPLY] 청크 적용 중 예외 chunk={}: {}", p.chunkId(), e.getMessage());
+            return AdminService.ApplyOutcome.EMBED_FAILED;
+        }
+    }
+
+    /** 겹침 짝 중 하나라도 현재 본문이 수정안의 수정 전과 다른(또는 없는) 짝 — 그 짝은 전부 쓰지 않는다. */
+    private Set<String> staleGroups(String collection, List<ChangeProposalRepository.Proposal> todo) {
+        Set<String> out = new HashSet<>();
+        for (ChangeProposalRepository.Proposal p : todo) {
+            if (p.groupKey() == null || out.contains(p.groupKey())) continue;
+            AdminService.ChunkRow row;
+            try {
+                row = adminService.getChunk(collection, p.chunkId());
+            } catch (Exception e) {
+                row = null;
+            }
+            if (row == null || !com.example.ragagent.model.TextHash.sha256(row.fullText()).equals(p.beforeHash())) out.add(p.groupKey());
+        }
+        return out;
+    }
+
+    /**
+     * 관리자가 수정안 본문을 고친다(AGENT_MCP_DESIGN §10.7, G9) — {@code pending} 인 동안만. 사람의 판단을 모델용 가드로 막지 않고, 그림·페이지 마커와
+     * 코드 펜스 불변식(G2·G6)만 다시 본다. 청크 삭제 수정안은 고칠 본문이 없다(빼거나 승인한다).
+     *
+     * @return 거절 사유, 통과해 저장했으면 {@code null}
+     */
+    public String editProposal(long jobId, long proposalId, String newAfterText, String editor) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null) return "수정안을 찾지 못했습니다";
+        if (!ChangeProposalRepository.PENDING.equals(p.status())) return "검토 대기 중인 수정안만 고칠 수 있습니다";
+        if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) return "청크 삭제 수정안은 고칠 본문이 없습니다 — 빼거나 승인하세요";
+        String text = newAfterText == null ? "" : newAfterText.replace("\r\n", "\n");
+        if (text.isBlank()) return "본문이 비었습니다 — 청크를 지우려면 내용 삭제를 요청하세요";
+        if (text.length() > MAX_EDITED_CHARS) return "본문이 너무 깁니다(" + MAX_EDITED_CHARS + "자 이하)";
+        if (text.equals(p.beforeText())) return "수정 전과 같습니다 — 이 청크를 바꾸지 않으려면 '이 청크 빼기'를 누르세요";
+        String invariant = MaintenanceWorkflow.invariantViolation(p.beforeText(), text);
+        if (invariant != null) return invariant + " — 그림·페이지 마커와 코드 펜스는 그대로 두어야 합니다";
+        if (!proposals.editAfterText(proposalId, text, editor)) return "검토 대기 중인 수정안만 고칠 수 있습니다";
+        audit("change.edit", p, Map.of("editor", String.valueOf(editor)));
+        return null;
+    }
+
+    /** 관리자가 수정안을 뺀다(겹침 짝 포함). @return 뺀 수 — 0 이면 이미 처리됐거나 없는 수정안 */
+    public int withdrawProposal(long jobId, long proposalId, String reviewer) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null) return 0;
+        int n = proposals.withdraw(proposalId, reviewer);
+        if (n > 0) audit("change.withdraw", p, Map.of("reviewer", String.valueOf(reviewer), "count", n));
+        return n;
+    }
+
+    /** 감사 기록 — 본문은 남기지 않는다(before/after 는 {@code change_proposal} 에 있다). 기록 실패는 적용을 막지 않는다. */
+    private void audit(String action, ChangeProposalRepository.Proposal p, Map<String, Object> extra) {
+        if (auditLogger == null) return;
+        try {
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("job", p.jobId());
+            d.put("proposal", p.id());
+            d.put("doc", p.docId());
+            d.put("kind", p.kind());
+            d.put("edited", p.edited() || "change.edit".equals(action));
+            d.putAll(extra);
+            auditLogger.log(action, p.chunkId(), d);
+        } catch (Exception e) {
+            log.debug("[APPLY] 감사 기록 실패: {}", e.getMessage());
         }
     }
 

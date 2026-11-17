@@ -55,4 +55,48 @@ class ChangeProposalRepositoryTest {
         assertThat(p.reviewedBy()).isEqualTo("admin");
         assertThat(p.reviewedAt()).isNotBlank();
     }
+
+    @Test
+    @DisplayName("관리자 고치기 — pending 일 때만, 처음 기계 수정안은 한 번만 남는다(V16)")
+    void editKeepsTheMachineProposalOnce() {
+        repo.insertAll(List.of(proposal(1, "d1", "c1")));
+        long id = repo.listByJob(1).get(0).id();
+
+        assertThat(repo.editAfterText(id, "Oracle 을 사용", "admin")).isTrue();
+        assertThat(repo.editAfterText(id, "Oracle 을 사용한다", "admin2")).isTrue();
+
+        ChangeProposalRepository.Proposal p = repo.find(id).orElseThrow();
+        assertThat(p.afterText()).isEqualTo("Oracle 을 사용한다");
+        assertThat(p.machineAfterText()).isEqualTo("Oracle 사용");
+        assertThat(p.edited()).isTrue();
+        assertThat(p.editedBy()).isEqualTo("admin2");
+        assertThat(p.editedAt()).isNotBlank();
+
+        repo.transition(id, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "admin");
+        assertThat(repo.editAfterText(id, "늦은 편집", "admin")).isFalse();
+        assertThat(repo.find(id).orElseThrow().afterText()).isEqualTo("Oracle 을 사용한다");
+    }
+
+    @Test
+    @DisplayName("빼기 — 겹침 짝(group_key)은 함께, 다른 작업의 같은 키와 이미 처리된 것은 그대로")
+    void withdrawTakesTheOverlapPairTogether() {
+        repo.insertAll(List.of(
+                new ChangeProposalRepository.NewProposal(1, "d1", "d1.pdf", "c1", ChangeProposalRepository.KIND_EDIT,
+                        "a", "b", "h", null, null, null, null, "편집", "[]", "describes", "인용", "g1"),
+                new ChangeProposalRepository.NewProposal(1, "d1", "d1.pdf", "c2", ChangeProposalRepository.KIND_EDIT,
+                        "a", "b", "h", null, null, null, null, "편집", "[]", null, null, "g1"),
+                new ChangeProposalRepository.NewProposal(2, "d1", "d1.pdf", "c3", ChangeProposalRepository.KIND_EDIT,
+                        "a", "b", "h", null, null, null, null, "편집", "[]", null, null, "g1"),
+                proposal(1, "d1", "c4")));
+        List<ChangeProposalRepository.Proposal> job1 = repo.listByJob(1);
+        assertThat(job1.get(0).targetRole()).isEqualTo("describes");
+        assertThat(job1.get(0).evidenceQuote()).isEqualTo("인용");
+        assertThat(job1.get(0).opsJson()).isEqualTo("[]");
+
+        assertThat(repo.withdraw(job1.get(0).id(), "admin")).isEqualTo(2);
+        assertThat(repo.listByJob(1)).extracting(ChangeProposalRepository.Proposal::status)
+                .containsExactly(ChangeProposalRepository.WITHDRAWN, ChangeProposalRepository.WITHDRAWN, ChangeProposalRepository.PENDING);
+        assertThat(repo.listByJob(2).get(0).status()).isEqualTo(ChangeProposalRepository.PENDING);
+        assertThat(repo.withdraw(job1.get(0).id(), "admin")).isZero();   // 이미 뺐다
+    }
 }

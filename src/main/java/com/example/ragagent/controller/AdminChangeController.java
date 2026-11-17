@@ -105,6 +105,38 @@ public class AdminChangeController {
         return "redirect:/admin/change-jobs/" + id;
     }
 
+    /**
+     * 수정안 본문을 관리자가 고친다(AGENT_MCP_DESIGN §10.7) — {@code pending} 인 동안만, 그림·페이지 마커와 코드 펜스 불변식만 다시 본다. 응답은 그 수정안의
+     * 카드 조각이다. 거절되면 400 이 아니라 사유와 입력값을 담은 카드를 200 으로 돌려준다(400 은 화면에 토스트만 남고 입력이 사라진다).
+     */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/edit")
+    public String edit(@PathVariable long id, @PathVariable long pid, @RequestParam(defaultValue = "") String afterText, Model model) {
+        ChangeJobRepository.Job job = requireMaintenanceJob(id);
+        String error = applyService.editProposal(id, pid, afterText, currentUser.userId());
+        ChangeProposalRepository.Proposal p = proposals.find(pid).filter(x -> x.jobId() == id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        model.addAttribute("job", job);
+        model.addAttribute("v", view(p));
+        if (error != null) {
+            model.addAttribute("editError", error);
+            model.addAttribute("editText", afterText);
+        }
+        return "fragments/change-proposal-card :: card";
+    }
+
+    /** 수정안을 뺀다(겹침 짝 포함) — 문서의 대기 수가 바뀌므로 화면을 다시 읽게 한다. */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/withdraw")
+    public org.springframework.http.ResponseEntity<Void> withdraw(@PathVariable long id, @PathVariable long pid) {
+        requireMaintenanceJob(id);
+        applyService.withdrawProposal(id, pid, currentUser.userId());
+        return org.springframework.http.ResponseEntity.noContent().header("HX-Refresh", "true").build();
+    }
+
+    private static ProposalView view(ChangeProposalRepository.Proposal p) {
+        UnifiedDiffFormatter.Formatted f = UnifiedDiffFormatter.format(ChunkDiff.compare(p.beforeText(), p.afterText()));
+        return new ProposalView(p, f.text(), f.identical(), f.tooLarge());
+    }
+
     @GetMapping("/admin/change-jobs/{id}")
     public String page(@PathVariable long id, Model model) {
         fill(id, model);
@@ -127,8 +159,7 @@ public class AdminChangeController {
         ChangeJobRepository.Job job = requireMaintenanceJob(id);
         Map<String, List<ProposalView>> byDoc = new LinkedHashMap<>();
         for (ChangeProposalRepository.Proposal p : proposals.listByJob(id)) {
-            UnifiedDiffFormatter.Formatted f = UnifiedDiffFormatter.format(ChunkDiff.compare(p.beforeText(), p.afterText()));
-            byDoc.computeIfAbsent(p.docId(), k -> new ArrayList<>()).add(new ProposalView(p, f.text(), f.identical(), f.tooLarge()));
+            byDoc.computeIfAbsent(p.docId(), k -> new ArrayList<>()).add(view(p));
         }
         List<DocView> docs = new ArrayList<>();
         boolean inProgress = false;

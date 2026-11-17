@@ -226,6 +226,90 @@ class ChangeApplyServiceTest {
     }
 
     @Test
+    @DisplayName("관리자가 고친 수정안은 고친 본문으로 적용되고 MD 도 구간 대조로 그 본문을 따른다")
+    void editedProposalAppliesTheEditedText() throws IOException {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        long id = proposals.listByJob(jobId).get(0).id();
+        assertThat(service.editProposal(jobId, id, "Oracle 19c 사용", "root")).isNull();
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        Path md = Files.writeString(converted.resolve("d1.md"), "제목\nPostgreSQL 사용\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        verify(admin).applyChunkEdit(eq("latest"), eq("c0"), eq("Oracle 19c 사용"), any(), eq(TextHash.sha256("PostgreSQL 사용")));
+        assertThat(Files.readString(md)).isEqualTo("제목\nOracle 19c 사용\n");
+        assertThat(proposals.find(id).orElseThrow().machineAfterText()).isEqualTo("Oracle 사용");
+    }
+
+    @Test
+    @DisplayName("고치기는 마커를 깨거나 수정 전과 같거나 pending 이 아니면 거절하고 저장하지 않는다")
+    void editRejectsInvariantViolations() {
+        String before = "PostgreSQL 사용\n[이미지: images/a/1.png]";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                before, before.replace("PostgreSQL", "Oracle"), TextHash.sha256(before), null, null, null, null, "리터럴")));
+        long id = proposals.listByJob(jobId).get(0).id();
+
+        assertThat(service.editProposal(jobId, id, "Oracle 사용", "root")).contains("이미지 마커");
+        assertThat(service.editProposal(jobId, id, before, "root")).contains("수정 전과 같습니다");
+        assertThat(service.editProposal(jobId + 99, id, "x", "root")).isNotNull();   // 다른 작업 번호로는 못 고친다
+        assertThat(proposals.find(id).orElseThrow().edited()).isFalse();
+
+        approve("d1");
+        assertThat(service.editProposal(jobId, id, "Oracle 사용\n[이미지: images/a/1.png]\n추가", "root")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("청크 삭제 수정안은 applyChunkDelete 로 가고, MD 에서 그 구간이 사라진다")
+    void deleteChunkProposalDeletesTheChunkAndItsMdLines() throws IOException {
+        String body = "## B 기능\n\nB 를 쓰는 방법.";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0",
+                ChangeProposalRepository.KIND_DELETE_CHUNK, body, "", TextHash.sha256(body), null, null, null, null, "B 삭제")));
+        approve("d1");
+        when(admin.applyChunkDelete("latest", "c0", TextHash.sha256(body))).thenReturn(AdminService.ApplyOutcome.APPLIED);
+        Path md = Files.writeString(converted.resolve("d1.md"), "## A\n\nA 설명.\n\n## B 기능\n\nB 를 쓰는 방법.\n\n## C\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+        assertThat(Files.readString(md)).doesNotContain("B 기능").doesNotContain("B 를 쓰는 방법").contains("## A").contains("## C");
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+    }
+
+    @Test
+    @DisplayName("겹침 짝 중 하나라도 낡았으면 짝 전체를 쓰지 않는다(stale)")
+    void staleOverlapPairIsNotApplied() {
+        proposals.insertAll(List.of(
+                new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_EDIT,
+                        "A 는 30초", "A 는 60초", TextHash.sha256("A 는 30초"), null, null, null, null, "편집", null, null, null, "g1"),
+                new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c1", ChangeProposalRepository.KIND_EDIT,
+                        "30초 이후", "60초 이후", TextHash.sha256("30초 이후"), null, null, null, null, "편집", null, null, null, "g1")));
+        approve("d1");
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "A 는 30초", "A 는 30초", Map.of()));
+        when(admin.getChunk("latest", "c1")).thenReturn(new AdminService.ChunkRow("c1", "누가 고침", "누가 고침", Map.of()));
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.stale()).isEqualTo(2);
+        assertThat(r.applied()).isZero();
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("빼기 — 뺀 수정안은 승인해도 적용되지 않는다")
+    void withdrawnProposalIsNotApplied() {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘")));
+        long first = proposals.listByJob(jobId).get(0).id();
+
+        assertThat(service.withdrawProposal(jobId, first, "root")).isEqualTo(1);
+        approve("d1");
+
+        assertThat(statuses()).containsExactly(ChangeProposalRepository.WITHDRAWN, ChangeProposalRepository.APPROVED);
+    }
+
+    @Test
     @DisplayName("승인은 문서 단위·한 번만 — 두 번째 승인은 바뀐 것이 없다")
     void approvalIsPerDocumentAndOnce() {
         proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘"), proposal("d2", "c9", "PostgreSQL 셋")));
@@ -236,8 +320,8 @@ class ChangeApplyServiceTest {
     }
 
     @Test
-    @DisplayName("의미 변경 수정안이 적용된 문서는 MD 에 글자 치환만 들어가고 MD_PARTIAL 로 남는다 — 의미 변경은 MD 에 되쓸 수 없다")
-    void semanticProposalsLeaveTheMdPartial() throws IOException {
+    @DisplayName("의미 변경 수정안은 줄 구간 대조로 MD 에 되쓴다 — 드라이버 줄까지 반영되고 MD_PARTIAL 이 생기지 않는다(6a)")
+    void semanticProposalsAreWrittenBackByLineHunks() throws IOException {
         proposals.insertAll(List.of(
                 new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_SEMANTIC,
                         "PostgreSQL 사용\ndriver: org.postgresql.Driver", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
@@ -250,10 +334,9 @@ class ChangeApplyServiceTest {
         ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
 
         assertThat(r.applied()).isEqualTo(1);
-        assertThat(r.mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
-        // 글자 치환만 MD 에 — 드라이버 줄은 그대로(되쓸 방법이 없다)
-        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\ndriver: org.postgresql.Driver\n");
-        assertThat(proposals.listByJob(jobId).get(0).mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\ndriver: oracle.jdbc.OracleDriver\n");
+        assertThat(proposals.listByJob(jobId).get(0).mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
         verify(admin).applyChunkEdit("latest", "c0", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
                 Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle"), TextHash.sha256("PostgreSQL 사용\ndriver: org.postgresql.Driver"));
     }

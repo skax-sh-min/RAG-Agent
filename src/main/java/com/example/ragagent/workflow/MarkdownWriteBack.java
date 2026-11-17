@@ -5,6 +5,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+
+import com.example.ragagent.ingestion.ChunkSplitter;
+import com.example.ragagent.service.ChunkDiff;
 
 /**
  * 변환 MD 되쓰기(§6.33 4b-2) — 청크를 고친 수정을 {@code converted/{docId}_corrected.md}(없으면 {@code {docId}.md})에도 반영한다. 문서 단위
@@ -60,6 +67,218 @@ public final class MarkdownWriteBack {
             return new Result(APPLIED, count, count, "");
         } catch (IOException e) {
             return new Result(CONFLICT, 0, 0, "MD 를 쓰지 못했다: " + e.getMessage());
+        }
+    }
+
+    /** 적용된 수정안 하나의 수정 전·후 본문 — {@link #applyEdits} 의 입력. 청크 삭제는 {@code after} 가 빈 문자열이다. */
+    public record Edit(String before, String after) {}
+
+    /** MD 줄 범위 [{@code start}, {@code end}) 를 {@code replacement} 로 — 넣기만 하는 구간은 {@code start == end}. */
+    record Hunk(int start, int end, List<String> replacement) {}
+
+    /**
+     * 글자 치환이 아닌 수정(앵커 편집·의미 변경·관리자가 고친 것·청크 삭제)을 변환 MD 에 되쓴다(AGENT_MCP_DESIGN §10.8, E6).
+     *
+     * <p>수정안마다 수정 전·후를 줄 단위로 비교해({@link ChunkDiff}) 바뀐 구간을 얻고, <b>지운 줄 묶음이 MD 에 정확히 한 번</b> 나오는 자리를
+     * 바꾼다(줄 비교는 공백 정규화). 넣기만 한 구간은 바로 앞의 바뀌지 않은 줄(빈 줄 제외)이 MD 에 한 번 나와야 하고, 청크 맨 앞에 넣었으면 바로 뒤의
+     * 줄로 찾는다. 청크 삭제처럼 지우기만 하는 구간은 청크가 덧붙인 앞머리(부모 제목·다시 넣은 제목·코드 이어짐 표시)를 하나씩 떼어 가며 다시 찾는다 —
+     * 그 줄들은 MD 의 그 자리에 없다. 겹침 짝이 만든 같은 구간은 하나로 줄인다.
+     *
+     * <p><b>문서 단위로 전부 아니면 전무다.</b> 구간 하나라도 못 찾거나(없음·여러 곳) 구간끼리 겹치면 MD 를 건드리지 않고 {@link #CONFLICT} —
+     * 반쯤 바뀐 MD 는 청크와 갈라져 다음 재인덱싱이 일부만 되돌린다. 임시 파일 → 원자적 이동은 {@link #apply} 와 같다.
+     */
+    public static Result applyEdits(Path convertedDir, String docId, List<Edit> edits) {
+        Path md = resolve(convertedDir, docId);
+        if (md == null) return new Result(MISSING, 0, 0, "변환 MD 없음");
+        try {
+            String text = Files.readString(md, StandardCharsets.UTF_8);
+            List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
+            List<Hunk> hunks = new ArrayList<>();
+            for (Edit e : edits) {
+                String problem = locate(e, lines, hunks);
+                if (problem != null) return new Result(CONFLICT, 0, 0, problem);
+            }
+            List<Hunk> unique = new ArrayList<>(new LinkedHashSet<>(hunks));
+            unique.sort(Comparator.comparingInt(Hunk::start).thenComparingInt(Hunk::end));
+            for (int i = 1; i < unique.size(); i++) {
+                Hunk a = unique.get(i - 1), b = unique.get(i);
+                if (b.start() < a.end() || (b.start() == a.start() && a.start() == a.end())) {
+                    return new Result(CONFLICT, 0, 0, "수정 구간끼리 MD 에서 겹친다");
+                }
+            }
+            if (unique.isEmpty()) return new Result(APPLIED, 0, 0, "MD 에 바꿀 줄이 없다(공백만 바뀜)");
+            for (int i = unique.size() - 1; i >= 0; i--) {
+                Hunk h = unique.get(i);
+                lines.subList(h.start(), h.end()).clear();
+                lines.addAll(h.start(), h.replacement());
+            }
+            write(md, String.join("\n", lines));
+            return new Result(APPLIED, unique.size(), unique.size(), "");
+        } catch (IOException e) {
+            return new Result(CONFLICT, 0, 0, "MD 를 쓰지 못했다: " + e.getMessage());
+        }
+    }
+
+    /** 한 수정안의 바뀐 구간들을 MD 줄 위치로 옮겨 {@code out} 에 더한다. 못 옮기면 사유. */
+    private static String locate(Edit edit, List<String> md, List<Hunk> out) {
+        if (edit.after() == null || edit.after().isBlank()) {
+            // 청크 삭제 — 줄 비교에 맡기면 수정 전의 빈 줄이 수정 후의 빈 문자열과 "같은 줄"로 짝지어져 구간이 쪼개진다. 본문 전체를 한 덩어리로 찾는다.
+            List<String> block = trimBlank(List.of((edit.before() == null ? "" : edit.before()).split("\r\n|\r|\n", -1)));
+            if (block.isEmpty()) return null;
+            List<List<String>> candidates = new ArrayList<>(List.of(block));
+            candidates.addAll(withoutChunkHead(block));
+            for (List<String> c : candidates) {
+                if (c.isEmpty()) continue;
+                List<Integer> hits = findBlock(md, c);
+                if (hits.size() > 1) return "지울 청크가 MD 에 여러 번 나온다: " + preview(c);
+                if (hits.size() == 1) {
+                    out.add(new Hunk(hits.get(0), hits.get(0) + c.size(), List.of()));
+                    return null;
+                }
+            }
+            return "지울 청크를 MD 에서 찾지 못했다: " + preview(block);
+        }
+        ChunkDiff.Result diff = ChunkDiff.compare(edit.before() == null ? "" : edit.before(), edit.after() == null ? "" : edit.after());
+        if (diff == null || diff.tooLarge()) return "수정 전후를 비교하기에 너무 크다";
+        if (diff.identical()) return null;
+        List<ChunkDiff.Line> ls = diff.lines();
+        int i = 0;
+        while (i < ls.size()) {
+            if (ls.get(i).same()) { i++; continue; }
+            int from = i;
+            List<String> removed = new ArrayList<>();
+            List<String> added = new ArrayList<>();
+            while (i < ls.size() && !ls.get(i).same()) {
+                if (ls.get(i).removed()) removed.add(ls.get(i).text()); else added.add(ls.get(i).text());
+                i++;
+            }
+            boolean removedBlank = removed.stream().allMatch(String::isBlank);
+            boolean addedBlank = added.stream().allMatch(String::isBlank);
+            if (removedBlank && addedBlank) continue;   // 공백만 바뀜
+            if (!removedBlank) {
+                List<String> block = trimBlank(removed);
+                List<String> replacement = addedBlank ? List.of() : added;
+                List<List<String>> candidates = new ArrayList<>(List.of(block));
+                if (addedBlank) candidates.addAll(withoutChunkHead(block));
+                Integer at = null;
+                List<String> found = null;
+                for (List<String> c : candidates) {
+                    if (c.isEmpty()) continue;
+                    List<Integer> hits = findBlock(md, c);
+                    if (hits.size() > 1) return "지울 줄이 MD 에 여러 번 나온다: " + preview(c);
+                    if (hits.size() == 1) { at = hits.get(0); found = c; break; }
+                }
+                if (at == null) return "지울 줄을 MD 에서 찾지 못했다: " + preview(block);
+                out.add(new Hunk(at, at + found.size(), List.copyOf(replacement)));
+            } else {
+                String problem = locateInsertion(ls, from, i, added, md, out);
+                if (problem != null) return problem;
+            }
+        }
+        return null;
+    }
+
+    /** 넣기만 한 구간 — 앞의(없으면 뒤의) 바뀌지 않은 빈 줄 아닌 줄을 MD 에서 한 번 찾아 그 옆에 넣는다. */
+    private static String locateInsertion(List<ChunkDiff.Line> ls, int from, int to, List<String> added,
+                                          List<String> md, List<Hunk> out) {
+        int gap = 0;
+        for (int k = from - 1; k >= 0; k--) {
+            ChunkDiff.Line l = ls.get(k);
+            if (!l.same()) break;
+            if (l.text().isBlank()) { gap++; continue; }
+            List<Integer> hits = findBlock(md, List.of(l.text()));
+            if (hits.size() != 1) return "넣을 자리(앞 줄)를 MD 에서 하나로 찾지 못했다: " + preview(List.of(l.text()));
+            int pos = hits.get(0) + 1;
+            for (int g = 0; g < gap; g++) {
+                if (pos + g >= md.size() || !md.get(pos + g).isBlank()) return "넣을 자리 앞뒤의 빈 줄이 MD 와 다르다";
+            }
+            out.add(new Hunk(pos + gap, pos + gap, List.copyOf(added)));
+            return null;
+        }
+        gap = 0;
+        for (int k = to; k < ls.size(); k++) {
+            ChunkDiff.Line l = ls.get(k);
+            if (!l.same()) break;
+            if (l.text().isBlank()) { gap++; continue; }
+            List<Integer> hits = findBlock(md, List.of(l.text()));
+            if (hits.size() != 1) return "넣을 자리(뒤 줄)를 MD 에서 하나로 찾지 못했다: " + preview(List.of(l.text()));
+            int pos = hits.get(0) - gap;
+            for (int g = 0; g < gap; g++) {
+                if (pos + g < 0 || !md.get(pos + g).isBlank()) return "넣을 자리 앞뒤의 빈 줄이 MD 와 다르다";
+            }
+            if (pos < 0) return "넣을 자리 앞뒤의 빈 줄이 MD 와 다르다";
+            out.add(new Hunk(pos, pos, List.copyOf(added)));
+            return null;
+        }
+        return "넣을 자리를 가리킬 바뀌지 않은 줄이 없다";
+    }
+
+    /**
+     * 지우기만 하는 구간의 다른 후보들 — 청크가 덧붙인 앞머리를 하나씩 뗀 것. 끝의 코드 이어짐 표시(+ 그 앞의 펜스)를 먼저 떼고, 그다음 앞쪽에서 제목 줄과
+     * 코드 이어짐 표시(+ 바로 뒤의 펜스)를 하나씩 뗀다.
+     */
+    static List<List<String>> withoutChunkHead(List<String> block) {
+        List<List<String>> out = new ArrayList<>();
+        List<String> cur = new ArrayList<>(block);
+        int last = cur.size() - 1;
+        if (last >= 0 && ChunkSplitter.CODE_CONTINUATION_AFTER.equals(cur.get(last).strip())) {
+            cur.remove(last);
+            if (!cur.isEmpty() && cur.get(cur.size() - 1).strip().startsWith("```")) cur.remove(cur.size() - 1);
+            cur = trimBlank(cur);
+            out.add(List.copyOf(cur));
+        }
+        while (!cur.isEmpty()) {
+            String head = cur.get(0).strip();
+            if (head.startsWith("#")) {
+                cur.remove(0);
+            } else if (ChunkSplitter.CODE_CONTINUATION_BEFORE.equals(head)) {
+                cur.remove(0);
+                if (!cur.isEmpty() && cur.get(0).strip().startsWith("```")) cur.remove(0);
+            } else {
+                break;
+            }
+            cur = trimBlank(cur);
+            out.add(List.copyOf(cur));
+        }
+        return out;
+    }
+
+    /** {@code block} 이 MD 에서 시작하는 줄 번호들(줄마다 공백 정규화 비교). */
+    static List<Integer> findBlock(List<String> md, List<String> block) {
+        List<Integer> hits = new ArrayList<>();
+        outer:
+        for (int s = 0; s + block.size() <= md.size(); s++) {
+            for (int k = 0; k < block.size(); k++) {
+                if (!norm(md.get(s + k)).equals(norm(block.get(k)))) continue outer;
+            }
+            hits.add(s);
+        }
+        return hits;
+    }
+
+    private static String norm(String line) {
+        return line.replace('\r', ' ').strip().replaceAll("\\s+", " ");
+    }
+
+    private static List<String> trimBlank(List<String> in) {
+        int a = 0, b = in.size();
+        while (a < b && in.get(a).isBlank()) a++;
+        while (b > a && in.get(b - 1).isBlank()) b--;
+        return new ArrayList<>(in.subList(a, b));
+    }
+
+    private static String preview(List<String> block) {
+        String first = block.isEmpty() ? "" : block.get(0).strip();
+        return first.length() > 60 ? first.substring(0, 60) + "…" : first;
+    }
+
+    private static void write(Path md, String text) throws IOException {
+        Path tmp = md.resolveSibling(md.getFileName() + ".tmp");
+        Files.writeString(tmp, text, StandardCharsets.UTF_8);
+        try {
+            Files.move(tmp, md, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(tmp, md, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
