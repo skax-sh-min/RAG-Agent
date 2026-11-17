@@ -263,6 +263,47 @@ public class ChangeApplyService {
         return null;
     }
 
+    /**
+     * 수정안의 맥락 요약·키워드를 지금의 바뀐 뒤 본문으로 다시 만든다(관리자가 고른 때만 — AGENT_MCP_DESIGN §10.7). 인덱싱과 같은
+     * {@code KeywordExtractor} 호출 한 번이고, 결과는 수정안에만 저장된다(적용 때 청크에 실린다). {@code pending} 인 동안만, 청크 삭제 수정안은 대상이 아니다.
+     *
+     * @return 거절 사유, 저장했으면 {@code null}
+     */
+    public String regenerateContext(long jobId, long proposalId, String editor) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null) return "수정안을 찾지 못했습니다";
+        if (!ChangeProposalRepository.PENDING.equals(p.status())) return "검토 대기 중인 수정안만 다시 만들 수 있습니다";
+        if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) return "청크 삭제 수정안에는 맥락이 없습니다";
+        if (keywordExtractor == null) return "맥락을 다시 만들 수 없습니다(키워드 추출기가 없음)";
+        AdminService.ChunkRow row = adminService.getChunk(adminService.collectionFor(MaintenanceWorkflow.VERSION), p.chunkId());
+        if (row == null) return "청크를 찾지 못했습니다 — 수정안이 낡았을 수 있습니다";
+        Map<String, Object> meta = new HashMap<>(row.metadata());
+        org.springframework.ai.document.Document enriched;
+        try {
+            enriched = keywordExtractor.enrichSingle(new org.springframework.ai.document.Document(p.afterText(), meta));
+        } catch (Exception e) {
+            log.warn("[APPLY] 맥락 재생성 실패 proposal={}: {}", proposalId, e.getMessage());
+            return "맥락을 다시 만들지 못했습니다";
+        }
+        Object ctx = enriched.getMetadata().get(MetaKey.CHUNK_CONTEXT);
+        Object kw = enriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS);
+        String beforeCtx = p.beforeContext() != null ? p.beforeContext() : row.metadata().get(MetaKey.CHUNK_CONTEXT);
+        String beforeKw = p.beforeKeywords() != null ? p.beforeKeywords() : row.metadata().get(MetaKey.EXCERPT_KEYWORDS);
+        if (!proposals.updateContext(proposalId, beforeCtx, ctx == null ? null : ctx.toString(), beforeKw, kw == null ? null : kw.toString())) {
+            return "검토 대기 중인 수정안만 다시 만들 수 있습니다";
+        }
+        audit("change.regenerate-context", p, Map.of("editor", String.valueOf(editor)));
+        return null;
+    }
+
+    /** 맥락·키워드 재생성 — 세터 주입(생성자가 둘이고 테스트가 직접 부른다). */
+    private com.example.ragagent.ingestion.KeywordExtractor keywordExtractor;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKeywordExtractor(com.example.ragagent.ingestion.KeywordExtractor keywordExtractor) {
+        this.keywordExtractor = keywordExtractor;
+    }
+
     /** 관리자가 수정안을 뺀다(겹침 짝 포함). @return 뺀 수 — 0 이면 이미 처리됐거나 없는 수정안 */
     public int withdrawProposal(long jobId, long proposalId, String reviewer) {
         ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);

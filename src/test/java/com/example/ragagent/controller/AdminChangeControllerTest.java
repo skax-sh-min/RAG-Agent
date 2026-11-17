@@ -106,6 +106,26 @@ class AdminChangeControllerTest {
     }
 
     @Test
+    @DisplayName("맥락 다시 만들기 — 관리자·CSRF, 응답은 그 카드(실패면 사유), 진행 중 폴링은 열린 고치기 칸이 있으면 건너뛴다")
+    void regenerateContextReturnsTheCard() throws Exception {
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, ChangeJobRepository.KIND_MAINTENANCE, "done", null)));
+        when(proposals.find(1L)).thenReturn(Optional.of(proposal()));
+        when(applyService.regenerateContext(5, 1, "root")).thenReturn("맥락을 다시 만들지 못했습니다");
+
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/regenerate-context").with(user(ADMIN)))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/change-jobs/5/proposals/1/regenerate-context").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("id=\"proposal-1\"")))
+                .andExpect(content().string(containsString("맥락을 다시 만들지 못했습니다")))
+                .andExpect(content().string(containsString("맥락·키워드 다시 만들기")));
+
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal("approved", null)));
+        mvc.perform(get("/admin/change-jobs/5").with(user(ADMIN)))
+                .andExpect(content().string(containsString("every 3s [!document.querySelector(&#39;#change-job-body details[open]&#39;)]")));
+    }
+
+    @Test
     @DisplayName("빼기 — 204 와 HX-Refresh, 유지보수 작업이 아니면 404")
     void withdrawRefreshesThePage() throws Exception {
         when(jobs.find(5)).thenReturn(Optional.of(job(5, ChangeJobRepository.KIND_MAINTENANCE, "done", null)));

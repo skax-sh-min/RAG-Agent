@@ -9,9 +9,10 @@
 <body>
 
 <section layout:fragment="content" class="container py-4">
-    <div th:fragment="body"
+    <!--/* 진행 중이면 3초마다 본문을 다시 받는다 — 단, 고치기 칸이 열려 있는 동안은 건너뛴다(다시 그리면 입력하던 칸이 닫힌다). */-->
+    <div th:fragment="body" id="change-job-body"
          th:attr="hx-get=${running} ? @{/admin/change-jobs/{id}/body(id=${job.id})} : null,
-                  hx-trigger=${running} ? 'every 3s' : null,
+                  hx-trigger=${running} ? 'every 3s [!document.querySelector(\'#change-job-body details[open]\')]' : null,
                   hx-swap=${running} ? 'outerHTML' : null">
 
         <p class="small mb-2"><a th:href="@{/admin/change-jobs}" th:text="#{maint.back}">Back</a></p>

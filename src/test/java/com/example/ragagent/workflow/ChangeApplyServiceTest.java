@@ -298,6 +298,37 @@ class ChangeApplyServiceTest {
     }
 
     @Test
+    @DisplayName("맥락·키워드 다시 만들기 — 고친 본문으로 추출해 수정안에만 저장, pending 이 아니거나 청크 삭제면 거절")
+    void regenerateContextFromTheEditedText() {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        long id = proposals.listByJob(jobId).get(0).id();
+        service.editProposal(jobId, id, "Oracle 19c 를 사용한다", "root");
+        com.example.ragagent.ingestion.KeywordExtractor extractor = mock(com.example.ragagent.ingestion.KeywordExtractor.class);
+        service.setKeywordExtractor(extractor);
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "PostgreSQL 사용", "PostgreSQL 사용",
+                Map.of(MetaKey.CHUNK_CONTEXT, "옛 맥락", MetaKey.EXCERPT_KEYWORDS, "postgresql")));
+        when(extractor.enrichSingle(any())).thenAnswer(inv -> {
+            org.springframework.ai.document.Document d = inv.getArgument(0);
+            assertThat(d.getText()).isEqualTo("Oracle 19c 를 사용한다");   // 기계 수정안이 아니라 고친 본문으로
+            Map<String, Object> m = new java.util.HashMap<>(d.getMetadata());
+            m.put(MetaKey.CHUNK_CONTEXT, "DB > Oracle 19c");
+            m.put(MetaKey.EXCERPT_KEYWORDS, "oracle, 19c");
+            return new org.springframework.ai.document.Document(d.getText(), m);
+        });
+
+        assertThat(service.regenerateContext(jobId, id, "root")).isNull();
+
+        ChangeProposalRepository.Proposal p = proposals.find(id).orElseThrow();
+        assertThat(p.afterContext()).isEqualTo("DB > Oracle 19c");
+        assertThat(p.afterKeywords()).isEqualTo("oracle, 19c");
+        assertThat(p.beforeContext()).isEqualTo("ctx PostgreSQL");   // 이미 있던 수정 전 값은 그대로
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+
+        approve("d1");
+        assertThat(service.regenerateContext(jobId, id, "root")).contains("검토 대기");
+    }
+
+    @Test
     @DisplayName("빼기 — 뺀 수정안은 승인해도 적용되지 않는다")
     void withdrawnProposalIsNotApplied() {
         proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘")));

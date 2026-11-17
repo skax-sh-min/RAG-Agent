@@ -177,6 +177,16 @@ public class ChangeProposalRepository {
     }
 
     /**
+     * 맥락 요약·키워드의 수정 전·후를 바꾼다 — 관리자가 고친 본문에 맞춰 다시 만들 때(AGENT_MCP_DESIGN §10.7). {@code pending} 일 때만(compare-and-set).
+     */
+    public boolean updateContext(long id, String beforeContext, String afterContext, String beforeKeywords, String afterKeywords) {
+        return jdbc.update("""
+                UPDATE change_proposal SET before_context = ?, after_context = ?, before_keywords = ?, after_keywords = ?
+                WHERE id = ? AND status = ?
+                """, beforeContext, afterContext, beforeKeywords, afterKeywords, id, PENDING) > 0;
+    }
+
+    /**
      * 수정안을 뺀다({@code pending} → {@code withdrawn}). 겹침 짝({@code group_key})이 있으면 같은 작업의 짝도 함께 뺀다 — 한쪽만 적용되면
      * 겹침 구간이 어긋난다.
      *

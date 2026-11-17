@@ -172,6 +172,19 @@ public class AdminChangeController {
         return "fragments/change-proposal-card :: card";
     }
 
+    /** 맥락 요약·키워드를 지금 본문으로 다시 만든다(LLM 1회) — 응답은 그 수정안의 카드. 실패하면 사유를 카드에 싣는다. */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/regenerate-context")
+    public String regenerateContext(@PathVariable long id, @PathVariable long pid, Model model) {
+        ChangeJobRepository.Job job = requireMaintenanceJob(id);
+        String error = applyService.regenerateContext(id, pid, currentUser.userId());
+        ChangeProposalRepository.Proposal p = proposals.find(pid).filter(x -> x.jobId() == id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        model.addAttribute("job", job);
+        model.addAttribute("v", view(p));
+        if (error != null) model.addAttribute("contextError", error);
+        return "fragments/change-proposal-card :: card";
+    }
+
     /** 수정안을 뺀다(겹침 짝 포함) — 문서의 대기 수가 바뀌므로 화면을 다시 읽게 한다. */
     @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/withdraw")
     public org.springframework.http.ResponseEntity<Void> withdraw(@PathVariable long id, @PathVariable long pid) {

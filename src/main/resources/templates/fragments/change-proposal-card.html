@@ -14,6 +14,13 @@
     <div class="card-body">
         <pre class="small mb-0" style="white-space:pre-wrap" th:text="${v.diff}">diff</pre>
         <p class="small text-muted mt-2 mb-0" th:if="${v.tooLarge}" th:text="#{maint.diff.too-large}">too large</p>
+        <div class="small text-muted mt-2" th:if="${v.proposal.afterContext != null or v.proposal.afterKeywords != null}">
+            <div th:if="${v.proposal.afterContext != null}"><span th:text="#{maint.context}">Context</span>:
+                <span th:text="${v.proposal.afterContext}">ctx</span></div>
+            <div th:if="${v.proposal.afterKeywords != null}"><span th:text="#{maint.keywords}">Keywords</span>:
+                <span th:text="${v.proposal.afterKeywords}">kw</span></div>
+        </div>
+        <div class="alert alert-danger py-1 px-2 small mt-2 mb-0" th:if="${contextError != null}" th:text="${contextError}">error</div>
 
         <div th:if="${v.proposal.status == 'pending'}" class="mt-2">
             <details th:open="${editError != null}">
@@ -30,6 +37,13 @@
                 </form>
                 <p class="small text-muted mt-2 mb-0" th:if="${v.proposal.kind == 'delete_chunk'}" th:text="#{maint.edit.delete-chunk}">no body</p>
             </details>
+            <form class="mt-2" th:unless="${v.proposal.kind == 'delete_chunk'}"
+                  th:attr="hx-post=@{/admin/change-jobs/{id}/proposals/{pid}/regenerate-context(id=${job.id},pid=${v.proposal.id})},
+                           hx-target='#proposal-' + ${v.proposal.id}"
+                  hx-swap="outerHTML">
+                <button type="submit" class="btn btn-link btn-sm p-0" th:text="#{maint.regenerate-context}">Regenerate context</button>
+                <span class="small text-muted ms-1" th:if="${v.proposal.edited()}" th:text="#{maint.regenerate-context.hint}">hint</span>
+            </form>
             <form class="mt-2"
                   th:attr="hx-post=@{/admin/change-jobs/{id}/proposals/{pid}/withdraw(id=${job.id},pid=${v.proposal.id})},
                            hx-confirm=#{maint.withdraw.confirm}"

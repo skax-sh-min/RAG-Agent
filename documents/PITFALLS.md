@@ -630,7 +630,9 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **겹침 짝의 해시 사전 대조는 짝(`group_key`)이 있는 수정안만** 한다. 모든 수정안을 미리 읽게 하면 `getChunk` 를 목으로 두지 않은 기존 테스트들이 전부 `stale` 이 되고, 짝 없는 수정안은 `applyChunkEdit` 자신이 해시를 본다.
 - **고치기는 사람의 판단이라 모델용 가드를 걸지 않는다**(G9) — 마커·펜스 불변식(`MaintenanceWorkflow.invariantViolation`)과 빈 본문·20,000자·수정 전과 같음만 거절한다. 거절은 400 이 아니라 사유와 입력값을 담은 카드 조각 200(`ProviderCatalog` 선례 — 400 은 토스트만 남고 입력이 사라진다). `machine_after_text` 는 `COALESCE` 로 처음 한 번만 쓴다. 빼기는 문서의 대기 수가 바뀌므로 `HX-Refresh` 로 화면을 다시 읽는다.
 - **감사 기록은 백그라운드 스레드에서도 남지만 `user` 칸은 믿지 말 것.** 적용은 가상 스레드라 `AuditLogger` 의 현재 사용자가 비어 있을 수 있다 — 그래서 `details.reviewer` 에 승인자를 따로 싣는다.
-- **알려진 한계.** 작업이 돌고 있는(승인된 수정안이 있는) 동안 화면 본문이 3초마다 다시 그려져 열어 둔 고치기 칸이 닫힌다. 고친 뒤에도 `after_context`·`after_keywords` 는 기계 수정안의 값 그대로다. 실제 앱·실제 코퍼스로의 종단 확인은 아직 없다(단위·슬라이스 테스트만).
+- **진행 중 폴링이 열린 고치기 칸을 닫지 않는다.** 작업이 돌고 있는(승인된 수정안이 있는) 동안 본문을 3초마다 다시 받는데, 처음엔 열어 둔 고치기 칸까지 다시 그려 입력이 사라졌다. `hx-trigger` 에 htmx 필터 `every 3s [!document.querySelector('#change-job-body details[open]')]` 를 달아 `<details>` 가 열려 있는 동안은 건너뛴다. Thymeleaf 문자열 안의 작은따옴표는 `\'` 로 이스케이프해야 한다(`''` 가 아니다).
+- **맥락·키워드는 관리자가 고른 때만 다시 만든다.** 고치기는 본문만 바꾸므로 `after_context`·`after_keywords` 는 기계 수정안의 값으로 남는다. 카드의 「맥락·키워드 다시 만들기」(`ChangeApplyService.regenerateContext`)가 지금 `after_text` 로 `KeywordExtractor.enrichSingle` 을 한 번 불러 수정안에만 저장한다(적용 때 청크에 실린다, `pending` 만, 청크 삭제 제외). 저장할 때마다 자동으로 다시 만들지 않은 것은 LLM 호출 비용 때문이다. 고친 수정안 카드에는 눌러 달라는 안내가 붙는다.
+- **알려진 한계.** 실제 앱·실제 코퍼스로의 종단 확인은 아직 없다(단위·슬라이스 테스트만).
 
 ### 자연어 지식 수정 6b — MCP 제안 Tool · 앵커 편집 · 가드
 
