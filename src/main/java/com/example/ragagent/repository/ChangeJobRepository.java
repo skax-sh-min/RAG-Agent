@@ -26,13 +26,20 @@ public class ChangeJobRepository {
     public static final String FAILED = "failed";
     public static final String INTERRUPTED = "interrupted";
 
+    /** @param intentJson 자연어 지식 수정의 해석된 의도(V16) — 글자 치환 작업·옛 작업은 {@code null} */
     public record Job(long id, String kind, String requestText, String requestedBy, String status,
-                      String summaryJson, String error, String createdAt, String updatedAt) {}
+                      String summaryJson, String error, String createdAt, String updatedAt, String intentJson) {
+        /** V16 이전의 모양 — 테스트·옛 호출부용. */
+        public Job(long id, String kind, String requestText, String requestedBy, String status,
+                   String summaryJson, String error, String createdAt, String updatedAt) {
+            this(id, kind, requestText, requestedBy, status, summaryJson, error, createdAt, updatedAt, null);
+        }
+    }
 
     private static final RowMapper<Job> MAPPER = (rs, n) -> new Job(
             rs.getLong("id"), rs.getString("kind"), rs.getString("request_text"), rs.getString("requested_by"),
             rs.getString("status"), rs.getString("summary_json"), rs.getString("error"),
-            rs.getString("created_at"), rs.getString("updated_at"));
+            rs.getString("created_at"), rs.getString("updated_at"), rs.getString("intent_json"));
 
     private final JdbcTemplate jdbc;
 
@@ -60,6 +67,16 @@ public class ChangeJobRepository {
         Number id = keys.getKey();
         if (id == null) throw new IllegalStateException("change_job id 를 받지 못했습니다");
         return id.longValue();
+    }
+
+    /**
+     * 끝난 상태({@code done})로 바로 만든다 — 수정안을 밖(MCP 외부 에이전트)에서 하나씩 받는 작업처럼 백그라운드 단계가 없는 작업용. 의도를 함께 남긴다.
+     */
+    public long createDone(String kind, String requestText, String requestedBy, String intentJson) {
+        long id = create(kind, requestText, requestedBy);
+        jdbc.update("UPDATE change_job SET status = ?, intent_json = ?, updated_at = ? WHERE id = ?",
+                DONE, intentJson, DbTimestamp.now(), id);
+        return id;
     }
 
     /** 끝난 작업의 리포트를 저장한다 — {@code running} 인 작업만 바꾼다(재기동이 이미 {@code interrupted} 로 돌린 것을 되살리지 않는다). */

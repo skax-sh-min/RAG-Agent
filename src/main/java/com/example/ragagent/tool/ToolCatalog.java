@@ -2,6 +2,7 @@ package com.example.ragagent.tool;
 
 import com.example.ragagent.tool.catalog.CatalogQueryTool;
 import com.example.ragagent.tool.change.ChangeRequestTool;
+import com.example.ragagent.tool.change.ChunkEditTool;
 import com.example.ragagent.tool.change.DiffTool;
 import com.example.ragagent.tool.change.ImpactAnalysisTool;
 import com.example.ragagent.tool.knowledge.DocumentLookupTool;
@@ -32,21 +33,31 @@ import java.util.Optional;
 public class ToolCatalog {
 
     /** Tool 이름 → 접근 등급. 이 표에 없는 이름의 Tool 은 등록되지 않고 기동이 실패한다. */
-    static final Map<String, ToolAccess> ACCESS = Map.of(
-            "searchKnowledge", ToolAccess.PUBLIC,
-            "findRelatedDocuments", ToolAccess.PUBLIC,
-            "queryCatalog", ToolAccess.PUBLIC,     // 조회마다 관리자 전용이 있다 — CatalogQueryTool 이 한 번 더 검사한다
-            "getChunkContext", ToolAccess.PUBLIC,
-            "generateDiff", ToolAccess.PUBLIC,
-            "requestDocumentChange", ToolAccess.ADMIN,   // 수정안 대기열만 만든다 — 코퍼스는 승인 뒤 다른 단계(§6.33 4b)
-            "analyzeImpact", ToolAccess.PUBLIC,    // 분석을 시작할 뿐 코퍼스는 쓰지 않는다(§6.33 4a)
-            "getDocument", ToolAccess.ADMIN);
+    static final Map<String, ToolAccess> ACCESS = Map.ofEntries(
+            Map.entry("searchKnowledge", ToolAccess.PUBLIC),
+            Map.entry("findRelatedDocuments", ToolAccess.PUBLIC),
+            Map.entry("queryCatalog", ToolAccess.PUBLIC),     // 조회마다 관리자 전용이 있다 — CatalogQueryTool 이 한 번 더 검사한다
+            Map.entry("getChunkContext", ToolAccess.PUBLIC),
+            Map.entry("generateDiff", ToolAccess.PUBLIC),
+            Map.entry("requestDocumentChange", ToolAccess.ADMIN),   // 수정안 대기열만 만든다 — 코퍼스는 승인 뒤 다른 단계(§6.33 4b)
+            Map.entry("analyzeImpact", ToolAccess.PUBLIC),    // 분석을 시작할 뿐 코퍼스는 쓰지 않는다(§6.33 4a)
+            Map.entry("getDocument", ToolAccess.ADMIN),
+            // AGENT_MCP_DESIGN §10.9 — 외부 에이전트의 지식 수정. 전수 조회는 일반 검색보다 넓어 관리자만, 제안은 대기열에만 쌓인다.
+            Map.entry("findChunks", ToolAccess.ADMIN),
+            Map.entry("proposeChunkEdit", ToolAccess.ADMIN),
+            Map.entry("getChangeJob", ToolAccess.ADMIN));
 
     private record Entry(ToolCallback callback, ToolAccess access) {}
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
 
     @Autowired
+    public ToolCatalog(KnowledgeSearchTool knowledge, DocumentLookupTool lookup, CatalogQueryTool catalog, DiffTool diff,
+                       ImpactAnalysisTool impact, ChangeRequestTool change, ChunkEditTool chunkEdit) {
+        this(List.of(knowledge, lookup, catalog, diff, impact, change, chunkEdit));
+    }
+
+    /** 지식 수정 Tool 셋 없이 만든다 — 테스트용. */
     public ToolCatalog(KnowledgeSearchTool knowledge, DocumentLookupTool lookup, CatalogQueryTool catalog, DiffTool diff,
                        ImpactAnalysisTool impact, ChangeRequestTool change) {
         this(List.of(knowledge, lookup, catalog, diff, impact, change));

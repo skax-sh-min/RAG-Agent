@@ -632,6 +632,20 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **감사 기록은 백그라운드 스레드에서도 남지만 `user` 칸은 믿지 말 것.** 적용은 가상 스레드라 `AuditLogger` 의 현재 사용자가 비어 있을 수 있다 — 그래서 `details.reviewer` 에 승인자를 따로 싣는다.
 - **알려진 한계.** 작업이 돌고 있는(승인된 수정안이 있는) 동안 화면 본문이 3초마다 다시 그려져 열어 둔 고치기 칸이 닫힌다. 고친 뒤에도 `after_context`·`after_keywords` 는 기계 수정안의 값 그대로다. 실제 앱·실제 코퍼스로의 종단 확인은 아직 없다(단위·슬라이스 테스트만).
 
+### 자연어 지식 수정 6b — MCP 제안 Tool · 앵커 편집 · 가드
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.4·§10.5·§10.9. 외부 에이전트가 MCP 관리자 키로 청크를 찾고(`findChunks`), 읽고(`getChunkContext` + `contentHash`), 원문 인용 편집을 제안하고(`proposeChunkEdit`), 상태를 읽는다(`getChangeJob`). 2026-11-17.
+
+- **쓰기·승인은 Tool 이 아니다 — 빌드가 지킨다.** `ToolBoundaryConventionTest.FORBIDDEN_CODE` 에 `applyChunkEdit`·`applyChunkDelete`·`approveAndApply`·`applyApproved`·`transitionDocument`·`ChangeApplyService`·`ChangeProposalRepository` 를 더했다. Tool 은 `ChangeProposalService`(workflow)만 부르고, 그 서비스도 `pending` 행만 만든다. 금지어 검사는 부분 문자열이라 이름을 고를 때 조심했다 — 인자 `deleteWholeChunk` 는 `deleteChunk` 를 품지 않는다(`deleteChunk` 는 오래된 금지어다).
+- **일부만 통과한 제안은 통째로 거절한다.** `AnchoredEdit` 자체는 버린 작업을 빼고 나머지를 적용할 수 있지만, 외부 에이전트가 의도한 편집의 일부만 대기열에 오르면 뜻이 달라질 수 있어 `proposeExternal` 은 버린 작업이 하나라도 있으면 받지 않고 작업별 사유를 돌려준다. 앱 안 워크플로(6c)는 다른 정책을 쓸 수 있다.
+- **인용 찾기**: 정확히 일치 → 없으면 공백 정규화(연속 공백·줄바꿈 한 칸) 일치를 원래 위치로 되짚는다. 처음 구현은 정규화에 소문자화까지 넣은 함수를 인용 쪽에만 걸어 대문자가 섞인 인용이 영원히 안 맞았다 — 원문 쪽과 같은 정규화(공백만)를 쓴다. 소문자화는 "같은 글이 이미 있다"(G7) 판정에만 쓴다.
+- **보호 구간(G2)과 불변식(G6)은 짝이다.** 그림 마커(+ 바로 뒤 설명)·페이지 마커·펜스 줄·표 구분선을 일부만 건드리면 버리고, 지우기가 통째로 지우는 것은 허용하되 결과의 마커 목록이 "원래 − 지운 구간 안의 것"과 정확히 같아야 한다. 그래서 `MaintenanceWorkflow.invariantViolation`(마커 목록이 같아야 한다)을 그대로 쓰지 않는다 — 그쪽은 지우기를 모른다.
+- **넣는 자리는 블록 끝으로 민다.** 인용 끝이 속한 문단(다음 빈 줄 전)·표·목록의 끝, 코드 펜스 안이면 닫는 펜스 줄 뒤. 앞뒤를 빈 줄로 띄운다. 섹션 지우기는 펜스 안의 `#` 를 제목으로 보지 않는다.
+- **`contentHash` 는 `TextHash.sha256(fullText)`** — 적용 때 `applyChunkEdit` 이 대조하는 것과 같은 함수다. 제안 단계에서 한 번, 적용 단계에서 또 한 번 대조한다(그사이 바뀌면 `stale`).
+- **외부 작업.** `jobId` 없이 내면 `kind=maintenance`·`status=done`·`intent_json={"mode":"external"}` 작업을 새로 만든다(`ChangeJobRepository.createDone`, 백그라운드 단계가 없다). 같은 `jobId` 로 이어 붙이는 것은 요청자 본인의 외부 작업만 — 글자 치환 작업이나 남의 작업에는 못 붙는다. 같은 작업에 같은 청크의 `pending` 수정안이 있으면 거절(고치거나 빼는 것은 관리자 화면에서).
+- **`ToolCatalog.ACCESS` 가 11개가 되어 `Map.of`(10쌍 한도)에서 `Map.ofEntries` 로 바꿨다.** 생성자가 둘이 되어 주입할 쪽에 `@Autowired`(7인자)를 붙였다.
+- **하지 않은 것.** 겹침 짝(§10.6 ⑨)은 외부 제안에서 붙이지 않는다(기본 `chunk_overlap=0`) · 청크가 덧붙인 줄(부모 제목 등)을 인용으로 쓰는 것을 막지 않는다 — MD 되쓰기가 그 줄을 못 찾아 `MD_CONFLICT` 가 되는 것으로 드러난다 · 실제 MCP 클라이언트(Claude Code·MCP Inspector)로의 왕복은 확인하지 않았다(테스트는 `ToolCatalog.call` 로 JSON 인자 파싱까지).
+
 ### 문서 쓰기 잠금 (`DocumentWriteLocks`)
 
 같은 문서에서 `↺ 재인덱싱`(`DocumentIndexer.reindexFromMd`)과 유지보수 적용(`ChangeApplyService`)이 겹치면 — 재인덱싱이 청크 id 를 **모두 새로 만들고** 변환 MD 를 읽는 동안 적용이 옛 id 를 고쳐 쓰거나(수정은 사라지고 일부는 `stale`), 적용이 청크를 바꾸는 사이에 재인덱싱이 MD 를 읽어 반쯤 바뀐 문서가 된다. 적용 서비스 안의 잠금은 **서비스끼리만** 막았다.
