@@ -46,7 +46,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
-> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (the `vec0` native extension is bundled in the jar — Windows x64, macOS arm64/x64, Linux x64/arm64 on glibc; other platforms, Docker/Alpine: provide your own, see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
 > **Chroma version — v2 API required.** Spring AI 2.0.2's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
 
@@ -250,7 +250,7 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `EMBED_MAX_CHUNK_CHARS` | — | `0` (off) | Hard per-chunk character ceiling to fit the embedding server's batch/token limit. Set (e.g. `450`) when you hit `input (N tokens) is too large ... (batch size: 512)`; oversized chunks are force-split at line boundaries. Prefer raising the server batch (`llama-server -b/-ub`) first — see [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — parallel sub-batch embeds within one document's indexing (`1` = serial, default → zero regression). Set to ~(endpoints × per-endpoint parallel) to fill the E1 endpoints from a single large file |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
-| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only, optional — path to your own `vec0` loadable extension (always wins). Blank = the extension bundled in the jar (version = `sqlite-vec.version` in `pom.xml`; the build downloads and checksum-verifies it). Required for Docker/Alpine, unsupported platforms, or a jar built with `-Dsqlite-vec.skip=true` |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |

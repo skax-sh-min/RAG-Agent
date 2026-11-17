@@ -209,7 +209,13 @@ public class DataSourceConfig {
             warnLegacyPath(dbPath);
         }
         return new HikariDataSource(buildHikariConfig(
-                dbPath, maxPoolSize, vectorStoreType, sqliteVecExtensionPath, sqliteVecEntrypoint));
+                dbPath, maxPoolSize, vectorStoreType, sqliteVecExtensionPath, sqliteVecEntrypoint,
+                bundledExtensionDir(dataDir)));
+    }
+
+    /** jar 에 든 sqlite-vec 확장을 꺼내 두는 곳 — {@code {data-dir}/native}. */
+    static Path bundledExtensionDir(String dataDir) {
+        return Path.of(dataDir).toAbsolutePath().normalize().resolve("native");
     }
 
     /**
@@ -236,12 +242,18 @@ public class DataSourceConfig {
      */
     static HikariConfig buildHikariConfig(Path dbPath, int poolSize, String type,
                                           String extensionPath, String entrypoint) {
+        return buildHikariConfig(dbPath, poolSize, type, extensionPath, entrypoint, null);
+    }
+
+    /** {@code bundledDir} — {@code extensionPath} 가 비었을 때 jar 에 든 확장을 꺼낼 곳(null 이면 꺼내지 않고 비어 있으면 오류). */
+    static HikariConfig buildHikariConfig(Path dbPath, int poolSize, String type,
+                                          String extensionPath, String entrypoint, Path bundledDir) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(sqliteUrl(dbPath));
         config.setDriverClassName("org.sqlite.JDBC");
         config.setMaximumPoolSize(poolSize);   // pool=1 — SQLite serializes writes even in WAL mode
         config.setPoolName("sqlite");
-        configureSqliteVec(config, type, extensionPath, entrypoint);
+        configureSqliteVec(config, type, extensionPath, entrypoint, bundledDir);
         return config;
     }
 
@@ -265,22 +277,32 @@ public class DataSourceConfig {
      * {@code connectionInitSql}로 풀링된 모든 커넥션에 sqlite-vec {@code vec0} 확장을 로드한다.
      * pool=1이므로 단일 커넥션이 재생성되어도 확장이 다시 로드된다.
      *
-     * <p>No official Maven artifact bundles the native binary, so the operator provides the
-     * {@code vec0} loadable extension out-of-band and points {@code extension-path} at it
-     * (see OPERATOR_MANUAL §sqlite-vec). For the default {@code chroma} backend this is a no-op
-     * — the connection is left exactly as before.
+     * <p><b>어떤 바이너리를 쓰는가</b>: {@code extension-path}({@code SQLITE_VEC_EXTENSION_PATH}) 가 있으면 <b>그 파일이 이긴다</b> —
+     * 운영자가 직접 준 바이너리(Docker 볼륨 마운트·musl/Alpine·폐쇄망 반입). 비어 있으면 jar 에 든 확장({@link VecExtension} — 빌드가
+     * pom 의 {@code sqlite-vec.version} 으로 받아 넣은 것)을 {@code bundledDir} 아래로 꺼내 쓴다. 둘 다 없으면 이유와 함께 기동이 멈춘다.
+     * For the default {@code chroma} backend this is a no-op — the connection is left exactly as before.
      *
      * <p>Package-private + static so it can be unit-tested without opening a real connection.
      */
     static void configureSqliteVec(HikariConfig config, String type, String extensionPath, String entrypoint) {
+        configureSqliteVec(config, type, extensionPath, entrypoint, null);
+    }
+
+    /** @param bundledDir 경로가 비었을 때 jar 에 든 확장을 꺼낼 폴더. {@code null} 이면 jar 의 확장을 쓰지 않는다 */
+    static void configureSqliteVec(HikariConfig config, String type, String extensionPath, String entrypoint, Path bundledDir) {
         if (!isSqliteVec(type)) {
             return; // chroma (default) — unchanged
         }
         String path = extensionPath == null ? "" : extensionPath.trim();
+        boolean bundled = false;
         if (path.isEmpty()) {
-            throw new IllegalStateException(
-                    "app.vectorstore.type=sqlite-vec 인데 app.vectorstore.sqlite-vec.extension-path 가 비어 있습니다. "
-                    + "vec0 로더블 확장 바이너리 경로를 지정하세요 (예: /opt/sqlite-vec/vec0).");
+            if (bundledDir == null) {
+                throw new IllegalStateException(
+                        "app.vectorstore.type=sqlite-vec 인데 app.vectorstore.sqlite-vec.extension-path 가 비어 있습니다. "
+                        + "vec0 로더블 확장 바이너리 경로를 지정하세요 (예: /opt/sqlite-vec/vec0).");
+            }
+            path = extractBundled(bundledDir);
+            bundled = true;
         }
         String ep = entrypoint == null ? "" : entrypoint.trim();
         // load_extension SQL 리터럴 안전성: 작은따옴표는 SQL을 깨뜨리고 주입 위험 → 차단.
@@ -290,7 +312,9 @@ public class DataSourceConfig {
         if (ep.indexOf('\'') >= 0) {
             throw new IllegalStateException("entrypoint 에 작은따옴표(')를 포함할 수 없습니다: " + ep);
         }
-        path = resolveExtensionPath(path);
+        if (!bundled) {
+            path = resolveExtensionPath(path);
+        }
         log.info("[SQLITE-VEC] load_extension path resolved to: {}", path);
         // 1) 드라이버 레벨에서 load_extension() 허용 (xerial 기본 off — 보안)
         config.addDataSourceProperty("enable_load_extension", "true");
@@ -299,6 +323,28 @@ public class DataSourceConfig {
                 ? "SELECT load_extension('" + path + "')"
                 : "SELECT load_extension('" + path + "', '" + ep + "')";
         config.setConnectionInitSql(initSql);
+    }
+
+    /**
+     * {@code extension-path} 가 비었을 때 — jar 에 든 현재 플랫폼의 vec0 를 {@code bundledDir} 아래로 꺼내고 로드할 경로를 돌려준다.
+     * 이 빌드에 확장이 없거나(-Dsqlite-vec.skip=true) 플랫폼이 맞지 않으면 <b>왜 안 되고 무엇을 하면 되는지</b>를 담은 오류로 멈춘다 —
+     * 모르고 지나가면 첫 쿼리의 {@code no such module: vec0} 로 나타나 원인을 찾기 어렵다.
+     */
+    private static String extractBundled(Path bundledDir) {
+        if (!VecExtension.isBundled()) {
+            throw new IllegalStateException(
+                    "app.vectorstore.type=sqlite-vec 인데 extension-path(SQLITE_VEC_EXTENSION_PATH)가 비어 있고 이 빌드에는 sqlite-vec 확장이 "
+                    + "들어 있지 않습니다(-Dsqlite-vec.skip=true 로 빌드했거나 resources 단계가 건너뛰어졌습니다). "
+                    + "vec0 로더블 바이너리 경로를 지정하세요 (예: /opt/sqlite-vec/vec0).");
+        }
+        try {
+            Path extracted = VecExtension.extractTo(bundledDir);
+            log.info("[SQLITE-VEC] using the bundled sqlite-vec {} ({}): {}", VecExtension.version(), VecExtension.platform(), extracted);
+            return extracted.toString().replace('\\', '/');
+        } catch (IOException e) {
+            throw new IllegalStateException("jar 에 든 sqlite-vec 확장을 " + bundledDir + " 로 꺼내지 못했습니다(쓰기 권한·noexec 마운트 확인): "
+                    + e.getMessage() + " — 다른 곳의 바이너리를 SQLITE_VEC_EXTENSION_PATH 로 지정할 수도 있습니다.", e);
+        }
     }
 
     /**

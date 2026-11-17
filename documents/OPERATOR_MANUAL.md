@@ -152,11 +152,13 @@ rag_java/
 
 > Docker Compose 2.20.2+ 필요 (`depends_on … required: false`). `.env`에 `COMPOSE_PROFILES=chroma`를 두면 `--profile` 없이도 chroma가 기동됩니다.
 
-**sqlite-vec 모드 추가 준비** (공식 Java 라이브러리가 없어 네이티브 확장을 운영자가 제공):
+**sqlite-vec 모드 추가 준비** — `vec0` 네이티브 확장은 **jar 에 들어 있습니다**(아래 「jar 에 든 sqlite-vec」). 따로 준비하는 것은 **직접 지정이 필요한 경우**뿐입니다:
 
-1. 플랫폼용 `vec0` 로더블 확장을 [sqlite-vec 릴리스](https://github.com/asg017/sqlite-vec/releases)에서 받습니다. **컨테이너는 항상 Linux 바이너리** (`...-loadable-linux-{amd64|aarch64}`)가 필요합니다.
-2. Docker: `docker-compose.yml`의 `app.volumes`에서 바이너리 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로 지정합니다. 로컬 실행 시엔 호스트 절대경로를 지정합니다.
+1. **jar 에 든 확장을 쓰는 경우**(Windows x64 · macOS arm64/x64 · Linux x64/arm64 **glibc**): `SQLITE_VEC_EXTENSION_PATH` 를 비워 두면 됩니다. 앱이 이 플랫폼용 파일을 `{DATA_DIR}/native/sqlite-vec-<버전>/` 로 꺼내 로드합니다 — 쓰기 가능하고 `noexec` 가 아닌 경로여야 합니다.
+2. **직접 지정이 필요한 경우**: **Docker 이미지**(Alpine = musl 이라 jar 의 Linux 파일은 로드되지 않습니다 — 비워 두면 앱이 그 이유를 말하며 멈춥니다) · 위 목록에 없는 플랫폼(32비트 OS/JVM, Windows ARM 등) · `-Dsqlite-vec.skip=true` 로 빌드한 jar · 직접 검증한 바이너리를 쓰고 싶을 때. [sqlite-vec 릴리스](https://github.com/asg017/sqlite-vec/releases)에서 받아(컨테이너는 `...-loadable-linux-{x86_64|aarch64}`, musl 용은 직접 빌드) Docker 는 `docker-compose.yml`의 `app.volumes`에서 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로, 로컬 실행은 호스트 절대경로로 지정합니다. **경로를 주면 언제나 그 파일이 이깁니다.**
 3. `EMBED_*` 임베딩 모델의 **벡터 차원수**를 `app.embedding.dimensions`(예: 1536)로 반드시 설정합니다 — 미설정 시 기동이 실패합니다.
+
+**jar 에 든 sqlite-vec** (빌드 쪽): 버전은 `pom.xml` 의 **`sqlite-vec.version` 한 곳**(현재 0.1.9)이 정합니다 — 빌드(`maven-antrun-plugin`, `generate-resources`)가 그 버전의 릴리즈 파일 다섯 개(`windows-x86_64` · `macos-aarch64` · `macos-x86_64` · `linux-x86_64` · `linux-aarch64`)를 GitHub 에서 받아 jar 의 `native/sqlite-vec/<플랫폼>/` 에 넣고 같은 버전을 `native/sqlite-vec/VERSION` 으로 씁니다. 받은 파일은 `~/.m2/sqlite-vec/<버전>/` 에 남아 다음 빌드는 네트워크를 쓰지 않고, 각 파일은 `pom.xml` 의 `sqlite-vec.sha256.<플랫폼>` 과 SHA-256 이 맞아야 합니다(맞지 않으면 빌드가 멈춥니다 — 실행될 네이티브 코드라서). **버전을 올릴 때**: ① `sqlite-vec.version` 을 바꾸고 ② 릴리즈 페이지의 각 파일 digest(또는 받은 파일에 `sha256sum`)로 `sqlite-vec.sha256.*` 다섯 개를 바꿉니다. **네트워크 없이 빌드**해야 하면 `-Dsqlite-vec.skip=true`(jar 에 확장이 들어가지 않으니 실행할 때 `SQLITE_VEC_EXTENSION_PATH` 가 필요합니다) — 또는 캐시 폴더에 파일을 미리 두세요. 사내 프록시 뒤라면 `MAVEN_OPTS=-Dhttps.proxyHost=… -Dhttps.proxyPort=…`(Ant 의 다운로드는 Maven 의 `settings.xml` 프록시를 쓰지 않습니다). 라이선스: sqlite-vec 는 MIT 또는 Apache-2.0 이중 라이선스이며 두 라이선스 파일이 jar 의 같은 폴더에 들어 갑니다(`NOTICE`).
 
 > **macOS 격리(quarantine) 주의**: 브라우저로 받은 `vec0.dylib`에는 macOS Gatekeeper가 `com.apple.quarantine` 속성을 붙여 서명되지 않은 바이너리의 `dlopen()` 로딩을 차단합니다. 기동 로그에는 `.../vec0.dylib.dylib`처럼 확장자가 중복된 경로 실패로 보이지만(SQLite가 첫 시도 실패 후 플랫폼 접미사를 다시 붙여 재시도하는 흔적일 뿐, 진짜 원인 아님) 근본 원인은 격리 플래그입니다. 아키텍처(`file`/`lipo -info`로 arm64/x86_64 확인)가 맞는데도 로딩이 실패하면 다음으로 해제하세요:
 > ```bash
@@ -211,7 +213,7 @@ copy .env.example .env
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast). **이미 만들어진 `vec_embeddings` 의 차원과 다르면** 기동 로그에 ERROR 가 남고(앱은 뜹니다) 벡터 색인·검색이 실패합니다 — 모델을 바꿨다면 `/admin` 의 「임베딩 재생성」 카드로 다시 만드세요([§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec)) |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정.<br>Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
-| `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용, 선택** — 직접 준 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). **주면 언제나 그 파일이 이깁니다.** **비우면 jar 에 든 확장**(빌드가 `pom.xml` 의 `sqlite-vec.version` 으로 받아 넣은 것)을 `{DATA_DIR}/native/` 로 꺼내 씁니다 — Docker(Alpine/musl)·번들하지 않는 플랫폼·`-Dsqlite-vec.skip=true` 빌드에서는 비울 수 없고(앱이 이유를 말하며 기동을 멈춥니다) 직접 지정해야 합니다 |
 | `SQLITE_VEC_ENTRYPOINT` | — | — | sqlite-vec 전용(선택) — `load_extension` 엔트리포인트 강제. 보통 불필요 |
 | `CHROMA_HOST` | — | `http://localhost` | **chroma 전용** — Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
 | `CHROMA_PORT` | — | `8001` | **chroma 전용** — Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
@@ -734,7 +736,7 @@ docker compose down
 ```bash
 # 1. sqlite-vec 예시 환경파일 복사
 cp .env.example.sqlite .env
-# .env 파일에서 SQLITE_VEC_EXTENSION_PATH / EMBED_DIMENSIONS 수정
+# .env 파일에서 EMBED_DIMENSIONS 수정 (SQLITE_VEC_EXTENSION_PATH 는 직접 준 바이너리를 쓸 때만)
 
 # 2. 실행 (외부 Chroma 컨테이너 불필요)
 docker compose up --build -d
@@ -750,7 +752,8 @@ docker compose down
 ```
 
 > sqlite-vec 모드에서는 `SQLITE_VEC_EXTENSION_PATH`에 **컨테이너 내부에서 접근 가능한 경로**를 지정해야 합니다.
-> Docker에서는 플랫폼에 맞는 vec0 바이너리를 볼륨으로 마운트하고 경로를 지정하세요.
+> Docker에서는 플랫폼에 맞는 vec0 바이너리를 볼륨으로 마운트하고 경로를 지정하세요 — 이 저장소의 이미지는 Alpine(musl)이라
+> jar 에 든 sqlite-vec(glibc 용 Linux 파일)은 로드되지 않습니다(경로를 비워 두면 앱이 그 이유를 말하며 기동을 멈춥니다). musl 용으로 빌드한 vec0 를 마운트하거나 glibc 기반 이미지를 쓰세요.
 
 ---
 
@@ -859,7 +862,7 @@ mvn spring-boot:run
 
 #### 4.2.2 sqlite-vec 백엔드
 
-> sqlite-vec는 Chroma 서버를 띄우지 않습니다. 핵심은 `SQLITE_VEC_EXTENSION_PATH`와 `EMBED_DIMENSIONS`를 정확히 맞추는 것입니다.
+> sqlite-vec는 Chroma 서버를 띄우지 않습니다. 핵심은 `EMBED_DIMENSIONS`를 정확히 맞추는 것입니다 — vec0 확장은 jar 에 들어 있으므로 `SQLITE_VEC_EXTENSION_PATH` 는 직접 준 바이너리를 쓸 때만 지정합니다.
 
 **macOS / Linux**
 
@@ -896,8 +899,8 @@ Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -match '=' } |
 mvn spring-boot:run
 ```
 
-> Windows 로컬 예시 경로는 `.env.example.sqlite`의 `SQLITE_VEC_EXTENSION_PATH=./lib/win64/vec0.dll`를 참고하세요.
-> 운영 환경에서는 실제 vec0 바이너리 위치로 변경해야 하며, 시작 로그에서 vec0 로딩 성공(`vec_version()`)을 확인하세요.
+> vec0 확장은 jar 에 들어 있어 `SQLITE_VEC_EXTENSION_PATH` 를 비워 두면 됩니다(직접 준 바이너리를 쓸 때만 지정 — 예: `.env.example.sqlite` 의 `./lib/win64/vec0.dll`).
+> 시작 로그에서 사용한 확장(`[SQLITE-VEC] using the bundled sqlite-vec 0.1.9 (windows-x86_64)` 또는 `load_extension path resolved to`)과 로딩 성공(`vec_version()`)을 확인하세요.
 > macOS에서 `dlopen` 실패로 기동이 안 되면 §3.1의 "macOS 격리(quarantine) 주의" 참조.
 
 ---
@@ -1144,7 +1147,7 @@ mvn clean package -DskipTests        # webjar·의존성 포함 실행 가능 ja
 반입 대상:
 - `target/rag-agent-*.jar` (실행 가능 fat-jar)
 - **JRE/JDK 21** (호스트에 미설치 시)
-- **`vec0` 네이티브 확장** — 폐쇄망 호스트 OS/아키텍처(예: linux x86_64)용 loadable. <https://github.com/asg017/sqlite-vec/releases> 에서 사전 다운로드. **아키텍처 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast**
+- **`vec0` 네이티브 확장** — **jar 에 들어 있으므로(빌드가 받아 넣습니다) 따로 반입할 필요가 없습니다**(Windows x64 · macOS arm64/x64 · Linux x64/arm64 glibc). 지원하지 않는 플랫폼·musl·`-Dsqlite-vec.skip=true` 로 빌드한 jar 에서만 호스트 OS/아키텍처용 loadable 을 <https://github.com/asg017/sqlite-vec/releases> 에서 사전 다운로드해 반입하고 `SQLITE_VEC_EXTENSION_PATH` 로 지정합니다. **아키텍처 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast**. 빌드를 폐쇄망 안에서 한다면 `~/.m2/sqlite-vec/<버전>/` 에 릴리즈 파일을 미리 두거나 `-Dsqlite-vec.skip=true` 로 빌드하세요
 - (OCR 사용 시) **Tesseract + `kor`/`eng` tessdata**
 
 #### 2) 로컬 LLM(llama-server) 기동
@@ -1163,7 +1166,7 @@ llama-server -m embed-model.gguf  --port 8081 --embeddings  # 임베딩 (/v1/emb
 ```bash
 # 벡터 스토어: sqlite-vec (ChromaDB·Docker 불요)
 export VECTORSTORE_TYPE=sqlite-vec
-export SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0     # 반입한 vec0 경로
+#export SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0   # 비우면 jar 에 든 vec0 를 쓴다 — 직접 반입한 바이너리를 쓸 때만 지정
 
 # 로컬 LLM (llama-server) — LOCAL_LLM_KEY 불필요(비워도 등록됨)
 export LOCAL_LLM_URL=http://127.0.0.1:8080/v1
@@ -2479,7 +2482,7 @@ docker compose up -d         # Docker — .env 를 바꿨으니 컨테이너가 
 |---|---|
 | 기동 로그에 `…N차원으로 만들어져 있는데 …M 입니다` ERROR | 모델(차원)을 바꾸고 재생성하지 않은 상태 — 앱은 뜹니다. 3단계. 모델은 그대로고 `EMBED_DIMENSIONS` 가 틀렸다면 메시지의 N 으로 되돌리고 재기동 |
 | 카드가 안 보임 | chroma 백엔드(카드는 sqlite-vec 전용) — chroma 는 컬렉션을 삭제하고 전체를 재인덱싱합니다 |
-| 「처음부터」 직후 `no such module: vec0` 로 실패 | vec0 확장이 로드되지 않은 연결 — `SQLITE_VEC_EXTENSION_PATH` 를 확인(기동 로그 `[SQLITE-VEC] extension loaded`) |
+| 「처음부터」 직후 `no such module: vec0` 로 실패 | vec0 확장이 로드되지 않은 연결 — 기동 로그의 `[SQLITE-VEC]` 줄(`using the bundled …` 또는 `load_extension path resolved to`, `extension loaded`)과 `SQLITE_VEC_EXTENSION_PATH` 를 확인 |
 | 버튼을 눌렀더니 「이미 진행 중」(409) | 다른 관리자·탭이 돌린 작업이 있음 — 카드에 그 진행이 보입니다. 끝나길 기다리거나 「중단」 |
 | 재기동했더니 카드의 진행 표시가 사라짐 | 정상 — 진행 상태는 메모리에만 있습니다. 「벡터 N개 없음」과 「이어서」로 이어서 하면 됩니다 |
 | 끝났는데 검색 결과가 이상하게 적거나 많음 | 7.3-4 의 임계값 재조정. 접두사가 필요한 모델이면 품질이 낮을 수 있습니다(0단계) |
