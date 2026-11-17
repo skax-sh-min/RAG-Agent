@@ -10,6 +10,20 @@
 
 Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(한국어/영어)와 REST API를 제공합니다.
 
+## 지원 환경
+
+앱은 **64비트 JDK/JRE 21 이 있는 OS** 면 실행됩니다. 네이티브 부품(sqlite-vec · Tesseract OCR)과 `scripts/` 의 스크립트에 따라 OS 마다 사정이 다릅니다:
+
+| OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | `scripts/` 의 스크립트 |
+|---|---|---|---|
+| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd` / `.bat`) |
+| macOS arm64(Apple Silicon) · x64(Intel) | 지원 | 번들 | `macos_*` (Docker Desktop, Apple Silicon 은 Apple Container 도 가능) |
+| Linux x64 · arm64, glibc(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들 | `ubuntu_*` (Docker) |
+| Docker 이미지(Alpine / musl) | 지원 | **번들 사용 불가** — 직접 준 `vec0` 마운트 | `docker-compose.yml` |
+| 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 — chroma 백엔드 또는 직접 준 `vec0` | — |
+
+OS 별 자동 검증(CI)은 없습니다(GitHub Actions 미사용): 테스트와 런처·릴리즈 스크립트는 **Windows** 에서 실제로 돌려 확인했고, macOS·Linux 는 여기의 스크립트와 절차를 따르며, Windows 외 플랫폼의 번들 sqlite-vec 파일은 체크섬만 확인했고 실제 로드는 확인하지 못했습니다. 로컬(비 Docker) 실행에서 스캔 PDF OCR 을 쓰려면 호스트에 Tesseract(kor + eng)가 필요하고, 아니면 `IMAGE_OCR_ENABLED=false` 로 끕니다. 자세한 내용은 [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+
 ## 실행 방법
 
 ### Docker Compose (권장)

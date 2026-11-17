@@ -10,6 +10,20 @@ A self-hosted Q&A assistant that answers from your own documents. Upload manuals
 
 Built on Spring Boot 4.1 + Spring AI 2.0 and Java 21, with a Thymeleaf + HTMX web UI (Korean/English) and a REST API.
 
+## Supported platforms
+
+The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-vec, Tesseract OCR) and the scripts in `scripts/` decide the details:
+
+| OS / architecture | App (jar) | sqlite-vec bundled in the jar | Scripts in `scripts/` |
+|---|---|---|---|
+| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd` / `.bat`) |
+| macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `macos_*` (Docker Desktop, or Apple Container on Apple Silicon) |
+| Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `ubuntu_*` (Docker) |
+| Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |
+| Anything else (Windows ARM, 32-bit OS/JVM, BSD …) | needs a JVM; untested | no — use the Chroma backend or your own `vec0` | — |
+
+There is no CI matrix (GitHub Actions is not used): the tests and the launcher/release scripts were actually run on Windows; macOS and Linux rely on the scripts and procedures here, and the bundled sqlite-vec files for platforms other than Windows were only checksum-verified, not loaded. Local (non-Docker) runs need native Tesseract (kor + eng) for scanned-PDF OCR, or `IMAGE_OCR_ENABLED=false`. Details: [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+
 ## Getting Started
 
 ### Docker Compose (recommended)

@@ -141,6 +141,23 @@ rag_java/
 > **macOS Apple Silicon**: Docker Desktop 대신 [Apple Container](https://github.com/apple/container)를 사용할 수 있습니다.  
 > GitHub Releases에서 최신 `.pkg`를 다운로드해 설치하세요.
 
+#### 지원 운영체제
+
+앱은 JVM 위에서 돌아 **64비트 JDK 21 이 있는 OS** 면 실행되지만, 네이티브 부품(sqlite-vec 확장 · Tesseract OCR)과 제공 스크립트 때문에 OS 마다 사정이 다릅니다. 표에는 이 저장소에서 확인할 수 있는 사실만 적었습니다.
+
+| OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | 제공 스크립트(`scripts/`) | 비고 |
+|---|---|---|---|---|
+| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`·`.bat`, `windows_run_by_mvn_cmd_no_docker.bat`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
+| macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `macos_run_by_apple_container.sh`·`macos_run_by_jar_no_docker.sh`·`macos_run_by_mvn_no_docker.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data.sh` | Docker Desktop 또는 Apple Container(위 표) |
+| macOS Intel(x64) | 지원 | 번들(macOS x64) | 위와 같은 `macos_*` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
+| Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
+| Docker 이미지(Alpine = **musl**) | 지원 — 이미지가 Alpine 기반(`eclipse-temurin:21-jre-alpine`) | **번들 사용 불가** | `docker-compose.yml` | sqlite-vec 모드는 musl 용 `vec0` 를 마운트해 `SQLITE_VEC_EXTENSION_PATH` 지정(아래) |
+| 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 | — | chroma 백엔드를 쓰거나 `vec0` 를 직접 받아 `SQLITE_VEC_EXTENSION_PATH` 지정 |
+
+- **검증 수준**: GitHub Actions 를 쓰지 않아 OS 별 자동 검증은 없습니다. 테스트(`mvn test`)와 런처·릴리즈 스크립트의 실제 실행은 **Windows** 에서 확인했습니다. macOS·Linux 는 위 스크립트와 §4 의 절차가 있지만, 번들한 sqlite-vec 의 Windows 외 플랫폼 파일은 SHA-256 만 확인했고 실제 로드는 확인하지 못했습니다(기동 로그의 `vec_version()` 으로 확인하세요).
+- **OCR(Tesseract)**: 스캔 PDF OCR(`IMAGE_OCR_ENABLED`, 기본 켜짐)은 **네이티브 Tesseract + `kor`/`eng` 언어 데이터**가 호스트에 있어야 합니다 — Docker 이미지에는 들어 있고, 로컬(비 Docker) 실행은 OS 별로 설치하거나 `IMAGE_OCR_ENABLED=false` 로 끕니다.
+- **파일 경로·권한**: sqlite-vec 번들은 `{DATA_DIR}/native/` 로 꺼내 로드하므로 그 경로가 쓰기 가능하고 `noexec` 가 아니어야 합니다. DB 파일을 네트워크 공유(NFS/SMB)에 두는 배포는 `mmap_size` 때문에 조건이 붙습니다([§3.3](#33-applicationproperties-전용-설정)의 SQLite 세션 PRAGMA 행).
+
 #### 벡터 스토어 백엔드 선택 (chroma / sqlite-vec)
 
 `VECTORSTORE_TYPE` 환경변수로 벡터 스토어 백엔드를 선택합니다.
