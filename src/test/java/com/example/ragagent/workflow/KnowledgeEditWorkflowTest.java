@@ -227,6 +227,39 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("내용 삭제 — 짧은 문장이라도 남으면 청크 삭제가 아니라 문장 수정이다")
+    void shortRemainderStaysAnEdit() {
+        String text = "## 기능\n\nB 는 이렇게 쓴다.\n\n주의!";
+        mentions("c1", text);
+        chunk("c1", text, "기능", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"B 는 이렇게 쓴다.\"}",
+                "판정: 변경 필요\n이유: B 설명\n@@ 지우기\n처음: B 는 이렇게 쓴다.");
+
+        workflow.propose(jobId, "B 에 대한 내용을 삭제해", new EditIntent("remove", "B", null, null, null, null), Locale.KOREAN);
+
+        ChangeProposalRepository.Proposal p = stored().get(0);
+        assertThat(p.kind()).isEqualTo(ChangeProposalRepository.KIND_EDIT);
+        assertThat(p.afterText()).doesNotContain("B 는 이렇게 쓴다").contains("주의!").contains("## 기능");
+    }
+
+    @Test
+    @DisplayName("내용 삭제 — 지운 뒤 제목·표지만 남으면 청크 삭제 수정안이 된다")
+    void headingOnlyRemainderBecomesAChunkDelete() {
+        String text = "## B 기능\n\nB 는 이렇게 쓴다.\n\n[페이지: 3]";
+        mentions("c1", text);
+        chunk("c1", text, "B 기능", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"B 는 이렇게 쓴다.\"}",
+                "판정: 변경 필요\n이유: B 설명\n@@ 지우기\n처음: B 는 이렇게 쓴다.");
+
+        workflow.propose(jobId, "B 에 대한 내용을 삭제해", new EditIntent("remove", "B", null, null, null, null), Locale.KOREAN);
+
+        ChangeProposalRepository.Proposal p = stored().get(0);
+        assertThat(p.kind()).isEqualTo(ChangeProposalRepository.KIND_DELETE_CHUNK);
+        assertThat(p.afterText()).isEmpty();
+        assertThat(p.rationale()).contains("남은 본문이 없어");
+    }
+
+    @Test
     @DisplayName("내용 삭제 — 청크 전체 삭제 판정은 섹션 제목에 대상이 있을 때만 delete_chunk 가 된다")
     void removeWholeChunkNeedsTheSubjectInTheHeading() {
         String text = "## B 기능\n\nB 는 이렇게 쓴다.";

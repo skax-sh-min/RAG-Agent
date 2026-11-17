@@ -73,10 +73,11 @@ public class KnowledgeEditWorkflow {
     /** {@code add_note} 의 추가 적용 후보 수(확정 2026-11-17). */
     static final int MAX_EXTRA_CANDIDATES = 5;
     /**
-     * 남은 본문(제목·표지·펜스·공백 제외)이 이보다 짧으면 지우기가 청크 삭제로 바뀐다(G5). 설계의 40자에서 줄였다 — G3 을 지나 <b>남은</b> 문장은
-     * 대상과 무관한 내용이라, 짧다는 이유로 청크째 지우면 지키려던 문장까지 사라진다(테스트가 잡았다). 거의 빈 청크만 삭제로 올린다.
+     * 지우기가 청크 삭제로 바뀌는 조건 — 남은 본문(제목 줄·그림/페이지 표지·펜스 줄·공백 제외)이 <b>한 글자도 없을 때만</b>(2026-11-17 결정). 글자가 하나라도
+     * 남으면 늘 문장 수정(남은 본문을 그대로 둔 {@code edit} 수정안)이다. 설계의 40자 문턱은 G3 을 지나 남은 무관한 문장까지 청크째 지웠고(테스트가 잡았다),
+     * 그 뒤의 10자도 "주의!" 같은 짧은 문장을 지웠다 — 무엇을 남길지는 관리자가 Diff 로 정한다.
      */
-    static final int MIN_REMAINING_CHARS = 10;
+    static final int MIN_REMAINING_CHARS = 1;
     static final int INTENT_OUTPUT_TOKENS = 256;
     static final int JUDGE_OUTPUT_TOKENS = 512;
     static final int EDIT_OUTPUT_TOKENS = 1_024;
@@ -450,7 +451,7 @@ public class KnowledgeEditWorkflow {
             return Edit.skip("가드 위반 — " + String.join(" · ", why));
         }
         if (remove && remainingBody(r.text()) < MIN_REMAINING_CHARS) {
-            return new Edit("", true, MAPPER.writeValueAsString(r.applied()), false, "남은 본문이 거의 없어 청크 삭제로 바꿨다", null);
+            return new Edit("", true, MAPPER.writeValueAsString(r.applied()), false, "제목·표지 말고 남은 본문이 없어 청크 삭제로 바꿨다", null);
         }
         String note = dropped.isEmpty() && r.rejected().isEmpty() ? null
                 : "일부 작업을 버림 — " + String.join(" · ", dropped) + (r.rejected().isEmpty() ? "" : " · " + r.rejected().size() + "개 인용 실패");
