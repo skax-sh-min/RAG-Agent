@@ -900,6 +900,9 @@
         directLabel.textContent = isDirect ? labelDirect : labelRag;
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
+        /* 입력 칸 글자색도 'Direct' 라벨과 같은 색으로 — 토글을 보지 않고도 지금 어느 모드로 쓰는지 알 수 있게.
+           RAG 로 돌아가면 클래스를 떼어 원래 색으로. */
+        document.getElementById('question-input').classList.toggle('text-primary', isDirect);
         updateResponseModeAvailability(isDirect);
         /* §6.31 — 이력 제외도 어느 방향이든 푼다(응답 모드와 같은 수명). Direct 에서는 비활성. */
         setExcludeHistory(false);
