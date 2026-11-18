@@ -29,9 +29,16 @@ public class DocumentLookupTool {
     static final int DEFAULT_DOC_CHARS = 4_000;
     static final int MAX_DOC_CHARS = 8_000;
 
-    public record ContextChunk(String chunkId, int index, boolean requested, String text) {}
+    /**
+     * @param contentHash 본문의 SHA-256 — 수정안을 낼 때({@code proposeChunkEdit}) {@code baseHash} 로 돌려준다. 그사이 청크가 바뀌었으면 거절된다
+     */
+    public record ContextChunk(String chunkId, int index, boolean requested, String text, String contentHash) {}
 
-    public record ChunkContextOutput(String docId, String file, List<ContextChunk> chunks) {}
+    /**
+     * @param heading      요청한 청크의 섹션 제목(메타데이터)
+     * @param chunkContext 요청한 청크의 맥락 요약 — 검색 텍스트는 이것 + 본문이다
+     */
+    public record ChunkContextOutput(String docId, String file, String heading, String chunkContext, List<ContextChunk> chunks) {}
 
     public record DocumentOutput(String docId, int totalChars, int offset, String text, Integer nextOffset) {}
 
@@ -74,15 +81,21 @@ public class DocumentLookupTool {
         }
         List<ContextChunk> out = new ArrayList<>();
         if (pos < 0) {
-            out.add(new ContextChunk(row.id(), index, true, row.fullText()));
+            out.add(new ContextChunk(row.id(), index, true, row.fullText(), hash(row)));
         } else {
             for (int i = Math.max(0, pos - b); i <= Math.min(window.size() - 1, pos + a); i++) {
                 AdminService.ChunkRow r = window.get(i);
                 if (!readable(r)) continue;
-                out.add(new ContextChunk(r.id(), chunkIndex(r), i == pos, r.fullText()));
+                out.add(new ContextChunk(r.id(), chunkIndex(r), i == pos, r.fullText(), hash(r)));
             }
         }
-        return new ChunkContextOutput(row.docId(), row.filename(), List.copyOf(out));
+        return new ChunkContextOutput(row.docId(), row.filename(), row.metadata().get(MetaKey.HEADING),
+                row.metadata().get(MetaKey.CHUNK_CONTEXT), List.copyOf(out));
+    }
+
+    /** 수정안의 {@code baseHash} 와 같은 해시 — 적용 때 대조하는 것과 같은 함수({@code TextHash.sha256}). */
+    public static String hash(AdminService.ChunkRow row) {
+        return com.example.ragagent.model.TextHash.sha256(row.fullText() == null ? "" : row.fullText());
     }
 
     @Tool(name = "getDocument",
@@ -103,7 +116,7 @@ public class DocumentLookupTool {
     }
 
     /** 문서 청크인가 — 큐레이션 Q&amp;A 가 아니고, 메타데이터에 버전이 있으면 이 Tool 의 버전이어야 한다. */
-    static boolean readable(AdminService.ChunkRow row) {
+    public static boolean readable(AdminService.ChunkRow row) {
         if (row.isCurated()) return false;
         String version = row.metadata().get(MetaKey.VERSION);
         return version == null || version.isBlank() || KnowledgeSearchTool.VERSION.equals(version);

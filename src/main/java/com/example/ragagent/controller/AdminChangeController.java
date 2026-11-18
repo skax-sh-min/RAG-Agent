@@ -5,6 +5,8 @@ import com.example.ragagent.repository.ChangeProposalRepository;
 import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.ChunkDiff;
 import com.example.ragagent.workflow.ChangeApplyService;
+import com.example.ragagent.workflow.EditIntent;
+import com.example.ragagent.workflow.KnowledgeEditWorkflow;
 import com.example.ragagent.workflow.MaintenanceWorkflow;
 import com.example.ragagent.workflow.UnifiedDiffFormatter;
 import org.slf4j.Logger;
@@ -60,6 +62,14 @@ public class AdminChangeController {
         this.currentUser = currentUser;
     }
 
+    /** 자연어 수정 워크플로(6c) — 세터 주입(슬라이스 테스트의 생성자를 흔들지 않게). 없으면 지시문만의 요청도 글자 치환으로 간다. */
+    private KnowledgeEditWorkflow knowledgeEdit;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKnowledgeEdit(KnowledgeEditWorkflow knowledgeEdit) {
+        this.knowledgeEdit = knowledgeEdit;
+    }
+
     @GetMapping("/admin/change-jobs")
     public String list(@RequestParam(required = false) String error,
                        @RequestParam(required = false) String from,
@@ -72,20 +82,88 @@ public class AdminChangeController {
         return "admin-change-jobs";
     }
 
+    /**
+     * 유지보수 요청. 갈래는 셋이다(AGENT_MCP_DESIGN §10.6):
+     * <ul>
+     *   <li>바꿀 말·새 말을 직접 주면(유형이 비었거나 {@code replace}) — 지금의 글자 치환 워크플로(옵션 둘 포함).</li>
+     *   <li>유형을 직접 고르면({@code deprecate}·{@code remove}·{@code add_note}·{@code revise}) — 그 의도로 자연어 수정 워크플로(해석 단계 없음).</li>
+     *   <li>지시문만 주면(유형 "자동") — 자연어 수정 워크플로가 LLM 으로 해석한다. 글자 바꾸기로 해석되면 글자 치환으로 넘어간다(옵션은 꺼진 채).</li>
+     * </ul>
+     */
     @PostMapping("/admin/change-requests")
-    public String request(@RequestParam String instruction,
+    public String request(@RequestParam(required = false, defaultValue = "") String instruction,
                           @RequestParam(required = false) String from,
                           @RequestParam(required = false) String to,
                           @RequestParam(required = false, defaultValue = "false") boolean semantic,
-                          @RequestParam(required = false, defaultValue = "false") boolean caseVariants) {
+                          @RequestParam(required = false, defaultValue = "false") boolean caseVariants,
+                          @RequestParam(required = false, defaultValue = "") String type,
+                          @RequestParam(required = false) String subject,
+                          @RequestParam(required = false) String content,
+                          @RequestParam(required = false) String replacement) {
         try {
-            MaintenanceWorkflow.Started s = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
-                    LocaleContextHolder.getLocale());
-            return "redirect:/admin/change-jobs/" + s.jobId();
+            String t = type.strip();
+            boolean literal = from != null && !from.isBlank() && to != null && !to.isBlank();
+            long jobId;
+            if (literal && (t.isEmpty() || EditIntent.REPLACE.equals(t))) {
+                jobId = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
+                        LocaleContextHolder.getLocale()).jobId();
+            } else if (EditIntent.REPLACE.equals(t)) {
+                return "redirect:/admin/change-jobs?error=invalid";   // 글자 바꾸기를 골랐는데 바꿀 말·새 말이 없다
+            } else if (knowledgeEdit == null) {
+                jobId = workflow.start(currentUser.userId(), instruction, from, to, semantic, caseVariants,
+                        LocaleContextHolder.getLocale()).jobId();
+            } else {
+                EditIntent intent = t.isEmpty() ? null : new EditIntent(t, subject, content, replacement, null, null);
+                jobId = knowledgeEdit.start(currentUser.userId(), instruction, intent, LocaleContextHolder.getLocale()).jobId();
+            }
+            return "redirect:/admin/change-jobs/" + jobId;
         } catch (IllegalStateException busy) {
             return "redirect:/admin/change-jobs?error=busy";
         } catch (IllegalArgumentException bad) {
             return "redirect:/admin/change-jobs?error=invalid";
+        }
+    }
+
+    /**
+     * 청크 오류 신고에서 수정안 만들기(6d, AGENT_MCP_DESIGN §10.12) — 신고 상세의 폼. 지시문은 신고 코멘트로 채워진 것을 관리자가 고친 것이고, 대상은 그
+     * 청크 하나로 고정된다. 유형이 비면("자동") 지시문을 해석하고, {@code replace} 면 바꿀 말·새 말로 그 청크에만 글자 치환을 한다. 그 청크의 수정안이 적용되면
+     * 신고가 해결로 닫힌다({@link ChangeApplyService}).
+     */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/propose")
+    public String proposeFromReport(@PathVariable String chunkId,
+                                    @RequestParam(required = false, defaultValue = "") String instruction,
+                                    @RequestParam(required = false, defaultValue = "") String type,
+                                    @RequestParam(required = false) String subject,
+                                    @RequestParam(required = false) String content,
+                                    @RequestParam(required = false) String replacement,
+                                    @RequestParam(required = false) String from,
+                                    @RequestParam(required = false) String to) {
+        if (knowledgeEdit == null) return "redirect:/admin/change-jobs?error=invalid";
+        try {
+            String t = type.strip();
+            EditIntent intent = t.isEmpty() ? null
+                    : EditIntent.REPLACE.equals(t) ? new EditIntent(t, null, null, null, from, to)
+                    : new EditIntent(t, subject, content, replacement, null, null);
+            long jobId = knowledgeEdit.startFromReport(currentUser.userId(), chunkId, instruction, intent,
+                    LocaleContextHolder.getLocale()).jobId();
+            return "redirect:/admin/change-jobs/" + jobId;
+        } catch (IllegalStateException busy) {
+            return "redirect:/admin/change-jobs?error=busy";
+        } catch (IllegalArgumentException bad) {
+            return "redirect:/admin/change-jobs?error=invalid";
+        }
+    }
+
+    /** 자연어 수정 작업의 리포트에서 고른 청크(추가 적용 후보·언급만)로 수정안을 더한다. */
+    @PostMapping("/admin/change-jobs/{id}/chunks/propose")
+    public String proposeChunks(@PathVariable long id, @RequestParam(required = false) List<String> chunkIds) {
+        requireMaintenanceJob(id);
+        if (knowledgeEdit == null || chunkIds == null || chunkIds.isEmpty()) return "redirect:/admin/change-jobs/" + id;
+        try {
+            int n = knowledgeEdit.proposeForChunks(id, chunkIds, LocaleContextHolder.getLocale());
+            return "redirect:/admin/change-jobs/" + id + (n == 0 ? "?notice=nothing" : "");
+        } catch (IllegalArgumentException e) {
+            return "redirect:/admin/change-jobs/" + id + "?notice=nothing";
         }
     }
 
@@ -103,6 +181,51 @@ public class AdminChangeController {
         requireMaintenanceJob(id);
         applyService.reject(id, docId, currentUser.userId());
         return "redirect:/admin/change-jobs/" + id;
+    }
+
+    /**
+     * 수정안 본문을 관리자가 고친다(AGENT_MCP_DESIGN §10.7) — {@code pending} 인 동안만, 그림·페이지 마커와 코드 펜스 불변식만 다시 본다. 응답은 그 수정안의
+     * 카드 조각이다. 거절되면 400 이 아니라 사유와 입력값을 담은 카드를 200 으로 돌려준다(400 은 화면에 토스트만 남고 입력이 사라진다).
+     */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/edit")
+    public String edit(@PathVariable long id, @PathVariable long pid, @RequestParam(defaultValue = "") String afterText, Model model) {
+        ChangeJobRepository.Job job = requireMaintenanceJob(id);
+        String error = applyService.editProposal(id, pid, afterText, currentUser.userId());
+        ChangeProposalRepository.Proposal p = proposals.find(pid).filter(x -> x.jobId() == id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        model.addAttribute("job", job);
+        model.addAttribute("v", view(p));
+        if (error != null) {
+            model.addAttribute("editError", error);
+            model.addAttribute("editText", afterText);
+        }
+        return "fragments/change-proposal-card :: card";
+    }
+
+    /** 맥락 요약·키워드를 지금 본문으로 다시 만든다(LLM 1회) — 응답은 그 수정안의 카드. 실패하면 사유를 카드에 싣는다. */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/regenerate-context")
+    public String regenerateContext(@PathVariable long id, @PathVariable long pid, Model model) {
+        ChangeJobRepository.Job job = requireMaintenanceJob(id);
+        String error = applyService.regenerateContext(id, pid, currentUser.userId());
+        ChangeProposalRepository.Proposal p = proposals.find(pid).filter(x -> x.jobId() == id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        model.addAttribute("job", job);
+        model.addAttribute("v", view(p));
+        if (error != null) model.addAttribute("contextError", error);
+        return "fragments/change-proposal-card :: card";
+    }
+
+    /** 수정안을 뺀다(겹침 짝 포함) — 문서의 대기 수가 바뀌므로 화면을 다시 읽게 한다. */
+    @PostMapping("/admin/change-jobs/{id}/proposals/{pid}/withdraw")
+    public org.springframework.http.ResponseEntity<Void> withdraw(@PathVariable long id, @PathVariable long pid) {
+        requireMaintenanceJob(id);
+        applyService.withdrawProposal(id, pid, currentUser.userId());
+        return org.springframework.http.ResponseEntity.noContent().header("HX-Refresh", "true").build();
+    }
+
+    private static ProposalView view(ChangeProposalRepository.Proposal p) {
+        UnifiedDiffFormatter.Formatted f = UnifiedDiffFormatter.format(ChunkDiff.compare(p.beforeText(), p.afterText()));
+        return new ProposalView(p, f.text(), f.identical(), f.tooLarge());
     }
 
     @GetMapping("/admin/change-jobs/{id}")
@@ -127,8 +250,7 @@ public class AdminChangeController {
         ChangeJobRepository.Job job = requireMaintenanceJob(id);
         Map<String, List<ProposalView>> byDoc = new LinkedHashMap<>();
         for (ChangeProposalRepository.Proposal p : proposals.listByJob(id)) {
-            UnifiedDiffFormatter.Formatted f = UnifiedDiffFormatter.format(ChunkDiff.compare(p.beforeText(), p.afterText()));
-            byDoc.computeIfAbsent(p.docId(), k -> new ArrayList<>()).add(new ProposalView(p, f.text(), f.identical(), f.tooLarge()));
+            byDoc.computeIfAbsent(p.docId(), k -> new ArrayList<>()).add(view(p));
         }
         List<DocView> docs = new ArrayList<>();
         boolean inProgress = false;
@@ -145,13 +267,31 @@ public class AdminChangeController {
         }
         model.addAttribute("job", job);
         model.addAttribute("running", ChangeJobRepository.RUNNING.equals(job.status()) || inProgress);
-        model.addAttribute("report", parse(job));
+        KnowledgeEditWorkflow.Report editReport = parseEditReport(job);
+        model.addAttribute("editReport", editReport);
+        // 자연어 수정 작업의 리포트는 글자 치환 리포트 모양으로 읽으면 바꿀 말이 비어 "null → null" 로 그려진다 — 둘 중 하나만 싣는다.
+        model.addAttribute("report", editReport == null ? parse(job) : null);
+        java.util.Set<String> proposed = new java.util.HashSet<>();
+        for (List<ProposalView> vs : byDoc.values()) for (ProposalView v : vs) proposed.add(v.proposal().chunkId());
+        model.addAttribute("proposedChunks", proposed);
         model.addAttribute("docs", docs);
         model.addAttribute("anyApplied", anyApplied);
     }
 
     private static long count(List<ProposalView> views, String status) {
         return views.stream().filter(v -> status.equals(v.proposal().status())).count();
+    }
+
+    /** 자연어 수정 작업의 리포트 — 의도의 {@code mode} 가 {@code nl} 일 때만. */
+    static KnowledgeEditWorkflow.Report parseEditReport(ChangeJobRepository.Job job) {
+        if (job.intentJson() == null || !job.intentJson().contains("\"nl\"")) return null;
+        if (job.summaryJson() == null || job.summaryJson().isBlank()) return null;
+        try {
+            return MAPPER.readValue(job.summaryJson(), KnowledgeEditWorkflow.Report.class);
+        } catch (RuntimeException e) {
+            log.warn("[KNOWLEDGE-EDIT] 리포트를 읽지 못했다 job={}: {}", job.id(), e.getMessage());
+            return null;
+        }
     }
 
     static MaintenanceWorkflow.Report parse(ChangeJobRepository.Job job) {

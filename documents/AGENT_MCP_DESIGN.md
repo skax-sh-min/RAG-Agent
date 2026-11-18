@@ -7,6 +7,8 @@
 > 결정과 진행 상태는 [PLAN.md §6.33](PLAN.md) 이 추적한다.
 >
 > **구현 현황 (2026-11-10)**: Phase 0·1a·1b·2·3·4 구현됨(5: 추적 패널·`agent_tool_call` 은 2026-11-11 구현, 2주 관측과 기본값 판단은 남음). 이 문서는 **설계 시점의 서술**이라 일부는 구현과 다르다 — 같은 자리에 **「구현:」** 으로 표시했다. 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고 새 사이트(`AGENT_PLAN`)를 만들지 않고 `ThinkingSite.CONDENSE` 를 쓴다 ② `getChangeJob` Tool·`onToolCall`/SSE `tool`·`agent_tool_call` 저장은 **만들지 않았다**(작업 조회는 리포트 화면, 추적 패널은 Phase 5) ③ 유지보수 요청은 채팅에서 **되묻고 확정한 뒤에만** 시작하며 관리자 판정은 요청 스레드의 `ThreadContext.admin` 이다. 살아 있는 동작 명세는 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS.
+>
+> **추가 설계 (2026-11-17, 미구현)**: 자연어 지식 수정 — 사용 중단 표시·내용 삭제·주의 사항 추가·설명 수정, 원문 인용에 고정된 편집, 관리자가 고친 뒤 승인, 변환 MD 구간 되쓰기, MCP 제안 Tool(`findChunks`·`proposeChunkEdit`·`getChangeJob`)은 **§10**.
 
 ## Context
 
@@ -35,6 +37,8 @@
 | 리랭크 후보 수·최종 컷 | `search-top-k` 하나만 편집한다. 후보 수 = `search-top-k × 2`, 최종 컷 = `max(5, ⌈search-top-k × 2/3⌉)` 로 파생하고 `/settings` 에서 조회 전용으로 보인다(§4.3, 2026-11-06) |
 
 **선결 결함 (Phase 0에서 먼저 처리).** 블로킹 LLM 호출의 요청 본문에 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나갔다. 2026-11-06 요청 본문으로 확인했고 `ModelPinningChatModel` 로 고쳤다. 자세한 내용은 §2.4.
+
+**권장 모델 (운영 기준, 2026-11-17).** Agent(`app.agent.enabled`)를 켜는 배포는 LOCAL 모델을 **Gemma 4 12B 이상, 또는 Tool 사용(함수 호출·구조화 출력)에 맞춘 최신 모델**로 둔다. E2B 는 Agent 없는 채팅·검색의 최소 구성이다. 측정이 아니라 운영 기준이다 — 앱 하네스로 잰 모델은 E2B 뿐이고, E2B 는 짧은 수정 명령 인식 4/6, 의미 변경 수정안 통과 1/10, 네이티브 Tool Calling 0.20 으로 판단·형식이 약했다. 모델을 바꾸면 `ToolCallingEvaluationTest` 로 다시 재고 [AGENT_EVALUATION.md](AGENT_EVALUATION.md) 에 남긴다. 운영 절차는 ADMIN_MANUAL §10.1 "Agent 를 켤 때의 모델".
 
 **알려진 제약.** llama-server와 달리 LM Studio에서는 앱의 "생각 끔"이 듣지 않는다. 고치지 않기로 했다(운영 결정). 이 문서의 LLM 호출 지연은 생각을 끈 값이므로 LM Studio에서는 더 걸린다(§2.4).
 
@@ -316,10 +320,12 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 | `findRelatedDocuments` | `findRelatedDocuments()` | O | O | 읽기 |
 | `queryCatalog` | `searchDatabase()` | O | O | 조회마다 다름 |
 | `analyzeImpact` | 영향도 분석 | O | O | 읽기 |
-| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 — **채팅은 되묻고 "네"를 받은 뒤에만**(`PendingChangeConfirmations`), 옵션(`semantic`·`caseVariants`)은 채팅에서 못 켠다 | ADMIN만 | 제안 |
+| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 — **채팅은 되묻고 "네"를 받은 뒤에만**(`PendingChangeConfirmations`), 옵션(`semantic`·`caseVariants`)은 채팅에서 못 켠다. **설계(§10): 지시문만 받으면 자연어 수정 워크플로** | ADMIN만 | 제안 |
+| `findChunks` | `find_chunk` (§10.9, 설계) | X | ADMIN만 | ADMIN 읽기 |
+| `proposeChunkEdit` | `update_chunk`, `delete_chunk_section` (§10.9, 설계) | X | ADMIN만 | 제안 — 대기열에만 쌓인다 |
 | `getChunkContext` | 추가 | X | O | 읽기 |
 | `getDocument` | `getDocument()` | X | ADMIN만 | ADMIN 읽기 |
-| `getChangeJob` | 추가 | X | O | 읽기 — **구현: 만들지 않았다**(작업 조회는 리포트 화면 `/ui/impact-jobs/{id}`·`/admin/change-jobs/{id}`, MCP 에서는 `analyzeImpact`/`requestDocumentChange` 가 돌려준 번호로 화면을 연다) |
+| `getChangeJob` | 추가 | X | O | 읽기 — **구현: 만들지 않았다**(작업 조회는 리포트 화면 `/ui/impact-jobs/{id}`·`/admin/change-jobs/{id}`, MCP 에서는 `analyzeImpact`/`requestDocumentChange` 가 돌려준 번호로 화면을 연다). **§10.9 에서 ADMIN 으로 다시 만든다(설계)** — 외부 에이전트가 가드 위반을 읽고 고쳐 다시 내야 한다 |
 | `generateDiff` | `generateDiff()` | X | O | 읽기 |
 
 Tool이 아닌 내부 기능: `ChangeApplyService.apply()`(`updateDocument` 의 실제 쓰기)와 재색인(`reindexKnowledge` 에 해당). 둘 다 관리자 승인 뒤 워크플로만 호출한다.
@@ -770,6 +776,8 @@ sequenceDiagram
 
 알려진 한계가 둘 있다. MD 반영에 성공해도 `edited_at` 이 찍혀 재인덱싱 경고가 뜬다(`AdminService:407-419`). 문서 재인덱싱은 청크 id를 바꾸므로 대기 중인 수정안은 `stale` 이 된다.
 
+> 글자 치환이 아닌 자연어 지시(사용 중단 표시·내용 삭제·주의 사항 추가·설명 수정)로 넓히는 설계 — 원문 인용에 고정된 편집, 관리자가 고친 뒤 승인, 청크 삭제, 변환 MD 구간 되쓰기 — 는 **§10**(2026-11-17, 미구현).
+
 ### 5.6 저장 구조 (Flyway `V12` 이후)
 
 ```text
@@ -948,10 +956,11 @@ classDiagram
 | 3 | Agent 도입(Tool 선택 1회). 시작 전에 Tool 사전 평가 | 중 | 1b |
 | 4 | 영향도 분석, 문서 유지보수 | 상 | 1b |
 | 5 | 운영 적용 | 중 | 2, 3, 4 |
+| 6 | 자연어 지식 수정(§10) — 6a 관리자 고치기·MD 구간 되쓰기 · 6b MCP 제안 Tool · 6c 앱 안 워크플로 · 6d 신고 연결 | 상 | 4 (6b는 2도) |
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수.
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 미실시** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
 
 ### Phase 0. 선결 결함과 검색 기준선
 
@@ -1210,11 +1219,12 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 5. MCP Client: 외부 MCP 서버가 실제로 생기면.
 6. 원본 DOCX 쓰기: 수요가 확인되면 별도 과제로.
 7. LLM 자율 Tool 루프: 재개 신호(§7)가 관측되면.
+8. 자연어 지식 수정(§10): LLM 이 필요 없는 6a(관리자 고치기·MD 구간 되쓰기)부터. 앱 안 워크플로(6c)는 사전 평가 뒤.
 
 ### 하지 말아야 할 일
 
 1. `AgentGraph` 를 자유 ReAct 루프로 교체하지 않는다.
-2. LLM에게 쓰기 Tool을 주지 않는다. `updateChunk`, `reindexChunk`, `createFromSubmission` 이 대상이다.
+2. LLM에게 쓰기 Tool을 주지 않는다. `updateChunk`, `reindexChunk`, `createFromSubmission` 이 대상이다. 수정안을 대기열에 넣기만 하는 제안 Tool(`requestDocumentChange`, `proposeChunkEdit` — §10.9)은 쓰기가 아니다. 임베딩·재색인·**승인**도 Tool 로 만들지 않는다.
 3. 자유 SQL을 실행하는 Tool을 만들지 않는다.
 4. 같은 JVM 안에서 MCP Client로 자기 서버를 호출하지 않는다.
 5. MCP Server를 별도 프로세스로 빼서 같은 SQLite 파일을 공유하지 않는다.
@@ -1223,6 +1233,361 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 8. 측정 없이 Agent를 기본값으로 켜지 않는다.
 9. 소형 로컬 모델에게 재검색 여부나 근거 충분 여부의 판단을 맡기지 않는다.
 10. C 모드를 심층 검색으로 바꾸지 않는다. 문서를 재료로 새 코드를 만드는 지금 기능이 사라진다.
+
+---
+
+## 10. 자연어 지식 수정 (추가 설계, 2026-11-17 — 6a 구현)
+
+> 기준: `fix/opus` HEAD `089515a`. Phase 4(§5.4·§5.5)가 구현된 상태 위의 설계다. 숫자 상한·문턱은 제안값이고 6c 사전 평가(§10.12)에서 다시 정한다.
+>
+> **구현: 6a (2026-11-17)** — V16 · 관리자 고치기·빼기(`ChangeApplyService.editProposal`/`withdrawProposal`, `fragments/change-proposal-card.html`) · 줄 구간 MD 되쓰기(`MarkdownWriteBack.applyEdits`) · `applyChunkDelete` · `applyChunkEdit` 의 `image_paths` 동기화 · 감사 로그 `change.*`. 설계와 다른 곳: 청크 삭제의 MD 되쓰기는 줄 비교가 아니라 본문 덩어리 찾기이고(PITFALLS "자연어 지식 수정 6a"), 겹침 짝의 해시 사전 대조는 짝이 있는 수정안만 한다.
+>
+> **구현: 6b (2026-11-17)** — `AnchoredEdit`(작업 넷, G1·G2·G5·G6·G7) · `ChangeProposalService.proposeExternal`/`jobSummary` · `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`, 모두 ADMIN) · `getChunkContext` 출력에 `contentHash`·`heading`·`chunkContext`. 설계와 다른 곳: 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 G3·G4·G10(지시문이 있어야 하는 가드)을 걸지 않는다 · `newText` 는 크기 상한이 2만 자(G5 의 `revise` 30% 대신).
+>
+> **구현: 6c (2026-11-17)** — `EditIntent`(해석·근거 검사) · `EditGuards`(G3·G4·G10) · `KnowledgeEditWorkflow`(①③④⑤⑥⑦⑧⑩, `proposeForChunks`) · `/admin/change-jobs` 의 유형 선택·자연어 리포트·추가 적용 후보 · 채팅 되묻기(`ToolDispatchService.askNaturalLanguage`, `Pending` 에 해석 저장) · `requestDocumentChange` 의 자연어·`type` 인자. **설계와 다른 곳**: ① **사전 평가 없이 구현했다**(사용자 요청 — 판단표로 범위를 줄이지 않고 네 유형 모두 열려 있다. `KnowledgeEditEvaluationTest` 는 아직 없다) ② 청크 삭제 승격은 **남은 본문이 전혀 없을 때만**(설계 40자 — G3 을 지나 남은 무관한 문장까지 지우게 되어 바꿨다. 글자가 남으면 늘 문장 수정) ③ 겹침 짝(⑨)은 만들지 않았다(기본 `chunk_overlap=0`) ④ `revise` 의 G5(바뀐 글자 30%)는 걸지 않았다 — G3·G4 와 `AnchoredEdit` 의 바꾸기 2,000자 상한만 ⑤ 지우기 요청에서 일부 작업이 버려져도 남은 작업으로 수정안을 만든다(외부 제안과 달리 — 사람이 검토하고 리포트에 사유가 남는다) ⑥ 의도 해석의 `unclear` 는 작업 실패로 끝난다.
+
+**왜 하는가.** 지식 오류를 고치려면 지금 운영자가 일곱 단계를 손으로 한다 — 관련 청크 검색 → 내용 확인 → 대상 선정 → 수정 → 저장 → 임베딩 재생성 → 인덱스 갱신. 유지보수 워크플로(§5.5)가 이 중 대부분을 자동으로 하지만 **글자 치환(A → B)만** 받는다. "A 기능은 더 이상 사용되지 않음", "B 기능에 대한 내용을 삭제", "B 에 C 와 같은 주의 사항 추가", "이 문단의 설명을 고쳐" 같은 지시는 치환으로 표현되지 않는다. 의미 변경 옵션(`semantic`)은 치환 결과를 LLM 이 통째 다시 쓰는 방식이라 실측에서 9청크 중 1개만 가드를 통과했다(PITFALLS "의미 변경 수정안").
+
+**목표.** 자연어 지시 하나로 Agent 가 관련 청크를 찾고, 고칠 곳을 고르고, before/after 수정안을 만들고, 관리자가 (필요하면 고친 뒤) 승인하면 저장·재임베딩·인덱스·변환 MD 반영까지 끝낸다. 외부 에이전트(MCP)도 같은 대기열로 수정안을 낼 수 있다.
+
+### 10.1 설계 결정
+
+| # | 결정 | 이유 | 버린 대안 |
+|---|---|---|---|
+| E1 | **쓰기·임베딩·재색인·승인은 Tool 이 아니다.** 요청서의 `update_chunk`·`delete_chunk_section` 은 수정안을 대기열에 넣는 **제안 Tool** 로, `create_embedding`·`reindex_chunk` 는 승인 뒤 적용 단계로 대응한다(§10.9) | 코퍼스로 들어가는 문은 관리자 승인 하나다(§3.1, §9). 저장과 임베딩을 따로 부르면 본문과 벡터가 어긋난 상태가 생긴다(§2.2 — `applyChunkEdit` 이 둘을 한 번에 하는 이유). 승인을 Tool 로 열면 외부 에이전트가 관리자 키로 자기 수정안을 승인할 수 있다 | 쓰기 Tool + 확인 문구 |
+| E2 | **LLM 은 본문을 다시 쓰지 않고, 원문 인용에 고정된 편집 작업(앵커 편집)을 낸다.** 코드가 인용을 원문에서 찾아 적용한다(§10.4) | 통째 다시 쓰기는 무관한 구절을 지우고 마커를 바꿨다(실측). 인용은 코드가 확인할 수 있고, 출력이 짧아 출력 예약이 4,096 에서 1,024 로 준다 | 지금의 `semantic`(통째 다시 쓰기 + 가드) |
+| E3 | **새로 넣는 문장(주의 사항·사용 중단 안내)은 지시문이 사실의 출처이고, LLM 이 주변 글에 맞춰 다듬는다.** 모델은 위치를 고르고 지시문의 문장을 그 자리의 문체·용어·주어에 맞게 고쳐 쓴다. 코드가 다듬은 문장을 지시문과 대조하고(G10), 어기면 지시문 문장을 템플릿에 그대로 넣는다(2026-11-17 개정) | 지시문을 그대로 붙이면 "~해야 합니다"·"이거"처럼 문서와 어울리지 않는다. 사실(숫자·식별자·부정 여부)은 코드가 지시문과 대조하므로 지어낼 수 없다 | 모델이 자유롭게 문장 작성 · 지시문 문장을 고치지 않고 그대로(처음 설계) |
+| E4 | **대상 식별은 영향도 판정(§5.4)을 넓혀 재사용하고 "설명함 / 언급만 / 무관"을 가른다** | 4a 판정은 실측 회수 24/24, 인용 검증과 단어 경계 가드가 이미 있다. "B 삭제"가 B 를 언급만 하는 비교표·목록까지 지우면 안 된다 | 언급된 청크 전부를 대상으로 |
+| E5 | **관리자가 수정안 본문을 고친 뒤 승인할 수 있다.** 고친 결과도 마커·펜스 불변식은 다시 지난다 | 요청서 요구. 모델이 "거의 맞는" 수정안을 내도 쓸모가 생긴다 | 거절하고 청크 화면에서 손으로 — 지금 절차로 돌아간다 |
+| E6 | **변환 MD 되쓰기를 줄 단위 구간 대조로 넓힌다.** 리터럴은 지금의 발생 수 대조를 그대로 쓴다 | 자유 편집·사람 편집도 MD 에 들어가야 다음 재인덱싱이 되돌리지 않는다. 지금 의미 변경은 `MD_PARTIAL` 이다 | 청크에서 MD 를 다시 만들기 — 청크에 더해진 부모 제목·표 머리글 때문에 MD 와 다르다 |
+| E7 | **겹침 구간의 편집은 이웃 청크에 같은 편집을 짝으로 붙인다.** 문서의 `chunk_overlap` 이 0 이면(기본값) 아무것도 하지 않는다 | 한쪽만 고치면 `ChunkReassembler` 가 겹침을 못 찾아 내보내기·`getDocument` 에 중복이 생긴다. 리터럴은 양쪽이 같이 바뀌어 드러나지 않았다 | 무시 |
+| E8 | **두 경로, 한 대기열.** 앱 안 워크플로(로컬 모델)와 외부 에이전트(MCP 관리자 키)가 같은 `change_proposal` 에 쌓고 같은 가드·승인·적용을 지난다 | 대상 식별과 편집 작성은 큰 모델이 훨씬 낫다. 검증·승인·적용은 앱 코드가 쥔다 | 앱 안 워크플로만 — 소형 모델 품질이 상한이 된다 |
+| E9 | **채팅의 Tool 선택지는 늘리지 않는다.** `requestDocumentChange` 가 자연어 지시도 받는다 | 선택지가 늘면 소형 모델의 선택 정확도가 떨어진다(§3.1) | 새 Tool `requestKnowledgeEdit` |
+| E10 | **고정 워크플로다**(D8 유지). 단계 순서와 상한은 코드가 정하고 LLM 은 단계 안의 판단만 한다 | 재현·감사·재개가 쉽다 | 자유 Tool 루프 |
+
+### 10.2 지금 절차와 바뀌는 것
+
+| 단계 | 지금 (수동) | 바뀐 뒤 | 하는 쪽 |
+|---|---|---|---|
+| 1. 관련 청크 검색 | `/admin` 청크 화면, 채팅 출처를 보고 찾는다 | 전수 조회(`findMentions`) + 하이브리드 검색·리랭크 후보 | 코드 |
+| 2. 청크 내용 확인 | 하나씩 읽는다 | 청크별 판정(설명함·언급만·무관) + 근거 인용, 인용은 코드가 원문에서 확인 | LLM + 코드 |
+| 3. 수정 대상 선정 | 운영자가 고른다 | 유형별 규칙으로 고르고(§10.6) 화면에서 빼거나 더한다 | 코드 → 관리자 |
+| 4. 청크 내용 수정 | 텍스트 칸에서 고친다 | 앵커 편집 수정안 + Diff, 가드(§10.5) | LLM + 코드 |
+| 5. 저장 | `updateChunk` — 임베딩은 그대로 | 문서 단위 승인(필요하면 고친 뒤) | 관리자 |
+| 6. 임베딩 재생성 | 청크마다 `reindexChunk` 를 따로 누른다 | `applyChunkEdit` 한 번(해시 대조 → 임베딩 먼저 → 저장 → FTS) | 코드 |
+| 7. 벡터 인덱스 갱신 | 위와 같음. 변환 MD 는 고치지 않는다 | 같음 + 변환 MD 구간 되쓰기(§10.8) | 코드 |
+
+지금 절차는 5와 6 사이에 본문과 벡터가 어긋난 시간이 있고, 6을 잊으면 계속 어긋난다. MD 에 반영하지 않으므로 그 문서를 재인덱싱하면 수정이 사라진다(`edited_at` 경고만 뜬다). 자동 경로의 5~7은 4b-2 가 이미 만든 적용 순서(§5.5)를 그대로 쓴다.
+
+### 10.3 수정 유형
+
+| 유형 | 지시 예 | 대상 청크 | 편집 | 새 문장의 출처 |
+|---|---|---|---|---|
+| `replace` (지금) | "PostgreSQL 을 Oracle 로 바꿔" | 언급된 곳 전부 | `TermReplacement` | 지시문의 from/to |
+| `deprecate` | "A 기능은 더 이상 사용되지 않습니다" | A 를 **설명하는** 청크. 섹션마다 첫 청크 하나 | 안내 블록 삽입. **원문은 지우지 않는다.** 선택: "A 를 쓰라"는 문장 고치기 | 지시문(대안 "대신 X" 포함), LLM 이 주변 글에 맞춰 다듬음(G10) |
+| `remove` | "B 기능에 대한 내용을 삭제해" | B 를 설명하는 청크 | 구간 지우기 · 섹션 지우기. 남는 본문이 없으면 청크 삭제(승인 뒤 적용) | 없음 |
+| `add_note` | "B 기능과 관련해 C 와 같은 주의 사항을 추가해" | B 를 설명하는 청크 중 리랭커 점수 1위를 **추천**(수정안), 다음 후보 최대 5개는 화면에서 골라 더한다(§10.7) | 문단 뒤 삽입 | 지시문의 C, LLM 이 주변 글에 맞춰 다듬음(G10) |
+| `revise` | "A 의 기본 타임아웃은 30초가 아니라 60초다" | 그 사실을 담은 청크 | 구간 바꾸기 | 지시문(새 낱말은 지시문에서만, G4) |
+
+`deprecate` 는 **원문을 지우지 않고 안내만 넣는다**(확정 2026-11-17). 옛 버전을 쓰는 독자가 남아 있을 수 있고, 되돌리기 쉽다. 설명을 지우는 것은 별도의 `remove` 요청이다.
+
+**LLM 이 하는 글쓰기의 범위.** `revise` 의 바꾼 문장, `deprecate` 의 선택 문장 고치기, 그리고 `deprecate`·`add_note` 의 넣는 문장은 모두 LLM 이 주변 글에 맞춰 쓴다. 공통 규칙은 하나다 — **사실은 지시문에서만, 표현은 주변 글에 맞춰.** 코드는 표현을 막지 않고 사실만 대조한다(G4·G10).
+
+### 10.4 앵커 편집
+
+**편집 작업 넷.**
+
+| 작업 | 인용 | 적용 |
+|---|---|---|
+| 바꾸기 | `원문`(바꿀 구간 전체), `새글` | 그 구간을 새글로 |
+| 지우기 | `처음`, `끝` | 처음 인용의 시작부터 끝 인용의 끝까지. 긴 문단을 통째 베껴 쓰게 하면 출력이 길고 한 글자만 틀려도 인용이 깨지므로 두 끝만 받는다 |
+| 섹션 지우기 | `제목`(제목 줄) | 그 제목 줄부터 같거나 높은 수준의 다음 제목 전까지(청크 끝을 넘으면 이어지는 청크는 통째 삭제, §10.8) |
+| 넣기 | `뒤`(이 문장 뒤) | 블록을 넣는다. 위치는 인용 끝이 속한 **문단·표·코드 펜스·목록 블록의 끝**으로 민다. 표나 펜스 한가운데에는 넣지 않는다 |
+
+**출력 형식.** 본문에 따옴표·줄바꿈·코드 펜스가 많아 JSON 이 아니라 지금 의미 변경과 같은 줄 형식을 쓴다. 값은 다음 키 줄이나 `@@` 줄 전까지다.
+
+```text
+판정: 변경 필요 | 변경 없음
+이유: <한 줄>
+@@ 바꾸기
+원문: <원문에서 그대로 복사한 문장>
+새글: <바꾼 문장>
+@@ 지우기
+처음: <지울 구간의 앞부분, 원문 그대로>
+끝: <지울 구간의 뒷부분, 원문 그대로>
+@@ 섹션 지우기
+제목: <제목 줄, 원문 그대로>
+@@ 넣기
+뒤: <이 문장 뒤, 원문 그대로>
+```
+
+**인용 찾기.** 정확히 일치를 먼저 보고, 없으면 공백 정규화(연속 공백·줄바꿈을 한 칸으로) 일치를 원래 위치로 되짚는다. **정확히 한 곳**이어야 한다. 여러 곳이면 그 작업을 버린다(재시도하지 않는다). 작업끼리 구간이 겹치면 모두 버린다. 적용은 뒤쪽 위치부터 한다.
+
+**청크가 덧붙인 줄은 인용이 될 수 없다.** 부모 제목 줄, 다시 넣은 제목, 다시 넣은 표 머리글, 코드 이어짐 표시는 변환 MD 에 없어 되쓸 수 없다. 판정은 `ChunkReassembler` 의 같은 strip 함수로 한다(출처 하나). 섹션 지우기의 `제목` 만 실제 제목 줄을 가리킨다.
+
+**넣는 블록: LLM 이 다듬고 코드가 틀을 씌운다.** 넣기 작업에는 위치(`뒤`)와 함께 다듬은 문장(`글`)이 온다. 모델에게는 넣을 자리 앞뒤 문단과 지시문에서 뽑은 문장(`content`·`replacement`)을 주고, 그 자리의 문체(합니다체·해라체), 문서가 쓰는 용어와 표기(예: 문서가 `initConfig()` 로 쓰면 그 표기), 주어를 맞춰 한두 문장으로 고쳐 쓰게 한다. 블록의 머리(`**사용 중단**`·`**주의**`)와 인용 블록 모양은 코드가 번들 키(`edit.block.deprecated`, `edit.block.note`)로 씌운다.
+
+```text
+@@ 넣기
+뒤: <이 문장 뒤, 원문 그대로>
+글: <주변 글에 맞춘 문장>
+```
+
+```text
+> **사용 중단** — {다듬은 문장}
+> **주의** — {다듬은 문장}
+```
+
+다듬은 문장이 G10 을 어기거나 비어 있으면 **지시문 문장을 그대로** 넣은 기본 문장으로 물러난다(`{subject}은(는) 더 이상 사용되지 않습니다. 대신 {replacement}을(를) 사용하세요.` · `{content}` — 대안이 없으면 둘째 문장을 뺀다). 리포트와 Diff 에 "다듬은 문장 / 기본 문장" 중 어느 것인지 표시한다. `MessageFormat` 으로 채우므로 템플릿에 작은따옴표를 쓰지 않는다(PITFALLS "채팅에서 관리자 호출"의 함정).
+
+**반영 날짜는 문장에 넣지 않는다**(확정 2026-11-17). 언제 바뀌었는지는 청크의 수정일(`edited_at`, 적용 때 찍힌다)로 보고, 누가·어떤 작업으로 바꿨는지는 감사 로그(§10.8)에 남긴다.
+
+`deprecate` 의 위치는 코드가 정한다: 청크가 제목 줄로 시작하면 그 바로 아래, 아니면 대상이 처음 단독으로 나오는 문단 앞이다. 그래서 `deprecate` 의 LLM 호출은 위치가 아니라 문장 다듬기 하나다.
+
+### 10.5 가드
+
+모델의 출력을 믿지 않는다. 가드 하나라도 어기면 **그 작업을 버리고** 사유를 리포트에 남긴다. 작업이 하나도 남지 않으면 그 청크의 수정안을 만들지 않는다.
+
+| # | 검사 | 대상 | 근거 |
+|---|---|---|---|
+| G1 | 인용 고정 — 모든 인용이 원문에 정확히 한 곳(공백 정규화 허용), 청크가 덧붙인 줄이 아님 | 전부 | 인용이 없으면 무엇을 바꾸는지 코드가 알 수 없다 |
+| G2 | 보호 구간 — 이미지 마커와 바로 뒤 설명, `[페이지: N]`, 코드 펜스 줄, 표 구분선을 **일부만** 건드리지 않는다. 통째로 지우는 것은 `remove` 만 허용 | 전부 | 마커가 반쯤 깨지면 그림·페이지가 깨진다 |
+| G3 | 대상 관련성 — 지우기·바꾸기 구간 또는 그 구간이 속한 섹션 제목에 대상(또는 별칭)이 단독으로 나온다(`hasStandaloneOccurrence`) | `remove`, `revise` | E2B 가 무관한 구절(`SQLException인 경우`)을 지운 실측에 대한 직접 대응 |
+| G4 | 새 사실은 지시문에서만 — 바꾸기의 새글에 새로 생긴 낱말 중 원문·지시문·템플릿 어디에도 없는 것이 1개 이하, 숫자는 0개 | `revise`, `deprecate` 의 문장 고치기 | 소형 모델이 값을 지어내는 것을 막는다 |
+| G10 | 넣는 문장의 사실 대조 — ① 지시문 문장의 숫자·식별자(영숫자·`_`·`.`·`()` 를 품은 낱말)·따옴표 안 문자열이 **모두 그대로** 들어 있다 ② 그 밖의 숫자·식별자는 주변 문단에 있는 것만 ③ 부정 표현(않·없·금지·말·불가·never·not)의 수가 지시문 문장과 같다 ④ 새로 생긴 내용어(지시문·주변 문단·템플릿 어디에도 없는 낱말)가 2개 이하 ⑤ 길이가 지시문 문장의 0.5~2배, 400자 이하 · 마커·펜스·표 줄 없음 | `deprecate`·`add_note` 의 넣는 문장 | 표현은 바꾸되 사실은 바꾸지 못하게. 어기면 지시문 문장 그대로로 물러난다(작업을 버리지 않는다) |
+| G5 | 크기 — 작업 5개 이하. `deprecate`·`add_note` 는 지우기 0, 넣는 블록 500자 이하. `revise` 는 바뀐 글자가 원문의 30% 이하. `remove` 는 상한 없음, 남은 본문(덧붙인 줄·마커·공백 제외)이 **전혀 없을 때만** 청크 삭제로 바꾸고 한 글자라도 남으면 문장 수정이다(2026-11-17 결정 — 처음 설계는 40자 미만) | 유형별 | 요약·과잉 수정을 거른다 |
+| G6 | 불변식 — 지금의 `invariantViolation`(마커 목록, 페이지 마커, 펜스 결함 증가). `remove` 가 마커를 통째로 지웠으면 지운 목록과 정확히 맞아야 한다 | 전부 | 리터럴·의미 변경과 같은 검사 |
+| G7 | 무변화·중복 — 결과가 원문과 같거나, 같은 안내 블록이 이미 있다(정규화 비교) | 전부 | 같은 지시를 두 번 돌려도 안내가 두 번 들어가지 않는다 |
+| G8 | 겹침 짝 — 이웃 청크의 같은 구간을 정확히 맞추지 못하면 짝 둘 다 버린다 | 겹침이 있는 문서 | E7 |
+| G9 | 사람 편집 — G2·G6만 강제하고 나머지는 화면에 경고로만 보인다 | 관리자가 고친 수정안 | 사람의 판단을 모델용 가드로 막지 않는다 |
+
+### 10.6 전체 흐름 (앱 안 워크플로)
+
+```mermaid
+sequenceDiagram
+    actor A as 관리자
+    participant W as KnowledgeEditWorkflow
+    participant L as LlmRouter
+    participant K as findMentions, HybridSearch
+    participant G as 가드 (코드)
+    participant P as change_proposal
+    participant UI as /admin 대기열
+    participant X as ChangeApplyService
+    A->>W: A 기능은 더 이상 사용되지 않습니다
+    W->>L: 지시 해석 (JSON 1회)
+    L-->>W: type=deprecate, subject=A
+    W->>K: 전수 조회 + 하이브리드 후보
+    loop 후보마다 (상한 40, 채팅에 양보)
+        W->>L: 판정 (설명함, 언급만, 무관 + 인용)
+        W->>G: 인용 검증, 단어 경계
+    end
+    loop 대상마다
+        W->>L: 편집 작업 (위치, 주변 글에 맞춘 문장)
+        W->>G: G1 ~ G10 (G10 위반이면 지시문 문장 그대로)
+        W->>L: 맥락, 키워드 재생성 (remove, revise)
+    end
+    W->>P: pending 저장 (겹침 짝 포함)
+    A->>UI: Diff 검토, 고치기, 빼기, 문서 단위 승인
+    UI->>X: 적용 (백업, 해시, 임베딩 먼저, 청크 삭제, MD 구간 되쓰기)
+```
+
+| 단계 | 하는 일 | 규칙 |
+|---|---|---|
+| ① 지시 해석 | LLM 1회, `ThinkingSite.CONDENSE`(출력 256), JSON `{type, subject, from, to, content, replacement}` | `type` 이 집합 밖이거나 `unclear` 면 작업 실패("유형과 대상을 직접 고르라"). **`subject`·`content`·`replacement` 는 지시문의 부분 문자열이어야 한다**(공백 정규화) — 모델이 대상이나 넣을 문장을 지어내지 못한다. 별칭도 모델이 지어낼 수 있어 받지 않는다(폼의 별칭 칸으로만). `replace` 면 지금 경로(§5.5)로 넘긴다. 폼이나 MCP 가 유형·대상을 직접 주면 이 단계를 건너뛴다(지금 from/to 와 같다) |
+| ② 확인 | 채팅만. 해석된 유형·대상·넣을 문장을 되묻는다(§10.10) | "네" 뒤에는 **확인한 해석 그대로** 돈다. 다시 해석하지 않는다 |
+| ③ 후보 | 전수 조회(대상, 상한 200) ∪ 하이브리드 검색 + 교차 인코더(지시문, 후보 `effectiveRerankCandidates()`) | 큐레이션 청크는 수정안 대상이 아니고 수만 센다("수동 처리"). 3글자 미만은 전수 조회를 못 해 하이브리드 후보만 쓰고 리포트가 "빠진 곳이 있을 수 있다"고 밝힌다. 영향도의 열린 항목인 "의미 연관 후보"도 이 코드로 해결된다 |
+| ④ 판정 | 후보마다 LLM 1회, `ThinkingSite.RERANK`(출력 512), JSON `{role, quote}` | `prompt.impact.judge` 를 넓힌 `prompt.edit.judge`. 인용이 저장 원문에 없으면 대상에서 뺀다(`unverified`). 단어 경계 밖 언급은 모델에 묻지 않는다. 상한 40(`MAX_JUDGED`)을 넘는 후보는 언급 목록으로만 |
+| ⑤ 대상 선정 | 코드 | `deprecate`: 설명함 청크를 (문서, 섹션 제목)으로 묶어 묶음마다 `chunk_index` 가 가장 작은 하나. `remove`·`revise`: 설명함 전부. `add_note`: 설명함 중 리랭커 점수 1위 하나만 수정안으로 만들고, 다음 후보 최대 5개는 "추가 적용 후보"로 리포트에 싣는다(점수·근거 인용과 함께, 수정안은 만들지 않는다). 언급만은 리포트 목록이고 화면에서 하나씩 더할 수 있다 |
+| ⑥ 편집 작업 | 대상마다 LLM 1회, `ThinkingSite.RERANK`, 출력 `min(설정, 1024)` | 유형별 번들 `prompt.edit.ops.remove`·`.revise`·`.insert`(위치 + 다듬은 문장, `deprecate` 는 위치를 코드가 주고 문장만). 본문은 `PromptInjectionGuard.wrap()` |
+| ⑦ 가드 | 코드 | §10.5 |
+| ⑧ 맥락·키워드 | `remove`·`revise` 만, 대상마다 `KeywordExtractor` 1회 | 의미가 바뀌면 `chunk_context` 요약이 지운 내용을 계속 말한다. 수정안을 만들 때 다시 만들어 Diff 에 보이고, 적용은 LLM 을 부르지 않는다. 실패하면 옛 값을 그대로 둔다 |
+| ⑨ 겹침 짝 | 코드 | 문서의 `chunk_overlap > 0` 일 때만. 편집 구간이 이웃 청크의 겹침 창 안에도 있으면 같은 작업을 이웃에 붙이고 `group_key` 로 묶는다 |
+| ⑩ 저장 | `change_proposal`(§10.11), 리포트 | 리포트는 유형·대상·후보 수·판정 분포·대상 수·버린 작업과 사유·언급만 목록·수동 처리 수 |
+
+**비용.** 한 작업의 LLM 호출은 해석 1 + 판정 최대 40 + 편집 최대 대상 수 + 맥락 재생성 최대 대상 수다. 판정이 지배하므로 영향도 분석 한 건과 비슷하다. 영향도처럼 사용자당 동시 1건, 가상 스레드, 호출마다 대화형 게이트가 비기를 기다린다(상한 30초). 새 `ThinkingSite` 는 만들지 않는다(3단계·4a 와 같은 이유).
+
+### 10.7 관리자 검토와 고치기
+
+`/admin/change-jobs/{id}` 의 문서별 Diff 화면을 넓힌다. 전부 `/admin/**`(ADMIN), `POST` 는 CSRF.
+
+| 동작 | 엔드포인트 | 규칙 |
+|---|---|---|
+| 판정 근거 보기 | (화면) | 수정안마다 역할(설명함)·근거 인용·편집 작업 목록·가드가 버린 작업과 사유 |
+| 고치기 | `POST /admin/change-jobs/{id}/proposals/{pid}/edit` | `pending` 일 때만(CAS). 새 본문에 G2·G6 → 통과하면 `after_text` 를 바꾸고 처음 기계 수정안은 `machine_after_text` 에 한 번만 남긴다. 실패하면 400 이 아니라 사유와 입력값을 담은 폼 조각을 `HX-Retarget` 으로 돌려준다(`ProviderCatalog` 선례 — 400 은 토스트만 남긴다). 배지 "관리자가 고침" |
+| 이 청크 빼기 | `POST …/proposals/{pid}/withdraw` | `pending` → `withdrawn`. 겹침 짝은 함께 빠진다 |
+| 추가 적용 후보 고르기 (`add_note`) | `POST …/chunks/propose` (`chunkIds` 여러 개) | 리포트의 "추가 적용 후보"(최대 5개)를 체크박스로 골라 한 번에 수정안을 만든다. 같은 지시문 문장을 청크마다 그 자리에 맞춰 다듬는다(청크당 LLM 1회) |
+| 언급만인 청크 더하기 | `POST …/chunks/propose` (`chunkIds` 하나) | 그 청크로 §10.6 의 ⑥~⑨만 다시 돌려 수정안을 붙인다(LLM 1회) |
+| 승인·거절 | 지금과 같다(문서 단위) | 승인하면 그 문서의 `pending` 전부가 `approved` 가 되고 곧바로 적용한다 |
+
+고친 뒤에도 맥락·키워드는 수정안을 만들 때의 값 그대로다. 본문을 크게 고쳤으면 수정안을 빼고 그 청크를 다시 제안하게 하는 편이 낫다고 화면이 알린다.
+
+### 10.8 적용과 변환 MD 되쓰기
+
+**적용 순서는 §5.5 그대로이고 셋이 더해진다.**
+
+1. **해시 사전 대조.** 백업 뒤 쓰기 전에 그 문서의 승인된 수정안 전부의 해시를 먼저 대조한다. 겹침 짝 중 하나라도 `stale` 이면 짝 전체를 `stale` 로 둔다(한쪽만 적용되면 겹침이 어긋난다).
+2. **청크 삭제.** `kind=delete_chunk` 는 새 `AdminService.applyChunkDelete(collection, chunkId, expectedHash)` 로 간다 — 해시 대조 뒤 기존 `deleteChunk`(벡터·FTS·`doc_registry` 청크 수·재사용 표시 `markChunkDeleted`). 문서 잠금 안에서 돈다.
+3. **`image_paths` 동기화.** `applyChunkEdit` 은 지금 메타데이터를 그대로 이어받아, `remove` 가 그림 마커를 지우면 지운 그림이 답변 썸네일에 계속 붙는다. `updateChunk` 가 쓰는 `mergeEditableMeta(…, oldText, newText)` 의 마커 차분 규칙을 `applyChunkEdit` 에도 건다.
+4. **감사 로그.** 청크마다 적용 결과를 `AuditLogger` 에 `change.apply` 로 남긴다 — 작업 번호, 수정안 번호, 청크 id, 문서 id, 종류(`literal`·`semantic`·`edit`·`delete_chunk`), 유형(`deprecate` 등), 결과(`applied`·`stale`·`failed`), 승인자, 관리자가 고쳤는지, 넣는 문장이 다듬은 것인지 기본 문장인지. 본문은 남기지 않는다(before/after 는 `change_proposal` 에 있다). 문서 단위 승인·거절도 `change.approve`·`change.reject` 로 남긴다. 화면의 "언제"는 청크 `edited_at`, "누가·무엇을"은 이 기록이다.
+
+**MD 되쓰기.** 리터럴 작업은 지금의 발생 수 대조(`MarkdownWriteBack.apply`)를 그대로 쓴다. 그 밖의 작업(앵커 편집, 의미 변경, 관리자가 고친 것, 청크 삭제)은 새 `MarkdownWriteBack.applyHunks` 로 간다.
+
+- 적용된 수정안마다 `before_text → after_text` 를 줄 단위로 비교해(`ChunkDiff`) 바뀐 구간(hunk)을 얻는다. 기계 수정안과 사람이 고친 수정안이 같은 방식이라 앵커 정보에 기대지 않는다.
+- 청크가 덧붙인 줄은 구간에서 뺀다(§10.4와 같은 판정). 그 줄만 바뀐 구간은 되쓸 수 없어 충돌이다.
+- 지운 줄 묶음이 MD 에 **정확히 한 번**(공백 정규화) 나와야 그 자리를 바꾼다. 넣기만 한 구간은 바로 앞의 바뀌지 않은 줄이 MD 에 한 번 나와야 한다. 겹침 짝이 만든 같은 구간은 먼저 하나로 줄인다.
+- 섹션 지우기는 MD 에서 같은 제목 줄(한 번)을 찾아 같거나 높은 수준의 다음 제목 전까지 지운다. 여러 청크에 걸친 섹션을 한 번에 지운다.
+- **문서 단위 전부 아니면 전무다.** 구간 하나라도 못 맞추면 MD 를 건드리지 않고 `MD_CONFLICT` 다(반쯤 바뀐 MD 는 청크와 갈라진다). 임시 파일 → 원자적 이동은 지금과 같다.
+- 결과적으로 새 작업에서는 `MD_PARTIAL` 이 생기지 않는다. 옛 작업의 값으로만 남는다.
+
+원본 DOCX/PDF 는 여전히 고치지 않는다. 원본을 다시 올리면 수정은 사라진다고 리포트가 밝힌다.
+
+### 10.9 MCP Tool
+
+**요청서의 Tool 예시와 대응.**
+
+| 요청서 예시 | 설계 | 접근 | 성격 |
+|---|---|---|---|
+| `find_chunk` | **신규 `findChunks(subject, mode, limit)`** — `mode=mentions` 는 전수 조회, `search` 는 하이브리드 + 리랭크. 청크 id·파일·제목·발췌(300자)·`contentHash`. 50행 이하 | ADMIN | 읽기 |
+| `get_chunk` | **`getChunkContext` 확장** — 출력에 `contentHash`·`heading`·`chunkContext`·`editable`(큐레이션이거나 다른 버전이면 false)을 더한다 | PUBLIC | 읽기 |
+| `update_chunk` | **신규 `proposeChunkEdit(chunkId, baseHash, ops 또는 newText, rationale, jobId)`** — 수정안 하나를 대기열에 넣는다. 아무것도 쓰지 않는다 | ADMIN | 제안 |
+| `delete_chunk_section` | 같은 `proposeChunkEdit` 의 지우기·섹션 지우기 작업, 청크 통째는 `deleteWholeChunk=true` | ADMIN | 제안 |
+| `create_embedding` | **Tool 이 아니다.** 승인 뒤 `applyChunkEdit` 이 저장과 함께 한다 | — | — |
+| `reindex_chunk` | **Tool 이 아니다.** 같다 | — | — |
+| (추가) 자연어 요청 | `requestDocumentChange` 가 from/to 없이 지시문만 받으면 §10.6 워크플로를 시작한다. `type`·`subject`·`content` 를 주면 해석 단계를 건너뛴다 | ADMIN | 제안 |
+| (추가) 작업 조회 | **`getChangeJob(jobId)` 를 이번에 만든다** — 상태, 수정안 목록(파일·청크·종류·상태·축약 Diff·버린 작업과 사유), 검토 URL. 유지보수 작업만(영향도 작업은 지금처럼 리포트 화면) | ADMIN | 읽기 |
+| 승인 | **Tool 이 아니다.** `/admin` 화면(세션 + CSRF)에서만 한다 | — | — |
+
+`getChangeJob` 을 지금 만드는 이유: 4단계에서는 리포트 화면으로 충분했지만, 외부 에이전트는 자기가 낸 수정안이 가드에 걸렸는지 읽고 고쳐 다시 내야 한다.
+
+**`proposeChunkEdit` 규칙.**
+
+- `baseHash` 가 현재 본문 해시와 다르면 제안 단계에서 거절한다(에이전트가 낡은 본문을 보고 썼다).
+- `ops` 는 §10.4의 작업 넷을 구조화한 배열이다(외부 모델은 JSON 이 안정적이다). `newText` 를 주면 사람 편집처럼 G2·G6과 크기(G5의 `revise` 기준, `deleteWholeChunk` 아님)만 본다.
+- 가드 위반은 예외가 아니라 `{accepted:false, violations:[…]}` 로 돌려준다. 에이전트가 고쳐 다시 낼 수 있다.
+- `jobId` 가 없으면 새 작업(`kind=maintenance`, `intent_json.mode=external`, 요청 문장은 `rationale`)을 만들고, 있으면 요청자 본인의 외부 작업에 이어 붙인다. 작업당 수정안 200개 상한.
+- 큐레이션 청크·다른 버전 청크는 거절한다(`getChunkContext` 의 `readable()` 과 같은 판정, 거절 문구는 없는 청크와 같다).
+- 겹침 짝은 서버가 붙인다(§10.6 ⑨).
+- 감사: `ToolGuard` 의 `tool.call` 에 더해 `change.propose`(청크 id, 수락 여부)를 남긴다. 본문은 남기지 않는다.
+
+```mermaid
+sequenceDiagram
+    actor O as 운영자
+    participant X as 외부 에이전트
+    participant M as MCP Server
+    participant G as 가드 (코드)
+    participant P as change_proposal
+    participant UI as /admin 대기열
+    O->>X: A 기능은 더 이상 사용되지 않는다고 고쳐 줘
+    X->>M: findChunks(A, mentions)
+    X->>M: getChunkContext(chunkId)
+    X->>M: proposeChunkEdit(chunkId, baseHash, ops)
+    M->>G: G1 ~ G10
+    G-->>M: 수락 또는 위반 사유
+    M->>P: pending 저장
+    M-->>X: jobId, 결과, 검토 URL
+    X->>M: getChangeJob(jobId)
+    X-->>O: 검토 URL
+    O->>UI: Diff 검토, 고치기, 문서 단위 승인
+```
+
+**공개 범위.** `findChunks` 는 **관리자 전용**이다(확정 2026-11-17) — 읽기지만 편집 도구 묶음이고, 전수 조회는 코퍼스의 언급을 빠짐없이 훑을 수 있어 일반 검색(`searchKnowledge`)보다 넓다. `tools/list` 는 호출자별로 거르지 못하므로(PITFALLS "MCP 서버") 읽기 키에게도 ADMIN Tool 이 보이고 호출할 때 거부된다. 채팅의 Tool 선택지(`PLANNABLE`)에는 `findChunks`·`proposeChunkEdit`·`getChangeJob` 을 넣지 않는다(E9).
+
+**경계 테스트.** `ToolBoundaryConventionTest` 의 금지어에 `applyChunkEdit`·`applyChunkDelete`·`approveAndApply`·`transitionDocument` 를 더한다. 제안 Tool 은 워크플로 서비스(`ChangeProposalService`)만 부른다.
+
+### 10.10 채팅 경로
+
+- 관리자가 채팅에서 "A 기능은 더 이상 사용되지 않습니다" 라고 쓰면 Tool 계획이 `requestDocumentChange`(지시문만)를 고르게 한다. `prompt.agent.plan.rule.requestDocumentChange` 에 자연어 예시(사용 중단, 내용 삭제, 주의 사항 추가)를 더한다.
+- `ToolDispatchService.changeRequest()` 는 from/to 가 없으면 지금처럼 안내로 끝내지 않고 ① 지시 해석을 돌린다(TOOL 노드, 퍼밋 밖). 결과별로 되묻는다.
+
+| 해석 | 되묻는 문장 (예) |
+|---|---|
+| `deprecate` | 「A」을(를) 사용 중단으로 표시하는 수정안을 만들까요? A 를 설명하는 섹션마다 안내 문장을 넣습니다. |
+| `remove` | 「B」에 대한 설명을 지우는 수정안을 만들까요? 언급만 한 곳은 지우지 않습니다. |
+| `add_note` | 「B」 관련 청크에 다음 주의 사항을 넣는 수정안을 만들까요? > C |
+| `revise` | 「A」에 대한 설명을 "…" 로 고치는 수정안을 만들까요? |
+| `unclear`·검증 실패 | 무엇을 어떻게 바꿀지 읽지 못했습니다. 화면에서 유형과 대상을 골라 요청하세요. (미리 채운 링크) |
+
+- `PendingChangeConfirmations.Pending` 에 해석 결과(`EditIntent`)를 싣는다. "네" 는 저장된 해석으로 바로 시작하고 모델을 다시 부르지 않는다. 그 밖의 규칙(사용자·대화당 하나, 5분, 바로 다음 메시지가 정확한 긍정일 때만, meta 분류보다 앞섬)은 지금과 같다.
+- 수정안이 승인 전에는 아무것도 바꾸지 않으므로 "알리는 말"을 수정 요청으로 잘못 읽어도 되묻기에서 멈춘다. 비관리자에게는 이 Tool 이 보이지 않아 검색으로 간다.
+- 옵션(문장 고치기, `add_note` 대상 수)은 채팅에서 켜지 않는다. 화면에서 고른다.
+
+### 10.11 저장 구조 (Flyway `V16`)
+
+```text
+change_job       + intent_json        해석된 의도 {mode: literal|nl|external, type, subject, content, replacement}.
+                                       재현과 감사용. 옛 작업은 NULL
+change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text}]. 표시·감사용(적용과 MD 되쓰기는 before/after 로 한다)
+                 + target_role        describes | mentions | NULL
+                 + evidence_quote     판정 근거 인용
+                 + group_key          겹침 짝. 함께 빠지고 함께 stale
+                 + machine_after_text 관리자가 고치기 전의 기계 수정안. NULL 이면 고친 적 없음
+                 + edited_by, edited_at
+```
+
+- `change_proposal.kind` 에 `edit`, `delete_chunk` 을 더한다(`literal`, `semantic` 은 그대로). `delete_chunk` 의 `after_text` 는 빈 문자열이다.
+- `status` 에 `withdrawn` 을 더한다(관리자가 뺌).
+- 시각은 `DbTimestamp.now()`(UTC). 리포트 JSON 은 필드가 늘어도 옛 작업이 읽히도록 `LenientJson.MAPPER` 로 읽는다(PITFALLS "의미 변경 수정안").
+- 구현 때 `DATABASE.md` 표를 함께 고친다.
+
+### 10.12 단계와 완료 기준
+
+| 단계 | 내용 | 선행 | 이 순서인 이유 |
+|---|---|---|---|
+| 6a | 관리자 고치기·빼기 · 구간 MD 되쓰기 · `image_paths` 동기화 · `delete_chunk` 적용 경로 · `V16`. **LLM 없음** | 4 | 요청서의 "추가 수정 후 승인"을 지금의 리터럴·의미 변경 작업에도 바로 준다. `MD_PARTIAL` 을 없앤다. 뒤 단계의 적용 기반이다 |
+| 6b | MCP 제안 Tool(`findChunks` · `getChunkContext` 확장 · `proposeChunkEdit` · `getChangeJob`) + 앵커 편집과 가드(`AnchoredEdit`·`EditGuards`, 순수 클래스) | 6a | 대상 식별과 편집 작성을 큰 외부 모델이 하고 앱은 검증만 한다. 소형 모델 품질과 무관하게 바로 쓸 수 있고, 가드 코드는 6c와 같다 |
+| 6c | 앱 안 워크플로(`KnowledgeEditWorkflow` — 해석·후보·판정·편집·맥락 재생성) · `/admin` 요청 폼의 유형 선택 · 채팅 되묻기 | 6b, 사전 평가 | 소형 모델이 맡는 단계가 셋이라 측정으로 열 범위를 정한다 |
+| 6d (선택) | 청크 오류 신고에서 시작 — `/admin/chunk-reports` 의 "이 신고로 수정안 만들기"(코멘트를 지시문으로, 대상은 그 청크로 고정). 적용되면 신고를 해결로 닫는다(`ChunkReportService.resolveChunk`). **구현(2026-11-18)**: `KnowledgeEditWorkflow.startFromReport` — 후보 찾기·판정을 건너뛰고 그 청크에만 ⑥~⑩, 글자 바꾸기면 `MaintenanceWorkflow.proposeForChunk`(그 청크만, 옵션 없음). 작업에 `change_job.report_chunk_id`(V17)를 남기고 `ChangeApplyService` 가 그 청크의 수정안이 `applied` 일 때만 신고를 닫는다(낡음·실패면 열린 채). 신고 작업의 글자 치환은 발생 수 대조가 아니라 줄 구간 대조로 MD 에 되쓴다 | 6c | 오류를 발견하는 실제 입구가 신고다 |
+
+**6c 사전 평가.** 대상 모델은 권장 기준(Gemma 4 12B 이상 또는 Tool 사용에 맞춘 최신 모델, Context 절)을 만족하는 것으로 한다 — E2B 로 재면 판단표의 셋째 줄로 떨어질 가능성이 크고, 그 결과로 기능 범위를 정하면 큰 모델 배포까지 묶인다. 비교용으로 E2B 도 함께 잰다. `KnowledgeEditEvaluationTest` + `agent-eval/edit-gold.json`(코퍼스 복사본, 유형 넷 × 지시 5~8건). 지시 해석 정확도(유형·대상), 대상 recall·precision(설명함), 가드 통과율, 사람 수용률(고치지 않고 승인할 만한 비율, 수동 라벨)을 `documents/KNOWLEDGE_EDIT_EVALUATION.md` 에 남긴다. 생각을 끌 수 있는 서버(llama-server)에서 잰다.
+
+| 측정 결과 (제안 기준) | 결정 |
+|---|---|
+| 해석 90% 이상, 대상 recall 0.9·precision 0.8 이상, 가드를 통과한 수정안의 수용 70% 이상 | 유형 넷 모두 연다 |
+| 해석·대상은 되지만 편집 품질이 낮다 | 코드가 문장을 넣는 `deprecate`·`add_note` 만 열고 `remove`·`revise` 는 외부 에이전트(6b)나 관리자 고치기로 |
+| 해석부터 불안정 | 폼 입력(유형·대상·문장을 사람이 고른다)만 두고 LLM 은 판정만 한다 |
+
+**완료 기준.**
+
+- 6a: 관리자가 고친 수정안이 청크·벡터·FTS·MD 에 같은 내용으로 반영되고 기계 수정안이 `machine_after_text` 로 남는다. 마커를 깨는 편집은 저장되지 않고 사유가 보인다. 의미 변경·사람 편집이 MD 에 반영돼 재인덱싱 뒤에도 남는다(`scripts/maintenance_e2e` 확장). `delete_chunk` 적용 뒤 청크·벡터·FTS·레지스트리 청크 수·재사용 표시가 맞고 MD 에서 그 구간이 사라진다. 승인 없이 아무것도 바뀌지 않음을 테스트가 고정한다(기존 `nothingHappensWithoutApproval` 확장).
+- 6b: 읽기 키의 `proposeChunkEdit` 은 거부, 관리자 키는 대기열에만 쌓인다(코퍼스 불변). 가드 위반은 사유와 함께 돌아오고, `baseHash` 불일치는 제안 단계에서 거절된다. 가드 하나하나에 위반·통과 단위 테스트가 있다. Claude Code(MCP)로 "사용 중단" 시나리오를 끝까지 한 번 확인한다.
+- 6c: 사전 평가 판단표가 허락한 범위만 연다. 해석 실패·판정 형식 오류·가드 위반 주입에서 작업이 사유와 함께 끝나고 코퍼스는 불변이다. 같은 지시를 두 번 돌려도 안내가 두 번 들어가지 않는다. 채팅 되묻기에 해석된 유형·대상이 보이고 "네" 뒤 같은 의도로 시작한다.
+- 6d: 신고에서 시작한 작업의 대상이 그 청크로 고정되고, 적용되면 신고가 닫힌다.
+
+**구현 때 함께 고칠 문서.** `CLAUDE.md` Key Files(새 클래스) · `PITFALLS.md` · `DATABASE.md` · `ADMIN_MANUAL.md` §10 · `USER_MANUAL.md` §2.8 · `PLAN.md` §6.33.
+
+**패키지.** 새 패키지는 없다. `workflow/` 에 `KnowledgeEditWorkflow`·`EditIntent`·`AnchoredEdit`·`EditGuards`·`ChangeProposalService`, `tool/change/` 에 `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`)을 둔다. 영향도의 판정 호출은 `ChunkJudge` 로 떼어 두 워크플로가 공유한다.
+
+### 10.13 리스크
+
+| 리스크 | 심각도 | 대응 |
+|---|---|---|
+| 무관한 내용을 지움 | 높음 | 설명함 청크만, G3, 지우기는 두 끝 인용, 사람 승인, 적용 전 백업 |
+| 지어낸 사실이 들어감 | 높음 | 사실의 출처는 지시문뿐(E3), 해석 결과는 지시문의 부분 문자열, 다듬은 문장은 G10 으로 대조하고 어기면 지시문 문장 그대로, 바꾼 문장은 G4 |
+| 다듬은 문장이 뜻을 미묘하게 바꿈(G10 이 못 잡는 표현) | 중간 | Diff 에 지시문 문장을 나란히 보이고 "다듬은 문장" 배지, 관리자 고치기, 6c 사전 평가의 수용률에 포함 |
+| 문서 본문의 프롬프트 인젝션 | 중간 | 본문은 `wrap()`, 모델 출력은 인용 고정 편집뿐이고 코드가 검증, 쓰기는 사람 승인 뒤 |
+| 겹침 구간이 어긋나 내보내기에 중복 | 중간 | 겹침 짝(E7), 못 맞추면 버림. 기본 `chunk_overlap=0` 문서는 해당 없음 |
+| MD 구간을 못 찾아 재인덱싱이 수정을 되돌림 | 중간 | `MD_CONFLICT` 표시, 재인덱싱 사전 경고(`edited_at`). 원본 재업로드도 수정을 지운다 |
+| 청크 삭제로 재사용 답변이 낡음 | 중간 | `markChunkDeleted` 로 재사용 차단(기존), 리포트에 삭제 수 |
+| 승인 피로(많은 수정안을 대충 승인) | 중간 | 문서 단위 묶음, 근거 인용 표시, 판정 상한 40, 언급만은 기본 제외, 일괄 승인 없음 |
+| 외부 에이전트의 대량 제안 | 중간 | `mcp` 레이트리밋 버킷, 작업당 200개, 같은 가드 |
+| 2글자 대상(trigram 한계) | 낮음 | 하이브리드 후보만 쓰고 리포트가 빠진 곳 가능성을 밝힌다 |
+| 소형 모델의 편집 품질 | 높음 | 6c 사전 평가 판단표, 6b(외부 모델)와 관리자 고치기가 대안 |
+| Chroma 백엔드 | 중간 | §8.6과 같다. sqlite-vec 먼저 |
+
+### 10.14 하지 않는 것과 열린 결정
+
+**하지 않는 것.** 쓰기·임베딩·재색인·승인 Tool · 앱 안 워크플로에서 통째 다시 쓰기를 기본으로 쓰기(`semantic` 옵션은 리터럴 작업의 선택지로 남는다) · 원본 DOCX/PDF 수정 · 큐레이션 Q&A 수정(단일 출처가 `curated_qa` 라 리포트의 "수동 처리"로 지식 제안 편집 화면에 안내한다) · 코퍼스 전체 일괄 승인 · 자유 Tool 루프.
+
+**확정한 결정** (2026-11-17).
+
+| 항목 | 결정 | 반영한 곳 |
+|---|---|---|
+| 넣는 문장 | 지시문이 사실의 출처, LLM 이 주변 글에 맞춰 다듬고 코드가 사실을 대조한다. 어기면 지시문 문장 그대로 | E3, §10.4, G10 |
+| `deprecate` 가 원문을 지우는가 | 지우지 않는다. 내용 삭제는 별도 `remove` 요청 | §10.3 |
+| `add_note` 대상 수 | 가장 관련 높은 1개를 추천(수정안), 추가 적용 후보 최대 5개를 화면에서 골라 적용 | §10.3, §10.6 ⑤, §10.7 |
+| `findChunks` 접근 | 관리자만 | §10.9 |
+| 반영 날짜 | 문장에 넣지 않는다. 청크 수정일(`edited_at`)로 보고 감사 로그에 기록 | §10.4, §10.8 |
+| 청크 삭제 | 승인 뒤 허용(`delete_chunk`, MD 구간도 지운다) | §10.3, §10.8 |
 
 ---
 

@@ -37,7 +37,10 @@ class ToolBoundaryConventionTest {
             "SettingsOverrideRepository", "ProviderCatalog", "SqliteUserDetailsService", "MemoryRepository",
             "JdbcTemplate", "DataSource",
             "indexDocument", "syncDirectory", "deleteDocument", "updateChunk", "reindexChunk", "reindexFromMd", "deleteChunk",
-            "updateDocumentTags", "updateDisplayName", "createFromSubmission", "createFromLikedTurn");
+            "updateDocumentTags", "updateDisplayName", "createFromSubmission", "createFromLikedTurn",
+            // AGENT_MCP_DESIGN §10.9 — 적용·승인은 Tool 이 아니다. Tool 은 제안 서비스(ChangeProposalService)만 부른다.
+            "applyChunkEdit", "applyChunkDelete", "approveAndApply", "applyApproved", "transitionDocument", "ChangeApplyService",
+            "ChangeProposalRepository");
 
     /** 민감 테이블·예약 네임스페이스 — 이 계층 소스에 문자열로도 나오면 안 된다. */
     private static final List<String> FORBIDDEN_NAMES = List.of(
@@ -45,7 +48,7 @@ class ToolBoundaryConventionTest {
 
     private static final List<Class<?>> TOOLS = List.of(
             KnowledgeSearchTool.class, DocumentLookupTool.class, CatalogQueryTool.class, DiffTool.class, com.example.ragagent.tool.change.ChangeRequestTool.class,
-            com.example.ragagent.tool.change.ImpactAnalysisTool.class);
+            com.example.ragagent.tool.change.ImpactAnalysisTool.class, com.example.ragagent.tool.change.ChunkEditTool.class);
 
     private static List<Path> sources() throws IOException {
         List<Path> out = new ArrayList<>();
@@ -105,7 +108,7 @@ class ToolBoundaryConventionTest {
                 assertThat(ps[ps.length - 1].getType()).as("%s.%s 의 마지막 인자", c.getSimpleName(), m.getName()).isEqualTo(ToolContext.class);
             }
         }
-        assertThat(toolMethods).isEqualTo(8);
+        assertThat(toolMethods).isEqualTo(11);
     }
 
     @Test

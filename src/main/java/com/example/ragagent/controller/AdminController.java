@@ -48,6 +48,23 @@ public class AdminController {
     private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
+    /**
+     * 신고에서 수정안 만들기(6d) — 신고 상세가 폼을 보일지와 이 청크로 이미 만든 작업을 정한다. 세터 주입(슬라이스 테스트의 생성자를 흔들지 않게).
+     * 둘 중 하나라도 없으면 폼을 그리지 않는다.
+     */
+    private com.example.ragagent.repository.ChangeJobRepository changeJobs;
+    private com.example.ragagent.workflow.KnowledgeEditWorkflow knowledgeEdit;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setChangeJobs(com.example.ragagent.repository.ChangeJobRepository changeJobs) {
+        this.changeJobs = changeJobs;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setKnowledgeEdit(com.example.ragagent.workflow.KnowledgeEditWorkflow knowledgeEdit) {
+        this.knowledgeEdit = knowledgeEdit;
+    }
+
     public AdminController(AdminService adminService, RagService ragService,
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
@@ -621,6 +638,16 @@ public class AdminController {
         model.addAttribute("detail", detail);
         model.addAttribute("collection",
                 detail == null ? null : adminService.collectionFor(detail.version()));
+        // 6d — 이 신고로 수정안 만들기. 큐레이션 청크·이미 사라진 청크는 대상이 될 수 없다(워크플로도 거절한다).
+        model.addAttribute("reportEditEnabled", detail != null && knowledgeEdit != null && changeJobs != null
+                && !detail.curated() && detail.currentContent() != null);
+        model.addAttribute("reportJobs", detail == null || changeJobs == null
+                ? java.util.List.of() : changeJobs.recentForReportChunk(chunkId, 5));
+        if (detail != null) {
+            // 지시문 칸의 초기값 — 신고 코멘트(오래된 것부터). 관리자가 고쳐 보낸다.
+            model.addAttribute("reportInstruction", String.join("\n", detail.reports().stream()
+                    .map(v -> v.report().comment()).filter(c -> c != null && !c.isBlank()).distinct().toList()));
+        }
         return "fragments/admin-chunk-reports :: detail";
     }
 

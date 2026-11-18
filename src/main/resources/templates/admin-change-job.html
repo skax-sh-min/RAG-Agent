@@ -9,9 +9,10 @@
 <body>
 
 <section layout:fragment="content" class="container py-4">
-    <div th:fragment="body"
+    <!--/* 진행 중이면 3초마다 본문을 다시 받는다 — 단, 고치기 칸이 열려 있는 동안은 건너뛴다(다시 그리면 입력하던 칸이 닫힌다). */-->
+    <div th:fragment="body" id="change-job-body"
          th:attr="hx-get=${running} ? @{/admin/change-jobs/{id}/body(id=${job.id})} : null,
-                  hx-trigger=${running} ? 'every 3s' : null,
+                  hx-trigger=${running} ? 'every 3s [!document.querySelector(\'#change-job-body details[open]\')]' : null,
                   hx-swap=${running} ? 'outerHTML' : null">
 
         <p class="small mb-2"><a th:href="@{/admin/change-jobs}" th:text="#{maint.back}">Back</a></p>
@@ -20,6 +21,9 @@
             <span class="text-muted fs-6" th:text="'#' + ${job.id}">#1</span>
         </h5>
         <p class="mb-3"><strong th:text="${job.requestText}">text</strong></p>
+        <div th:if="${job.fromReport()}" class="alert alert-light border py-2 small">
+            <i class="bi bi-flag me-1"></i><span th:text="#{maint.from-report(${job.reportChunkId()})}">From report</span>
+        </div>
 
         <div th:unless="${anyApplied}" class="alert alert-secondary py-2 small" th:text="#{maint.not-applied}">Nothing has been changed yet.</div>
         <div th:if="${anyApplied}" class="alert alert-warning py-2 small" th:text="#{maint.original-file}">Original files are not changed.</div>
@@ -53,6 +57,52 @@
             </div>
         </div>
 
+        <div th:if="${editReport != null}">
+            <p class="mb-2"><span class="badge bg-primary" th:text="#{'edit.type.' + ${editReport.type}}">type</span>
+                <code th:text="${editReport.subject}">A</code>
+                <span th:if="${editReport.content != null}" class="ms-1" th:text="'— ' + ${editReport.content}">content</span>
+                <span th:if="${editReport.replacement != null}" class="ms-1 text-muted"
+                      th:text="#{maint.nl.replacement(${editReport.replacement})}">instead</span></p>
+            <div th:if="${editReport.tooShort}" class="alert alert-warning py-2" th:text="#{maint.nl.too-short}">too short</div>
+            <div th:if="${editReport.truncated}" class="alert alert-warning py-2" th:text="#{maint.truncated(${editReport.mentions})}">truncated</div>
+            <ul class="small text-muted">
+                <li th:text="#{maint.nl.summary(${editReport.candidates}, ${editReport.judged}, ${editReport.proposals})}">summary</li>
+                <li th:if="${editReport.unjudged > 0}" th:text="#{maint.nl.unjudged(${editReport.unjudged})}">unjudged</li>
+                <li th:if="${editReport.manualCurated > 0}" th:text="#{maint.report.manual(${editReport.manualCurated})}">manual</li>
+                <li th:if="${editReport.fallbacks > 0}" th:text="#{maint.nl.fallbacks(${editReport.fallbacks})}">fallbacks</li>
+                <li th:each="x : ${editReport.discarded}" class="text-danger" th:text="${x.file} + ' — ' + ${x.reason}">discarded</li>
+            </ul>
+            <form th:if="${!editReport.extraCandidates.isEmpty() or !editReport.mentionsOnly.isEmpty()}"
+                  th:action="@{/admin/change-jobs/{id}/chunks/propose(id=${job.id})}" method="post" class="card mb-3">
+                <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}" th:value="${_csrf != null ? _csrf.token : ''}"/>
+                <div class="card-body small">
+                    <div th:unless="${editReport.extraCandidates.isEmpty()}">
+                        <div class="fw-semibold mb-1" th:text="#{maint.nl.extra}">More places</div>
+                        <div class="form-check" th:each="c : ${editReport.extraCandidates}">
+                            <input class="form-check-input" type="checkbox" name="chunkIds" th:value="${c.chunkId}"
+                                   th:id="'extra-' + ${c.chunkId}" th:disabled="${proposedChunks.contains(c.chunkId)}">
+                            <label class="form-check-label" th:for="'extra-' + ${c.chunkId}">
+                                <span th:text="${c.file}">file</span> <span class="text-muted" th:text="${c.quote}">quote</span>
+                                <span class="badge bg-light text-dark border" th:if="${proposedChunks.contains(c.chunkId)}" th:text="#{maint.nl.proposed}">proposed</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div th:unless="${editReport.mentionsOnly.isEmpty()}" class="mt-2">
+                        <div class="fw-semibold mb-1" th:text="#{maint.nl.mentions}">Mentions only</div>
+                        <div class="form-check" th:each="c : ${editReport.mentionsOnly}">
+                            <input class="form-check-input" type="checkbox" name="chunkIds" th:value="${c.chunkId}"
+                                   th:id="'mention-' + ${c.chunkId}" th:disabled="${proposedChunks.contains(c.chunkId)}">
+                            <label class="form-check-label" th:for="'mention-' + ${c.chunkId}">
+                                <span th:text="${c.file}">file</span> <span class="text-muted" th:text="${c.quote}">quote</span>
+                                <span class="badge bg-light text-dark border" th:if="${proposedChunks.contains(c.chunkId)}" th:text="#{maint.nl.proposed}">proposed</span>
+                            </label>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary btn-sm mt-2" th:text="#{maint.nl.propose}">Create proposals</button>
+                </div>
+            </form>
+        </div>
+
         <div class="mb-4" th:each="d : ${docs}">
             <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
                 <h6 class="mb-0"><span th:text="${d.filename}">file</span>
@@ -72,18 +122,9 @@
                     </form>
                 </div>
             </div>
-            <div class="card mb-2" th:each="v : ${d.views}">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><span class="text-muted small" th:text="${v.proposal.chunkId}">id</span>
-                        <span class="badge ms-1" th:classappend="${v.proposal.kind == 'semantic'} ? 'bg-warning text-dark' : 'bg-light text-dark border'"
-                              th:text="#{'maint.kind.' + ${v.proposal.kind}}">literal</span></span>
-                    <span class="badge bg-secondary" th:text="#{'maint.status.' + ${v.proposal.status}}">pending</span>
-                </div>
-                <div class="card-body">
-                    <pre class="small mb-0" style="white-space:pre-wrap" th:text="${v.diff}">diff</pre>
-                    <p class="small text-muted mt-2 mb-0" th:if="${v.tooLarge}" th:text="#{maint.diff.too-large}">too large</p>
-                </div>
-            </div>
+            <th:block th:each="v : ${d.views}">
+                <div th:replace="~{fragments/change-proposal-card :: card}"></div>
+            </th:block>
         </div>
     </div>
 </section>

@@ -3,6 +3,8 @@ package com.example.ragagent.tool;
 import com.example.ragagent.repository.AgentToolCallRepository;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.workflow.EditIntent;
+import com.example.ragagent.workflow.KnowledgeEditWorkflow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -64,6 +66,14 @@ public class ToolDispatchService {
     /** 메시지 번들 없이 — 테스트용. 정형 안내는 한국어 기본 문구다. */
     public ToolDispatchService(ToolCatalog catalog) {
         this(catalog, null, null);
+    }
+
+    /** 자연어 수정의 해석(6c) — 세터 주입(생성자가 여럿이다). 없으면 바꿀 말·새 말이 없는 요청은 지금처럼 안내로 끝난다. */
+    private KnowledgeEditWorkflow knowledgeEdit;
+
+    @Autowired(required = false)
+    public void setKnowledgeEdit(KnowledgeEditWorkflow knowledgeEdit) {
+        this.knowledgeEdit = knowledgeEdit;
     }
 
     /** 관측 저장소 — 세터 주입(생성자가 여럿이다). 없으면 기록하지 않는다. */
@@ -157,6 +167,13 @@ public class ToolDispatchService {
         String from = a.path("from").asString("").strip();
         String to = a.path("to").asString("").strip();
         String instruction = a.path("instruction").asString("").strip();
+        if (plan.confirmed() && !a.path("type").asString("").isBlank()) {
+            // 확정된 자연어 수정 — 되물을 때 보여 준 해석(저장소의 값)을 그대로 넘긴다. 모델이 채운 값이 아니다(확정 계획은 저장소만 만든다).
+            return startConfirmed(state, caller, a);
+        }
+        if (!plan.confirmed() && (from.isEmpty() || to.isEmpty()) && knowledgeEdit != null) {
+            return askNaturalLanguage(state);
+        }
         if (from.isEmpty() || to.isEmpty() || from.equals(to) || from.length() > MAX_TERM_CHARS || to.length() > MAX_TERM_CHARS) {
             return fixedAnswer(state, text("chat.answer.change-needs-terms",
                     "무엇을 무엇으로 바꿀지 분명하지 않습니다. 예: PostgreSQL 을 Oracle 로 바꿔 줘", state));
@@ -173,6 +190,58 @@ public class ToolDispatchService {
         JsonNode r = MAPPER.readTree(result);
         boolean busy = "busy".equals(r.path("status").asString(""));
         log.info("[TOOL] 유지보수 {} user={} thread={}", busy ? "중복 요청" : "시작", state.userId(), state.threadId());
+        return fixedAnswer(state, busy
+                ? text("chat.answer.change-busy", "이미 진행 중인 유지보수 요청이 있습니다. 끝난 뒤 다시 요청해 주세요.", state)
+                : text("chat.answer.change-started", "수정안 만들기를 시작했습니다 (작업 #{0}). 끝나면 아래 화면에서 Diff 를 검토하고 승인하세요: [/admin/change-jobs/{0}](/admin/change-jobs/{0})", state,
+                        String.valueOf(r.path("jobId").asLong(0))));
+    }
+
+    /**
+     * 자연어 수정 되묻기(AGENT_MCP_DESIGN §10.10) — <b>사용자가 친 원문</b>을 해석한다(모델이 고쳐 쓴 지시문이 아니라 — 해석 값은 그 문장의 부분 문자열이어야
+     * 한다). 해석된 유형·대상·문장을 되읽어 주고 그 해석을 그대로 기억한다. 글자 바꾸기로 해석되면 지금의 "A 를 B 로" 되묻기와 같다. 못 읽으면 화면 링크.
+     */
+    private AgentState askNaturalLanguage(AgentState state) {
+        String question = state.question() == null ? "" : state.question().strip();
+        EditIntent intent;
+        try {
+            intent = knowledgeEdit.interpret(question, state.locale());
+        } catch (Exception e) {
+            log.info("[TOOL] 자연어 수정 해석 실패 thread={}: {}", state.threadId(), e.getMessage());
+            return fixedAnswer(state, text("chat.answer.edit-unclear",
+                    "무엇을 어떻게 바꿀지 읽지 못했습니다. 화면에서 유형과 대상을 골라 요청하세요: [/admin/change-jobs](/admin/change-jobs)", state));
+        }
+        if (intent.isReplace()) {
+            pending.put(state.userId(), state.threadId(), new PendingChangeConfirmations.Pending(question, intent.from(), intent.to()));
+            return fixedAnswer(state, text("chat.answer.change-ask", "「{0}」을(를) 「{1}」(으)로 바꾸는 수정안을 만들까요? 만들려면 네 라고 답해 주세요. "
+                    + "옵션은 {2} 에서 직접 요청하세요.", state, intent.from(), intent.to(),
+                    "/admin/change-jobs?from=" + enc(intent.from()) + "&to=" + enc(intent.to())));
+        }
+        pending.put(state.userId(), state.threadId(), new PendingChangeConfirmations.Pending(question, null, null,
+                intent.type(), intent.subject(), intent.content(), intent.replacement()));
+        log.info("[TOOL] 자연어 수정 되묻기 type={} user={} thread={}", intent.type(), state.userId(), state.threadId());
+        String key = "chat.answer.edit-ask." + intent.type();
+        String fallback = switch (intent.type()) {
+            case EditIntent.DEPRECATE -> "「{0}」을(를) 사용 중단으로 표시하는 수정안을 만들까요? {0} 을(를) 설명하는 섹션마다 안내 문장을 넣고 원문은 지우지 않습니다. 만들려면 네 라고 답해 주세요.";
+            case EditIntent.REMOVE -> "「{0}」에 대한 설명을 지우는 수정안을 만들까요? 언급만 한 곳은 지우지 않습니다. 만들려면 네 라고 답해 주세요.";
+            case EditIntent.ADD_NOTE -> "「{0}」 관련 청크에 다음 주의 사항을 넣는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
+            default -> "「{0}」에 대한 설명을 다음 내용으로 고치는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
+        };
+        return fixedAnswer(state, text(key, fallback, state, intent.subject(), intent.content() == null ? "" : intent.content()));
+    }
+
+    /** 확정된 자연어 수정을 시작한다 — 관리자 권한은 {@link ToolCatalog#call} 이 한 번 더 본다. */
+    private AgentState startConfirmed(AgentState state, ToolCaller caller, JsonNode a) {
+        tools.jackson.databind.node.ObjectNode args = MAPPER.createObjectNode()
+                .put("instruction", a.path("instruction").asString(""))
+                .put("type", a.path("type").asString(""));
+        for (String k : new String[]{"subject", "content", "replacement"}) {
+            String v = a.path(k).asString("");
+            if (!v.isBlank()) args.put(k, v);
+        }
+        String result = catalog.call(CHANGE_TOOL, args.toString(), caller);
+        JsonNode r = MAPPER.readTree(result);
+        boolean busy = "busy".equals(r.path("status").asString(""));
+        log.info("[TOOL] 자연어 수정 {} user={} thread={}", busy ? "중복 요청" : "시작", state.userId(), state.threadId());
         return fixedAnswer(state, busy
                 ? text("chat.answer.change-busy", "이미 진행 중인 유지보수 요청이 있습니다. 끝난 뒤 다시 요청해 주세요.", state)
                 : text("chat.answer.change-started", "수정안 만들기를 시작했습니다 (작업 #{0}). 끝나면 아래 화면에서 Diff 를 검토하고 승인하세요: [/admin/change-jobs/{0}](/admin/change-jobs/{0})", state,

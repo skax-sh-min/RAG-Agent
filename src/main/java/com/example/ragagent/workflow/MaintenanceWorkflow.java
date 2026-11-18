@@ -288,6 +288,61 @@ public class MaintenanceWorkflow {
     }
 
     /**
+     * 신고에서 시작한 글자 바꾸기(6d, AGENT_MCP_DESIGN §10.12) — 대상이 <b>그 청크 하나</b>로 고정된다. 코퍼스 전수 조회를 하지 않고, 의미 변경·대소문자
+     * 변형 옵션도 켜지 않는다(채팅·자동 해석의 글자 바꾸기와 같다). 리포트는 글자 치환 리포트 모양이라 작업 화면이 그대로 그린다. 어떤 실패도 {@code failed}.
+     */
+    void proposeAndStoreForChunk(long jobId, String instruction, String from, String to, String chunkId) {
+        try {
+            Report report = proposeForChunk(jobId, instruction, from, to, chunkId);
+            jobs.finish(jobId, ChangeJobRepository.DONE, MAPPER.writeValueAsString(report), null);
+            log.info("[MAINTENANCE] 신고 청크 수정안 job={} chunk={} 수정안={}", jobId, chunkId, report.proposals());
+        } catch (Exception e) {
+            log.warn("[MAINTENANCE] 신고 청크 수정안 실패 job={}: {}", jobId, e.getMessage());
+            jobs.finish(jobId, ChangeJobRepository.FAILED, null, String.valueOf(e.getMessage()));
+        }
+    }
+
+    Report proposeForChunk(long jobId, String instruction, String fromArg, String toArg, String chunkId) {
+        if (fromArg == null || fromArg.isBlank() || toArg == null || toArg.isBlank()) {
+            throw new IllegalArgumentException("바꿀 말과 새 말이 필요합니다");
+        }
+        String from = fromArg.strip();
+        String to = toArg.strip();
+        if (from.length() > MAX_TERM_CHARS || to.length() > MAX_TERM_CHARS) {
+            throw new IllegalArgumentException("바꿀 말이 너무 깁니다(" + MAX_TERM_CHARS + "자 이하의 식별자·용어만 치환할 수 있습니다)");
+        }
+        if (from.equals(to)) throw new IllegalArgumentException("바꿀 말과 새 말이 같습니다");
+        String collection = adminService.collectionFor(VERSION);
+        AdminService.ChunkRow row = adminService.getChunk(collection, chunkId);
+        if (row == null || row.isCurated()) throw new IllegalArgumentException("신고된 청크를 읽지 못했습니다: " + chunkId);
+        TermReplacement rule = new TermReplacement(from, to, false);
+        String before = row.fullText() == null ? "" : row.fullText();
+        int variants = rule.variantCount(before) > 0 ? 1 : 0;
+        List<Discarded> discarded = new ArrayList<>();
+        List<ChangeProposalRepository.NewProposal> out = new ArrayList<>();
+        int unchanged = 0;
+        if (!rule.matches(before)) {
+            unchanged = 1;
+        } else {
+            String after = rule.apply(before);
+            String problem = invariantViolation(before, after);
+            if (problem != null) {
+                discarded.add(new Discarded(row.filename(), row.id(), problem));
+            } else {
+                String ctx = row.metadata().get(MetaKey.CHUNK_CONTEXT);
+                String kw = row.metadata().get(MetaKey.EXCERPT_KEYWORDS);
+                out.add(new ChangeProposalRepository.NewProposal(jobId, row.docId(), row.filename(), row.id(),
+                        ChangeProposalRepository.KIND_LITERAL, before, after, sha256(before),
+                        ctx, ctx == null ? null : rule.apply(ctx), kw, kw == null ? null : rule.apply(kw),
+                        "리터럴 치환(신고된 청크): \"" + from + "\" → \"" + to + "\""));
+            }
+        }
+        proposals.insertAll(out);
+        return new Report(instruction, from, to, rule.matches(before) ? 1 : 0, false, false,
+                out.size(), unchanged, 0, List.copyOf(discarded), false, 0, 0, List.of(), false, variants);
+    }
+
+    /**
      * 수정안이 지켜야 할 것 — 이미지 마커·페이지 마커가 그대로이고 코드 펜스 문제가 <b>새로</b> 생기지 않았는가. 위반 사유 또는 {@code null}.
      * (펜스는 원래 있던 문제까지 탓하지 않는다 — 이 수정이 만든 것만 본다.)
      */

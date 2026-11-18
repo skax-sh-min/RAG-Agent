@@ -491,4 +491,24 @@ class MaintenanceWorkflowTest {
         // 규칙이 글자 그대로면 변형은 "바꿀 말"이 아니다(실측에서 모델이 ORACLE 을 PostgreSQL 로 바꾼 것처럼 허용된다)
         assertThat(MaintenanceWorkflow.validateRewrite(lit, revived, TermReplacement.exact("Oracle", "PostgreSQL"))).isNull();
     }
+
+    @Test
+    @DisplayName("6d — 신고 청크의 글자 치환은 그 청크만 본다(전수 조회 없음). 바꿀 말이 없으면 수정안 없이 unchanged")
+    void reportedChunkLiteralOnlyTouchesThatChunk() {
+        chunk("c1", "d1", "포트는 8080 이다.", "설정 > 8080", null);
+
+        MaintenanceWorkflow.Report r = workflow.proposeForChunk(7L, "8080 을 9090 으로", "8080", "9090", "c1");
+
+        assertThat(r.proposals()).isEqualTo(1);
+        ChangeProposalRepository.NewProposal p = stored().get(0);
+        assertThat(p.chunkId()).isEqualTo("c1");
+        assertThat(p.afterText()).isEqualTo("포트는 9090 이다.");
+        assertThat(p.afterContext()).isEqualTo("설정 > 9090");
+        verify(keywords, org.mockito.Mockito.never()).findMentions(eq("latest"), anyString(), anyInt());
+
+        chunk("c2", "d1", "다른 내용", null, null);
+        MaintenanceWorkflow.Report none = workflow.proposeForChunk(8L, "8080 을 9090 으로", "8080", "9090", "c2");
+        assertThat(none.proposals()).isZero();
+        assertThat(none.unchanged()).isEqualTo(1);
+    }
 }

@@ -22,6 +22,20 @@
         <spring-ai.version>2.0.2</spring-ai.version>
         <!-- 앱 jar 매니페스트 Min-Launcher-Protocol — 이 버전이 요구하는 최소 런처 세대(아래 maven-jar-plugin default-jar 설명) -->
         <min.launcher.protocol>1</min.launcher.protocol>
+
+        <!-- sqlite-vec 로더블 확장 — 버전의 유일한 출처. 빌드(maven-antrun-plugin, generate-resources)가 이 버전의 릴리즈 파일을
+             받아 jar 의 native/sqlite-vec/ 에 넣고 같은 폴더에 VERSION 파일도 쓴다(VecExtension 이 그 파일을 읽는다 — 코드에 버전이 없다).
+             버전을 올릴 때는 아래 sha256 다섯 개도 함께 바꾼다: 릴리즈 페이지의 각 파일 digest 이거나
+             받은 파일에 sha256sum 을 돌린 값(캐시는 ${sqlite-vec.cache.dir}). 해시가 틀리면 빌드가 멈춘다 — 실행될 네이티브 코드라서 -->
+        <sqlite-vec.version>0.1.9</sqlite-vec.version>
+        <sqlite-vec.cache.dir>${user.home}/.m2/sqlite-vec/${sqlite-vec.version}</sqlite-vec.cache.dir>
+        <!-- -Dsqlite-vec.skip=true: 받지도 jar 에 넣지도 않는다(네트워크 없이 빌드). 그때 앱은 SQLITE_VEC_EXTENSION_PATH 를 직접 받아야 한다 -->
+        <sqlite-vec.skip>false</sqlite-vec.skip>
+        <sqlite-vec.sha256.windows-x86_64>51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983</sqlite-vec.sha256.windows-x86_64>
+        <sqlite-vec.sha256.macos-aarch64>8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29</sqlite-vec.sha256.macos-aarch64>
+        <sqlite-vec.sha256.macos-x86_64>53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713</sqlite-vec.sha256.macos-x86_64>
+        <sqlite-vec.sha256.linux-x86_64>b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7</sqlite-vec.sha256.linux-x86_64>
+        <sqlite-vec.sha256.linux-aarch64>ea03d39541e478fab5974253c461e1cb5d77742f69e40cf96e3fad5bc309a37c</sqlite-vec.sha256.linux-aarch64>
     </properties>
 
     <dependencyManagement>
@@ -271,6 +285,61 @@
                         <goals>
                             <goal>build-info</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- sqlite-vec 로더블 확장을 jar 에 넣는다(target/classes/native/sqlite-vec/<플랫폼>/vec0.*, 그리고 VERSION).
+                 받은 파일은 ${sqlite-vec.cache.dir} 에 남아 다음 빌드는 네트워크를 쓰지 않는다. 받은 tar.gz 는 pom 에 적힌 SHA-256 과
+                 맞아야 한다. 출력을 <resources> 로 더하지 않고 target/classes 에 바로 쓰는 이유: 스프링 부트 부모의 <resources>(application*.properties
+                 필터링)를 이 프로젝트가 다시 선언하면 그 설정을 덮어쓰게 된다.
+                 앱 쪽: com.example.ragagent.config.VecExtension 이 jar 에서 현재 플랫폼의 파일을 꺼낸다. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>bundle-sqlite-vec</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${sqlite-vec.skip}</skip>
+                            <target>
+                                <macrodef name="sqlite-vec">
+                                    <attribute name="platform"/>
+                                    <attribute name="sha256"/>
+                                    <sequential>
+                                        <local name="archive"/>
+                                        <property name="archive"
+                                                  value="${sqlite-vec.cache.dir}/sqlite-vec-${sqlite-vec.version}-loadable-@{platform}.tar.gz"/>
+                                        <mkdir dir="${sqlite-vec.cache.dir}"/>
+                                        <get src="https://github.com/asg017/sqlite-vec/releases/download/v${sqlite-vec.version}/sqlite-vec-${sqlite-vec.version}-loadable-@{platform}.tar.gz"
+                                             dest="${archive}"
+                                             skipexisting="true"/>
+                                        <fail message="sqlite-vec @{platform}: SHA-256 mismatch for ${archive} - delete ${sqlite-vec.cache.dir} and build again. If the version was just changed, update the sqlite-vec.sha256.@{platform} property in pom.xml (expected @{sha256}).">
+                                            <condition>
+                                                <not>
+                                                    <checksum file="${archive}" algorithm="SHA-256" property="@{sha256}"/>
+                                                </not>
+                                            </condition>
+                                        </fail>
+                                        <untar src="${archive}"
+                                               dest="${project.build.outputDirectory}/native/sqlite-vec/@{platform}"
+                                               compression="gzip"/>
+                                    </sequential>
+                                </macrodef>
+                                <sqlite-vec platform="windows-x86_64" sha256="${sqlite-vec.sha256.windows-x86_64}"/>
+                                <sqlite-vec platform="macos-aarch64" sha256="${sqlite-vec.sha256.macos-aarch64}"/>
+                                <sqlite-vec platform="macos-x86_64" sha256="${sqlite-vec.sha256.macos-x86_64}"/>
+                                <sqlite-vec platform="linux-x86_64" sha256="${sqlite-vec.sha256.linux-x86_64}"/>
+                                <sqlite-vec platform="linux-aarch64" sha256="${sqlite-vec.sha256.linux-aarch64}"/>
+                                <!-- 코드가 읽는 버전 파일: pom 속성이 유일한 버전 출처 -->
+                                <echo file="${project.build.outputDirectory}/native/sqlite-vec/VERSION"
+                                      message="${sqlite-vec.version}"/>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

@@ -36,7 +36,7 @@ public class SqliteVecVerifier {
         } catch (Exception e) {
             throw new IllegalStateException(
                     "sqlite-vec 확장 로드 검증 실패 (SELECT vec_version()). "
-                    + "app.vectorstore.sqlite-vec.extension-path 가 올바른 vec0 바이너리를 가리키는지, "
+                    + "app.vectorstore.sqlite-vec.extension-path 가 올바른 vec0 바이너리를 가리키는지(비워 두면 jar 에 든 것을 씁니다), "
                     + "현재 플랫폼용 바이너리인지 확인하세요. 원인: " + e.getMessage(), e);
         }
     }

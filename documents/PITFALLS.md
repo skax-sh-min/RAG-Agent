@@ -618,6 +618,63 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **하네스가 알려 준 것(운영과 무관하지 않다).** 세션 쿠키가 `Secure`(운영은 Caddy HTTPS 전제, `USE_CADDY_REVERSE_PROXY_HTTPS` 기본 true)라 http 로 직접 붙는 클라이언트는 세션을 못 잇는다 — 스크래치 앱은 `-DUSE_CADDY_REVERSE_PROXY_HTTPS=false`. 폼 CSRF 는 쿠키 원값이 아니라 **페이지가 렌더한 마스킹 토큰**을 보내야 하고 로그인 뒤 토큰이 돈다. 그리고 **모든 요청이 403 일 때 "되묻지 않았다" 같은 부정 검사가 공허하게 통과한다** — 하네스가 채팅 응답이 200 인지 먼저 확인한다.
 - **알려진 한계.** 대기가 메모리라 재기동하면 사라진다(사용자는 한 번 더 말하면 된다) · 한 관리자가 여러 대화에서 동시에 되묻기 중일 수 있다(대화별로 따로) · 계획 호출 때문에 관리자의 모든 일반 질문에 LLM 호출이 한 번 더 든다(`app.agent.enabled` 가 켜진 경우 — 채팅 전체의 기존 동작).
 
+### 자연어 지식 수정 6a — 관리자 고치기 · 줄 구간 MD 되쓰기 · 청크 삭제 적용
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.7·§10.8·§10.11. LLM 이 없는 기반 단계(2026-11-17). 수정안을 **만드는** 새 경로(앵커 편집·자연어 해석·MCP 제안)는 아직 없고, 이 단계는 지금의 리터럴·의미 변경 수정안을 고치고 빼고, 새 종류(`edit`·`delete_chunk`)를 적용할 수 있게 한다.
+
+- **MD 되쓰기가 두 갈래다.** 기계가 낸 글자 치환만 있는 문서(`kind=literal` ∧ 고친 적 없음)는 지금처럼 발생 수 대조(`MarkdownWriteBack.apply`). 그 밖의 것(의미 변경·관리자가 고친 것·`edit`·`delete_chunk`)이 **하나라도** 있으면 문서 전체를 줄 구간 대조(`applyEdits`)로 한다. 고친 리터럴을 발생 수로 대조하면 고친 본문이 MD 에 안 들어간다 — 그래서 판정 기준이 종류가 아니라 `literalOnly` 다. 의미 변경이 구간 대조로 옮겨 **새 작업에서는 `MD_PARTIAL` 이 생기지 않는다**(옛 행의 문구만 남김).
+- **구간 대조의 규칙.** `ChunkDiff` 로 바뀐 줄 묶음을 얻고, 지운 줄 묶음이 MD 에 **정확히 한 번**(줄마다 공백 정규화) 나와야 바꾼다. 넣기만 한 구간은 앞의(없으면 뒤의) 빈 줄 아닌 바뀌지 않은 줄을 한 번 찾아 그 옆에, 사이의 빈 줄 수가 MD 와 같아야 한다. 겹침 짝이 만든 같은 구간은 한 번만. 문서 하나에서 하나라도 못 맞추면 **전부 아니면 전무**로 MD 를 그대로 둔다(`MD_CONFLICT`).
+- **청크 삭제는 줄 비교에 맡기지 않는다.** 처음엔 `ChunkDiff.compare(본문, "")` 를 썼는데, 수정 전의 빈 줄이 수정 후의 빈 문자열과 **같은 줄로 짝지어져** 구간이 둘로 쪼개졌다(테스트가 MD 에 빈 줄 하나가 더 남는 것으로 잡았다). 이제 수정 후가 비면 본문 전체를 한 덩어리로 찾고, 못 찾으면 청크가 덧붙인 앞머리(제목 줄·코드 이어짐 표시 + 뒤 펜스)와 끝의 코드 이어짐 표시를 하나씩 떼어 다시 찾는다(`withoutChunkHead`). 이 떼어 내기는 **지우기 전용**이다 — 바꾸기 구간에서 줄을 떼면 그 줄의 새 내용이 갈 곳이 없다.
+- **`applyChunkEdit` 이 이제 `image_paths` 를 마커에 맞춘다.** 화면 편집(`updateChunk`)과 같은 규칙을 `AdminService.syncImagePaths` 하나로 뽑아 둘이 쓴다 — 옛 값 − 사라진 마커 + 새 마커(본문에 마커가 없는 스캔 PDF 의 경로는 남는다). 예전엔 유지보수 적용이 그림 마커를 지워도 썸네일이 계속 붙었다(리터럴은 마커 불변식 때문에 드러나지 않았다).
+- **`applyChunkDelete`** 는 `applyChunkEdit` 과 같은 사전 검사(없음·큐레이션·해시) 뒤에만 기존 `deleteChunk`(벡터·FTS·레지스트리·재사용 표시)를 부른다. sqlite-vec 의 `deleteChunk` 는 두 테이블을 따로 지우는 기존 동작 그대로다(트랜잭션 아님).
+- **겹침 짝의 해시 사전 대조는 짝(`group_key`)이 있는 수정안만** 한다. 모든 수정안을 미리 읽게 하면 `getChunk` 를 목으로 두지 않은 기존 테스트들이 전부 `stale` 이 되고, 짝 없는 수정안은 `applyChunkEdit` 자신이 해시를 본다.
+- **고치기는 사람의 판단이라 모델용 가드를 걸지 않는다**(G9) — 마커·펜스 불변식(`MaintenanceWorkflow.invariantViolation`)과 빈 본문·20,000자·수정 전과 같음만 거절한다. 거절은 400 이 아니라 사유와 입력값을 담은 카드 조각 200(`ProviderCatalog` 선례 — 400 은 토스트만 남고 입력이 사라진다). `machine_after_text` 는 `COALESCE` 로 처음 한 번만 쓴다. 빼기는 문서의 대기 수가 바뀌므로 `HX-Refresh` 로 화면을 다시 읽는다.
+- **감사 기록은 백그라운드 스레드에서도 남지만 `user` 칸은 믿지 말 것.** 적용은 가상 스레드라 `AuditLogger` 의 현재 사용자가 비어 있을 수 있다 — 그래서 `details.reviewer` 에 승인자를 따로 싣는다.
+- **진행 중 폴링이 열린 고치기 칸을 닫지 않는다.** 작업이 돌고 있는(승인된 수정안이 있는) 동안 본문을 3초마다 다시 받는데, 처음엔 열어 둔 고치기 칸까지 다시 그려 입력이 사라졌다. `hx-trigger` 에 htmx 필터 `every 3s [!document.querySelector('#change-job-body details[open]')]` 를 달아 `<details>` 가 열려 있는 동안은 건너뛴다. Thymeleaf 문자열 안의 작은따옴표는 `\'` 로 이스케이프해야 한다(`''` 가 아니다).
+- **맥락·키워드는 관리자가 고른 때만 다시 만든다.** 고치기는 본문만 바꾸므로 `after_context`·`after_keywords` 는 기계 수정안의 값으로 남는다. 카드의 「맥락·키워드 다시 만들기」(`ChangeApplyService.regenerateContext`)가 지금 `after_text` 로 `KeywordExtractor.enrichSingle` 을 한 번 불러 수정안에만 저장한다(적용 때 청크에 실린다, `pending` 만, 청크 삭제 제외). 저장할 때마다 자동으로 다시 만들지 않은 것은 LLM 호출 비용 때문이다. 고친 수정안 카드에는 눌러 달라는 안내가 붙는다.
+- **알려진 한계.** 실제 앱·실제 코퍼스로의 종단 확인은 아직 없다(단위·슬라이스 테스트만).
+
+### 자연어 지식 수정 6b — MCP 제안 Tool · 앵커 편집 · 가드
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.4·§10.5·§10.9. 외부 에이전트가 MCP 관리자 키로 청크를 찾고(`findChunks`), 읽고(`getChunkContext` + `contentHash`), 원문 인용 편집을 제안하고(`proposeChunkEdit`), 상태를 읽는다(`getChangeJob`). 2026-11-17.
+
+- **쓰기·승인은 Tool 이 아니다 — 빌드가 지킨다.** `ToolBoundaryConventionTest.FORBIDDEN_CODE` 에 `applyChunkEdit`·`applyChunkDelete`·`approveAndApply`·`applyApproved`·`transitionDocument`·`ChangeApplyService`·`ChangeProposalRepository` 를 더했다. Tool 은 `ChangeProposalService`(workflow)만 부르고, 그 서비스도 `pending` 행만 만든다. 금지어 검사는 부분 문자열이라 이름을 고를 때 조심했다 — 인자 `deleteWholeChunk` 는 `deleteChunk` 를 품지 않는다(`deleteChunk` 는 오래된 금지어다).
+- **일부만 통과한 제안은 통째로 거절한다.** `AnchoredEdit` 자체는 버린 작업을 빼고 나머지를 적용할 수 있지만, 외부 에이전트가 의도한 편집의 일부만 대기열에 오르면 뜻이 달라질 수 있어 `proposeExternal` 은 버린 작업이 하나라도 있으면 받지 않고 작업별 사유를 돌려준다. 앱 안 워크플로(6c)는 다른 정책을 쓸 수 있다.
+- **인용 찾기**: 정확히 일치 → 없으면 공백 정규화(연속 공백·줄바꿈 한 칸) 일치를 원래 위치로 되짚는다. 처음 구현은 정규화에 소문자화까지 넣은 함수를 인용 쪽에만 걸어 대문자가 섞인 인용이 영원히 안 맞았다 — 원문 쪽과 같은 정규화(공백만)를 쓴다. 소문자화는 "같은 글이 이미 있다"(G7) 판정에만 쓴다.
+- **보호 구간(G2)과 불변식(G6)은 짝이다.** 그림 마커(+ 바로 뒤 설명)·페이지 마커·펜스 줄·표 구분선을 일부만 건드리면 버리고, 지우기가 통째로 지우는 것은 허용하되 결과의 마커 목록이 "원래 − 지운 구간 안의 것"과 정확히 같아야 한다. 그래서 `MaintenanceWorkflow.invariantViolation`(마커 목록이 같아야 한다)을 그대로 쓰지 않는다 — 그쪽은 지우기를 모른다.
+- **넣는 자리는 블록 끝으로 민다.** 인용 끝이 속한 문단(다음 빈 줄 전)·표·목록의 끝, 코드 펜스 안이면 닫는 펜스 줄 뒤. 앞뒤를 빈 줄로 띄운다. 섹션 지우기는 펜스 안의 `#` 를 제목으로 보지 않는다.
+- **`contentHash` 는 `TextHash.sha256(fullText)`** — 적용 때 `applyChunkEdit` 이 대조하는 것과 같은 함수다. 제안 단계에서 한 번, 적용 단계에서 또 한 번 대조한다(그사이 바뀌면 `stale`).
+- **외부 작업.** `jobId` 없이 내면 `kind=maintenance`·`status=done`·`intent_json={"mode":"external"}` 작업을 새로 만든다(`ChangeJobRepository.createDone`, 백그라운드 단계가 없다). 같은 `jobId` 로 이어 붙이는 것은 요청자 본인의 외부 작업만 — 글자 치환 작업이나 남의 작업에는 못 붙는다. 같은 작업에 같은 청크의 `pending` 수정안이 있으면 거절(고치거나 빼는 것은 관리자 화면에서).
+- **`ToolCatalog.ACCESS` 가 11개가 되어 `Map.of`(10쌍 한도)에서 `Map.ofEntries` 로 바꿨다.** 생성자가 둘이 되어 주입할 쪽에 `@Autowired`(7인자)를 붙였다.
+- **하지 않은 것.** 겹침 짝(§10.6 ⑨)은 외부 제안에서 붙이지 않는다(기본 `chunk_overlap=0`) · 청크가 덧붙인 줄(부모 제목 등)을 인용으로 쓰는 것을 막지 않는다 — MD 되쓰기가 그 줄을 못 찾아 `MD_CONFLICT` 가 되는 것으로 드러난다 · 실제 MCP 클라이언트(Claude Code·MCP Inspector)로의 왕복은 확인하지 않았다(테스트는 `ToolCatalog.call` 로 JSON 인자 파싱까지).
+
+### 자연어 지식 수정 6c — `KnowledgeEditWorkflow`
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.3·§10.6·§10.10. 2026-11-17. **사전 평가(§10.12) 없이 구현했다** — 소형 모델에서의 판정·편집 품질은 재지 않았다.
+
+- **해석 값은 지시문의 부분 문자열이어야 한다**(`EditIntent.groundingProblem`, 공백 정규화·대소문자 무시). 모델이 대상이나 넣을 문장을 지어내면 작업이 실패한다 — 틀린 대상으로 전수 조회·수정하는 것보다 낫다. 별칭은 받지 않는다. 사람이 고른 의도(폼·MCP `type`·채팅에서 확인한 해석)는 이 검사를 하지 않는다.
+- **채팅은 사용자가 친 원문을 해석한다** — 모델이 계획에서 고쳐 쓴 `instruction` 이 아니다(해석 값이 원문의 부분 문자열이어야 하므로). 모델이 숨긴 인자(`type`·`subject`·`content`·`replacement`, `CHAT_HIDDEN_PARAMS`)를 채워도 읽지 않는다. 되물을 때 보여 준 해석을 `PendingChangeConfirmations.Pending` 에 저장하고, "네" 뒤 `ToolPlanService` 가 그 값으로 확정 계획을 만든다 — **확정 뒤 다시 해석하지 않는다**(사용자가 "네" 한 것과 다른 일이 시작될 수 있다).
+- **넣는 문장의 G10 은 "기준 문장"과 견준다.** 사용 중단의 기준은 지시문이 아니라 템플릿(`edit.sentence.deprecated` — "{0}은(는) 더 이상 사용되지 않습니다.")이다: 지시문이 "A 폐기됐어" 처럼 부정 표현이 없어도 안내의 뜻은 "사용되지 않는다"라서, 지시문과 부정 수를 견주면 맞는 문장을 다 떨어뜨린다. 어기면 기준 문장을 그대로 넣는다(작업을 버리지 않는다).
+- **청크 삭제로 바꾸는 것은 남은 내용이 전혀 없을 때만이다**(2026-11-17 결정, `MIN_REMAINING_CHARS = 1`). 제목 줄·그림/페이지 표지·펜스 줄·공백을 뺀 남은 본문이 한 글자라도 있으면 늘 문장 수정(`edit`)이다. 처음 구현(설계값 40자)에서 "B 는 이렇게 쓴다." 를 지운 뒤 남은 무관한 문장(17자)이 짧다는 이유로 청크째 삭제 수정안이 됐고(G3 이 지키려던 문장을 승격이 지웠다 — 테스트가 잡았다), 그다음 10자도 "주의!" 같은 짧은 문장을 지웠다. 무엇을 남길지는 관리자가 Diff 로 정한다.
+- **청크 전체 삭제 판정은 섹션 제목에 대상이 있을 때만 받는다** — 모델이 "청크 전체 삭제" 라고 해도 첫 제목 줄에 대상이 단어 경계로 없으면 버린다.
+- **사용 중단 안내는 (문서, 섹션 제목)마다 `chunk_index` 가 가장 작은 청크 하나에만** — 같은 섹션의 청크마다 넣으면 재조립된 문서에 안내가 여러 번 나온다. 같은 안내가 이미 있으면 넣지 않는다(같은 지시를 두 번 돌려도 한 번).
+- **리포트는 두 모양이 같은 칸에 산다.** `change_job.summary_json` 에 글자 치환은 `MaintenanceWorkflow.Report`, 자연어는 `KnowledgeEditWorkflow.Report`(`mode=nl`)가 들어간다. 화면은 `intent_json` 의 `mode` 로 가른다 — 자연어 리포트를 글자 치환 모양으로 읽으면(관대한 매퍼라 실패하지 않는다) 바꿀 말이 비어 "null → null" 로 그려진다. `ChangeApplyService` 는 그 모양으로 읽어도 `from` 이 없어 치환 규칙 없이(줄 구간 대조로) 간다.
+- **판정의 "설명함"은 인용이 원문에 있을 때만** — 없으면 "언급만"으로 내려 수정안을 만들지 않고 목록에 남긴다(영향도의 `unverified` 와 같은 생각).
+- **호출 지점은 새 사이트가 아니다** — 해석은 `CONDENSE`(256), 판정·편집·다듬기는 `RERANK`(512·1,024). `ThinkingSite` 를 더하면 설정 카드·미리보기가 함께 바뀐다(3단계·4a 와 같은 이유).
+- **알려진 한계.** 실모델로 돌려 보지 않았다(모의 응답 테스트뿐) · `unclear` 해석은 작업 실패 · 겹침 짝 없음 · 판정 40곳 상한 · 주의 사항의 "추가 적용 후보"는 판정 때의 순서(교차 인코더가 있으면 점수순)로 고른다.
+
+### 자연어 지식 수정 6d — 신고에서 수정안 만들기
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.12. 2026-11-18. `/admin` 청크 오류 신고 상세 → `POST /admin/chunk-reports/chunks/{chunkId}/propose` → `KnowledgeEditWorkflow.startFromReport`.
+
+- **대상은 그 청크 하나로 고정한다** — 후보 찾기(전수 조회·하이브리드)와 판정을 건너뛰고 그 청크에만 편집 단계를 돌린다(판정 없이 역할 `describes`, 근거 인용 없음). 글자 바꾸기로 해석돼도 코퍼스 전체가 아니라 `MaintenanceWorkflow.proposeForChunk`(그 청크만, `semantic`·`caseVariants` 꺼짐)다. 관리자가 신고를 보고 고른 청크라 "어디를 고칠지"는 이미 정해졌고, 전수 조회로 넓히면 신고와 무관한 청크까지 수정안이 생긴다. 신고 작업에는 리포트의 "추가 후보"로 다른 청크를 더할 수 없다(`proposeForChunks` 가 거절).
+- **신고 코멘트는 지시문의 초기값일 뿐이다** — 신고자(게스트 포함)가 쓴 글이라 관리자가 고쳐 보내게 하고, 해석은 평소처럼 `wrap()` + 지시문 부분 문자열 검사를 지난다. 승인 전에는 아무것도 바뀌지 않는 것도 같다.
+- **신고는 그 청크의 수정안이 `applied` 일 때만 닫는다**(`ChangeApplyService.closeReports` → `ChunkReportService.resolveChunk`, 메모 "수정 작업 #N 적용으로 해결"). 낡음·실패·거절이면 열린 채로 둔다 — 고쳐지지 않은 신고를 닫으면 대기열이 사실과 어긋난다. 신고를 닫는 실패는 적용 결과를 바꾸지 않는다(청크는 이미 고쳐졌다). `ChunkReportService` 는 세터 주입이라 없으면 닫지 않는다.
+- **신고 작업의 글자 치환은 줄 구간 대조로 MD 에 되쓴다** — 발생 수 대조(`literalOnly`)는 "문서의 어느 청크에도 바꿀 말이 안 남음"을 전제하는데 청크 하나만 바꾸면 다른 청크에 그 말이 남는 것이 정상이라 늘 `MD_CONFLICT` 가 된다. `report_chunk_id` 가 있으면 `literalOnly` 를 끈다(`ChangeApplyServiceTest.applyingTheReportedChunkResolvesItsReports`).
+- **연결은 `change_job.report_chunk_id`(V17) 한 칸이다** — 신고 행에 작업 id 를 쓰지 않는다. 한 청크로 작업을 여럿 만들 수 있고, 신고 상세는 `recentForReportChunk` 로 그 청크의 작업을 보인다. FK 가 아니다(재인덱싱으로 청크가 사라질 수 있다 — 그러면 수정안은 낡음이 되고 신고는 열린 채).
+- **사라진 청크·큐레이션 청크로는 시작하지 않는다**(화면에서 폼을 숨기고 워크플로도 거절). 큐레이션 청크의 단일 출처는 `curated_qa` 다.
+- **알려진 한계.** 실모델·브라우저로 확인하지 않았다(단위·슬라이스 테스트뿐) · 오류 사유는 작업 목록의 `error=invalid`/`busy` 로만 보인다(사유 문장은 없다).
+
 ### 문서 쓰기 잠금 (`DocumentWriteLocks`)
 
 같은 문서에서 `↺ 재인덱싱`(`DocumentIndexer.reindexFromMd`)과 유지보수 적용(`ChangeApplyService`)이 겹치면 — 재인덱싱이 청크 id 를 **모두 새로 만들고** 변환 MD 를 읽는 동안 적용이 옛 id 를 고쳐 쓰거나(수정은 사라지고 일부는 `stale`), 적용이 청크를 바꾸는 사이에 재인덱싱이 MD 를 읽어 반쯤 바뀐 문서가 된다. 적용 서비스 안의 잠금은 **서비스끼리만** 막았다.
@@ -1081,6 +1138,19 @@ RAG 에서 검색이 비었을 때 문서 없는 프롬프트로 답변을 받�
 - **`windows_release.cmd` 는 로직 없이 Git Bash 로 `release.sh` 를 실행하는 래퍼다**: cmd 로 pom 편집·체크섬·zip 읽기·git 흐름을 다시 구현하면 검증되지 않은 두 번째 구현이 생긴다. bash 를 찾는 순서는 `RELEASE_BASH` → `where git` 옆의 `..\bin` 과 `..\..\bin` → `%ProgramFiles%`·`%ProgramFiles(x86)%`·`%LocalAppData%\Programs` 의 Git — **PATH 의 `bash` 는 쓰지 않는다**(WSL 의 `C:\Windows\System32\bash.exe` 일 수 있고, 경로 체계가 달라 Windows 경로를 못 읽는다). 스크립트 경로는 **슬래시로 바꿔** 넘긴다(`$0` 의 `dirname` 으로 저장소 루트를 구하는데 역슬래시 경로는 한 덩어리 이름이 된다). 경로를 펼치는 자리는 **괄호 블록 안에 두지 않는다**(`C:\Program Files (x86)\…` 의 `)` 가 블록을 끝낸다 — `goto` 로 흐름을 잇는다). 파일은 ASCII 만, **CRLF**(라벨·`goto` 가 LF 만 있으면 깨질 수 있다 — `.gitattributes` 가 `*.cmd` 를 고정하지만 작업 복사본을 직접 만들 때는 변환할 것).
 - **테스트는 스크립트를 실제로 돌린다**(`ReleaseHarness` — 임시 git 저장소 + 로컬 bare 원격이라 push 가 진짜로 일어나고, 가짜 `mvn`(pom 버전을 읽어 `build-info.properties` 가 든 jar 를 만든다)·가짜 `gh`(호출을 기록)를 `RELEASE_MVN`/`RELEASE_GH` 로 지정): `ReleaseBashScriptTest` 30개(`--pr` 넷: 보호된 main 에서의 PR 흐름·`--pr --no-publish`·기존 릴리즈 브랜치 거절·`--pr` 없이 보호된 main 에서 멈춤과 안내 / 전체 릴리즈 · `--build-only` · `--no-publish` · 지정 버전·`--next` · 거절 사유 각각 — 더러운 트리·기존 태그·다른 브랜치·원격보다 뒤처짐·Java 17·gh 없음/미로그인·잘못된 버전 — · 빌드 실패·jar 버전 불일치 시 pom 복원 · 확인 거절 · 초안 생성 실패 뒤의 안내 · CRLF pom 보존)와 `ReleaseCmdWrapperTest` 8개(Windows 만 — 래퍼가 하는 일: bash 찾기·인자·공백 경로·표준 입력·종료 코드). 저장소는 **클래스당 한 번 만들고 테스트마다 복사**한다. Windows 에서는 프로세스 하나를 띄우는 데 0.3초쯤 들어(git·sed·tr 모두) 시나리오당 10초 안팎이다 — 스크립트가 아니라 환경 비용이다. 진짜 Maven 으로는 깨끗한 클론에서 `windows_release.cmd --build-only --skip-tests` 를 돌려 확인했다.
 - **돌려 보지 못한 것**: 진짜 `gh` 로 실제 GitHub 에 게시하는 단계(가짜 `gh` 가 인자 모양만 본다 — `gh release create … --draft` 와 `--verify-tag` 의 실제 동작은 첫 릴리즈에서 확인할 것), Linux·macOS 에서의 bash 실행(BSD sed 의 `-b` 없음 경로 포함).
+
+### sqlite-vec 확장은 jar 에 넣는다 — 버전은 pom 한 곳
+
+- **무엇이 바뀌었나**: 예전에는 `vec0` 로더블을 운영자가 따로 받아 `SQLITE_VEC_EXTENSION_PATH` 로 지정했다(`lib/` 는 gitignore 라 저장소에 바이너리가 없었다). 이제 **빌드가 받아 jar 에 넣고 앱이 꺼내 쓴다** — 버전의 유일한 출처는 `pom.xml` 의 `sqlite-vec.version`(현재 0.1.9)이고 코드에는 버전 상수가 없다(`native/sqlite-vec/VERSION` 파일을 `VecExtension.version()` 이 읽는다). 이 앱에는 원래 `VecExtension` 클래스도 코드 속 버전 상수도 없었다(그 이름이 들어간 옛 커밋은 `sqliteVecExtensionPath` 필드 때문이다) — "pom 과 코드에서 버전을 따로 올리던 문제"가 아니라 **"운영자가 플랫폼별 바이너리를 직접 구하던 일"을 없애는 변경**이다.
+- **직접 지정이 이긴다**: `SQLITE_VEC_EXTENSION_PATH` 가 있으면 번들은 꺼내지도 않는다(`sqliteVec_explicitPathBeatsTheBundle`). Docker 마운트·직접 검증한 바이너리·번들이 없는 플랫폼의 길이 그대로 남는다. 번들 폴더 없이 부르는 예전 시그니처(`configureSqliteVec` 4인자·`buildHikariConfig` 5인자)는 "비어 있으면 오류"를 그대로 지킨다.
+- **Docker 이미지는 번들을 못 쓴다 — Alpine(musl)이다**: 릴리즈의 Linux 파일은 glibc 용이라 musl 에서는 `load_extension` 이 불투명하게 실패한다("Error loading shared library ld-linux-…"). 경로를 비워 둔 채 Docker 로 띄운 사람이 그 오류를 보지 않도록 `VecExtension.platform()` 이 `/lib/ld-musl-*.so.1` 로 musl 을 알아보고 **이유와 대안(musl 용 vec0 마운트·glibc 이미지)을 말하며 기동을 멈춘다**. 실제 Alpine 에서 돌려 본 것은 아니다(판정은 순수 함수로 시험).
+- **받은 파일은 SHA-256 으로 고정한다**: 실행될 네이티브 코드를 서명 없이 GitHub 에서 받아 jar 에 구워 넣는 것이라 pom 에 플랫폼별 해시(`sqlite-vec.sha256.<플랫폼>`)를 두고 antrun 의 `<checksum>` 이 맞지 않으면 빌드를 멈춘다. 처음 값은 받은 파일의 `sha256sum` 이고 **GitHub 릴리즈 API 의 asset `digest` 와 대조해** 같음을 확인했다(다섯 개). 버전을 올리면 해시 다섯 개도 바꾼다 — 안 바꾸면 빌드가 메시지로 알려 준다(캐시가 깨졌을 때도 같은 메시지: 캐시 폴더를 지우고 다시).
+- **출력은 `<resources>` 가 아니라 `target/classes` 에 바로 쓴다**: 스프링 부트 부모가 `src/main/resources` 를 두 `<resource>`(application*.properties 만 필터링, 나머지는 그대로)로 선언해 두었고 자식이 `<resources>` 를 다시 선언하면 그 설정을 통째로 덮어쓴다(이 앱의 application.properties 는 `@…@` 토큰이 없어 당장 깨지지는 않지만 필터링이 조용히 꺼진다). antrun 이 `generate-resources` 에서 `${project.build.outputDirectory}/native/sqlite-vec/` 에 쓰면 resources 단계가 그 위에 소스 리소스를 복사할 뿐이다. 대가: IDE 가 pom 없이 빌드하면 번들이 없다 — `mvn generate-resources` 한 번, 또는 `SQLITE_VEC_EXTENSION_PATH` 를 지정한다(`VecExtension.isBundled()` 가 아니면 앱이 그 이유를 말한다).
+- **`mvn` 의 모든 빌드(`test` 포함)가 `generate-resources` 를 지나므로 처음 한 번은 GitHub 에 접속한다**: 받은 파일은 `~/.m2/sqlite-vec/<버전>/` 에 남아 다음부터는 네트워크를 쓰지 않는다. 네트워크 없이 빌드하려면 `-Dsqlite-vec.skip=true`(jar 에 확장이 안 들어가고 그때는 경로가 필수 — 확장에 의존하는 테스트는 `VecExtension.isBundled()` 로 스스로 건너뛴다) 또는 캐시를 미리 채운다. **Ant 의 `<get>` 은 Maven `settings.xml` 의 프록시를 쓰지 않는다** — `MAVEN_OPTS=-Dhttps.proxyHost=…`. Docker 빌더 스테이지(`mvn package`)도 이 다운로드를 한다.
+- **플랫폼은 다섯**: `windows-x86_64` · `macos-aarch64` · `macos-x86_64` · `linux-x86_64` · `linux-aarch64`(Intel 맥용 `macos-x86_64` 가 릴리즈에 있어 함께 넣었다 — 크기가 ~50KB 다). 릴리즈에는 Windows ARM 이 없다. **32비트 OS/JVM** 은 `os.arch` 가 `arm`/`x86` 이라 `platform()` 이 "미지원 플랫폼 … SQLITE_VEC_EXTENSION_PATH" 로 멈춘다(라즈베리파이는 64비트 OS + 64비트 JDK 여야 한다). 판정에서 `os.contains("win")` 은 `darwin` 도 참이라 맥이 윈도로 읽힌다 — `!darwin` 을 함께 본다(`darwinIsNotWindows`).
+- **꺼내기**: `{DATA_DIR}/native/sqlite-vec-<버전>/vec0.*`. **버전 폴더**라 롤백한 옛 앱(런처)과 새 앱이 서로의 파일을 덮지 않는다(Windows 는 로드 중인 DLL 을 못 바꾼다). 이미 있으면 **크기가 아니라 내용까지 같을 때만** 건너뛴다(같은 크기로 깨진 파일을 놓치지 않는다 — `extractsToAVersionedFolderAndIsIdempotent`), 쓸 때는 임시 파일 → 이동. 쓰기 가능하고 `noexec` 가 아닌 곳이어야 한다(실패하면 그 이유와 직접 지정이 대안임을 말한다). 경로에 작은따옴표가 있으면 `load_extension` SQL 이 깨지므로 번들 경로도 같은 가드를 지난다.
+- **라이선스**: sqlite-vec 는 MIT/Apache-2.0 이중 라이선스이고 릴리즈 tar.gz 에는 라이선스 파일이 없어, 저장소의 `src/main/resources/native/sqlite-vec/LICENSE-MIT`·`LICENSE-APACHE`(v0.1.9 태그의 원문)를 바이너리 옆에 같이 싣고 `NOTICE` 의 "운영자가 따로 설치" 항목에서 "jar 에 포함" 항목으로 옮겼다. **법무 검토를 거친 것은 아니다.**
+- **확인한 것**: ① 새 캐시 폴더로 처음부터 빌드 → 다섯 파일 다운로드·해시 통과·jar 에 `native/sqlite-vec/<플랫폼>/vec0.*` 다섯 + `VERSION`(`0.1.9`) + 라이선스 두 개(jar 크기 +약 0.4MB) ② 이미 캐시된 기본 폴더(`~/.m2/sqlite-vec/0.1.9`)로 재빌드 ③ **sqlite-vec 0.1.9 에서 이 앱의 sqlite-vec 통합 테스트가 통과**(`SqliteVecIntegrationTest`·`DataSourceJdbcTemplateWiringTest`·`SqliteVecLegacyDbPathIntegrationTest`·`SqliteVecVectorStoreProviderTest`, `-Dsqlitevec.path` 로 번들 파일 지정) ④ 경로를 **비운** 실제 스프링 컨텍스트가 번들을 꺼내 `vec_version()`=`v0.1.9` 와 vec0 KNN 까지(`DataSourceBundledSqliteVecTest`) ⑤ `-Dsqlite-vec.skip=true generate-resources` 는 아무것도 받지 않고(캐시 폴더도 만들어지지 않음), **파일 끝에 바이트를 덧붙인 캐시**는 빌드가 `SHA-256 mismatch`(플랫폼·기대 해시·"캐시 폴더를 지우고 다시"를 담은 메시지)로 멈춘다. **돌려 보지 못한 것**: Windows 외 플랫폼에서 실제 로드(해시만 확인), 실제 Alpine, 프록시 환경의 다운로드, 캐시도 네트워크도 없을 때 `<get>` 이 내는 실패 메시지.
 
 ### 운영 테이블 스키마는 Flyway 에만 있다
 

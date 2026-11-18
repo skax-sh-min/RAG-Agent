@@ -128,6 +128,80 @@ class DataSourceConfigTest {
                 .hasMessageContaining("vec0 바이너리");
     }
 
+    // ── jar 에 든 sqlite-vec (extension-path 가 비었을 때) ─────────────────
+
+    private static void assumeBundled() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(VecExtension.isBundled(),
+                "이 빌드는 sqlite-vec 를 jar 에 넣지 않았다(-Dsqlite-vec.skip=true)");
+        try {
+            VecExtension.platform();
+        } catch (IllegalStateException e) {
+            org.junit.jupiter.api.Assumptions.abort("번들하는 플랫폼이 아니다: " + e.getMessage());
+        }
+    }
+
+    @Test
+    @DisplayName("sqlite-vec + 경로 비움 + 번들 폴더: jar 의 확장을 <폴더>/sqlite-vec-<버전>/ 에 꺼내 그 경로로 load_extension")
+    void sqliteVec_blankPath_usesTheBundledExtension(@TempDir Path dir) throws Exception {
+        assumeBundled();
+        HikariConfig c = base();
+
+        DataSourceConfig.configureSqliteVec(c, "sqlite-vec", "", "", dir);
+
+        Path extracted = dir.resolve("sqlite-vec-" + VecExtension.version())
+                .resolve(VecExtension.fileName(VecExtension.platform()));
+        assertThat(extracted).exists();
+        assertThat(c.getDataSourceProperties().getProperty("enable_load_extension")).isEqualTo("true");
+        assertThat(c.getConnectionInitSql())
+                .isEqualTo("SELECT load_extension('" + extracted.toAbsolutePath().normalize().toString().replace('\\', '/') + "')");
+    }
+
+    @Test
+    @DisplayName("extension-path 를 주면 그 파일이 이긴다 — 번들 폴더가 있어도 jar 의 확장은 꺼내지 않는다 (Docker 마운트·musl·반입 바이너리)")
+    void sqliteVec_explicitPathBeatsTheBundle(@TempDir Path dir) {
+        HikariConfig c = base();
+
+        DataSourceConfig.configureSqliteVec(c, "sqlite-vec", "/opt/sqlite-vec/vec0", "", dir);
+
+        assertThat(c.getConnectionInitSql()).contains("/opt/sqlite-vec/vec0");
+        assertThat(dir.toFile().list()).as("번들은 꺼내지지 않았다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("chroma 백엔드는 번들 폴더를 줘도 아무것도 꺼내지 않는다")
+    void chroma_neverExtractsTheBundle(@TempDir Path dir) {
+        HikariConfig c = base();
+
+        DataSourceConfig.configureSqliteVec(c, "chroma", "", "", dir);
+
+        assertThat(c.getConnectionInitSql()).isNull();
+        assertThat(dir.toFile().list()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("번들 폴더 경로에 작은따옴표가 있으면 load_extension SQL 이 깨지므로 거절한다")
+    void sqliteVec_bundledPathWithQuote_isRefused(@TempDir Path dir) {
+        assumeBundled();
+        HikariConfig c = base();
+
+        assertThatThrownBy(() -> DataSourceConfig.configureSqliteVec(c, "sqlite-vec", "", "", dir.resolve("it's")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("작은따옴표");
+    }
+
+    @Test
+    @DisplayName("buildHikariConfig: 번들 폴더를 넘기면 경로가 비어도 vec0 initSql 이 만들어지고, 안 넘기면(4-5인자) 예전처럼 비어 있으면 오류")
+    void buildHikariConfig_bundledDirOnlyWhenGiven(@TempDir Path dir) throws Exception {
+        assertThatThrownBy(() -> DataSourceConfig.buildHikariConfig(dir.resolve("a.db"), 1, "sqlite-vec", "", ""))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("extension-path");
+        assumeBundled();
+
+        HikariConfig c = DataSourceConfig.buildHikariConfig(dir.resolve("a.db"), 1, "sqlite-vec", "", "", dir.resolve("native"));
+
+        assertThat(c.getConnectionInitSql()).startsWith("SELECT load_extension('").contains("sqlite-vec-" + VecExtension.version());
+        assertThat(DataSourceConfig.bundledExtensionDir(dir.toString())).isEqualTo(dir.toAbsolutePath().normalize().resolve("native"));
+    }
+
     // ── 세션 PRAGMA (URL 파라미터) ──────────────────────────────────
 
     /**

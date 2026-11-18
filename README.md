@@ -10,6 +10,20 @@ A self-hosted Q&A assistant that answers from your own documents. Upload manuals
 
 Built on Spring Boot 4.1 + Spring AI 2.0 and Java 21, with a Thymeleaf + HTMX web UI (Korean/English) and a REST API.
 
+## Supported platforms
+
+The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-vec, Tesseract OCR) and the scripts in `scripts/` decide the details:
+
+| OS / architecture | App (jar) | sqlite-vec bundled in the jar | Scripts in `scripts/` |
+|---|---|---|---|
+| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd` / `.bat`) |
+| macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `macos_*` (Docker Desktop, or Apple Container on Apple Silicon) |
+| Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `ubuntu_*` (Docker) |
+| Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |
+| Anything else (Windows ARM, 32-bit OS/JVM, BSD …) | needs a JVM; untested | no — use the Chroma backend or your own `vec0` | — |
+
+There is no CI matrix (GitHub Actions is not used): the tests and the launcher/release scripts were actually run on Windows; macOS and Linux rely on the scripts and procedures here, and the bundled sqlite-vec files for platforms other than Windows were only checksum-verified, not loaded. Local (non-Docker) runs need native Tesseract (kor + eng) for scanned-PDF OCR, or `IMAGE_OCR_ENABLED=false`. Details: [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+
 ## Getting Started
 
 ### Docker Compose (recommended)
@@ -46,7 +60,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
-> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (the `vec0` native extension is bundled in the jar — Windows x64, macOS arm64/x64, Linux x64/arm64 on glibc; other platforms, Docker/Alpine: provide your own, see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
 > **Chroma version — v2 API required.** Spring AI 2.0.2's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
 
@@ -125,7 +139,8 @@ Installed apps learn about a new version from the **latest GitHub release** and 
 | Asset 3 (recommended) | `rag-agent-X.Y.Z-launcher.jar` (+ its `.sha256`) — the ~30 KB launcher a new install starts with; `mvn package` builds it as `target/rag-agent-X.Y.Z-launcher.jar`. Apps never mistake it for the application jar |
 | State | **published** — not a draft, not a pre-release. A release without the jar attached is not announced at all |
 
-> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand. **If `main` only accepts pull requests, use `--pr`**: it leaves `main` alone, puts the release commit, the tag and the version bump on a `release/X.Y.Z` branch, pushes that branch and the tag, creates the **draft** release and opens the pull request, then stops — merge the PR with **"Create a merge commit"** (a squash or rebase merge makes new commits, so the commit the tag points at would no longer be in `main`'s history), then publish with `gh release edit vX.Y.Z --draft=false`.
+> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
+> **If `main` only accepts pull requests, use `--pr`**: it leaves `main` alone, puts the release commit, the tag and the version bump on a `release/X.Y.Z` branch, pushes that branch and the tag, creates the **draft** release and opens the pull request, then stops — merge the PR with **"Create a merge commit"** (a squash or rebase merge makes new commits, so the commit the tag points at would no longer be in `main`'s history), then publish with `gh release edit vX.Y.Z --draft=false`. The JAR files and their checksum files are located in the target\released directory.
 
 The steps below release `0.5.7` while `pom.xml` says `0.5.7-SNAPSHOT`. Run them from the repository root.
 
@@ -189,7 +204,7 @@ git push origin main
 git push origin v0.5.7
 ```
 
-**7. Publish on GitHub** — *Releases → Draft a new release*: choose the existing tag `v0.5.7`, title `0.5.7`, click *Generate release notes* (edit as needed), drag `rag-agent-0.5.7.jar` and `rag-agent-0.5.7.jar.sha256` (and, recommended, `rag-agent-0.5.7-launcher.jar` with its `.sha256`) onto the page, **wait until every upload has finished**, leave *pre-release* unchecked, then *Publish release*.
+**7. Publish on GitHub** — *Releases → Draft a new release*: choose the existing tag `v0.5.7`, title `0.5.7`, click *Generate release notes* (edit as needed), drag and drop `rag-agent-0.5.7.jar` and `rag-agent-0.5.7.jar.sha256` from target\released onto the release page (and, recommended, `rag-agent-0.5.7-launcher.jar` with its `.sha256`), **wait until every upload has finished**, leave *pre-release* unchecked, then *Publish release*.
 
 **8. Verify** — the release page lists every file you attached. Apps with `UPDATE_CHECK_ENABLED=true` announce it at their next check (start-up or the daily one), or when an admin presses *Check now* on `/admin`. A quick look at what they see:
 
@@ -249,7 +264,7 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `EMBED_MAX_CHUNK_CHARS` | — | `0` (off) | Hard per-chunk character ceiling to fit the embedding server's batch/token limit. Set (e.g. `450`) when you hit `input (N tokens) is too large ... (batch size: 512)`; oversized chunks are force-split at line boundaries. Prefer raising the server batch (`llama-server -b/-ub`) first — see [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — parallel sub-batch embeds within one document's indexing (`1` = serial, default → zero regression). Set to ~(endpoints × per-endpoint parallel) to fill the E1 endpoints from a single large file |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
-| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only, optional — path to your own `vec0` loadable extension (always wins). Blank = the extension bundled in the jar (version = `sqlite-vec.version` in `pom.xml`; the build downloads and checksum-verifies it). Required for Docker/Alpine, unsupported platforms, or a jar built with `-Dsqlite-vec.skip=true` |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |

@@ -77,6 +77,8 @@ class AdminControllerWebMvcTest {
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
     @MockitoBean com.example.ragagent.service.CuratedQuestionSuggester questionSuggester;
     @MockitoBean com.example.ragagent.service.ChunkReportService chunkReportService;
+    @MockitoBean com.example.ragagent.repository.ChangeJobRepository changeJobs;            // 6d 신고 → 수정안(세터 주입)
+    @MockitoBean com.example.ragagent.workflow.KnowledgeEditWorkflow knowledgeEdit;
     @MockitoBean com.example.ragagent.audit.AuditLogger auditLogger;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
@@ -1184,6 +1186,36 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("chunk-report-side")))
                 .andExpect(content().string(containsString("chunk-diff-ch")))
                 .andExpect(content().string(containsString("openChunkEditFromReport")));
+    }
+
+    @Test
+    @DisplayName("6d — 신고 상세에 '이 신고로 수정안 만들기' 폼(코멘트를 지시문으로 미리 채움)과 이 청크로 만든 작업 링크가 보인다. 큐레이션 청크는 폼 없음")
+    void chunkReportDetail_offersAProposalForm() throws Exception {
+        var r = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                1L, "chunk-5", "doc-1", "latest", "manual.pdf", "u1", "t1", 7L,
+                null, "WRONG", "8080이 아니라 9090입니다", "h1", "기본 포트는 8080입니다",
+                "open", null, null, "2026-09-04 10:00:00", null);
+        java.util.function.BiFunction<String, Boolean, com.example.ragagent.service.ChunkReportService.ChunkReportDetail> detail =
+                (id, curated) -> new com.example.ragagent.service.ChunkReportService.ChunkReportDetail(
+                        id, "doc-1", curated ? "curated" : "latest", "manual.pdf", curated,
+                        List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r, false)),
+                        "기본 포트는 8080입니다", "기본 포트는 8080입니다", "original",
+                        com.example.ragagent.service.ChunkDiff.compare("기본 포트는 8080입니다", "기본 포트는 8080입니다"),
+                        com.example.ragagent.service.ChunkReportService.CHANGE_UNCHANGED, List.of());
+        when(chunkReportService.chunkDetail("chunk-5")).thenReturn(Optional.of(detail.apply("chunk-5", false)));
+        when(chunkReportService.chunkDetail("q-1")).thenReturn(Optional.of(detail.apply("q-1", true)));
+        when(adminService.collectionFor(anyString())).thenReturn("manual_latest");
+        when(changeJobs.recentForReportChunk("chunk-5", 5)).thenReturn(List.of(new com.example.ragagent.repository.ChangeJobRepository.Job(
+                31, "maintenance", "포트", "root", "done", null, null, "t", "t", null, "chunk-5")));
+
+        mvc.perform(get("/admin/chunk-reports/chunks/chunk-5").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("/admin/chunk-reports/chunks/chunk-5/propose")))
+                .andExpect(content().string(containsString(">8080이 아니라 9090입니다</textarea>")))
+                .andExpect(content().string(containsString("/admin/change-jobs/31")));
+        mvc.perform(get("/admin/chunk-reports/chunks/q-1").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("/propose"))));
     }
 
     @Test

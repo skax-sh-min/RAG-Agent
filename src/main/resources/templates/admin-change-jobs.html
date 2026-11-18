@@ -24,7 +24,33 @@
                     <label class="form-label small" for="instruction" th:text="#{maint.instruction}">Instruction</label>
                     <input class="form-control" id="instruction" name="instruction" maxlength="500"
                            th:value="${from != null and to != null} ? ${from} + ' → ' + ${to} : null"
-                           th:placeholder="#{maint.instruction.placeholder}" required>
+                           th:placeholder="#{maint.instruction.placeholder}">
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-md-4">
+                        <label class="form-label small" for="type" th:text="#{maint.type}">Type</label>
+                        <select class="form-select" id="type" name="type">
+                            <option value="" th:text="#{maint.type.auto}">Auto</option>
+                            <option value="replace" th:text="#{edit.type.replace}">Replace</option>
+                            <option value="deprecate" th:text="#{edit.type.deprecate}">Deprecate</option>
+                            <option value="remove" th:text="#{edit.type.remove}">Remove</option>
+                            <option value="add_note" th:text="#{edit.type.add_note}">Add note</option>
+                            <option value="revise" th:text="#{edit.type.revise}">Revise</option>
+                        </select>
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label small" for="subject" th:text="#{maint.subject}">Subject</label>
+                        <input class="form-control" id="subject" name="subject" maxlength="200">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label small" for="content" th:text="#{maint.content}">Content</label>
+                        <input class="form-control" id="content" name="content" maxlength="500">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small" for="replacement" th:text="#{maint.replacement}">Alternative</label>
+                        <input class="form-control" id="replacement" name="replacement" maxlength="200">
+                    </div>
+                    <div class="form-text" th:text="#{maint.type.hint}">hint</div>
                 </div>
                 <div class="row g-2 mb-3">
                     <div class="col-md-6">

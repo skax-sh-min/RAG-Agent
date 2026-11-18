@@ -70,6 +70,8 @@ services:
       - ./data:/app/data
       # sqlite-vec 모드: 컨테이너 아키텍처(linux)용 vec0 로더블 바이너리를 마운트하고
       # SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0 로 지정 (운영자 제공 — OPERATOR_MANUAL 참조)
+      # 이 이미지는 Alpine(musl)이라 jar 에 든 sqlite-vec(glibc 용)은 로드되지 않는다 — 경로를 비워 두면 앱이 이유를
+      # 말하며 기동을 멈춘다. musl 용 vec0 를 마운트하거나 glibc 기반 이미지로 바꿀 것.
       # 주의: env_file 로 .env 가 그대로 전달되므로, 호스트용 경로(예: ./lib/macos/vec0.dylib)가
       # .env 에 남아 있으면 컨테이너 안에서 로드에 실패한다 — Docker 로 띄울 땐 반드시 위 컨테이너
       # 경로로 덮어쓸 것.

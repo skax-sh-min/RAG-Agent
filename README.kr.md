@@ -10,6 +10,20 @@
 
 Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(한국어/영어)와 REST API를 제공합니다.
 
+## 지원 환경
+
+앱은 **64비트 JDK/JRE 21 이 있는 OS** 면 실행됩니다. 네이티브 부품(sqlite-vec · Tesseract OCR)과 `scripts/` 의 스크립트에 따라 OS 마다 사정이 다릅니다:
+
+| OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | `scripts/` 의 스크립트 |
+|---|---|---|---|
+| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd` / `.bat`) |
+| macOS arm64(Apple Silicon) · x64(Intel) | 지원 | 번들 | `macos_*` (Docker Desktop, Apple Silicon 은 Apple Container 도 가능) |
+| Linux x64 · arm64, glibc(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들 | `ubuntu_*` (Docker) |
+| Docker 이미지(Alpine / musl) | 지원 | **번들 사용 불가** — 직접 준 `vec0` 마운트 | `docker-compose.yml` |
+| 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 — chroma 백엔드 또는 직접 준 `vec0` | — |
+
+OS 별 자동 검증(CI)은 없습니다(GitHub Actions 미사용): 테스트와 런처·릴리즈 스크립트는 **Windows** 에서 실제로 돌려 확인했고, macOS·Linux 는 여기의 스크립트와 절차를 따르며, Windows 외 플랫폼의 번들 sqlite-vec 파일은 체크섬만 확인했고 실제 로드는 확인하지 못했습니다. 로컬(비 Docker) 실행에서 스캔 PDF OCR 을 쓰려면 호스트에 Tesseract(kor + eng)가 필요하고, 아니면 `IMAGE_OCR_ENABLED=false` 로 끕니다. 자세한 내용은 [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+
 ## 실행 방법
 
 ### Docker Compose (권장)
@@ -46,7 +60,7 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 
 ### 로컬 실행
 
-> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
+> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (`vec0` 네이티브 확장은 jar 에 들어 있습니다 — Windows x64 · macOS arm64/x64 · Linux x64/arm64(glibc). 그 밖의 플랫폼·Docker/Alpine 은 직접 준비 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
 > **Chroma 버전 — v2 API 필수.** Spring AI 2.0.2의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/…` 경로만 호출하는데 tenant/database 개념은 Chroma v1 API에 존재하지 않으므로, **v1 시절 서버(0.5.x 이하)와는 호환되지 않습니다**. 아래 명령과 `docker-compose.yml`은 `:latest` 대신 `chromadb/chroma:1.0.21`로 태그를 고정합니다 — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어 `:latest`는 어느 날 조용히 앱을 깨뜨릴 수 있습니다. 버전을 올릴 땐 의도적으로 이 태그를 바꾸세요.
 
@@ -127,7 +141,8 @@ container system stop
 | 첨부 파일 3 (권장) | `rag-agent-X.Y.Z-launcher.jar`(+ `.sha256`) — 새로 설치할 때 시작하는 약 30KB 짜리 런처. `mvn package` 가 `target/rag-agent-X.Y.Z-launcher.jar` 로 만듭니다. 앱은 이 파일을 앱 jar 로 오인하지 않습니다 |
 | 상태 | **게시됨** — 초안(draft)도, 시험판(pre-release)도 아니어야 합니다. jar가 첨부되지 않은 릴리즈는 아예 알리지 않습니다 |
 
-> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요. **`main` 이 풀 리퀘스트로만 받는다면 `--pr`**: `main` 은 건드리지 않고 `release/X.Y.Z` 브랜치에 커밋·태그를 만들어 그 브랜치와 태그를 푸시하고, **초안** 릴리즈와 PR 을 만든 뒤 멈춥니다 — PR 을 **"Create a merge commit"** 으로 병합하고(스쿼시·리베이스는 태그가 가리키는 커밋이 `main` 이력에서 빠집니다) `gh release edit vX.Y.Z --draft=false` 로 게시하세요.
+> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\windows_release.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
+> **`main` 이 풀 리퀘스트로만 받는다면 `--pr`**: `main` 은 건드리지 않고 `release/X.Y.Z` 브랜치에 커밋·태그를 만들어 그 브랜치와 태그를 푸시하고, **초안** 릴리즈와 PR 을 만든 뒤 멈춥니다 — PR 을 **"Create a merge commit"** 으로 병합하고(스쿼시·리베이스는 태그가 가리키는 커밋이 `main` 이력에서 빠집니다) `gh release edit vX.Y.Z --draft=false` 로 게시하세요. jar 파일과 체크섬은 target\release 디렉토리에 있습니다.
 
 아래는 `pom.xml`이 `0.5.7-SNAPSHOT`일 때 `0.5.7`을 릴리즈하는 순서입니다. 저장소 루트에서 실행하세요.
 
@@ -191,7 +206,7 @@ git push origin main
 git push origin v0.5.7
 ```
 
-**7. GitHub에서 게시** — *Releases → Draft a new release*: 이미 푸시한 태그 `v0.5.7`을 고르고, 제목은 `0.5.7`, *Generate release notes*로 릴리즈 노트를 만든 뒤(필요하면 고칩니다), `rag-agent-0.5.7.jar`와 `rag-agent-0.5.7.jar.sha256`(권장: `rag-agent-0.5.7-launcher.jar` 와 그 `.sha256` 도)을 끌어다 놓고, **모든 업로드가 끝날 때까지 기다린** 다음, *pre-release*는 체크하지 않은 채 *Publish release*를 누릅니다.
+**7. GitHub에서 게시** — *Releases → Draft a new release*: 이미 푸시한 태그 `v0.5.7`을 고르고, 제목은 `0.5.7`, *Generate release notes*로 릴리즈 노트를 만든 뒤(필요하면 고칩니다), target\released에서 `rag-agent-0.5.7.jar`와 `rag-agent-0.5.7.jar.sha256`(권장: `rag-agent-0.5.7-launcher.jar` 와 그 `.sha256` 도)을 끌어다 놓고, **모든 업로드가 끝날 때까지 기다린** 다음, *pre-release*는 체크하지 않은 채 *Publish release*를 누릅니다.
 
 **8. 확인** — 릴리즈 페이지에 올린 파일이 모두 보여야 합니다. `UPDATE_CHECK_ENABLED=true`인 앱은 다음 확인(기동 직후 또는 매일 정해진 시각)이나 관리자가 `/admin`에서 *지금 확인*을 눌렀을 때 알립니다. 앱이 보는 응답은 다음으로 볼 수 있습니다:
 
@@ -251,7 +266,7 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `EMBED_MAX_CHUNK_CHARS` | — | `0` (비활성) | 임베딩 서버 배치/토큰 한계에 맞추는 청크 문자 수 하드 상한. `input (N tokens) is too large ... (batch size: 512)` 에러 시 설정(예: `450`). 초과 청크는 줄 경계에서 강제 재분할. 먼저 서버 배치를 키우는 것(`llama-server -b/-ub`)을 권장 — [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) 참조 |
 | `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(`1`=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정해 단일 대용량 파일이 E1 엔드포인트를 채우게 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
-| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용, 선택 — 직접 준 `vec0` 로더블 확장 경로(주면 언제나 그 파일이 이깁니다). 비우면 jar 에 든 확장을 씁니다(버전은 `pom.xml` 의 `sqlite-vec.version`, 빌드가 받아 체크섬을 확인해 넣습니다). Docker/Alpine · 번들하지 않는 플랫폼 · `-Dsqlite-vec.skip=true` 로 빌드한 jar 는 직접 지정이 필요합니다 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 (chroma 백엔드) |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |

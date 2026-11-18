@@ -226,6 +226,121 @@ class ChangeApplyServiceTest {
     }
 
     @Test
+    @DisplayName("관리자가 고친 수정안은 고친 본문으로 적용되고 MD 도 구간 대조로 그 본문을 따른다")
+    void editedProposalAppliesTheEditedText() throws IOException {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        long id = proposals.listByJob(jobId).get(0).id();
+        assertThat(service.editProposal(jobId, id, "Oracle 19c 사용", "root")).isNull();
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        Path md = Files.writeString(converted.resolve("d1.md"), "제목\nPostgreSQL 사용\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        verify(admin).applyChunkEdit(eq("latest"), eq("c0"), eq("Oracle 19c 사용"), any(), eq(TextHash.sha256("PostgreSQL 사용")));
+        assertThat(Files.readString(md)).isEqualTo("제목\nOracle 19c 사용\n");
+        assertThat(proposals.find(id).orElseThrow().machineAfterText()).isEqualTo("Oracle 사용");
+    }
+
+    @Test
+    @DisplayName("고치기는 마커를 깨거나 수정 전과 같거나 pending 이 아니면 거절하고 저장하지 않는다")
+    void editRejectsInvariantViolations() {
+        String before = "PostgreSQL 사용\n[이미지: images/a/1.png]";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                before, before.replace("PostgreSQL", "Oracle"), TextHash.sha256(before), null, null, null, null, "리터럴")));
+        long id = proposals.listByJob(jobId).get(0).id();
+
+        assertThat(service.editProposal(jobId, id, "Oracle 사용", "root")).contains("이미지 마커");
+        assertThat(service.editProposal(jobId, id, before, "root")).contains("수정 전과 같습니다");
+        assertThat(service.editProposal(jobId + 99, id, "x", "root")).isNotNull();   // 다른 작업 번호로는 못 고친다
+        assertThat(proposals.find(id).orElseThrow().edited()).isFalse();
+
+        approve("d1");
+        assertThat(service.editProposal(jobId, id, "Oracle 사용\n[이미지: images/a/1.png]\n추가", "root")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("청크 삭제 수정안은 applyChunkDelete 로 가고, MD 에서 그 구간이 사라진다")
+    void deleteChunkProposalDeletesTheChunkAndItsMdLines() throws IOException {
+        String body = "## B 기능\n\nB 를 쓰는 방법.";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0",
+                ChangeProposalRepository.KIND_DELETE_CHUNK, body, "", TextHash.sha256(body), null, null, null, null, "B 삭제")));
+        approve("d1");
+        when(admin.applyChunkDelete("latest", "c0", TextHash.sha256(body))).thenReturn(AdminService.ApplyOutcome.APPLIED);
+        Path md = Files.writeString(converted.resolve("d1.md"), "## A\n\nA 설명.\n\n## B 기능\n\nB 를 쓰는 방법.\n\n## C\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+        assertThat(Files.readString(md)).doesNotContain("B 기능").doesNotContain("B 를 쓰는 방법").contains("## A").contains("## C");
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+    }
+
+    @Test
+    @DisplayName("겹침 짝 중 하나라도 낡았으면 짝 전체를 쓰지 않는다(stale)")
+    void staleOverlapPairIsNotApplied() {
+        proposals.insertAll(List.of(
+                new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_EDIT,
+                        "A 는 30초", "A 는 60초", TextHash.sha256("A 는 30초"), null, null, null, null, "편집", null, null, null, "g1"),
+                new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c1", ChangeProposalRepository.KIND_EDIT,
+                        "30초 이후", "60초 이후", TextHash.sha256("30초 이후"), null, null, null, null, "편집", null, null, null, "g1")));
+        approve("d1");
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "A 는 30초", "A 는 30초", Map.of()));
+        when(admin.getChunk("latest", "c1")).thenReturn(new AdminService.ChunkRow("c1", "누가 고침", "누가 고침", Map.of()));
+
+        ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
+
+        assertThat(r.stale()).isEqualTo(2);
+        assertThat(r.applied()).isZero();
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("맥락·키워드 다시 만들기 — 고친 본문으로 추출해 수정안에만 저장, pending 이 아니거나 청크 삭제면 거절")
+    void regenerateContextFromTheEditedText() {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        long id = proposals.listByJob(jobId).get(0).id();
+        service.editProposal(jobId, id, "Oracle 19c 를 사용한다", "root");
+        com.example.ragagent.ingestion.KeywordExtractor extractor = mock(com.example.ragagent.ingestion.KeywordExtractor.class);
+        service.setKeywordExtractor(extractor);
+        when(admin.getChunk("latest", "c0")).thenReturn(new AdminService.ChunkRow("c0", "PostgreSQL 사용", "PostgreSQL 사용",
+                Map.of(MetaKey.CHUNK_CONTEXT, "옛 맥락", MetaKey.EXCERPT_KEYWORDS, "postgresql")));
+        when(extractor.enrichSingle(any())).thenAnswer(inv -> {
+            org.springframework.ai.document.Document d = inv.getArgument(0);
+            assertThat(d.getText()).isEqualTo("Oracle 19c 를 사용한다");   // 기계 수정안이 아니라 고친 본문으로
+            Map<String, Object> m = new java.util.HashMap<>(d.getMetadata());
+            m.put(MetaKey.CHUNK_CONTEXT, "DB > Oracle 19c");
+            m.put(MetaKey.EXCERPT_KEYWORDS, "oracle, 19c");
+            return new org.springframework.ai.document.Document(d.getText(), m);
+        });
+
+        assertThat(service.regenerateContext(jobId, id, "root")).isNull();
+
+        ChangeProposalRepository.Proposal p = proposals.find(id).orElseThrow();
+        assertThat(p.afterContext()).isEqualTo("DB > Oracle 19c");
+        assertThat(p.afterKeywords()).isEqualTo("oracle, 19c");
+        assertThat(p.beforeContext()).isEqualTo("ctx PostgreSQL");   // 이미 있던 수정 전 값은 그대로
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+
+        approve("d1");
+        assertThat(service.regenerateContext(jobId, id, "root")).contains("검토 대기");
+    }
+
+    @Test
+    @DisplayName("빼기 — 뺀 수정안은 승인해도 적용되지 않는다")
+    void withdrawnProposalIsNotApplied() {
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘")));
+        long first = proposals.listByJob(jobId).get(0).id();
+
+        assertThat(service.withdrawProposal(jobId, first, "root")).isEqualTo(1);
+        approve("d1");
+
+        assertThat(statuses()).containsExactly(ChangeProposalRepository.WITHDRAWN, ChangeProposalRepository.APPROVED);
+    }
+
+    @Test
     @DisplayName("승인은 문서 단위·한 번만 — 두 번째 승인은 바뀐 것이 없다")
     void approvalIsPerDocumentAndOnce() {
         proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용"), proposal("d1", "c1", "PostgreSQL 둘"), proposal("d2", "c9", "PostgreSQL 셋")));
@@ -236,8 +351,8 @@ class ChangeApplyServiceTest {
     }
 
     @Test
-    @DisplayName("의미 변경 수정안이 적용된 문서는 MD 에 글자 치환만 들어가고 MD_PARTIAL 로 남는다 — 의미 변경은 MD 에 되쓸 수 없다")
-    void semanticProposalsLeaveTheMdPartial() throws IOException {
+    @DisplayName("의미 변경 수정안은 줄 구간 대조로 MD 에 되쓴다 — 드라이버 줄까지 반영되고 MD_PARTIAL 이 생기지 않는다(6a)")
+    void semanticProposalsAreWrittenBackByLineHunks() throws IOException {
         proposals.insertAll(List.of(
                 new ChangeProposalRepository.NewProposal(jobId, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_SEMANTIC,
                         "PostgreSQL 사용\ndriver: org.postgresql.Driver", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
@@ -250,10 +365,9 @@ class ChangeApplyServiceTest {
         ChangeApplyService.DocResult r = service.applyApproved(jobId, "d1", "root");
 
         assertThat(r.applied()).isEqualTo(1);
-        assertThat(r.mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
-        // 글자 치환만 MD 에 — 드라이버 줄은 그대로(되쓸 방법이 없다)
-        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\ndriver: org.postgresql.Driver\n");
-        assertThat(proposals.listByJob(jobId).get(0).mdStatus()).isEqualTo(ChangeApplyService.MD_PARTIAL);
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\ndriver: oracle.jdbc.OracleDriver\n");
+        assertThat(proposals.listByJob(jobId).get(0).mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
         verify(admin).applyChunkEdit("latest", "c0", "Oracle 사용\ndriver: oracle.jdbc.OracleDriver",
                 Map.of(MetaKey.CHUNK_CONTEXT, "ctx Oracle"), TextHash.sha256("PostgreSQL 사용\ndriver: org.postgresql.Driver"));
     }
@@ -350,5 +464,61 @@ class ChangeApplyServiceTest {
         proposals.transitionDocument(job2, "d3", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
         sharing.applyApproved(job2, "d3", "root");   // 리포트가 없어(작업이 끝나지 않음) 오류로 돌아온다
         assertThat(locks.isLocked("d3")).isFalse();
+    }
+
+    // ── 6d 신고에서 시작한 작업 ──────────────────────────────────────────────
+
+    /** 신고 청크 c0 에서 시작한 글자 치환 작업 — 같은 문서의 다른 청크(c1)에는 바꿀 말이 남아 있다. */
+    private long reportJob() {
+        long id = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "PostgreSQL → Oracle", "root", "c0");
+        jobs.finish(id, ChangeJobRepository.DONE,
+                "{\"instruction\":\"x\",\"from\":\"PostgreSQL\",\"to\":\"Oracle\",\"mentions\":1,\"truncated\":false,\"tooShort\":false,"
+                        + "\"proposals\":1,\"unchanged\":0,\"manualCurated\":0,\"discarded\":[]}", null);
+        String before = "PostgreSQL 사용";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(id, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                before, "Oracle 사용", TextHash.sha256(before), null, null, null, null, "리터럴(신고된 청크)")));
+        proposals.transitionDocument(id, "d1", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        return id;
+    }
+
+    @Test
+    @DisplayName("6d — 신고 작업의 그 청크가 적용되면 신고를 해결로 닫고, MD 는 줄 구간으로 그 줄만 바꾼다(다른 청크의 같은 말은 그대로)")
+    void applyingTheReportedChunkResolvesItsReports() throws IOException {
+        com.example.ragagent.service.ChunkReportService reports = mock(com.example.ragagent.service.ChunkReportService.class);
+        when(reports.resolveChunk(eq("c0"), eq("root"), anyString())).thenReturn(2);
+        service.setChunkReports(reports);
+        long id = reportJob();
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용", "PostgreSQL 설치");
+        Path md = Files.writeString(converted.resolve("d1.md"), "PostgreSQL 사용\n\nPostgreSQL 설치\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(id, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        assertThat(r.reportsClosed()).isEqualTo(2);
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\n\nPostgreSQL 설치\n");
+        verify(reports).resolveChunk(eq("c0"), eq("root"), org.mockito.ArgumentMatchers.contains("#" + id));
+    }
+
+    @Test
+    @DisplayName("6d — 신고 청크가 낡아(stale) 적용되지 않으면 신고는 열린 채로 남는다 · 신고와 무관한 작업은 신고를 건드리지 않는다")
+    void reportsStayOpenUnlessTheReportedChunkIsApplied() {
+        com.example.ragagent.service.ChunkReportService reports = mock(com.example.ragagent.service.ChunkReportService.class);
+        service.setChunkReports(reports);
+        long id = reportJob();
+        applied("c0", AdminService.ApplyOutcome.STALE);
+
+        ChangeApplyService.DocResult r = service.applyApproved(id, "d1", "root");
+
+        assertThat(r.reportsClosed()).isZero();
+        verify(reports, never()).resolveChunk(anyString(), anyString(), anyString());
+
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용");
+        service.applyApproved(jobId, "d1", "root");
+        verify(reports, never()).resolveChunk(anyString(), anyString(), anyString());
     }
 }

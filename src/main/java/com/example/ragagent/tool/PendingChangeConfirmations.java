@@ -32,8 +32,17 @@ public class PendingChangeConfirmations {
     /** 동시에 쥐는 대기의 상한 — 관리자가 소수이므로 넉넉한 안전판일 뿐이다. */
     static final int MAX_ENTRIES = 1_000;
 
-    /** 되묻는 중인 요청 — 확정되면 이 값으로 수정안 작업이 시작된다. */
-    public record Pending(String instruction, String from, String to) {}
+    /**
+     * 되묻는 중인 요청 — 확정되면 <b>이 값 그대로</b> 수정안 작업이 시작된다(다시 해석하지 않는다).
+     *
+     * @param type 자연어 수정의 해석된 유형({@code deprecate}·{@code remove}·{@code add_note}·{@code revise}) — 글자 바꾸기면 {@code null}
+     */
+    public record Pending(String instruction, String from, String to, String type, String subject, String content, String replacement) {
+        /** 글자 바꾸기 되묻기. */
+        public Pending(String instruction, String from, String to) {
+            this(instruction, from, to, null, null, null, null);
+        }
+    }
 
     private record Entry(Pending pending, long expiresAtMs) {}
 

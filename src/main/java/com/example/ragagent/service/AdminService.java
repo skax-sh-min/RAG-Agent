@@ -783,6 +783,13 @@ public class AdminService {
                 if (v != null) meta.put(key, v);
             }
         }
+        // 본문의 그림 마커가 바뀌었으면 image_paths 도 따라간다 — 그대로 두면 지운 그림이 답변 썸네일에 계속 붙고 새 그림은 붙지 않는다
+        // (화면 편집 updateChunk 와 같은 규칙, AGENT_MCP_DESIGN §10.8).
+        String newBody = newText == null ? "" : newText;
+        Object storedPaths = meta.get(MetaKey.IMAGE_PATHS);
+        String syncedPaths = syncImagePaths(storedPaths == null ? null : storedPaths.toString(), row.fullText(), newBody);
+        if (syncedPaths == null) meta.remove(MetaKey.IMAGE_PATHS);
+        else meta.put(MetaKey.IMAGE_PATHS, syncedPaths);
         // 손으로 고친 것과 같은 표식 — 문서 단위 재인덱싱은 저장된 MD 에서 청크를 다시 만들어 이 편집을 버릴 수 있다(MD 되쓰기가 성공하면 그렇지 않지만
         // 그 판단은 이 메서드가 아니라 호출자의 몫이므로 경고 쪽으로 기운다).
         meta.put(MetaKey.EDITED_AT, Instant.now().toString());
@@ -800,6 +807,27 @@ public class AdminService {
             questionReuseService.invalidateChunkIfHashChanged(chunkId, previousHash);
         }
         log.info("[ADMIN] chunk edit applied id={}", chunkId);
+        return ApplyOutcome.APPLIED;
+    }
+
+    /**
+     * 승인된 청크 삭제 수정안을 적용한다(AGENT_MCP_DESIGN §10.8) — {@link #applyChunkEdit} 과 같은 사전 검사(없음·큐레이션·해시)를 지난 뒤에만
+     * {@link #deleteChunk}(벡터·FTS·레지스트리 청크 수·재사용 표시)를 부른다. 수정안을 만든 뒤 누가 청크를 고쳤으면 지우지 않는다({@code STALE}).
+     *
+     * @return {@code APPLIED} 외에는 아무것도 지우지 않았다. 지우는 중의 예외는 {@code EMBED_FAILED}(적용 실패)로 돌려준다
+     */
+    public ApplyOutcome applyChunkDelete(String collectionName, String chunkId, String expectedHash) {
+        ChunkRow row = getChunk(collectionName, chunkId);
+        if (row == null) return ApplyOutcome.NOT_FOUND;
+        if (row.isCurated()) return ApplyOutcome.CURATED;
+        if (!com.example.ragagent.model.TextHash.sha256(row.fullText()).equals(expectedHash)) return ApplyOutcome.STALE;
+        try {
+            deleteChunk(collectionName, chunkId);
+        } catch (Exception e) {
+            log.error("applyChunkDelete failed id={}: {}", chunkId, e.getMessage());
+            return ApplyOutcome.EMBED_FAILED;
+        }
+        log.info("[ADMIN] chunk delete applied id={}", chunkId);
         return ApplyOutcome.APPLIED;
     }
 
@@ -918,20 +946,30 @@ public class AdminService {
                                                  String oldText, String newText) {
         Map<String, String> merged = mergeEditableMetaBase(storedMeta, clientMeta);
         if (newText != null) {
-            java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
-            String stored = merged.get(MetaKey.IMAGE_PATHS);
-            if (stored != null && !stored.isBlank()) {
-                for (String p : stored.split(",")) if (!p.isBlank()) paths.add(p.strip());
-            }
-            if (oldText != null) {
-                List<String> now = ChunkImageEditor.paths(newText);
-                for (String p : ChunkImageEditor.paths(oldText)) if (!now.contains(p)) paths.remove(p);
-            }
-            paths.addAll(ChunkImageEditor.paths(newText));
-            if (paths.isEmpty()) merged.remove(MetaKey.IMAGE_PATHS);
-            else merged.put(MetaKey.IMAGE_PATHS, String.join(",", paths));
+            String synced = syncImagePaths(merged.get(MetaKey.IMAGE_PATHS), oldText, newText);
+            if (synced == null) merged.remove(MetaKey.IMAGE_PATHS);
+            else merged.put(MetaKey.IMAGE_PATHS, synced);
         }
         return merged;
+    }
+
+    /**
+     * {@link MetaKey#IMAGE_PATHS} 를 본문의 마커 변화에 맞춘다 — 옛 값 − (옛 본문에는 있었는데 새 본문에서 사라진 마커) + (새 본문의 마커).
+     * 청크 편집 화면({@link #updateChunk})과 유지보수 적용({@link #applyChunkEdit})이 같은 규칙을 쓴다.
+     *
+     * @return 새 값, 남은 경로가 없으면 {@code null}(키를 지운다)
+     */
+    static String syncImagePaths(String stored, String oldText, String newText) {
+        java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
+        if (stored != null && !stored.isBlank()) {
+            for (String p : stored.split(",")) if (!p.isBlank()) paths.add(p.strip());
+        }
+        if (oldText != null) {
+            List<String> now = ChunkImageEditor.paths(newText);
+            for (String p : ChunkImageEditor.paths(oldText)) if (!now.contains(p)) paths.remove(p);
+        }
+        paths.addAll(ChunkImageEditor.paths(newText));
+        return paths.isEmpty() ? null : String.join(",", paths);
     }
 
     private static Map<String, String> mergeEditableMetaBase(Map<String, String> storedMeta,

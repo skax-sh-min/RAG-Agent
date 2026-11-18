@@ -163,6 +163,70 @@ class ToolDispatchServiceTest {
 
     private static final String ARGS = "{\"instruction\":\"PostgreSQL 을 Oracle 로 바꿔 줘\",\"from\":\"PostgreSQL\",\"to\":\"Oracle\"}";
 
+    // ── 자연어 지식 수정(6c): 원문을 해석해 되묻고, 확인한 해석 그대로 시작한다 ──
+
+    @Test
+    @DisplayName("바꿀 말·새 말이 없는 요청은 사용자가 친 원문을 해석해 유형·대상을 되묻고, 그 해석을 그대로 기억한다")
+    void naturalLanguageRequestAsksWithTheInterpretation() {
+        changeSetUp();
+        com.example.ragagent.workflow.KnowledgeEditWorkflow edit = mock(com.example.ragagent.workflow.KnowledgeEditWorkflow.class);
+        changeDispatch.setKnowledgeEdit(edit);
+        org.mockito.Mockito.when(edit.interpret(org.mockito.ArgumentMatchers.eq("A 기능은 더 이상 사용되지 않습니다"), any()))
+                .thenReturn(new com.example.ragagent.workflow.EditIntent("deprecate", "A 기능", null, null, null, null));
+        AgentState state = AgentState.of("A 기능은 더 이상 사용되지 않습니다", "latest", "t1", "root", "", RoutingMode.COST_FIRST, false,
+                java.util.Locale.KOREAN).toBuilder()
+                .toolPlan(new ToolPlan("requestDocumentChange", "{\"instruction\":\"A 기능 폐기 처리\",\"type\":\"remove\",\"subject\":\"Z\"}"))
+                .callerAdmin(true).build();
+
+        AgentState out = changeDispatch.execute(state);
+
+        assertThat(out.answer()).contains("「A 기능」").contains("사용 중단으로 표시").contains("원문은 지우지 않습니다");
+        PendingChangeConfirmations.Pending p = pending.resolve("root", "t1", "네").orElseThrow();
+        // 모델이 채운 type·subject(remove·Z)가 아니라 원문의 해석이 기억된다
+        assertThat(p.type()).isEqualTo("deprecate");
+        assertThat(p.subject()).isEqualTo("A 기능");
+        assertThat(p.instruction()).isEqualTo("A 기능은 더 이상 사용되지 않습니다");
+        verify(changeWorkflow, org.mockito.Mockito.never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any());
+    }
+
+    @Test
+    @DisplayName("해석하지 못하면 시작도 되묻기도 하지 않고 화면 링크를 준다")
+    void unreadableNaturalLanguageRequestPointsToTheScreen() {
+        changeSetUp();
+        com.example.ragagent.workflow.KnowledgeEditWorkflow edit = mock(com.example.ragagent.workflow.KnowledgeEditWorkflow.class);
+        changeDispatch.setKnowledgeEdit(edit);
+        org.mockito.Mockito.when(edit.interpret(any(), any())).thenThrow(new IllegalArgumentException("해석 실패"));
+
+        AgentState out = changeDispatch.execute(adminState(new ToolPlan("requestDocumentChange", "{\"instruction\":\"뭔가 고쳐\"}"), true));
+
+        assertThat(out.answer()).contains("/admin/change-jobs");
+        assertThat(pending.isPending("root", "t1")).isFalse();
+    }
+
+    @Test
+    @DisplayName("확정된 자연어 수정은 저장된 해석으로 자연어 워크플로를 시작한다")
+    void confirmedNaturalLanguageStartsTheEditWorkflow() {
+        changeWorkflow = mock(MaintenanceWorkflow.class);
+        pending = new PendingChangeConfirmations();
+        com.example.ragagent.workflow.KnowledgeEditWorkflow edit = mock(com.example.ragagent.workflow.KnowledgeEditWorkflow.class);
+        org.mockito.Mockito.when(edit.start(any(), any(), any(), any())).thenReturn(new com.example.ragagent.workflow.KnowledgeEditWorkflow.Started(77, "running"));
+        ToolCatalog catalog = new ToolCatalog(List.of(new ChangeRequestTool(changeWorkflow, new ToolGuard(mock(AuditLogger.class)), edit)));
+        ToolDispatchService dispatch = new ToolDispatchService(catalog, null, pending);
+        dispatch.setKnowledgeEdit(edit);
+        String args = "{\"instruction\":\"A 기능은 더 이상 사용되지 않습니다\",\"type\":\"deprecate\",\"subject\":\"A 기능\"}";
+
+        AgentState out = dispatch.execute(adminState(new ToolPlan("requestDocumentChange", args, true), true));
+
+        assertThat(out.answer()).contains("/admin/change-jobs/77");
+        org.mockito.ArgumentCaptor<com.example.ragagent.workflow.EditIntent> intent =
+                org.mockito.ArgumentCaptor.forClass(com.example.ragagent.workflow.EditIntent.class);
+        verify(edit).start(org.mockito.ArgumentMatchers.eq("root"), org.mockito.ArgumentMatchers.eq("A 기능은 더 이상 사용되지 않습니다"),
+                intent.capture(), any());
+        assertThat(intent.getValue().type()).isEqualTo("deprecate");
+        assertThat(intent.getValue().subject()).isEqualTo("A 기능");
+    }
+
     @Test
     @DisplayName("처음 고른 계획은 되묻기만 한다 — 작업을 시작하지 않고, 바꿀 말·새 말을 되읽고, 옵션 화면 링크(미리 채움)를 준다")
     void firstPickOnlyAsks() {
