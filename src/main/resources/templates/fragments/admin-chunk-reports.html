@@ -247,6 +247,64 @@
         </div>
     </div>
 
+    <!-- 6d — 이 신고로 수정안 만들기(AGENT_MCP_DESIGN §10.12). 대상은 이 청크 하나로 고정되고, 수정안은 승인 전에는
+         아무것도 바꾸지 않는다. 그 수정안이 적용되면 이 청크의 열린 신고가 해결로 닫힌다.
+         지시문은 신고 코멘트로 채워 두고 관리자가 고쳐 보낸다(코멘트는 신고자가 쓴 글이다 — 그대로 실행하지 않는다).
+         일반 폼 POST 라 제출하면 작업 화면으로 이동한다. -->
+    <div class="border rounded p-2" th:if="${reportEditEnabled or !#lists.isEmpty(reportJobs)}">
+        <div class="small fw-semibold mb-1"><i class="bi bi-magic me-1"></i>이 신고로 수정안 만들기</div>
+        <div th:unless="${#lists.isEmpty(reportJobs)}" class="small mb-2">
+            <span class="text-muted">이 청크로 만든 작업:</span>
+            <span th:each="j : ${reportJobs}" class="me-2">
+                <a th:href="@{/admin/change-jobs/{id}(id=${j.id()})}" th:text="'#' + ${j.id()}">#1</a>
+                <span class="text-muted" th:text="'(' + ${j.status()} + ')'">(done)</span>
+            </span>
+        </div>
+        <form th:if="${reportEditEnabled}" th:action="@{/admin/chunk-reports/chunks/{id}/propose(id=${detail.chunkId()})}" method="post">
+            <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                   th:value="${_csrf != null ? _csrf.token : ''}">
+            <label class="form-label small mb-0" for="report-edit-instruction">지시문 <span class="text-muted">(신고 코멘트 — 고쳐서 보내세요)</span></label>
+            <textarea class="form-control form-control-sm mb-2" id="report-edit-instruction" name="instruction" rows="3"
+                      maxlength="2000" th:text="${reportInstruction}"></textarea>
+            <div class="row g-2 mb-2">
+                <div class="col-12 col-md-4">
+                    <label class="form-label small mb-0" for="report-edit-type" th:text="#{maint.type}">Type</label>
+                    <select class="form-select form-select-sm" id="report-edit-type" name="type">
+                        <option value="" th:text="#{maint.type.auto}">Auto</option>
+                        <option value="replace" th:text="#{edit.type.replace}">Replace</option>
+                        <option value="deprecate" th:text="#{edit.type.deprecate}">Deprecate</option>
+                        <option value="remove" th:text="#{edit.type.remove}">Remove</option>
+                        <option value="add_note" th:text="#{edit.type.add_note}">Add note</option>
+                        <option value="revise" th:text="#{edit.type.revise}">Revise</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-8">
+                    <label class="form-label small mb-0" for="report-edit-subject" th:text="#{maint.subject}">Subject</label>
+                    <input class="form-control form-control-sm" id="report-edit-subject" name="subject" maxlength="200">
+                </div>
+                <div class="col-12 col-md-8">
+                    <label class="form-label small mb-0" for="report-edit-content" th:text="#{maint.content}">Content</label>
+                    <input class="form-control form-control-sm" id="report-edit-content" name="content" maxlength="500">
+                </div>
+                <div class="col-12 col-md-4">
+                    <label class="form-label small mb-0" for="report-edit-replacement" th:text="#{maint.replacement}">Alternative</label>
+                    <input class="form-control form-control-sm" id="report-edit-replacement" name="replacement" maxlength="200">
+                </div>
+                <div class="col-6">
+                    <label class="form-label small mb-0" for="report-edit-from" th:text="#{maint.from}">From</label>
+                    <input class="form-control form-control-sm" id="report-edit-from" name="from" maxlength="200">
+                </div>
+                <div class="col-6">
+                    <label class="form-label small mb-0" for="report-edit-to" th:text="#{maint.to}">To</label>
+                    <input class="form-control form-control-sm" id="report-edit-to" name="to" maxlength="200">
+                </div>
+            </div>
+            <div class="form-text mb-2">유형이 「자동」이면 지시문을 해석합니다. 대상은 이 청크 하나뿐이며, 수정안은 승인하기 전에는 아무것도 바꾸지 않습니다.
+                승인한 수정안이 적용되면 이 청크의 신고가 「처리 완료」로 닫힙니다.</div>
+            <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-magic me-1"></i>수정안 만들기</button>
+        </form>
+    </div>
+
     <!-- 조치 — 청크 단위. 이 청크의 열린 신고가 한 번에 닫힌다. -->
     <div class="border-top pt-2">
         <label class="form-label small fw-semibold" for="chunk-report-note">처리 메모 / 반려 사유</label>

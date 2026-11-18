@@ -26,20 +26,37 @@ public class ChangeJobRepository {
     public static final String FAILED = "failed";
     public static final String INTERRUPTED = "interrupted";
 
-    /** @param intentJson 자연어 지식 수정의 해석된 의도(V16) — 글자 치환 작업·옛 작업은 {@code null} */
+    /**
+     * @param intentJson    자연어 지식 수정의 해석된 의도(V16) — 글자 치환 작업·옛 작업은 {@code null}
+     * @param reportChunkId 청크 오류 신고에서 시작한 작업의 그 청크(V17, AGENT_MCP_DESIGN §10.12 6d) — 대상이 이 청크 하나로 고정되고, 이 청크의 수정안이
+     *                      적용되면 열린 신고가 해결로 닫힌다. 그 밖의 작업은 {@code null}
+     */
     public record Job(long id, String kind, String requestText, String requestedBy, String status,
-                      String summaryJson, String error, String createdAt, String updatedAt, String intentJson) {
+                      String summaryJson, String error, String createdAt, String updatedAt, String intentJson,
+                      String reportChunkId) {
+        /** V17 이전의 모양 — 테스트·옛 호출부용. */
+        public Job(long id, String kind, String requestText, String requestedBy, String status,
+                   String summaryJson, String error, String createdAt, String updatedAt, String intentJson) {
+            this(id, kind, requestText, requestedBy, status, summaryJson, error, createdAt, updatedAt, intentJson, null);
+        }
+
         /** V16 이전의 모양 — 테스트·옛 호출부용. */
         public Job(long id, String kind, String requestText, String requestedBy, String status,
                    String summaryJson, String error, String createdAt, String updatedAt) {
-            this(id, kind, requestText, requestedBy, status, summaryJson, error, createdAt, updatedAt, null);
+            this(id, kind, requestText, requestedBy, status, summaryJson, error, createdAt, updatedAt, null, null);
+        }
+
+        /** 신고에서 시작한 작업인가. */
+        public boolean fromReport() {
+            return reportChunkId != null && !reportChunkId.isBlank();
         }
     }
 
     private static final RowMapper<Job> MAPPER = (rs, n) -> new Job(
             rs.getLong("id"), rs.getString("kind"), rs.getString("request_text"), rs.getString("requested_by"),
             rs.getString("status"), rs.getString("summary_json"), rs.getString("error"),
-            rs.getString("created_at"), rs.getString("updated_at"), rs.getString("intent_json"));
+            rs.getString("created_at"), rs.getString("updated_at"), rs.getString("intent_json"),
+            rs.getString("report_chunk_id"));
 
     private final JdbcTemplate jdbc;
 
@@ -77,6 +94,20 @@ public class ChangeJobRepository {
         jdbc.update("UPDATE change_job SET status = ?, intent_json = ?, updated_at = ? WHERE id = ?",
                 DONE, intentJson, DbTimestamp.now(), id);
         return id;
+    }
+
+    /**
+     * 신고에서 시작한 작업을 만든다(V17, 6d) — {@link #create} 와 같고 그 청크를 함께 남긴다.
+     */
+    public long createForReport(String kind, String requestText, String requestedBy, String reportChunkId) {
+        long id = create(kind, requestText, requestedBy);
+        jdbc.update("UPDATE change_job SET report_chunk_id = ? WHERE id = ?", reportChunkId, id);
+        return id;
+    }
+
+    /** 이 청크의 신고에서 시작한 최근 작업(최신순) — 신고 상세가 "이미 만든 작업"을 보인다. */
+    public List<Job> recentForReportChunk(String chunkId, int limit) {
+        return jdbc.query("SELECT * FROM change_job WHERE report_chunk_id = ? ORDER BY id DESC LIMIT ?", MAPPER, chunkId, limit);
     }
 
     /** 해석된 의도를 남긴다(V16) — 자연어 지식 수정 작업이 해석을 마친 뒤 한 번. */

@@ -59,4 +59,18 @@ class ChangeJobRepositoryTest {
         assertThat(repo.countRunning("bob")).isEqualTo(1);
         assertThat(repo.recentFor("alice", 10)).extracting(ChangeJobRepository.Job::id).containsExactly(a2, a1);
     }
+
+    @Test
+    @DisplayName("6d — 신고에서 시작한 작업은 그 청크를 남기고, 청크별로 최신순 조회된다(그 밖의 작업은 null)")
+    void reportChunkJobs() {
+        long plain = repo.create(ChangeJobRepository.KIND_MAINTENANCE, "x", "root");
+        long r1 = repo.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "r1", "root", "c1");
+        long r2 = repo.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "r2", "root", "c1");
+        repo.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "other", "root", "c2");
+
+        assertThat(repo.find(plain).orElseThrow().fromReport()).isFalse();
+        assertThat(repo.find(r1).orElseThrow().reportChunkId()).isEqualTo("c1");
+        assertThat(repo.find(r1).orElseThrow().status()).isEqualTo(ChangeJobRepository.RUNNING);
+        assertThat(repo.recentForReportChunk("c1", 5)).extracting(ChangeJobRepository.Job::id).containsExactly(r2, r1);
+    }
 }

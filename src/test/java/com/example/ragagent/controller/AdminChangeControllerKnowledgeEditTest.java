@@ -134,4 +134,42 @@ class AdminChangeControllerKnowledgeEditTest {
                 .andExpect(header().string("Location", "/admin/change-jobs/5"));
         verify(knowledgeEdit).proposeForChunks(eq(5L), eq(List.of("c2", "m1")), any());
     }
+
+    @Test
+    @DisplayName("6d — 신고에서 수정안 만들기: 관리자·CSRF, 유형·바꿀 말을 의도로 넘기고 대상은 경로의 청크")
+    void proposeFromReport() throws Exception {
+        when(knowledgeEdit.startFromReport(any(), any(), any(), any(), any())).thenReturn(new KnowledgeEditWorkflow.Started(12, "running"));
+
+        mvc.perform(post("/admin/chunk-reports/chunks/c1/propose").with(user(ADMIN)).param("instruction", "포트가 바뀜"))
+                .andExpect(status().isForbidden());
+        verify(knowledgeEdit, never()).startFromReport(any(), any(), any(), any(), any());
+
+        mvc.perform(post("/admin/chunk-reports/chunks/c1/propose").with(user(ADMIN)).with(csrf()).param("instruction", "포트가 바뀜"))
+                .andExpect(header().string("Location", "/admin/change-jobs/12"));
+        verify(knowledgeEdit).startFromReport(eq("root"), eq("c1"), eq("포트가 바뀜"), eq(null), any());
+
+        mvc.perform(post("/admin/chunk-reports/chunks/c1/propose").with(user(ADMIN)).with(csrf())
+                        .param("instruction", "x").param("type", "replace").param("from", "8080").param("to", "9090"))
+                .andExpect(header().string("Location", "/admin/change-jobs/12"));
+        ArgumentCaptor<EditIntent> intent = ArgumentCaptor.forClass(EditIntent.class);
+        verify(knowledgeEdit).startFromReport(eq("root"), eq("c1"), eq("x"), intent.capture(), any());
+        assertThat(intent.getValue().isReplace()).isTrue();
+        assertThat(intent.getValue().from()).isEqualTo("8080");
+
+        when(knowledgeEdit.startFromReport(eq("root"), eq("gone"), any(), any(), any())).thenThrow(new IllegalArgumentException("없음"));
+        mvc.perform(post("/admin/chunk-reports/chunks/gone/propose").with(user(ADMIN)).with(csrf()).param("instruction", "x"))
+                .andExpect(header().string("Location", "/admin/change-jobs?error=invalid"));
+    }
+
+    @Test
+    @DisplayName("6d — 신고에서 시작한 작업 화면은 대상 청크가 고정됐다고 밝힌다")
+    void reportJobBanner() throws Exception {
+        when(jobs.find(6L)).thenReturn(Optional.of(new ChangeJobRepository.Job(6, "maintenance", "포트", "root", "done", null, null,
+                "t", "t", null, "chunk-abc")));
+
+        mvc.perform(get("/admin/change-jobs/6").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("청크 오류 신고에서 시작한 작업")))
+                .andExpect(content().string(containsString("chunk-abc")));
+    }
 }

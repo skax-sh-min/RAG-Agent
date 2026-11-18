@@ -21,6 +21,9 @@
             <span class="text-muted fs-6" th:text="'#' + ${job.id}">#1</span>
         </h5>
         <p class="mb-3"><strong th:text="${job.requestText}">text</strong></p>
+        <div th:if="${job.fromReport()}" class="alert alert-light border py-2 small">
+            <i class="bi bi-flag me-1"></i><span th:text="#{maint.from-report(${job.reportChunkId()})}">From report</span>
+        </div>
 
         <div th:unless="${anyApplied}" class="alert alert-secondary py-2 small" th:text="#{maint.not-applied}">Nothing has been changed yet.</div>
         <div th:if="${anyApplied}" class="alert alert-warning py-2 small" th:text="#{maint.original-file}">Original files are not changed.</div>

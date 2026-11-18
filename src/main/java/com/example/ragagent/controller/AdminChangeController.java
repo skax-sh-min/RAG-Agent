@@ -124,6 +124,36 @@ public class AdminChangeController {
         }
     }
 
+    /**
+     * 청크 오류 신고에서 수정안 만들기(6d, AGENT_MCP_DESIGN §10.12) — 신고 상세의 폼. 지시문은 신고 코멘트로 채워진 것을 관리자가 고친 것이고, 대상은 그
+     * 청크 하나로 고정된다. 유형이 비면("자동") 지시문을 해석하고, {@code replace} 면 바꿀 말·새 말로 그 청크에만 글자 치환을 한다. 그 청크의 수정안이 적용되면
+     * 신고가 해결로 닫힌다({@link ChangeApplyService}).
+     */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/propose")
+    public String proposeFromReport(@PathVariable String chunkId,
+                                    @RequestParam(required = false, defaultValue = "") String instruction,
+                                    @RequestParam(required = false, defaultValue = "") String type,
+                                    @RequestParam(required = false) String subject,
+                                    @RequestParam(required = false) String content,
+                                    @RequestParam(required = false) String replacement,
+                                    @RequestParam(required = false) String from,
+                                    @RequestParam(required = false) String to) {
+        if (knowledgeEdit == null) return "redirect:/admin/change-jobs?error=invalid";
+        try {
+            String t = type.strip();
+            EditIntent intent = t.isEmpty() ? null
+                    : EditIntent.REPLACE.equals(t) ? new EditIntent(t, null, null, null, from, to)
+                    : new EditIntent(t, subject, content, replacement, null, null);
+            long jobId = knowledgeEdit.startFromReport(currentUser.userId(), chunkId, instruction, intent,
+                    LocaleContextHolder.getLocale()).jobId();
+            return "redirect:/admin/change-jobs/" + jobId;
+        } catch (IllegalStateException busy) {
+            return "redirect:/admin/change-jobs?error=busy";
+        } catch (IllegalArgumentException bad) {
+            return "redirect:/admin/change-jobs?error=invalid";
+        }
+    }
+
     /** 자연어 수정 작업의 리포트에서 고른 청크(추가 적용 후보·언급만)로 수정안을 더한다. */
     @PostMapping("/admin/change-jobs/{id}/chunks/propose")
     public String proposeChunks(@PathVariable long id, @RequestParam(required = false) List<String> chunkIds) {

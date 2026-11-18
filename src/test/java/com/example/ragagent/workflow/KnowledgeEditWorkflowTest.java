@@ -345,4 +345,59 @@ class KnowledgeEditWorkflowTest {
         assertThat(job.intentJson()).contains("\"nl\"").contains("deprecate");
         assertThat(job.summaryJson()).contains("\"mode\":\"nl\"").contains("\"proposals\":1");
     }
+
+    // ── 6d 신고에서 시작 ─────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("6d — 신고에서 시작하면 후보 찾기·판정 없이 그 청크에만 수정안을 만든다(대상 고정)")
+    void reportedChunkIsTheOnlyTarget() {
+        // 다른 청크도 대상을 언급하지만 신고 작업은 전수 조회·검색을 하지 않는다.
+        mentions("c1", A_CHUNK, "c2", "# A 기능 예시\n\nA 기능을 쓰는 예.");
+        chunk("c1", A_CHUNK, "A 기능", 0);
+        llm("글: A 기능은 더 이상 사용되지 않습니다.");   // 판정 호출이 없으므로 첫 응답이 곧 문장 다듬기다
+        long reportJob = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "A 기능은 더 이상 사용되지 않습니다", "root", "c1");
+
+        workflow.runForReport(reportJob, "A 기능은 더 이상 사용되지 않습니다",
+                new EditIntent("deprecate", "A 기능", null, null, null, null), "c1", Locale.KOREAN);
+
+        ChangeJobRepository.Job job = jobs.find(reportJob).orElseThrow();
+        assertThat(job.status()).isEqualTo(ChangeJobRepository.DONE);
+        assertThat(job.reportChunkId()).isEqualTo("c1");
+        assertThat(job.summaryJson()).contains("\"candidates\":1").contains("\"judged\":0").contains("\"proposals\":1");
+        List<ChangeProposalRepository.Proposal> ps = proposals.listByJob(reportJob);
+        assertThat(ps).extracting(ChangeProposalRepository.Proposal::chunkId).containsExactly("c1");
+        assertThat(ps.get(0).afterText()).contains("사용 중단");
+        verify(keywords, never()).findMentions(eq("latest"), anyString(), anyInt());
+        verify(hybrid, never()).search(any());
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("6d — 신고 작업이 글자 바꾸기로 해석되면 그 청크에만 글자 치환을 한다")
+    void reportedReplaceStaysOnTheChunk() {
+        long reportJob = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "8080 을 9090 으로", "root", "c1");
+
+        workflow.runForReport(reportJob, "8080 을 9090 으로", new EditIntent("replace", null, null, null, "8080", "9090"), "c1", Locale.KOREAN);
+
+        verify(maintenance).proposeAndStoreForChunk(reportJob, "8080 을 9090 으로", "8080", "9090", "c1");
+        verify(maintenance, never()).proposeAndStore(any(Long.class), anyString(), anyString(), anyString(), any(Locale.class));
+        assertThat(jobs.find(reportJob).orElseThrow().intentJson()).contains("\"literal\"");
+    }
+
+    @Test
+    @DisplayName("6d — 사라진 청크·큐레이션 청크로는 시작하지 않고, 신고 작업에는 다른 청크를 더할 수 없다")
+    void reportStartGuards() {
+        EditIntent intent = new EditIntent("deprecate", "A 기능", null, null, null, null);
+        assertThatThrownBy(() -> workflow.startFromReport("root", "gone", "A 기능 중단", intent, Locale.KOREAN))
+                .isInstanceOf(IllegalArgumentException.class);
+        Map<String, String> curatedMeta = new HashMap<>(Map.of(MetaKey.DOC_TYPE, "curated_qa", MetaKey.VERSION, "curated"));
+        when(admin.getChunk("latest", "q1")).thenReturn(new AdminService.ChunkRow("q1", "Q", "Q", curatedMeta));
+        assertThatThrownBy(() -> workflow.startFromReport("root", "q1", "A 기능 중단", intent, Locale.KOREAN))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        long reportJob = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "x", "root", "c1");
+        jobs.setIntent(reportJob, intent.toJson("nl"));
+        assertThatThrownBy(() -> workflow.proposeForChunks(reportJob, List.of("c2"), Locale.KOREAN))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

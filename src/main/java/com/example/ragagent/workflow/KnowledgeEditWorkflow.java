@@ -181,6 +181,70 @@ public class KnowledgeEditWorkflow {
         return new Started(id, ChangeJobRepository.RUNNING);
     }
 
+    /**
+     * 청크 오류 신고에서 시작한다(6d, AGENT_MCP_DESIGN §10.12) — 지시문은 관리자가 신고 코멘트로 채워 고친 것이고, <b>대상은 그 청크 하나로 고정</b>된다:
+     * 후보 찾기(전수 조회·하이브리드)와 판정을 건너뛰고 그 청크에만 편집 단계(⑥~⑩)를 돌린다. 글자 바꾸기로 해석되면 그 청크에만 글자 치환을 한다.
+     * 작업에 청크가 남아({@code change_job.report_chunk_id}) 그 수정안이 적용되면 {@link ChangeApplyService} 가 신고를 해결로 닫는다.
+     *
+     * @param intent 사람이 고른 의도 — {@code null} 이면 지시문을 LLM 으로 해석한다
+     * @throws IllegalStateException    이 사용자의 작업이 이미 돌고 있을 때
+     * @throws IllegalArgumentException 지시문도 의도도 없거나, 의도의 모양이 틀렸거나, 청크가 없거나 큐레이션 청크일 때
+     */
+    public Started startFromReport(String userId, String chunkId, String instruction, EditIntent intent, Locale locale) {
+        if (chunkId == null || chunkId.isBlank()) throw new IllegalArgumentException("신고된 청크가 필요합니다");
+        String text = instruction == null ? "" : instruction.strip();
+        if (text.isEmpty() && intent == null) throw new IllegalArgumentException("지시문이 필요합니다");
+        if (intent != null) {
+            String problem = intent.shapeProblem();
+            if (problem != null) throw new IllegalArgumentException(problem);
+            if (text.isEmpty()) text = describe(intent);
+        }
+        AdminService.ChunkRow row = adminService.getChunk(adminService.collectionFor(VERSION), chunkId);
+        if (row == null) throw new IllegalArgumentException("신고된 청크가 지금 문서에 없습니다(삭제·재인덱싱): " + chunkId);
+        if (row.isCurated()) throw new IllegalArgumentException("큐레이션 Q&A 청크는 지식 제안 편집에서 고칩니다");
+        if (jobs.countRunning(userId) > 0) throw new IllegalStateException("이미 진행 중인 작업이 있습니다");
+        long id = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, text, userId, chunkId);
+        String finalText = text;
+        Thread.ofVirtual().name("knowledge-edit-report-" + id)
+                .start(MdcPropagation.wrap(() -> runForReport(id, finalText, intent, chunkId, locale)));
+        return new Started(id, ChangeJobRepository.RUNNING);
+    }
+
+    /** 신고에서 시작한 작업의 몸체 — 테스트의 입구. 어떤 실패도 {@code failed} 로 남는다. */
+    void runForReport(long jobId, String instruction, EditIntent given, String chunkId, Locale locale) {
+        try {
+            EditIntent intent = given != null ? given : interpret(instruction, locale);
+            if (intent.isReplace()) {
+                jobs.setIntent(jobId, intent.toJson("literal"));
+                maintenance.proposeAndStoreForChunk(jobId, instruction, intent.from(), intent.to(), chunkId);
+                return;
+            }
+            jobs.setIntent(jobId, intent.toJson(MODE_NL));
+            Report report = proposeForReportedChunk(jobId, instruction, intent, chunkId, locale);
+            jobs.finish(jobId, ChangeJobRepository.DONE, MAPPER.writeValueAsString(report), null);
+            log.info("[KNOWLEDGE-EDIT] 신고 청크 완료 job={} type={} chunk={} 수정안={}", jobId, intent.type(), chunkId, report.proposals());
+        } catch (Exception e) {
+            log.warn("[KNOWLEDGE-EDIT] 신고 청크 실패 job={}: {}", jobId, e.getMessage());
+            jobs.finish(jobId, ChangeJobRepository.FAILED, null, String.valueOf(e.getMessage()));
+        }
+    }
+
+    /**
+     * 그 청크 하나에만 ⑥~⑩ — 판정을 하지 않으므로 대상 역할은 {@code describes}(관리자가 신고를 보고 고른 청크다), 근거 인용은 없다. 리포트의 후보는 1,
+     * 판정은 0 이다.
+     */
+    Report proposeForReportedChunk(long jobId, String instruction, EditIntent intent, String chunkId, Locale locale) {
+        String collection = adminService.collectionFor(VERSION);
+        AdminService.ChunkRow row = adminService.getChunk(collection, chunkId);
+        if (row == null || row.isCurated()) throw new IllegalArgumentException("신고된 청크를 읽지 못했습니다: " + chunkId);
+        Built b = build(jobId, instruction, intent, collection, new Judged(chunkId, row.docId(), row.filename(), ROLE_DESCRIBES, "", null), locale);
+        List<ChangeProposalRepository.NewProposal> out = b.proposal() == null ? List.of() : List.of(b.proposal());
+        proposals.insertAll(out);
+        return new Report(MODE_NL, instruction, intent.type(), intent.subject(), intent.content(), intent.replacement(),
+                0, false, false, 1, 0, 0, out.size(), 0, b.fallback() ? 1 : 0,
+                List.of(), List.of(), b.discarded() == null ? List.of() : List.of(b.discarded()));
+    }
+
     /** 작업 몸체 — 테스트의 입구. 어떤 실패도 {@code failed} 로 남는다. */
     void run(long jobId, String instruction, EditIntent given, Locale locale) {
         try {
@@ -299,6 +363,7 @@ public class KnowledgeEditWorkflow {
         ChangeJobRepository.Job job = jobs.find(jobId)
                 .filter(j -> ChangeJobRepository.KIND_MAINTENANCE.equals(j.kind()))
                 .orElseThrow(() -> new IllegalArgumentException("유지보수 작업을 찾을 수 없습니다: " + jobId));
+        if (job.fromReport()) throw new IllegalArgumentException("신고에서 시작한 작업은 대상이 그 청크로 고정됩니다: " + jobId);
         EditIntent intent = EditIntent.fromJson(job.intentJson());
         if (intent == null || intent.isReplace() || intent.subject() == null) {
             throw new IllegalArgumentException("자연어 수정 작업이 아닙니다: " + jobId);

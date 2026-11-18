@@ -960,7 +960,7 @@ classDiagram
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 미실시** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 설계(§10.12).
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 미실시** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
 
 ### Phase 0. 선결 결함과 검색 기준선
 
@@ -1536,7 +1536,7 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 | 6a | 관리자 고치기·빼기 · 구간 MD 되쓰기 · `image_paths` 동기화 · `delete_chunk` 적용 경로 · `V16`. **LLM 없음** | 4 | 요청서의 "추가 수정 후 승인"을 지금의 리터럴·의미 변경 작업에도 바로 준다. `MD_PARTIAL` 을 없앤다. 뒤 단계의 적용 기반이다 |
 | 6b | MCP 제안 Tool(`findChunks` · `getChunkContext` 확장 · `proposeChunkEdit` · `getChangeJob`) + 앵커 편집과 가드(`AnchoredEdit`·`EditGuards`, 순수 클래스) | 6a | 대상 식별과 편집 작성을 큰 외부 모델이 하고 앱은 검증만 한다. 소형 모델 품질과 무관하게 바로 쓸 수 있고, 가드 코드는 6c와 같다 |
 | 6c | 앱 안 워크플로(`KnowledgeEditWorkflow` — 해석·후보·판정·편집·맥락 재생성) · `/admin` 요청 폼의 유형 선택 · 채팅 되묻기 | 6b, 사전 평가 | 소형 모델이 맡는 단계가 셋이라 측정으로 열 범위를 정한다 |
-| 6d (선택) | 청크 오류 신고에서 시작 — `/admin/chunk-reports` 의 "이 신고로 수정안 만들기"(코멘트를 지시문으로, 대상은 그 청크로 고정). 적용되면 신고를 해결로 닫는다(`ChunkReportService.resolveChunk`) | 6c | 오류를 발견하는 실제 입구가 신고다 |
+| 6d (선택) | 청크 오류 신고에서 시작 — `/admin/chunk-reports` 의 "이 신고로 수정안 만들기"(코멘트를 지시문으로, 대상은 그 청크로 고정). 적용되면 신고를 해결로 닫는다(`ChunkReportService.resolveChunk`). **구현(2026-11-18)**: `KnowledgeEditWorkflow.startFromReport` — 후보 찾기·판정을 건너뛰고 그 청크에만 ⑥~⑩, 글자 바꾸기면 `MaintenanceWorkflow.proposeForChunk`(그 청크만, 옵션 없음). 작업에 `change_job.report_chunk_id`(V17)를 남기고 `ChangeApplyService` 가 그 청크의 수정안이 `applied` 일 때만 신고를 닫는다(낡음·실패면 열린 채). 신고 작업의 글자 치환은 발생 수 대조가 아니라 줄 구간 대조로 MD 에 되쓴다 | 6c | 오류를 발견하는 실제 입구가 신고다 |
 
 **6c 사전 평가.** 대상 모델은 권장 기준(Gemma 4 12B 이상 또는 Tool 사용에 맞춘 최신 모델, Context 절)을 만족하는 것으로 한다 — E2B 로 재면 판단표의 셋째 줄로 떨어질 가능성이 크고, 그 결과로 기능 범위를 정하면 큰 모델 배포까지 묶인다. 비교용으로 E2B 도 함께 잰다. `KnowledgeEditEvaluationTest` + `agent-eval/edit-gold.json`(코퍼스 복사본, 유형 넷 × 지시 5~8건). 지시 해석 정확도(유형·대상), 대상 recall·precision(설명함), 가드 통과율, 사람 수용률(고치지 않고 승인할 만한 비율, 수동 라벨)을 `documents/KNOWLEDGE_EDIT_EVALUATION.md` 에 남긴다. 생각을 끌 수 있는 서버(llama-server)에서 잰다.
 

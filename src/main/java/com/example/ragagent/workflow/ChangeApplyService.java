@@ -52,10 +52,14 @@ public class ChangeApplyService {
     /** 관리자가 고친 본문의 길이 상한 — 청크 하나의 크기를 크게 넘는 붙여넣기를 막는다. */
     static final int MAX_EDITED_CHARS = 20_000;
 
-    /** 한 문서의 적용 결과. {@code error} 가 있으면 아무것도 적용하지 않았다(백업 실패·잠금 충돌 등). */
-    public record DocResult(String docId, int applied, int stale, int failed, String mdStatus, String error) {
+    /**
+     * 한 문서의 적용 결과. {@code error} 가 있으면 아무것도 적용하지 않았다(백업 실패·잠금 충돌 등).
+     *
+     * @param reportsClosed 신고에서 시작한 작업(6d)이 그 청크의 수정안을 적용해 해결로 닫은 신고 수 — 그 밖에는 0
+     */
+    public record DocResult(String docId, int applied, int stale, int failed, String mdStatus, String error, int reportsClosed) {
         static DocResult error(String docId, String message) {
-            return new DocResult(docId, 0, 0, 0, null, message);
+            return new DocResult(docId, 0, 0, 0, null, message, 0);
         }
     }
 
@@ -68,6 +72,17 @@ public class ChangeApplyService {
     private final DocumentWriteLocks writeLocks;
     /** 감사 로그 — 세터 주입(생성자가 둘이고 테스트가 직접 부른다). 없으면 기록하지 않는다. */
     private com.example.ragagent.audit.AuditLogger auditLogger;
+
+    /**
+     * 청크 오류 신고 — 신고에서 시작한 작업(6d)의 그 청크 수정안이 적용되면 열린 신고를 해결로 닫는다. 세터 주입(생성자가 둘이고 테스트가 직접 부른다).
+     * 없으면 닫지 않는다(관리자가 신고 화면에서 직접 닫는다).
+     */
+    private com.example.ragagent.service.ChunkReportService chunkReports;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setChunkReports(com.example.ragagent.service.ChunkReportService chunkReports) {
+        this.chunkReports = chunkReports;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setAuditLogger(com.example.ragagent.audit.AuditLogger auditLogger) {
@@ -129,13 +144,17 @@ public class ChangeApplyService {
         try {
             List<ChangeProposalRepository.Proposal> todo = proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED);
             if (todo.isEmpty()) return DocResult.error(docId, "적용할 승인된 수정안이 없습니다");
-            MaintenanceWorkflow.Report report = report(jobId);
+            ChangeJobRepository.Job job = jobs.find(jobId).orElse(null);
+            // 신고에서 시작한 작업(6d) — 그 청크의 수정안이 적용되면 신고를 닫는다.
+            String reportChunk = job != null && job.fromReport() ? job.reportChunkId() : null;
+            MaintenanceWorkflow.Report report = report(job);
             // 수정안을 만든 때와 같은 치환 규칙(대소문자 변형 포함 여부까지) — 제목·남은 말 검사·발생 수 대조 MD 되쓰기가 이것을 쓴다.
             // 치환 규칙이 없는 작업(자연어 수정·외부 제안)도 있으므로 없을 수 있다.
             TermReplacement rule = report == null || report.from() == null || report.to() == null ? null
                     : new TermReplacement(report.from(), report.to(), report.caseVariants());
             // 발생 수 대조는 "기계가 낸 글자 치환"에만 맞다. 의미 변경·앵커 편집·관리자가 고친 것·청크 삭제가 하나라도 있으면 줄 구간 대조로 되쓴다.
-            boolean literalOnly = todo.stream().allMatch(p -> ChangeProposalRepository.KIND_LITERAL.equals(p.kind()) && !p.edited());
+            // 신고 작업의 글자 치환은 청크 하나만 바꾸므로 "문서의 어느 청크에도 바꿀 말이 안 남음"을 전제하는 발생 수 대조가 맞지 않는다 — 줄 구간 대조로.
+            boolean literalOnly = reportChunk == null && todo.stream().allMatch(p -> ChangeProposalRepository.KIND_LITERAL.equals(p.kind()) && !p.edited());
             if (literalOnly && rule == null) return DocResult.error(docId, "작업 리포트를 읽지 못했습니다");
 
             DatabaseBackupService.RunResult backup = backups.run("pre-change-" + jobId);
@@ -149,6 +168,7 @@ public class ChangeApplyService {
             // 겹침 짝은 쓰기 전에 해시를 먼저 대조한다 — 한쪽만 적용되면 겹침 구간이 어긋나므로 하나라도 낡았으면 짝 전체를 쓰지 않는다.
             Set<String> staleGroups = staleGroups(collection, todo);
             int applied = 0, stale = 0, failed = 0, appliedOccurrences = 0;
+            boolean reportedChunkApplied = false;
             List<MarkdownWriteBack.Edit> appliedEdits = new ArrayList<>();
             for (ChangeProposalRepository.Proposal p : todo) {
                 AdminService.ApplyOutcome outcome;
@@ -161,6 +181,7 @@ public class ChangeApplyService {
                     case APPLIED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.APPLIED, null);
                         applied++;
+                        if (p.chunkId().equals(reportChunk)) reportedChunkApplied = true;
                         if (rule != null) appliedOccurrences += rule.count(p.beforeText());
                         appliedEdits.add(new MarkdownWriteBack.Edit(p.beforeText(), p.afterText()));
                     }
@@ -193,12 +214,29 @@ public class ChangeApplyService {
             } else {
                 log.info("[APPLY] 적용된 청크 없음 job={} doc={} stale={} 실패={}", jobId, docId, stale, failed);
             }
-            return new DocResult(docId, applied, stale, failed, md, null);
+            int closed = reportedChunkApplied ? closeReports(jobId, reportChunk, reviewer) : 0;
+            return new DocResult(docId, applied, stale, failed, md, null, closed);
         } catch (Exception e) {
             log.warn("[APPLY] 실패 job={} doc={}: {}", jobId, docId, e.getMessage());
             return DocResult.error(docId, String.valueOf(e.getMessage()));
         } finally {
             lease.close();
+        }
+    }
+
+    /**
+     * 신고에서 시작한 작업의 그 청크가 적용됐다 — 열린 신고를 해결로 닫는다(6d). 신고 처리 실패는 적용 결과를 바꾸지 않는다(청크는 이미 고쳐졌고, 신고는
+     * 관리자가 화면에서 직접 닫을 수 있다).
+     */
+    private int closeReports(long jobId, String chunkId, String reviewer) {
+        if (chunkReports == null) return 0;
+        try {
+            int n = chunkReports.resolveChunk(chunkId, reviewer, "수정 작업 #" + jobId + " 적용으로 해결");
+            if (n > 0) log.info("[APPLY] 신고 해결 job={} chunk={} 닫음={}", jobId, chunkId, n);
+            return n;
+        } catch (Exception e) {
+            log.warn("[APPLY] 신고를 닫지 못했다 job={} chunk={}: {}", jobId, chunkId, e.getMessage());
+            return 0;
         }
     }
 
@@ -340,13 +378,12 @@ public class ChangeApplyService {
         }
     }
 
-    private MaintenanceWorkflow.Report report(long jobId) {
-        return jobs.find(jobId).map(j -> {
-            try {
-                return j.summaryJson() == null ? null : MAPPER.readValue(j.summaryJson(), MaintenanceWorkflow.Report.class);
-            } catch (RuntimeException e) {
-                return null;
-            }
-        }).orElse(null);
+    private static MaintenanceWorkflow.Report report(ChangeJobRepository.Job j) {
+        if (j == null || j.summaryJson() == null) return null;
+        try {
+            return MAPPER.readValue(j.summaryJson(), MaintenanceWorkflow.Report.class);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 }

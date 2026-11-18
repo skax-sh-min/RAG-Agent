@@ -465,4 +465,60 @@ class ChangeApplyServiceTest {
         sharing.applyApproved(job2, "d3", "root");   // 리포트가 없어(작업이 끝나지 않음) 오류로 돌아온다
         assertThat(locks.isLocked("d3")).isFalse();
     }
+
+    // ── 6d 신고에서 시작한 작업 ──────────────────────────────────────────────
+
+    /** 신고 청크 c0 에서 시작한 글자 치환 작업 — 같은 문서의 다른 청크(c1)에는 바꿀 말이 남아 있다. */
+    private long reportJob() {
+        long id = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "PostgreSQL → Oracle", "root", "c0");
+        jobs.finish(id, ChangeJobRepository.DONE,
+                "{\"instruction\":\"x\",\"from\":\"PostgreSQL\",\"to\":\"Oracle\",\"mentions\":1,\"truncated\":false,\"tooShort\":false,"
+                        + "\"proposals\":1,\"unchanged\":0,\"manualCurated\":0,\"discarded\":[]}", null);
+        String before = "PostgreSQL 사용";
+        proposals.insertAll(List.of(new ChangeProposalRepository.NewProposal(id, "d1", "d1.pdf", "c0", ChangeProposalRepository.KIND_LITERAL,
+                before, "Oracle 사용", TextHash.sha256(before), null, null, null, null, "리터럴(신고된 청크)")));
+        proposals.transitionDocument(id, "d1", ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        return id;
+    }
+
+    @Test
+    @DisplayName("6d — 신고 작업의 그 청크가 적용되면 신고를 해결로 닫고, MD 는 줄 구간으로 그 줄만 바꾼다(다른 청크의 같은 말은 그대로)")
+    void applyingTheReportedChunkResolvesItsReports() throws IOException {
+        com.example.ragagent.service.ChunkReportService reports = mock(com.example.ragagent.service.ChunkReportService.class);
+        when(reports.resolveChunk(eq("c0"), eq("root"), anyString())).thenReturn(2);
+        service.setChunkReports(reports);
+        long id = reportJob();
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용", "PostgreSQL 설치");
+        Path md = Files.writeString(converted.resolve("d1.md"), "PostgreSQL 사용\n\nPostgreSQL 설치\n");
+
+        ChangeApplyService.DocResult r = service.applyApproved(id, "d1", "root");
+
+        assertThat(r.applied()).isEqualTo(1);
+        assertThat(r.reportsClosed()).isEqualTo(2);
+        assertThat(r.mdStatus()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("Oracle 사용\n\nPostgreSQL 설치\n");
+        verify(reports).resolveChunk(eq("c0"), eq("root"), org.mockito.ArgumentMatchers.contains("#" + id));
+    }
+
+    @Test
+    @DisplayName("6d — 신고 청크가 낡아(stale) 적용되지 않으면 신고는 열린 채로 남는다 · 신고와 무관한 작업은 신고를 건드리지 않는다")
+    void reportsStayOpenUnlessTheReportedChunkIsApplied() {
+        com.example.ragagent.service.ChunkReportService reports = mock(com.example.ragagent.service.ChunkReportService.class);
+        service.setChunkReports(reports);
+        long id = reportJob();
+        applied("c0", AdminService.ApplyOutcome.STALE);
+
+        ChangeApplyService.DocResult r = service.applyApproved(id, "d1", "root");
+
+        assertThat(r.reportsClosed()).isZero();
+        verify(reports, never()).resolveChunk(anyString(), anyString(), anyString());
+
+        proposals.insertAll(List.of(proposal("d1", "c0", "PostgreSQL 사용")));
+        approve("d1");
+        applied("c0", AdminService.ApplyOutcome.APPLIED);
+        chunksOfDoc("Oracle 사용");
+        service.applyApproved(jobId, "d1", "root");
+        verify(reports, never()).resolveChunk(anyString(), anyString(), anyString());
+    }
 }

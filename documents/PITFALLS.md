@@ -663,6 +663,18 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **호출 지점은 새 사이트가 아니다** — 해석은 `CONDENSE`(256), 판정·편집·다듬기는 `RERANK`(512·1,024). `ThinkingSite` 를 더하면 설정 카드·미리보기가 함께 바뀐다(3단계·4a 와 같은 이유).
 - **알려진 한계.** 실모델로 돌려 보지 않았다(모의 응답 테스트뿐) · `unclear` 해석은 작업 실패 · 겹침 짝 없음 · 판정 40곳 상한 · 주의 사항의 "추가 적용 후보"는 판정 때의 순서(교차 인코더가 있으면 점수순)로 고른다.
 
+### 자연어 지식 수정 6d — 신고에서 수정안 만들기
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.12. 2026-11-18. `/admin` 청크 오류 신고 상세 → `POST /admin/chunk-reports/chunks/{chunkId}/propose` → `KnowledgeEditWorkflow.startFromReport`.
+
+- **대상은 그 청크 하나로 고정한다** — 후보 찾기(전수 조회·하이브리드)와 판정을 건너뛰고 그 청크에만 편집 단계를 돌린다(판정 없이 역할 `describes`, 근거 인용 없음). 글자 바꾸기로 해석돼도 코퍼스 전체가 아니라 `MaintenanceWorkflow.proposeForChunk`(그 청크만, `semantic`·`caseVariants` 꺼짐)다. 관리자가 신고를 보고 고른 청크라 "어디를 고칠지"는 이미 정해졌고, 전수 조회로 넓히면 신고와 무관한 청크까지 수정안이 생긴다. 신고 작업에는 리포트의 "추가 후보"로 다른 청크를 더할 수 없다(`proposeForChunks` 가 거절).
+- **신고 코멘트는 지시문의 초기값일 뿐이다** — 신고자(게스트 포함)가 쓴 글이라 관리자가 고쳐 보내게 하고, 해석은 평소처럼 `wrap()` + 지시문 부분 문자열 검사를 지난다. 승인 전에는 아무것도 바뀌지 않는 것도 같다.
+- **신고는 그 청크의 수정안이 `applied` 일 때만 닫는다**(`ChangeApplyService.closeReports` → `ChunkReportService.resolveChunk`, 메모 "수정 작업 #N 적용으로 해결"). 낡음·실패·거절이면 열린 채로 둔다 — 고쳐지지 않은 신고를 닫으면 대기열이 사실과 어긋난다. 신고를 닫는 실패는 적용 결과를 바꾸지 않는다(청크는 이미 고쳐졌다). `ChunkReportService` 는 세터 주입이라 없으면 닫지 않는다.
+- **신고 작업의 글자 치환은 줄 구간 대조로 MD 에 되쓴다** — 발생 수 대조(`literalOnly`)는 "문서의 어느 청크에도 바꿀 말이 안 남음"을 전제하는데 청크 하나만 바꾸면 다른 청크에 그 말이 남는 것이 정상이라 늘 `MD_CONFLICT` 가 된다. `report_chunk_id` 가 있으면 `literalOnly` 를 끈다(`ChangeApplyServiceTest.applyingTheReportedChunkResolvesItsReports`).
+- **연결은 `change_job.report_chunk_id`(V17) 한 칸이다** — 신고 행에 작업 id 를 쓰지 않는다. 한 청크로 작업을 여럿 만들 수 있고, 신고 상세는 `recentForReportChunk` 로 그 청크의 작업을 보인다. FK 가 아니다(재인덱싱으로 청크가 사라질 수 있다 — 그러면 수정안은 낡음이 되고 신고는 열린 채).
+- **사라진 청크·큐레이션 청크로는 시작하지 않는다**(화면에서 폼을 숨기고 워크플로도 거절). 큐레이션 청크의 단일 출처는 `curated_qa` 다.
+- **알려진 한계.** 실모델·브라우저로 확인하지 않았다(단위·슬라이스 테스트뿐) · 오류 사유는 작업 목록의 `error=invalid`/`busy` 로만 보인다(사유 문장은 없다).
+
 ### 문서 쓰기 잠금 (`DocumentWriteLocks`)
 
 같은 문서에서 `↺ 재인덱싱`(`DocumentIndexer.reindexFromMd`)과 유지보수 적용(`ChangeApplyService`)이 겹치면 — 재인덱싱이 청크 id 를 **모두 새로 만들고** 변환 MD 를 읽는 동안 적용이 옛 id 를 고쳐 쓰거나(수정은 사라지고 일부는 `stale`), 적용이 청크를 바꾸는 사이에 재인덱싱이 MD 를 읽어 반쯤 바뀐 문서가 된다. 적용 서비스 안의 잠금은 **서비스끼리만** 막았다.
