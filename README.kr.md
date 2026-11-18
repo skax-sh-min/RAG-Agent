@@ -295,8 +295,6 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축된 감사 파일 보관 일수 |
 | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 전체 크기 상한 |
 
-> `app.image-description.mode`·`app.image-description.min-image-bytes`는 바인딩만 남아 있고 **읽는 코드가 없습니다** — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점 캐시로 옮겨갔습니다. 그래서 환경변수도 일부러 만들지 않았습니다.
-
 ### RAG 튜닝
 
 | 변수 | 기본값 | 권장 범위 | 설명 |

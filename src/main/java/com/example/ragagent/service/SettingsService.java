@@ -106,7 +106,28 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
             new Spec(SettingsKeys.CHUNK_SPLIT_GRANULAR,            Kind.BOOL,   0,   0,    0,    "settings.item.chunk-split-granular"),
             new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   4,    1,    "settings.item.max-concurrent-files"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls"),
+            new Spec(SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE,     Kind.INT,    1,   20,   1,    "settings.item.keyword-batch-size"),
+            new Spec(SettingsKeys.INDEXING_KEYWORD_TIMEOUT,        Kind.INT,    10,  3600, 10,   "settings.item.keyword-timeout-seconds"),
+            // 0 = 끔(상한 없음). 켤 때는 chunk-size 보다 크게 — 작으면 정상 크기의 청크까지 잘린다.
+            new Spec(SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS,       Kind.INT,    0,   32000, 100, "settings.item.embed-max-chunk-chars"),
+            new Spec(SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES, Kind.INT,   1,   8,    1,    "settings.item.embed-max-concurrent-batches")
+    );
+
+    // Insertion order = render order in the "문서 변환" group. Apply on the next upload — the converters
+    // read them per conversion; documents already converted don't change.
+    // DOCX EMF/WMF 변환은 여기에 없다: @ConditionalOnProperty 빈(EmfToPngConverter·LibreOfficeConverter)의
+    // 게이트라 화면에서 켜도 빈이 없으면 아무 일도 하지 않는다(재기동 필요).
+    private static final List<Spec> CONVERSION_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES,    Kind.BOOL,   0,   0,    0,    "settings.item.pptx-remove-duplicate-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_DIVIDER_SLIDES,        Kind.BOOL,   0,   0,    0,    "settings.item.pptx-drop-divider-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES, Kind.BOOL,  0,   0,    0,    "settings.item.pptx-drop-redundant-title-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_ENDING_SLIDE,          Kind.BOOL,   0,   0,    0,    "settings.item.pptx-drop-ending-slide"),
+            new Spec(SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION,  Kind.DOUBLE, 0.0, 500.0, 1.0, "settings.item.pptx-image-min-shape-dimension"),
+            new Spec(SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING,      Kind.DOUBLE, 0.0, 100.0, 1.0, "settings.item.pptx-image-cluster-padding"),
+            new Spec(SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED,      Kind.BOOL,   0,   0,    0,    "settings.item.pptx-image-merge-annotated"),
+            new Spec(SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES,     Kind.BOOL,   0,   0,    0,    "settings.item.pptx-image-rasterize-shapes"),
+            new Spec(SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED,      Kind.BOOL,   0,   0,    0,    "settings.item.docx-image-merge-annotated")
     );
 
     /** 추가 질문 개수의 허용 범위와 기본값 — 화면 스펙과 followUpQuestionsCount()가 같은 값을 쓴다. */
@@ -141,6 +162,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         Map<String, Spec> m = new LinkedHashMap<>();
         for (Spec s : SEARCH_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : CONVERSION_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : UI_HOT_SPECS) m.put(s.key(), s);
         // §6.29 — 호출 지점별 생각 수준. 키는 ThinkingSite 가 만든다(사이트를 더하면 여기도 저절로 는다). 일반 항목 격자(*_HOT_SPECS)에는
@@ -380,6 +402,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
+                new SettingGroup("conversion", "settings.group.conversion", conversionItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
                 new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
                 new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
@@ -779,7 +802,7 @@ public class SettingsService implements AppProperties.OverrideSource {
     /** 이 화면의 편집 가능한 일반 항목 전부(검색 · 인덱싱 · LLM · 화면 표시) — 설명 키 확인용. */
     static List<String> hotItemLabelKeys() {
         List<String> keys = new ArrayList<>();
-        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
+        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, CONVERSION_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
             for (Spec spec : specs) keys.add(spec.labelKey());
         }
         return keys;
@@ -836,6 +859,13 @@ public class SettingsService implements AppProperties.OverrideSource {
     private List<SettingItem> indexingItems() {
         List<SettingItem> items = new ArrayList<>(INDEXING_HOT_SPECS.size());
         for (Spec s : INDEXING_HOT_SPECS) items.add(editableItem(s.key()));
+        return items;
+    }
+
+    /** PPTX/DOCX conversion knobs — apply on the next upload; already-converted documents are untouched. */
+    private List<SettingItem> conversionItems() {
+        List<SettingItem> items = new ArrayList<>(CONVERSION_HOT_SPECS.size());
+        for (Spec s : CONVERSION_HOT_SPECS) items.add(editableItem(s.key()));
         return items;
     }
 
@@ -1031,6 +1061,19 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.CHUNK_SPLIT_GRANULAR            -> Boolean.toString(props.chunkSplitGranularSafe());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
+            case SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE     -> Integer.toString(props.indexingSafe().keywordBatchSize());
+            case SettingsKeys.INDEXING_KEYWORD_TIMEOUT        -> Integer.toString(props.indexingSafe().keywordTimeoutSeconds());
+            case SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS       -> Integer.toString(props.embeddingSafe().maxChunkChars());
+            case SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES -> Integer.toString(props.embeddingSafe().maxConcurrentBatches());
+            case SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES    -> Boolean.toString(props.pptxRemoveDuplicateSlidesSafe());
+            case SettingsKeys.PPTX_DROP_DIVIDER_SLIDES        -> Boolean.toString(props.pptxDropDividerSlidesSafe());
+            case SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES -> Boolean.toString(props.pptxDropRedundantTitleSlidesSafe());
+            case SettingsKeys.PPTX_DROP_ENDING_SLIDE          -> Boolean.toString(props.pptxDropEndingSlideSafe());
+            case SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION  -> trimNum(props.pptxImageSafe().minShapeDimensionPt());
+            case SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING      -> trimNum(props.pptxImageSafe().clusterProximityPaddingPt());
+            case SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED      -> Boolean.toString(props.pptxImageSafe().mergeAnnotatedPictures());
+            case SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES     -> Boolean.toString(props.pptxImageSafe().rasterizeShapes());
+            case SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED      -> Boolean.toString(props.docxImageSafe().mergeAnnotatedShapes());
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());

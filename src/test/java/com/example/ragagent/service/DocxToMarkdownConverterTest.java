@@ -31,7 +31,7 @@ class DocxToMarkdownConverterTest {
         AppProperties props = mock(AppProperties.class);
         when(props.docxImageSafe()).thenReturn(new AppProperties.DocxShapeExtractionConfig(mergeAnnotatedShapes));
         when(props.imageDescriptionSafe()).thenReturn(new AppProperties.ImageDescriptionProperties(
-                "off", false, false, null, 0, false, false));
+                false, false, null, false, false));
         return new DocxToMarkdownConverter(
                 Optional.empty(), Optional.empty(), props, new DocxAnnotationShapeMerger(props));
     }

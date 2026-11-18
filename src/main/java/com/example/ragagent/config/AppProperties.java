@@ -607,18 +607,16 @@ public record AppProperties(
     ) {}
 
     public record ImageDescriptionProperties(
-            String mode,
             boolean enabled,
             boolean ocrEnabled,
             String tessdataPath,
-            int minImageBytes,
             boolean docxEmfConvert,
             boolean docxWmfConvert
     ) {}
 
     public ImageDescriptionProperties imageDescriptionSafe() {
         if (imageDescription == null)
-            return new ImageDescriptionProperties("strip", false, false, null, 1_000, false, false);
+            return new ImageDescriptionProperties(false, false, null, false, false);
         return imageDescription;
     }
 
@@ -869,22 +867,30 @@ public record AppProperties(
 
     /** PPTX duplicate/table-of-contents slide removal on/off. Defaults to enabled. */
     public boolean pptxRemoveDuplicateSlidesSafe() {
+        Boolean o = overrideBool(SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES);
+        if (o != null) return o;
         return pptxRemoveDuplicateSlides == null || pptxRemoveDuplicateSlides;
     }
 
     /** PPTX section-divider (title-only, no body/image) slide removal on/off. Defaults to enabled. */
     public boolean pptxDropDividerSlidesSafe() {
+        Boolean o = overrideBool(SettingsKeys.PPTX_DROP_DIVIDER_SLIDES);
+        if (o != null) return o;
         return pptxDropDividerSlides == null || pptxDropDividerSlides;
     }
 
     /** PPTX redundant "preview title" slide removal (title-only slide whose text also appears on
      *  the immediately following slide) on/off. Defaults to enabled. */
     public boolean pptxDropRedundantTitleSlidesSafe() {
+        Boolean o = overrideBool(SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES);
+        if (o != null) return o;
         return pptxDropRedundantTitleSlides == null || pptxDropRedundantTitleSlides;
     }
 
     /** PPTX last-slide "ending marker" (끝/END/The End) removal on/off. Defaults to enabled. */
     public boolean pptxDropEndingSlideSafe() {
+        Boolean o = overrideBool(SettingsKeys.PPTX_DROP_ENDING_SLIDE);
+        if (o != null) return o;
         return pptxDropEndingSlide == null || pptxDropEndingSlide;
     }
 
@@ -927,27 +933,29 @@ public record AppProperties(
         // MarkdownCorrectionService.correct(), TextToMarkdownService.convert() and
         // LazyVisionService — so the next indexing sees a /settings change without a restart). None
         // of them may cache these in a field.
-        // timeout/batch are ALSO read fresh per call (KeywordExtractor reads props.indexingSafe()
-        // directly, not cached), but they stay outside SettingsKeys/HOT_EDITABLE — no override hook
-        // exists for them here, so a /settings entry for them would have nothing to write to. Not a
-        // caching limitation like similarity-threshold used to be (see the two VectorStoreProvider
-        // impls) — just not wired up as hot-editable yet.
+        // keyword timeout/batch are hot too — KeywordExtractor reads props.indexingSafe() per call.
         // Fallbacks mirror the application.properties defaults (FILES=1, LLM=3) so a missing/zero
         // config lands on the same conservative peak (FILES × LLM) the shipped config does — they
         // used to drift (4/8), silently tripling the peak whenever the config block was absent.
         Integer filesOverride = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES);
         Integer llmOverride   = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM);
+        Integer timeoutOverride = overrideInt(SettingsKeys.INDEXING_KEYWORD_TIMEOUT);
+        Integer batchOverride   = overrideInt(SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE);
         if (indexing == null) {
             int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 1;
             int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 3;
-            return new IndexingConfig(f, l, 30, 2);
+            int t = (timeoutOverride != null && timeoutOverride > 0) ? timeoutOverride : 30;
+            int b = (batchOverride != null && batchOverride > 0) ? batchOverride : 2;
+            return new IndexingConfig(f, l, t, b);
         }
         int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
                     : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 1);
         int llm     = (llmOverride != null && llmOverride > 0) ? llmOverride
                     : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 3);
-        int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
-        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 2;
+        int timeout = (timeoutOverride != null && timeoutOverride > 0) ? timeoutOverride
+                    : (indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30);
+        int batch   = (batchOverride != null && batchOverride > 0) ? batchOverride
+                    : (indexing.keywordBatchSize() > 0 ? indexing.keywordBatchSize() : 2);
         return new IndexingConfig(files, llm, timeout, batch);
     }
 
@@ -959,21 +967,27 @@ public record AppProperties(
     }
 
     public EmbeddingConfig embeddingSafe() {
-        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true, 0, List.of(), 1);
+        // max-chunk-chars / max-concurrent-batches are hot (/settings 인덱싱 그룹) — DocumentIndexer and both
+        // VectorStoreProviders read embeddingSafe() per indexing call. The connection fields are not.
+        Integer maxCharsOverride = overrideInt(SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS);
+        Integer batchesOverride  = overrideInt(SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES);
+        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true,
+                maxCharsOverride != null && maxCharsOverride > 0 ? maxCharsOverride : 0, List.of(),
+                batchesOverride != null && batchesOverride > 1 ? batchesOverride : 1);
         int connect = (embedding.connectTimeoutSeconds() != null && embedding.connectTimeoutSeconds() > 0)
                 ? embedding.connectTimeoutSeconds() : 10;
         int read = (embedding.readTimeoutSeconds() != null && embedding.readTimeoutSeconds() > 0)
                 ? embedding.readTimeoutSeconds() : 120;
         boolean usageFallback = embedding.usageFallbackEnabled() == null || embedding.usageFallbackEnabled();
         // 0 = disabled (no hard cap); negative values are clamped to 0.
-        int maxChunkChars = (embedding.maxChunkChars() != null && embedding.maxChunkChars() > 0)
-                ? embedding.maxChunkChars() : 0;
+        Integer maxCharsRaw = maxCharsOverride != null ? maxCharsOverride : embedding.maxChunkChars();
+        int maxChunkChars = (maxCharsRaw != null && maxCharsRaw > 0) ? maxCharsRaw : 0;
         // §6.21 E1/E2 — null-safe defaults: no extra endpoints, serial sub-batch embedding.
         // 주소는 EMBED_BASE_URLS 하나에 {@code ;} 로 여럿 적는다 — 첫 주소가 baseUrl, 나머지가 추가 엔드포인트다.
         List<String> urls = parseUrls(embedding.baseUrl());
         List<String> additionalBaseUrls = urls.size() > 1 ? List.copyOf(urls.subList(1, urls.size())) : List.of();
-        int maxConcurrentBatches = (embedding.maxConcurrentBatches() != null && embedding.maxConcurrentBatches() > 1)
-                ? embedding.maxConcurrentBatches() : 1;
+        Integer batchesRaw = batchesOverride != null ? batchesOverride : embedding.maxConcurrentBatches();
+        int maxConcurrentBatches = (batchesRaw != null && batchesRaw > 1) ? batchesRaw : 1;
         return new EmbeddingConfig(
                 urls.isEmpty() ? embedding.baseUrl() : urls.get(0),
                 embedding.apiKey(),
@@ -1175,16 +1189,24 @@ public record AppProperties(
      * to only bundle shapes that literally touch/overlap).
      */
     public PptxShapeExtractionConfig pptxImageSafe() {
-        double minDim = (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
+        // Hot-editable (/settings 문서 변환 그룹): PptxImageExtractor reads this per extraction.
+        Double minDimO = overrideDouble(SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION);
+        Double paddingO = overrideDouble(SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING);
+        Boolean mergeO = overrideBool(SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED);
+        Boolean rasterO = overrideBool(SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES);
+        double minDim = (minDimO != null && minDimO >= 0) ? minDimO
+                : (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
                 ? pptxImage.minShapeDimensionPt() : 30.0;
-        double padding = (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
+        double padding = (paddingO != null && paddingO >= 0) ? paddingO
+                : (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
                 ? pptxImage.clusterProximityPaddingPt() : 5.0;
-        boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
+        boolean mergeAnnotatedPictures = mergeO != null ? mergeO
+                : (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
                 ? pptxImage.mergeAnnotatedPictures() : true;
         // rasterizeShapes defaults to false — loose overlapping shapes no longer auto-merge into
         // one blob; only groups/SmartArt/table+shape/picture+annotation composites survive.
-        boolean rasterizeShapes = (pptxImage != null && pptxImage.rasterizeShapes() != null)
-                && pptxImage.rasterizeShapes();
+        boolean rasterizeShapes = rasterO != null ? rasterO
+                : (pptxImage != null && pptxImage.rasterizeShapes() != null) && pptxImage.rasterizeShapes();
         return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures, rasterizeShapes);
     }
 
@@ -1195,8 +1217,9 @@ public record AppProperties(
      * honored.
      */
     public DocxShapeExtractionConfig docxImageSafe() {
-        boolean mergeAnnotatedShapes = (docxImage != null && docxImage.mergeAnnotatedShapes() != null)
-                && docxImage.mergeAnnotatedShapes();
+        Boolean o = overrideBool(SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED);   // hot — read per paragraph
+        boolean mergeAnnotatedShapes = o != null ? o
+                : (docxImage != null && docxImage.mergeAnnotatedShapes() != null) && docxImage.mergeAnnotatedShapes();
         return new DocxShapeExtractionConfig(mergeAnnotatedShapes);
     }
 

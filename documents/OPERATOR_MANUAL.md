@@ -483,10 +483,6 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `app.image-description.docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
 | `app.image-description.docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
 
-> **`mode` / `min-image-bytes`는 현재 코드에서 읽지 않습니다.** `ImageDescriptionProperties`에 바인딩만 되어 있고
-> 소비처가 없어(strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점
-> 캐시로 옮겨감) 값을 바꿔도 동작이 달라지지 않습니다. 바인딩 호환을 위해 남겨둔 것이라 환경변수도 두지 않았습니다.
-
 > **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION`·`type=LIGHT_BOTH`·`type=BOTH` — `supports(VISION)`이 참인 세 가지).
 > 프로바이더가 없으면 설명 없이 마커만 남습니다.
 >
@@ -1295,7 +1291,7 @@ export VECTORSTORE_TYPE=sqlite-vec
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
 
-- **Vision 설명**: `IMAGE_DESCRIPTION_ENABLED=false`면 Vision 호출이 아예 없습니다(모델 불요). 켜 두더라도 실제 설명은 업로드 시 "이미지 설명 추가"를 체크한 문서에서만 생성되므로, 설명이 필요하면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록하세요. (`app.image-description.mode`는 **읽지 않는 값**입니다 — §3.2 참고.)
+- **Vision 설명**: `IMAGE_DESCRIPTION_ENABLED=false`면 Vision 호출이 아예 없습니다(모델 불요). 켜 두더라도 실제 설명은 업로드 시 "이미지 설명 추가"를 체크한 문서에서만 생성되므로, 설명이 필요하면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록하세요.
 - **OCR**: 스캔 PDF 처리에만 사용. 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
 
 #### 6) 기동 확인 체크리스트

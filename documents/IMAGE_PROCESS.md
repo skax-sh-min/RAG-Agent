@@ -616,10 +616,6 @@ app.image-description.docx-emf-convert=${DOCX_EMF_CONVERT:true}
 
 # DOCX WMF→PNG 변환 (LibreOffice headless 필요)
 app.image-description.docx-wmf-convert=${DOCX_WMF_CONVERT:false}
-
-# ⚠ 아래 두 값은 바인딩만 남아 있고 읽는 코드가 없다(9.1 참고). 환경변수도 두지 않았다.
-app.image-description.mode=strip
-app.image-description.min-image-bytes=1000
 ```
 
 `AppProperties` 레코드 확장:
@@ -636,11 +632,9 @@ public record AppProperties(
     ImageDescriptionProperties imageDescription
 ) {
     public record ImageDescriptionProperties(
-        String mode,                 // 바인딩만 유지 — 읽는 코드 없음 (9.1 참고)
         boolean enabled,
         boolean ocrEnabled,
         String tessdataPath,
-        int minImageBytes,           // 바인딩만 유지 — 읽는 코드 없음 (9.1 참고)
         boolean docxEmfConvert,      // 14절
         boolean docxWmfConvert       // 14절
     ) {}
@@ -656,8 +650,8 @@ public record AppProperties(
 | `tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | _(빈 값)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작. 폐쇄망에서 언어 데이터를 임의 경로에 둔 경우 여기서 지정 |
 | `docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
 | `docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
-| ~~`mode`~~ | _(없음)_ | `strip` | **현재 코드에서 읽지 않음.** `ImageDescriptionProperties`에 바인딩만 되어 있고 소비처가 없다 — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스(5절)와 `LazyVisionService`의 질의 시점 캐시(12절)로 옮겨갔다. 값을 바꿔도 동작이 달라지지 않으므로 환경변수도 두지 않았다 |
-| ~~`min-image-bytes`~~ | _(없음)_ | `1000` | **현재 코드에서 읽지 않음.** 위와 같은 이유로 바인딩 호환을 위해서만 남아 있다. 작은 아이콘을 걸러내고 싶다면 지금은 PPTX의 `app.pptx-image.min-shape-dimension-pt`(도형 크기 기준)가 실제로 동작하는 유일한 필터다 |
+
+> 예전의 `mode`·`min-image-bytes` 는 읽는 코드가 없어 2026-11-18 에 지웠다(strip/describe 판단은 업로드 화면 체크박스(5절)와 `LazyVisionService` 의 질의 시점 캐시(12절)로 옮겨갔다). 작은 아이콘을 걸러내는 필터는 PPTX 의 `app.pptx-image.min-shape-dimension-pt` 뿐이다.
 
 > **인덱싱 시점 동기 L2는 프로퍼티가 아니라 업로드 화면의 체크박스로 제어됩니다.** 문서 업로드 시
 > "이미지 설명 추가"(`addImageDescriptions`)를 체크하면 DOCX·TXT·MD에 한해 업로드 건별로 동기 L2가
@@ -674,7 +668,6 @@ app.image-description.ocr-enabled=false
 **Vision 설명 활성화 (검색 시점 Lazy Vision, 비용 최소)**
 ```properties
 app.image-description.enabled=true
-app.image-description.min-image-bytes=1000
 ```
 > Vision 프로바이더(`VISION` 또는 `BOTH` type) 가 `app.llm.providers`에 등록되어 있어야 함.
 > 업로드 시점에 즉시 임베딩에 포함하려면(동기 L2) 업로드 화면 체크박스를 사용하세요 — 별도 프로퍼티는 없습니다.

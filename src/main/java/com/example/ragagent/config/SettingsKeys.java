@@ -54,6 +54,21 @@ public final class SettingsKeys {
     public static final String CHUNK_SPLIT_GRANULAR           = "chunk-split-granular";
     public static final String INDEXING_MAX_CONCURRENT_FILES  = "indexing.max-concurrent-files";
     public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
+    public static final String INDEXING_KEYWORD_BATCH_SIZE    = "indexing.keyword-batch-size";
+    public static final String INDEXING_KEYWORD_TIMEOUT       = "indexing.keyword-timeout-seconds";
+    public static final String EMBEDDING_MAX_CHUNK_CHARS      = "embedding.max-chunk-chars";
+    public static final String EMBEDDING_MAX_CONCURRENT_BATCHES = "embedding.max-concurrent-batches";
+
+    // ── Document conversion (apply on the next upload) ────────────────────────
+    public static final String PPTX_REMOVE_DUPLICATE_SLIDES   = "pptx-remove-duplicate-slides";
+    public static final String PPTX_DROP_DIVIDER_SLIDES       = "pptx-drop-divider-slides";
+    public static final String PPTX_DROP_REDUNDANT_TITLE_SLIDES = "pptx-drop-redundant-title-slides";
+    public static final String PPTX_DROP_ENDING_SLIDE         = "pptx-drop-ending-slide";
+    public static final String PPTX_IMAGE_MIN_SHAPE_DIMENSION = "pptx-image.min-shape-dimension-pt";
+    public static final String PPTX_IMAGE_CLUSTER_PADDING     = "pptx-image.cluster-proximity-padding-pt";
+    public static final String PPTX_IMAGE_MERGE_ANNOTATED     = "pptx-image.merge-annotated-pictures";
+    public static final String PPTX_IMAGE_RASTERIZE_SHAPES    = "pptx-image.rasterize-shapes";
+    public static final String DOCX_IMAGE_MERGE_ANNOTATED     = "docx-image.merge-annotated-shapes";
 
     // ── LLM (apply on the next LLM call) ─────────────────────────────────────
     public static final String LLM_TEMPERATURE                = "llm.temperature";
@@ -110,6 +125,19 @@ public final class SettingsKeys {
             MIN_CHUNK_SIZE,
             CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
-            INDEXING_MAX_CONCURRENT_LLM
+            INDEXING_MAX_CONCURRENT_LLM,
+            INDEXING_KEYWORD_BATCH_SIZE,
+            INDEXING_KEYWORD_TIMEOUT,
+            EMBEDDING_MAX_CHUNK_CHARS,
+            EMBEDDING_MAX_CONCURRENT_BATCHES,
+            PPTX_REMOVE_DUPLICATE_SLIDES,
+            PPTX_DROP_DIVIDER_SLIDES,
+            PPTX_DROP_REDUNDANT_TITLE_SLIDES,
+            PPTX_DROP_ENDING_SLIDE,
+            PPTX_IMAGE_MIN_SHAPE_DIMENSION,
+            PPTX_IMAGE_CLUSTER_PADDING,
+            PPTX_IMAGE_MERGE_ANNOTATED,
+            PPTX_IMAGE_RASTERIZE_SHAPES,
+            DOCX_IMAGE_MERGE_ANNOTATED
     );
 }

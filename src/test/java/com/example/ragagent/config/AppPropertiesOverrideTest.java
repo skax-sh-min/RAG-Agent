@@ -332,4 +332,56 @@ class AppPropertiesOverrideTest {
         assertThat(base().llmSafe().thinkingLevel(ThinkingSite.TITLE)).as("app.llm 자체가 없어도 오버라이드가 먹는다")
                 .isEqualTo(ThinkingLevel.MEDIUM);
     }
+
+    @Test
+    @DisplayName("인덱싱 키워드 배치·시간 제한과 임베딩 상한 두 값은 오버라이드가 이긴다")
+    void indexingAndEmbeddingKnobs_areHot() {
+        AppProperties p = withIndexing(new AppProperties.IndexingConfig(1, 3, 600, 2));
+        bind();
+        assertThat(p.indexingSafe().keywordBatchSize()).isEqualTo(2);
+        assertThat(p.embeddingSafe().maxChunkChars()).isZero();
+        assertThat(p.embeddingSafe().maxConcurrentBatches()).isEqualTo(1);
+
+        overrides.put(SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE, "5");
+        overrides.put(SettingsKeys.INDEXING_KEYWORD_TIMEOUT, "120");
+        overrides.put(SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS, "4000");
+        overrides.put(SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES, "3");
+
+        assertThat(p.indexingSafe().keywordBatchSize()).isEqualTo(5);
+        assertThat(p.indexingSafe().keywordTimeoutSeconds()).isEqualTo(120);
+        assertThat(p.embeddingSafe().maxChunkChars()).as("app.embedding 이 없어도 오버라이드가 먹는다").isEqualTo(4000);
+        assertThat(p.embeddingSafe().maxConcurrentBatches()).isEqualTo(3);
+        assertThat(base().indexingSafe().keywordTimeoutSeconds()).as("app.indexing 이 없어도").isEqualTo(120);
+    }
+
+    @Test
+    @DisplayName("문서 변환 키(PPTX 슬라이드·도형, DOCX 합성)는 오버라이드가 이긴다 — 명시적 false·0 도 그대로")
+    void conversionKnobs_areHot() {
+        AppProperties p = base();
+        bind();
+        assertThat(p.pptxDropDividerSlidesSafe()).isTrue();
+        assertThat(p.pptxImageSafe().minShapeDimensionPt()).isEqualTo(30.0);
+        assertThat(p.docxImageSafe().mergeAnnotatedShapes()).isFalse();
+
+        overrides.put(SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES, "false");
+        overrides.put(SettingsKeys.PPTX_DROP_DIVIDER_SLIDES, "false");
+        overrides.put(SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES, "false");
+        overrides.put(SettingsKeys.PPTX_DROP_ENDING_SLIDE, "false");
+        overrides.put(SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION, "12.5");
+        overrides.put(SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING, "0");
+        overrides.put(SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED, "false");
+        overrides.put(SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES, "true");
+        overrides.put(SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED, "true");
+
+        assertThat(p.pptxRemoveDuplicateSlidesSafe()).isFalse();
+        assertThat(p.pptxDropDividerSlidesSafe()).isFalse();
+        assertThat(p.pptxDropRedundantTitleSlidesSafe()).isFalse();
+        assertThat(p.pptxDropEndingSlideSafe()).isFalse();
+        AppProperties.PptxShapeExtractionConfig img = p.pptxImageSafe();
+        assertThat(img.minShapeDimensionPt()).isEqualTo(12.5);
+        assertThat(img.clusterProximityPaddingPt()).isZero();
+        assertThat(img.mergeAnnotatedPictures()).isFalse();
+        assertThat(img.rasterizeShapes()).isTrue();
+        assertThat(p.docxImageSafe().mergeAnnotatedShapes()).isTrue();
+    }
 }

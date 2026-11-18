@@ -293,8 +293,6 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `AUDIT_MAX_HISTORY_DAYS` | `7` | Retention for compressed audit files |
 | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | Total size cap for `data/audit/` |
 
-> `app.image-description.mode` and `app.image-description.min-image-bytes` still bind but **nothing reads them** — the strip/describe decision now lives in the upload-time "이미지 설명 추가" checkbox plus `LazyVisionService`'s query-time cache. They have no env var on purpose.
-
 ### RAG Tuning
 
 | Variable | Default | Recommended Range | Description |

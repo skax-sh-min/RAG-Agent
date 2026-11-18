@@ -64,7 +64,7 @@ RAG Agent 의 관리자 화면(`/admin`·`/settings`)과 관리자 전용 기능
 
 > **맨 위 "화면 표시" 카드는 서버 설정이 아닙니다** — 채팅 글자 크기(최소 12 · 작게 14 · 보통 16 · 크게 18px)를 고르는 곳으로, 값은 각 사용자의 **브라우저에만** 저장되고 누구나 바꿀 수 있습니다. 서버·다른 사용자에게는 영향이 없고 운영자가 기본값을 정하는 설정도 없습니다(기본은 보통). 자세한 동작은 [UI.md §9.4](UI.md#94-채팅-글자-크기-최소작게보통크게).
 
-**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(검색 · 저장 용량 · 쿼리 임베딩 캐시).
+**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 문서 변환 → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(검색 · 저장 용량 · 쿼리 임베딩 캐시).
 
 **맨 아래 「정보」 카드**: 앱 **버전 · 빌드 일시 · 라이선스(Apache License 2.0) · 저작권**이 보입니다(누구나 열람). 관리자에게는 **실행 환경**(Java · Spring Boot 버전) 한 줄이 더 보입니다. 버전과 빌드 일시는 빌드가 만드는 `META-INF/build-info.properties` 에서 읽으므로, IDE 에서 `main()` 을 바로 돌리는 등 빌드 정보 없이 뜬 개발 실행에서는 버전 자리에 **개발 빌드**라고 나오고 빌드 일시는 비어 있습니다(`mvn package`·`mvn spring-boot:run` 으로 띄우면 채워집니다).
 
@@ -127,6 +127,26 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 소제목 분할 | `app.chunk-split-granular` (`CHUNK_SPLIT_GRANULAR`) | true/false — [운영자 매뉴얼 §6.5](OPERATOR_MANUAL.md#65-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
 | 동시 파일 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
 | 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 8 |
+| 키워드 추출 배치 크기 | `app.indexing.keyword-batch-size` (`INDEXING_KEYWORD_BATCH_SIZE`) | 1 ~ 20 |
+| 키워드 추출 시간 제한(초) | `app.indexing.keyword-timeout-seconds` (`INDEXING_KEYWORD_TIMEOUT_SECONDS`) | 10 ~ 3600 |
+| 임베딩 청크 최대 글자 수 | `app.embedding.max-chunk-chars` (`EMBED_MAX_CHUNK_CHARS`) | 0(제한 없음) ~ 32000 |
+| 임베딩 동시 배치 수 | `app.embedding.max-concurrent-batches` (`EMBED_MAX_CONCURRENT_BATCHES`) | 1 ~ 8 |
+
+**핫 수정 가능 — 문서 변환 (재기동 불필요, 다음 업로드부터 반영)** — PPTX·DOCX 를 마크다운으로 바꿀 때의 규칙입니다. 이미 변환된 문서는 바뀌지 않으므로 원본을 다시 올려야 반영됩니다(↺ 재인덱싱은 변환된 MD 를 다시 쓰므로 변환 규칙이 적용되지 않습니다):
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| PPTX 중복 슬라이드 제거 | `app.pptx-remove-duplicate-slides` (`PPTX_REMOVE_DUPLICATE_SLIDES`) | true/false |
+| PPTX 구분 슬라이드 제거 | `app.pptx-drop-divider-slides` (`PPTX_DROP_DIVIDER_SLIDES`) | true/false |
+| PPTX 예고 제목 슬라이드 제거 | `app.pptx-drop-redundant-title-slides` (`PPTX_DROP_REDUNDANT_TITLE_SLIDES`) | true/false |
+| PPTX 마지막 끝 슬라이드 제거 | `app.pptx-drop-ending-slide` (`PPTX_DROP_ENDING_SLIDE`) | true/false |
+| PPTX 도형 최소 크기(pt) | `app.pptx-image.min-shape-dimension-pt` (`PPTX_IMAGE_MIN_SHAPE_DIMENSION_PT`) | 0 ~ 500 |
+| PPTX 도형 묶음 간격(pt) | `app.pptx-image.cluster-proximity-padding-pt` (`PPTX_IMAGE_CLUSTER_PROXIMITY_PADDING_PT`) | 0 ~ 100 |
+| PPTX 그림·주석 합성 | `app.pptx-image.merge-annotated-pictures` (`PPTX_IMAGE_MERGE_ANNOTATED_PICTURES`) | true/false |
+| PPTX 흩어진 도형 그림화 | `app.pptx-image.rasterize-shapes` (`PPTX_IMAGE_RASTERIZE_SHAPES`) | true/false |
+| DOCX 그림·도형 합성 (실험적) | `app.docx-image.merge-annotated-shapes` (`DOCX_IMAGE_MERGE_ANNOTATED_SHAPES`) | true/false |
+
+> DOCX 의 EMF/WMF 그림 변환(`DOCX_EMF_CONVERT`·`DOCX_WMF_CONVERT`)과 코드 블록 기본 언어(`MD_CORRECTION_DEFAULT_CODE_LANGUAGE`)는 여기에 없습니다 — 앞의 둘은 변환기 빈 자체를 켜고 끄는 값이라 재기동해야 바뀌고, 코드 언어는 아직 `.env` 로만 정합니다.
 
 > **프로바이더별로 따로 줄 수 있는 값 3종**(환경변수 없음, `application.properties` 직접 편집, 재기동 필요):
 > `app.llm.providers[N].max-tokens` — 그 프로바이더만의 출력 상한(미설정 시 전역 `app.llm.max-tokens`).

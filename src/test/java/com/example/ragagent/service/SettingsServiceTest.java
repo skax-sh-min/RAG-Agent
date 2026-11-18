@@ -299,16 +299,16 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/ui_hot/storage/cache 7그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — search_hot/fixed/indexing/conversion/llm_hot/ui_hot/storage/cache 8그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(7);
+        assertThat(view.groups()).hasSize(8);
         // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
         assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
-                "llm_hot", "ui_hot", "search_hot", "indexing", "search_fixed", "storage", "cache");
+                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "search_fixed", "storage", "cache");
         assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing");
+                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing", "conversion");
         assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
                 .containsExactly("search_fixed", "storage", "cache");
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
