@@ -197,9 +197,9 @@
         </div>
 
         <div class="form-check">
-          <input class="form-check-input" type="checkbox" id="export-image-desc" checked/>
-          <label class="form-check-label small" for="export-image-desc"
-                 th:text="#{doc.export.opt.image_desc}">Include image descriptions</label>
+          <input class="form-check-input" type="checkbox" id="export-exclude-image-desc" checked/>
+          <label class="form-check-label small" for="export-exclude-image-desc"
+                 th:text="#{doc.export.opt.exclude_image_desc}">Exclude image description tags</label>
         </div>
         <div class="form-check">
           <input class="form-check-input" type="checkbox" id="export-toc"/>
@@ -474,7 +474,7 @@
         const params = new URLSearchParams({
             version: exportTarget.version,
             format,
-            includeImageDescriptions: document.getElementById('export-image-desc').checked,
+            includeImageDescriptions: !document.getElementById('export-exclude-image-desc').checked,
             addHeadingNumbersAndToc:  document.getElementById('export-toc').checked
         });
 
