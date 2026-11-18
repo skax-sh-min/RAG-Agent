@@ -260,6 +260,30 @@ class DocxRendererTest {
     }
 
     @Test
+    @DisplayName("소제목은 Word 기본 제목 스타일(heading N)에 연결되고 스타일에 개요 수준이 있다 — 탐색 창·목차가 읽는 값")
+    void headingsUseBuiltInStylesWithOutlineLevels() throws Exception {
+        try (XWPFDocument doc = render("# 장\n\n## 절\n\n### 항\n\n###### 여섯\n\n본문")) {
+            for (String[] c : new String[][]{{"장", "1"}, {"절", "2"}, {"항", "3"}, {"여섯", "6"}}) {
+                XWPFParagraph p = doc.getParagraphs().stream()
+                        .filter(x -> x.getText().equals(c[0])).findFirst().orElseThrow();
+                assertThat(p.getStyle()).isEqualTo("Heading" + c[1]);
+
+                org.apache.poi.xwpf.usermodel.XWPFStyle style = doc.getStyles().getStyle(p.getStyle());
+                assertThat(style).as("스타일 정의가 문서에 있어야 한다").isNotNull();
+                assertThat(style.getName()).isEqualTo("heading " + c[1]);
+                assertThat(style.getCTStyle().xmlText())
+                        .contains("outlineLvl")
+                        .contains("w:val=\"" + (Integer.parseInt(c[1]) - 1) + "\"");
+                // 서식은 스타일이 갖는다 — 런에 직접 크기를 박으면 Word 에서 스타일을 고쳐도 반영되지 않는다
+                assertThat(p.getRuns()).allSatisfy(r -> assertThat(r.getFontSizeAsDouble()).isNull());
+            }
+            XWPFParagraph body = doc.getParagraphs().stream()
+                    .filter(x -> x.getText().equals("본문")).findFirst().orElseThrow();
+            assertThat(body.getStyle()).isNull();
+        }
+    }
+
+    @Test
     @DisplayName("생성된 문서가 열리는 유효한 docx 바이트다")
     void producesReadableDocx() throws Exception {
         byte[] bytes = DocxRenderer.render("## 소제목\n\n본문 **강조**.\n\n- 항목 1", "문서");

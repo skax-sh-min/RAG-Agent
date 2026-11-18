@@ -94,6 +94,7 @@ public final class DocxRenderer {
 
     public static byte[] render(String markdown, String title) throws Exception {
         try (XWPFDocument doc = new XWPFDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            addHeadingStyles(doc);
             if (title != null && !title.isBlank()) {
                 XWPFParagraph p = doc.createParagraph();
                 p.setAlignment(ParagraphAlignment.CENTER);
@@ -140,14 +141,56 @@ public final class DocxRenderer {
         }
     }
 
+    /**
+     * A heading paragraph that only names its style. The look (bold, size, spacing) and — the part
+     * Word needs for the navigation pane / outline view and its own TOC field — the outline level
+     * live in the {@code Heading1..6} style definitions {@link #addHeadingStyles} writes. Formatting
+     * the run directly instead would override the style, so editing "제목 1" in Word wouldn't touch
+     * these headings.
+     */
     private static void writeHeading(XWPFDocument doc, int level, String text) {
         XWPFParagraph p = doc.createParagraph();
-        p.setStyle("Heading" + Math.min(level, 6));   // may not exist in a blank doc → size fallback
-        XWPFRun r = p.createRun();
-        r.setText(text);
-        r.setBold(true);
-        r.setFontSize(Math.max(11, 20 - level * 2));
-        p.setSpacingBefore(200);
+        p.setStyle(headingStyleId(level));
+        p.createRun().setText(text);
+    }
+
+    static String headingStyleId(int level) {
+        return "Heading" + Math.max(1, Math.min(level, 6));
+    }
+
+    /**
+     * Defines Word's built-in heading styles in a document that has none. {@code new XWPFDocument()}
+     * starts without a styles part, so {@code setStyle("Heading2")} used to point at a style that
+     * didn't exist: Word fell back to a plain paragraph (no outline level → nothing in the
+     * navigation pane, outline view or a generated TOC, and the "제목 2" style wasn't linked).
+     *
+     * <p>The built-in names ({@code heading 1} …) make Word treat them as its own headings (shown
+     * localized as "제목 1"); {@code w:outlineLvl} is what the outline and TOC actually read. Parsed
+     * from XML rather than built through the CT* API because poi-ooxml-lite doesn't ship every
+     * style-property class.
+     */
+    static void addHeadingStyles(XWPFDocument doc) throws Exception {
+        StringBuilder xml = new StringBuilder(
+                "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                + "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
+                + "<w:name w:val=\"Normal\"/><w:qFormat/></w:style>");
+        for (int level = 1; level <= 6; level++) {
+            int halfPoints = Math.max(11, 20 - level * 2) * 2;   // 18pt, 16pt, 14pt, 12pt, 11pt, 11pt
+            xml.append("<w:style w:type=\"paragraph\" w:styleId=\"").append(headingStyleId(level)).append("\">")
+               .append("<w:name w:val=\"heading ").append(level).append("\"/>")
+               .append("<w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/>")
+               .append("<w:uiPriority w:val=\"9\"/><w:qFormat/>")
+               .append("<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before=\"200\" w:after=\"60\"/>")
+               .append("<w:outlineLvl w:val=\"").append(level - 1).append("\"/></w:pPr>")
+               .append("<w:rPr><w:b/><w:bCs/><w:sz w:val=\"").append(halfPoints).append("\"/>")
+               .append("<w:szCs w:val=\"").append(halfPoints).append("\"/></w:rPr>")
+               .append("</w:style>");
+        }
+        xml.append("</w:styles>");
+        org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyles styles =
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.StylesDocument.Factory
+                        .parse(xml.toString()).getStyles();
+        doc.createStyles().setStyles(styles);
     }
 
     private static void writeBody(XWPFDocument doc, String text) {
