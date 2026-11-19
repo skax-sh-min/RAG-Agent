@@ -58,9 +58,23 @@ public class SettingsController {
 
     @GetMapping("/settings")
     public String settingsPage(Model model) {
-        model.addAttribute("settings", settingsService.buildView());
+        model.addAttribute("settings", settingsService.buildView().forViewer(viewerIsAdmin(model)));
         if (aboutService != null) model.addAttribute("about", aboutService.info());
         return "settings";
+    }
+
+    /**
+     * 관리자 전용 그룹(인덱싱 · 문서 변환 · 운영 · 보안 — {@link SettingsView#ADMIN_ONLY_GROUPS})을 보여 줄 사람인가.
+     * {@code isAdmin}({@code GlobalModelAdvice}, 이 메서드보다 먼저 모델에 실린다)은 관리 전용 모드에서만 역할을 보고 정식 인증
+     * 모드에서는 로그인한 누구에게나 참이라, 정식 인증에서는 실제 {@code ROLE_ADMIN} 을 따로 본다({@code /admin/**} 게이트와 같은
+     * 기준). 평문 no-auth 는 단일 운영자 전제라 모두 관리자다.
+     */
+    private static boolean viewerIsAdmin(Model model) {
+        if (!Boolean.TRUE.equals(model.getAttribute("isAdmin"))) return false;
+        if (!Boolean.TRUE.equals(model.getAttribute("authEnabled"))) return true;
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.isAuthenticated()
+                && auth.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 
     /** Persist a hot-editable override. Range/type errors → IllegalArgumentException → 400. */

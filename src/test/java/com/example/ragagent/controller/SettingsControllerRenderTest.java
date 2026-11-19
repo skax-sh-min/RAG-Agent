@@ -486,6 +486,49 @@ class SettingsControllerRenderTest {
         assertThat(forGuest).doesNotContain("thinking-card").doesNotContain("/admin/settings/thinking");
     }
 
+    @Test
+    @DisplayName("GET /settings — 인덱싱/청킹 · 문서 변환 · 운영 · 보안·접속은 관리자에게만 (정식 인증의 일반 사용자 · 관리 전용 모드의 게스트는 HTML 에도 없다)")
+    void adminOnlyGroupsAreHiddenFromNonAdmins() throws Exception {
+        SettingItem ro = new SettingItem(null, "settings.item.rerank-enabled", "false", "text", false, false, null, null, null, null);
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)),
+                        new SettingGroup("indexing", "settings.group.indexing", List.of(hot)),
+                        new SettingGroup("conversion", "settings.group.conversion", List.of(hot)),
+                        new SettingGroup("operations", "settings.group.operations", List.of(hot)),
+                        new SettingGroup("security", "settings.group.security", List.of(ro)),
+                        new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(ro)))));
+        // 그룹 제목 전문으로 본다 — 템플릿 주석에 "인덱싱/청킹" 같은 낱말이 있다
+        List<String> adminOnly = List.of("인덱싱/청킹 (다음 인덱싱부터 적용)", "문서 변환 (다음 업로드부터 적용)",
+                "운영 (로그·백업·저장 공간)", "보안·접속 (조회 전용)");
+
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+        String forAdmin = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forAdmin).contains(adminOnly).contains("검색 튜닝", "검색 (조회 전용)");
+
+        // 정식 인증(기본 스텁) 의 일반 사용자 — isAdmin 모델 값은 참이지만 실제 역할이 없다
+        AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+        String forUser = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forUser).doesNotContain(adminOnly.toArray(String[]::new)).contains("검색 튜닝", "검색 (조회 전용)");
+
+        // 관리 전용 모드의 비관리자
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        String forGuest = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forGuest).doesNotContain(adminOnly.toArray(String[]::new)).contains("검색 (조회 전용)");
+
+        // 평문 no-auth — 단일 운영자 전제라 다 보인다
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
+        String plain = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(plain).contains(adminOnly);
+    }
+
     private void stubMinimalView() {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
                 "number", true, false, null, 1.0, 1000.0, 1.0);
