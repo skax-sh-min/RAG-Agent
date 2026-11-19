@@ -70,6 +70,19 @@ public final class SettingsKeys {
     public static final String PPTX_IMAGE_RASTERIZE_SHAPES    = "pptx-image.rasterize-shapes";
     public static final String DOCX_IMAGE_MERGE_ANNOTATED     = "docx-image.merge-annotated-shapes";
 
+    // ── Operations (apply immediately / on the next scheduled backup) ────────
+    /**
+     * 로그 수준 — {@code LOGGING_LEVEL} 이 정하는 세 로거({@link #LOGGED_PACKAGES})에 같은 값을 건다. {@code app.} 아래 값이 아니라
+     * {@code AppProperties} 가 읽지 않고, {@code SettingsService} 가 저장·초기화·기동 때 Spring 의 {@code LoggingSystem} 에 직접 건다.
+     */
+    public static final String LOGGING_LEVEL                  = "logging.level";
+    public static final String BACKUP_ENABLED                 = "backup.enabled";   // DatabaseBackupService — 다음 정기 실행부터
+    public static final String BACKUP_KEEP                    = "backup.keep";      // DatabaseBackupService — 다음 백업의 정리부터
+
+    /** {@code application.properties} 에서 {@code ${LOGGING_LEVEL}} 을 받는 로거들 — 화면의 로그 수준이 이 셋에 함께 걸린다. */
+    public static final List<String> LOGGED_PACKAGES = List.of(
+            "com.example.ragagent", "org.springframework.ai.openai", "reactor.netty.http.client");
+
     // ── LLM (apply on the next LLM call) ─────────────────────────────────────
     public static final String LLM_TEMPERATURE                = "llm.temperature";
     public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
@@ -138,6 +151,9 @@ public final class SettingsKeys {
             PPTX_IMAGE_CLUSTER_PADDING,
             PPTX_IMAGE_MERGE_ANNOTATED,
             PPTX_IMAGE_RASTERIZE_SHAPES,
-            DOCX_IMAGE_MERGE_ANNOTATED
+            DOCX_IMAGE_MERGE_ANNOTATED,
+            LOGGING_LEVEL,
+            BACKUP_ENABLED,
+            BACKUP_KEEP
     );
 }

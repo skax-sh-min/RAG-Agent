@@ -1,5 +1,7 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.config.SettingsKeys;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -7,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -21,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,7 +33,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * {@link DatabaseBackupService} — 진짜 SQLite 파일(앱과 같은 모양: Hikari 풀 1개 · WAL)에 대해 백업을 뜨고, 사본이 열리고
  * 내용이 같은지, 이름 규칙·보관 개수·실패 처리를 본다.
+ *
+ * <p>{@code global-state} 잠금: {@code enabled}·{@code keep} 이 {@code AppProperties} 의 정적 오버라이드 원천을 읽으므로, 그것을 묶는
+ * 다른 테스트({@code SettingsServiceTest})와 동시에 돌면 그쪽이 저장한 값을 읽을 수 있다.
  */
+@ResourceLock("global-state")
 class DatabaseBackupServiceTest {
 
     @TempDir Path tmp;
@@ -51,6 +59,26 @@ class DatabaseBackupServiceTest {
     @AfterEach
     void tearDown() {
         ds.close();
+        AppProperties.unbindOverrides();
+    }
+
+    @Test
+    @DisplayName("enabled·keep — /settings 오버라이드가 있으면 그 값(쓸 때마다 다시 읽는다), 없으면 기동 때 받은 값")
+    void enabledAndKeep_followTheSettingsOverride() throws Exception {
+        DatabaseBackupService svc = service(true, 7);
+        assertThat(svc.enabled()).isTrue();
+        assertThat(svc.keep()).isEqualTo(7);
+
+        Map<String, String> overrides = new java.util.HashMap<>(Map.of(SettingsKeys.BACKUP_ENABLED, "false", SettingsKeys.BACKUP_KEEP, "2"));
+        AppProperties.bindOverrides(overrides::get);
+        assertThat(svc.enabled()).isFalse();
+        assertThat(svc.status().keep()).isEqualTo(2);
+        for (int i = 0; i < 3; i++) assertThat(svc.run("manual").ok()).isTrue();
+        assertThat(svc.listBackups()).hasSize(2);   // 정리도 고친 값을 쓴다
+
+        overrides.clear();
+        assertThat(svc.enabled()).isTrue();
+        assertThat(svc.keep()).isEqualTo(7);
     }
 
     private DatabaseBackupService service(boolean enabled, int keep) {

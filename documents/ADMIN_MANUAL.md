@@ -64,7 +64,7 @@ RAG Agent 의 관리자 화면(`/admin`·`/settings`)과 관리자 전용 기능
 
 > **맨 위 "화면 표시" 카드는 서버 설정이 아닙니다** — 채팅 글자 크기(최소 12 · 작게 14 · 보통 16 · 크게 18px)를 고르는 곳으로, 값은 각 사용자의 **브라우저에만** 저장되고 누구나 바꿀 수 있습니다. 서버·다른 사용자에게는 영향이 없고 운영자가 기본값을 정하는 설정도 없습니다(기본은 보통). 자세한 동작은 [UI.md §9.4](UI.md#94-채팅-글자-크기-최소작게보통크게).
 
-**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 문서 변환 → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(검색 · 저장 용량 · 쿼리 임베딩 캐시).
+**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 문서 변환 → 운영(로그·백업·저장 공간) → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(검색 · 쿼리 임베딩 캐시).
 
 **맨 아래 「정보」 카드**: 앱 **버전 · 빌드 일시 · 라이선스(Apache License 2.0) · 저작권**이 보입니다(누구나 열람). 관리자에게는 **실행 환경**(Java · Spring Boot 버전) 한 줄이 더 보입니다. 버전과 빌드 일시는 빌드가 만드는 `META-INF/build-info.properties` 에서 읽으므로, IDE 에서 `main()` 을 바로 돌리는 등 빌드 정보 없이 뜬 개발 실행에서는 버전 자리에 **개발 빌드**라고 나오고 빌드 일시는 비어 있습니다(`mvn package`·`mvn spring-boot:run` 으로 띄우면 채워집니다).
 
@@ -148,6 +148,19 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 > DOCX 의 EMF/WMF 그림 변환(`DOCX_EMF_CONVERT`·`DOCX_WMF_CONVERT`)과 코드 블록 기본 언어(`MD_CORRECTION_DEFAULT_CODE_LANGUAGE`)는 여기에 없습니다 — 앞의 둘은 변환기 빈 자체를 켜고 끄는 값이라 재기동해야 바뀌고, 코드 언어는 아직 `.env` 로만 정합니다.
 
+**운영 카드 (로그·백업·저장 공간)** — 고칠 수 있는 줄과 조회 전용 줄이 한 카드에 섞여 있습니다.
+
+| 항목 | 키 | 범위 · 반영 |
+|------|----|------|
+| 로그 수준 | `logging.level` (`LOGGING_LEVEL`) | TRACE / DEBUG / INFO / WARN / ERROR — **저장 즉시** |
+| DB 정기 백업 | `app.backup.enabled` (`DB_BACKUP_ENABLED`) | true/false — 다음 정기 실행부터 |
+| DB 백업 보관 개수 | `app.backup.keep` (`DB_BACKUP_KEEP`) | 1 ~ 365 — 다음 백업이 끝날 때 정리부터 |
+| 문서 저장 사용량 | (측정값) | 조회 전용 |
+| 저장 상한 | `app.upload.max-total-size` (`UPLOAD_MAX_TOTAL_SIZE`) | 조회 전용 · 재기동 필요 |
+| 문서 백업 총 용량 상한 | `app.upload.backup-max-size` (`BACKUP_MAX_SIZE`) | 조회 전용 · 재기동 필요 |
+
+> **로그 수준**은 `LOGGING_LEVEL` 과 같은 세 로거(앱 패키지 `com.example.ragagent` · `org.springframework.ai.openai` · `reactor.netty.http.client`)에 한꺼번에 걸립니다. [기본값]을 누르면 각 로거가 설정 파일의 값으로 돌아갑니다(앱 INFO · Spring AI WARN · Netty INFO — `LOGGING_LEVEL` 을 줬으면 그 값). 저장한 수준은 재기동 뒤에도 이깁니다. `/actuator/loggers` 로 그 세 로거를 따로 바꿨다면 여기서 저장할 때 덮입니다. `DEBUG`·`TRACE` 는 프롬프트 원문·검색 문서가 로그에 남으니 짧게만 켜십시오. DB 백업의 시각(`DB_BACKUP_CRON`)·폴더(`DB_BACKUP_DIR`)는 스케줄러·경로가 기동 때 굳어 여기에 없습니다(재기동 필요). `/admin` 의 「DB 백업」 카드는 여기서 고친 값을 보여 줍니다.
+
 > **프로바이더별로 따로 줄 수 있는 값 3종**(환경변수 없음, `application.properties` 직접 편집, 재기동 필요):
 > `app.llm.providers[N].max-tokens` — 그 프로바이더만의 출력 상한(미설정 시 전역 `app.llm.max-tokens`).
 > `app.llm.providers[N].context-size` — 그 프로바이더의 총 컨텍스트 창(미설정 시 기동 탐지, 실패하면 "모름").
@@ -175,6 +188,8 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 추가 질문 개수 | `llm.follow-up-questions-count` (화면 설정 전용 — 환경변수 없음) | 2 ~ 5 (기본 3) |
 | 초과 시 제외 문서 수 | `app.llm.shrink-step` (`LLM_SHRINK_STEP`) | 1 ~ 10 (기본 1) |
 | 출력 상한 (max-tokens) | `app.llm.max-tokens` (`LLM_MAX_TOKENS`) | 8000 ~ 64000 |
+
+같은 카드 아래쪽에는 **조회 전용** 네 줄이 있고 줄마다 **재기동 필요** 배지가 붙습니다(기동 때 굳는 값이라 `.env` 를 고치고 재기동해야 바뀝니다): 답변 재시도 상한(`MAX_RETRY_COUNT`) · 이력 조회 턴 수(`MEMORY_FETCH_LIMIT_TURNS`) · 질문 최대 글자 수(`CHAT_MAX_QUESTION_CHARS` — 앱이 실제로 쓰는 500~100,000 으로 누른 값) · Tool 선택(`AGENT_ENABLED`).
 
 > **답변 뒤 질문 다듬기·추가 질문**은 답변이 끝날 때마다 소형 모델 계층(`MICRO_TEXT`)으로 LLM 을 **한 번 더** 부릅니다. 둘 다 켜져 있으면 **한 번의 호출**로 다듬은 질문과 추가 질문(`llm.follow-up-questions-count` 개, 기본 3)을 함께 받고(JSON), 추가 질문만 켜져 있으면 같은 호출에서 추가 질문만 쓰며, 질문 다듬기만 켜져 있으면 재사용될 수 있는 턴(문서를 검색한 N 답변)에서만 한 줄을 받습니다. 다듬은 질문은 `conversation_turns.clarified_question` 에 저장되고 질문 추천·재사용이 그 문장을 씁니다(§8) — 원문으로 충분했거나 결과를 버린 턴은 원문 사본을 저장하지 않고 **빈 문자열**("시도함" 표시)만 남깁니다 — 추가 질문이 켜져 있으면 S·C·Direct 턴에도 저장되지만 화면 표시용이고 재사용 후보가 되지는 않습니다. **추가 질문은 대화마다 마지막 답변의 것만 DB(`thread_follow_up`)에 저장합니다** — 채팅 화면이 가장 최근 답변 아래에 칩으로 보여 주고, 대화를 다시 열면 다시 붙습니다. 새 답변이 덮어쓰고, 제안을 만들지 않은 답변(대상 아님·꺼짐·호출 실패)은 지난 제안을 지웁니다. 끄면 저장된 제안도 내보내지 않습니다. 검색 0건 정형 답변·인사 뒤에는 부르지 않습니다. 사용량은 `/llm-usage` 에 `postanswer` 카드로 따로 잡힙니다. 출력이 짧아 **모델의 생각(thinking)을 끄고** 부르며, llama.cpp + gemma-4-E2B 실측으로 다듬기만은 턴마다 1초 안팎, 추가 질문까지 받으면 3~4초입니다. 응답을 JSON 으로 읽지 못하면 그 턴은 아무것도 저장하지 않으며(다듬은 질문은 NULL 로 남아 다시 시도할 수 있다) Spring AI 가 `BeanOutputConverter` ERROR 한 줄을 남깁니다. 다만 이 스위치는 **LOCAL 프로바이더에만** 실리고(아래 "추론 모델의 생각 끄기"), LM Studio 의 OpenAI 호환 경로처럼 스위치를 모르는 서버에서는 모델이 여전히 생각합니다 — 켠 채로는 턴마다 400~700 토큰, 10~17초의 백그라운드 생성이었습니다. 그 사이에 보낸 다음 질문은 같은 서버를 나눠 쓰므로(병렬 1 이면 기다리므로) 답이 그만큼 늦어질 수 있습니다. 소형 모델을 `type=MICRO_TEXT` 로 따로 등록하면 답변 모델에는 영향이 없고, 부담되면 끄십시오. 끄면 다음 턴부터 호출하지 않습니다(이미 다듬은 질문은 그대로 쓰입니다).
 
@@ -222,7 +237,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 **권한 — 이 카드만 조회까지 관리자 전용입니다.** 프로바이더 이름·창 크기·관측값이 드러나는데 게스트가 그 값으로 할 수 있는 일이 없어서, 다른 `/settings` 항목(조회는 누구나)과 달리 비관리자에게는 읽기 전용으로도 그려지지 않습니다. 화면에서 감추는 것이 아니라 서버가 막습니다(카드의 엔드포인트가 전부 `/admin/settings/**` — 전체 인증과 관리 전용 인증에서 `ROLE_ADMIN` 요구). **평문 no-auth 모드는 모든 방문자가 관리자**이므로 게스트가 있는 배포는 관리 전용 인증(`AUTH_MANAGEMENT_ONLY=true`)을 켜십시오.
 
-**조회 전용(재기동 필요)** — 해당 그룹(검색 · 저장 용량 · 쿼리 임베딩 캐시)의 제목 옆에 **재기동 필요** 배지가 한 번 붙습니다. LLM 라우팅 카드의 임베딩 차원도 같은 종류이지만 배지는 달지 않습니다: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 4종(일반·Direct·인덱싱·응용(C))은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반 temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
+**조회 전용(재기동 필요)** — 통째로 조회 전용인 그룹(검색 · 쿼리 임베딩 캐시)은 제목 옆에 **재기동 필요** 배지가 한 번, 편집 카드에 섞인 조회 전용 줄(LLM 튜닝의 대화 설정 넷 · 운영 카드의 저장 상한 둘)은 그 줄에 배지가 붙습니다. LLM 라우팅 카드의 임베딩 차원도 같은 종류이지만 배지는 달지 않습니다: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 4종(일반·Direct·인덱싱·응용(C))은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반 temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
 
 **권장 프로파일 (PLAN §6.29 6단계 실측)** — 아래 표의 "실측 권고" 열은 **실측이 권하는 값**이고, 실제 출하값은 21곳 전부 `off` 입니다(검증·응용 답변을 `off` 로 둔 것은 속도를 택한 의도적인 선택 — 아래 "빠르게" 프로파일이 출하 상태입니다). llama.cpp b11433 + gemma-4-E2B-it(창 32,768)에서 같은 입력을 호출 지점마다 끔/낮게로 번갈아 부른 결과이고, 모델이 크거나 서버가 다르면 몫이 달라질 수 있습니다 — 소스의 `ThinkingLevelEvaluationTest`(기본 skip, 스크래치 DB 복사본 필요)와 `scripts/thinking_eval_summary.py` 로 같은 방식으로 다시 잴 수 있습니다. 측정의 환경·표·재현 방법 전체는 [THINKING_EVALUATION.md](THINKING_EVALUATION.md) 에 있습니다.
 

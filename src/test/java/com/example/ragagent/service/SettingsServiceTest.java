@@ -299,26 +299,26 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — search_hot/fixed/indexing/conversion/llm_hot/ui_hot/storage/cache 8그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — llm_hot/ui_hot/search_hot/indexing/conversion/operations/search_fixed/cache 8그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
         assertThat(view.groups()).hasSize(8);
         // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
         assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
-                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "search_fixed", "storage", "cache");
+                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations", "search_fixed", "cache");
         assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing", "conversion");
+                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations");
         assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("search_fixed", "storage", "cache");
-        assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
+                .containsExactly("search_fixed", "cache");
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("ui_hot"));
-        // §6.15 저장 상한 — 조회 전용이므로 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
-        assertThat(view.groups()).anyMatch(g -> g.id().equals("storage")
-                && g.items().stream().noneMatch(SettingsView.SettingItem::editable));
+        // §6.15 저장 상한 — 운영 카드 안의 조회 전용 행이라 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("operations")).singleElement()
+                .satisfies(g -> assertThat(g.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label)
+                        .containsExactly("settings.item.storage-used", "settings.item.storage-limit", "settings.item.backup-max-size"));
         // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot + ui_hot)
         long editableCount = view.groups().stream()
                 .flatMap(g -> g.items().stream())
@@ -594,22 +594,30 @@ class SettingsServiceTest {
     // ── 그룹 제목 옆 표시 · 사라진 응답 예산 행 ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("buildView — '재기동 필요' 는 항목마다가 아니라 그룹 제목 옆에 한 번 붙는다(조회 전용 세 그룹)")
+    @DisplayName("buildView — 통째로 조회 전용인 그룹은 제목 옆에 한 번, 편집 카드에 섞인 조회 전용 행은 그 줄에 '재기동 필요'")
     void buildView_restartNoteSitsOnTheGroupTitle() {
         SettingsView view = service.buildView();
 
         assertThat(view.groups()).filteredOn(g -> g.note() != null).extracting(SettingsView.SettingGroup::id)
-                .containsExactlyInAnyOrder("search_fixed", "storage", "cache");
+                .containsExactlyInAnyOrder("search_fixed", "cache");
         assertThat(view.groups()).filteredOn(g -> g.note() != null)
                 .allSatisfy(g -> assertThat(g.note()).isEqualTo("settings.note.restart"));
-        // 재기동 필요는 그룹 제목으로 옮겼다. 항목 옆 배지는 리랭커 상태(§6.33)를 알리는 파생 항목 둘의 것뿐이다.
+        // 항목 옆 배지는 리랭커 상태(§6.33)를 알리는 파생 항목 둘, 그리고 편집 카드에 섞인 조회 전용 행의 '재기동 필요'뿐이다.
         assertThat(view.groups().stream().flatMap(g -> g.items().stream())
                 .filter(item -> item.note() != null))
-                .as("항목 옆에는 리랭커 상태 배지 말고 붙이지 않는다")
                 .allSatisfy(item -> {
-                    assertThat(item.label()).isIn("settings.item.rerank-candidates","settings.item.rerank-top-k");
-                    assertThat(item.note()).startsWith("settings.note.reranker-");
+                    if (item.note().equals("settings.note.restart")) {
+                        assertThat(item.editable()).as(item.label()).isFalse();
+                    } else {
+                        assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
+                        assertThat(item.note()).startsWith("settings.note.reranker-");
+                    }
                 });
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("llm_hot")).singleElement()
+                .satisfies(g -> assertThat(g.items()).filteredOn(i -> "settings.note.restart".equals(i.note()))
+                        .extracting(SettingsView.SettingItem::label).containsExactly(
+                                "settings.item.max-retry-count", "settings.item.memory-fetch-limit-turns",
+                                "settings.item.chat-max-question-chars", "settings.item.agent-enabled"));
     }
 
     @Test
@@ -683,8 +691,81 @@ class SettingsServiceTest {
         SettingsView.SettingGroup llm = service.buildView().groups().stream()
                 .filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow();
 
-        assertThat(llm.items()).as("남은 행은 전부 편집 가능한 설정이다").allMatch(SettingsView.SettingItem::editable);
+        // 조회 전용 행은 기동 때 굳는 대화 설정 넷(재기동 필요 배지)뿐이다
+        assertThat(llm.items()).filteredOn(i -> !i.editable())
+                .allSatisfy(i -> assertThat(i.note()).isEqualTo("settings.note.restart"))
+                .hasSize(4);
         assertThat(llm.items()).extracting(SettingsView.SettingItem::label)
                 .noneMatch(label -> label.contains("mode-budget"));
+    }
+
+    // ── 운영 카드: 로그 수준 · DB 백업 · 조회 전용 대화 설정 ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("로그 수준 — 저장하면 세 로거에 즉시 걸리고(대소문자 무관, 대문자로 저장), 기본값으로 되돌리면 각 로거의 설정값으로 돌아간다")
+    void logLevel_appliesToTheThreeLoggersAndResetsToConfigured() {
+        org.springframework.mock.env.MockEnvironment env = new org.springframework.mock.env.MockEnvironment()
+                .withProperty("logging.level.com.example.ragagent", "INFO")
+                .withProperty("logging.level.org.springframework.ai.openai", "WARN")
+                .withProperty("logging.level.reactor.netty.http.client", "INFO");
+        service.setEnvironment(env);
+        Logger app = com.example.ragagent.LogbackTestSupport.logger("com.example.ragagent");
+        Logger openai = com.example.ragagent.LogbackTestSupport.logger("org.springframework.ai.openai");
+        Level appBefore = app.getLevel();
+        Level openaiBefore = openai.getLevel();
+        try {
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).value()).isEqualTo("INFO");
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).choices())
+                    .containsExactly("TRACE", "DEBUG", "INFO", "WARN", "ERROR");
+
+            assertThat(service.update(SettingsKeys.LOGGING_LEVEL, "debug")).isEqualTo("DEBUG");
+            assertThat(repo.store).containsEntry(SettingsKeys.LOGGING_LEVEL, "DEBUG");
+            assertThat(app.getLevel()).isEqualTo(Level.DEBUG);
+            assertThat(openai.getLevel()).isEqualTo(Level.DEBUG);
+            assertThatThrownBy(() -> service.update(SettingsKeys.LOGGING_LEVEL, "verbose"))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            service.reset(SettingsKeys.LOGGING_LEVEL);
+            assertThat(app.getLevel()).isEqualTo(Level.INFO);
+            assertThat(openai.getLevel()).isEqualTo(Level.WARN);
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).value()).isEqualTo("INFO");
+        } finally {
+            app.setLevel(appBefore);
+            openai.setLevel(openaiBefore);
+            (com.example.ragagent.LogbackTestSupport.logger("reactor.netty.http.client")).setLevel(null);
+        }
+    }
+
+    @Test
+    @DisplayName("DB 백업 — 켜기·보관 개수는 저장 즉시 AppProperties.hotBool/hotInt 로 읽히고, 없으면 설정값(app.backup.*)")
+    void backupKnobs_areHot() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.backup.enabled", "true").withProperty("app.backup.keep", "9"));
+        assertThat(service.editableItem(SettingsKeys.BACKUP_KEEP).value()).isEqualTo("9");
+
+        service.update(SettingsKeys.BACKUP_ENABLED, "false");
+        service.update(SettingsKeys.BACKUP_KEEP, "3");
+        assertThat(AppProperties.hotBool(SettingsKeys.BACKUP_ENABLED, true)).isFalse();
+        assertThat(AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, 7)).isEqualTo(3);
+        assertThatThrownBy(() -> service.update(SettingsKeys.BACKUP_KEEP, "0")).isInstanceOf(IllegalArgumentException.class);
+
+        service.reset(SettingsKeys.BACKUP_KEEP);
+        assertThat(AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, 7)).isEqualTo(7);
+        assertThat(service.editableItem(SettingsKeys.BACKUP_KEEP).value()).isEqualTo("9");
+    }
+
+    @Test
+    @DisplayName("조회 전용 대화 설정 — 질문 길이는 QuestionLimit 과 같은 범위로 눌러 보이고, Tool 선택은 app.agent.enabled 그대로")
+    void chatFixedItems_showWhatTheConsumersUse() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.chat.max-question-chars", "200").withProperty("app.agent.enabled", "true"));
+        Map<String, String> values = new LinkedHashMap<>();
+        service.buildView().groups().stream().filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow()
+                .items().stream().filter(i -> !i.editable()).forEach(i -> values.put(i.label(), i.value()));
+
+        assertThat(values).containsEntry("settings.item.chat-max-question-chars", "500")
+                .containsEntry("settings.item.agent-enabled", "true")
+                .containsEntry("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()))
+                .containsEntry("settings.item.memory-fetch-limit-turns", "10");
     }
 }

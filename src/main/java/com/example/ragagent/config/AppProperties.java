@@ -691,6 +691,21 @@ public record AppProperties(
         try { return Integer.parseInt(v); } catch (NumberFormatException e) { return null; }
     }
 
+    /**
+     * {@code AppProperties} 밖에서 {@code @Value} 로 받는 값의 핫 오버라이드 — {@code DatabaseBackupService} 의
+     * {@code app.backup.enabled}·{@code keep} 처럼 이 레코드에 필드가 없는 값이 쓴다. 오버라이드가 없거나 읽을 수 없으면 {@code fallback}.
+     */
+    public static boolean hotBool(String key, boolean fallback) {
+        Boolean o = overrideBool(key);
+        return o != null ? o : fallback;
+    }
+
+    /** @see #hotBool(String, boolean) */
+    public static int hotInt(String key, int fallback) {
+        Integer o = overrideInt(key);
+        return o != null ? o : fallback;
+    }
+
     private static Boolean overrideBool(String key) {
         String v = rawOverride(key);
         if (v == null) return null;

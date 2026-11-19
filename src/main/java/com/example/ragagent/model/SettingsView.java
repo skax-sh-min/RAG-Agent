@@ -302,6 +302,7 @@ public record SettingsView(
      * @param step       numeric input step (nullable / number type only)
      * @param tooltip    i18n key for a hover explanation (nullable) — 값 열이 좁아 한 줄로는
      *                   담을 수 없는 계산 근거·적용 범위를 여기에 둔다
+     * @param choices    {@code "choice"} 행의 허용 값(그 순서로 선택 상자에 그린다). 다른 행은 빈 목록
      */
     public record SettingItem(
             String key,
@@ -314,8 +315,20 @@ public record SettingsView(
             Double min,
             Double max,
             Double step,
-            String tooltip
+            String tooltip,
+            List<String> choices
     ) {
+        public SettingItem {
+            choices = choices == null ? List.of() : List.copyOf(choices);
+        }
+
+        /** 선택지가 없는 행(대다수) — 선택지 필드를 더하면서 기존 호출부를 흔들지 않게. */
+        public SettingItem(String key, String label, String value, String type,
+                           boolean editable, boolean overridden, String note,
+                           Double min, Double max, Double step, String tooltip) {
+            this(key, label, value, type, editable, overridden, note, min, max, step, tooltip, List.of());
+        }
+
         /**
          * 툴팁 없는 행(대다수)을 위한 편의 생성자 — {@code SourceRef} 의 5/8/11-인자 생성자와 같은
          * 선례다. 툴팁은 값 열에 담을 수 없는 긴 설명이 있을 때만 붙으므로, 그 필드를 추가하면서

@@ -24,6 +24,10 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.logging.LogLevel;
+import org.springframework.boot.logging.LoggingSystem;
+import org.springframework.context.EnvironmentAware;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -52,7 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * bean-creation time, so accepting an override for them would silently do nothing until a restart.
  */
 @Service
-public class SettingsService implements AppProperties.OverrideSource {
+public class SettingsService implements AppProperties.OverrideSource, EnvironmentAware {
 
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
 
@@ -157,6 +161,17 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED,   Kind.BOOL,   0,   0,    0,    "settings.item.retrieval-metrics-enabled")
         );
 
+    /** 로그 수준의 허용 값 — 화면에 이 모양(대문자) 그대로 저장·표시된다. */
+    static final List<String> LOG_LEVEL_CHOICES = List.of("TRACE", "DEBUG", "INFO", "WARN", "ERROR");
+
+    // 운영 — 로그 수준은 저장 즉시(LoggingSystem 에 직접 건다), DB 백업 둘은 다음 정기 실행·다음 정리부터(DatabaseBackupService 가
+    // 쓸 때마다 다시 읽는다). cron·폴더는 스케줄러·경로가 기동 때 굳어 여기에 없다.
+    private static final List<Spec> OPERATIONS_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.LOGGING_LEVEL,  Kind.CHOICE, 0, 0,   0, "settings.item.logging-level", LOG_LEVEL_CHOICES),
+            new Spec(SettingsKeys.BACKUP_ENABLED, Kind.BOOL,   0, 0,   0, "settings.item.backup-enabled"),
+            new Spec(SettingsKeys.BACKUP_KEEP,    Kind.INT,    1, 365, 1, "settings.item.backup-keep")
+    );
+
     private static final Map<String, Spec> SPECS;
     static {
         Map<String, Spec> m = new LinkedHashMap<>();
@@ -165,6 +180,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         for (Spec s : CONVERSION_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : UI_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : OPERATIONS_HOT_SPECS) m.put(s.key(), s);
         // §6.29 — 호출 지점별 생각 수준. 키는 ThinkingSite 가 만든다(사이트를 더하면 여기도 저절로 는다). 일반 항목 격자(*_HOT_SPECS)에는
         // 넣지 않는다 — 이 키들의 유일한 편집 자리는 생각 수준 카드다.
         for (ThinkingSite site : ThinkingSite.values()) {
@@ -190,6 +206,12 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final ProviderCatalog providerCatalog;
     /** 교차 인코더 리랭커(§6.33) — 상태 배지만 읽는다. 빈이 없으면 {@code null}. */
     private CrossEncoderReranker crossEncoder;
+
+    /**
+     * 기동 때의 설정값(로그 수준의 기본값 · 백업 기본값 · 조회 전용 행)을 읽는 곳. 스프링이 {@link #setEnvironment} 로 넣는다 —
+     * 생성자가 테스트용으로 여럿이라 거기에 더하지 않았다. {@code null}(생성자를 직접 부르는 테스트)이면 각 값의 기본값을 쓴다.
+     */
+    private Environment environment;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
@@ -252,6 +274,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             if (SPECS.containsKey(key)) baseValues.put(key, effectiveValue(key));
         }
         AppProperties.bindOverrides(this);
+        if (cache.containsKey(SettingsKeys.LOGGING_LEVEL)) applyLogLevel();   // 저장된 로그 수준은 재기동 뒤에도 이긴다
         log.info("[SETTINGS] runtime override layer bound — {} override(s) loaded: {}",
                 cache.size(), cache.keySet());
         warnOnDivergingOverrides(baseValues);
@@ -307,6 +330,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         String before = effectiveValue(key);
         repo.upsert(key, canonical);
         cache.put(key, canonical);
+        if (SettingsKeys.LOGGING_LEVEL.equals(key)) applyLogLevel();
         String after = effectiveValue(key);
         audit.log("settings.update", key, Map.of("from", before, "to", after));
         log.info("[SETTINGS] override set: {} = {} (was {})", key, after, before);
@@ -328,6 +352,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         boolean had = cache.containsKey(key);
         repo.delete(key);
         cache.remove(key);
+        if (SettingsKeys.LOGGING_LEVEL.equals(key)) applyLogLevel();
         String after = effectiveValue(key);
         if (had) {
             audit.log("settings.reset", key, Map.of("from", before, "to", after));
@@ -357,12 +382,10 @@ public class SettingsService implements AppProperties.OverrideSource {
                 yield Integer.toString(n);
             }
             case CHOICE -> {
-                String choice = v.toLowerCase(java.util.Locale.ROOT);
-                if (!spec.choices().contains(choice)) {
-                    throw new IllegalArgumentException(
-                            "허용 값은 %s 입니다: %s".formatted(String.join(" / ", spec.choices()), raw));
-                }
-                yield choice;
+                // 대소문자는 가리지 않고, 저장은 목록에 적힌 모양 그대로(생각 수준은 소문자, 로그 수준은 대문자)
+                yield spec.choices().stream().filter(c -> c.equalsIgnoreCase(v)).findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "허용 값은 %s 입니다: %s".formatted(String.join(" / ", spec.choices()), raw)));
             }
             case DOUBLE -> {
                 double d;
@@ -403,8 +426,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("conversion", "settings.group.conversion", conversionItems()),
+                new SettingGroup("operations", "settings.group.operations", operationsItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
-                new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
                 new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
         );
 
@@ -784,7 +807,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 bool || choice ? null : spec.min(),
                 bool || choice ? null : spec.max(),
                 bool || choice ? null : spec.step(),
-                choice ? null : descriptionKey(spec.labelKey()));
+                descriptionKey(spec.labelKey()),
+                spec.choices());
     }
 
     /**
@@ -802,7 +826,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     /** 이 화면의 편집 가능한 일반 항목 전부(검색 · 인덱싱 · LLM · 화면 표시) — 설명 키 확인용. */
     static List<String> hotItemLabelKeys() {
         List<String> keys = new ArrayList<>();
-        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, CONVERSION_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
+        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, CONVERSION_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS,
+                OPERATIONS_HOT_SPECS)) {
             for (Spec spec : specs) keys.add(spec.labelKey());
         }
         return keys;
@@ -882,9 +907,98 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  (§6.26 A6); only each provider bean's defaultOptions still needs a restart, and that is just
      *  the fallback for callers that attach no options of their own. */
     private List<SettingItem> llmHotItems() {
-        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
+        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size() + 4);
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
+        items.addAll(chatFixedItems());
         return items;
+    }
+
+    /**
+     * 대화 흐름을 정하지만 기동 때 굳는 값 넷 — 같은 카드에 조회 전용으로, 줄마다 "재기동 필요" 배지를 단다. 값은 소비자가 실제로
+     * 쓰는 것과 같은 출처에서 읽는다: 재시도 상한은 {@code AgentGraph}·{@code AnswerService} 가 기동 때 받는 {@code maxRetryCount()},
+     * 이력 조회 상한은 {@code memorySafe()}, 질문 길이는 {@code QuestionLimit} 과 같은 범위(500~100,000)로 누른 값, Tool 선택은
+     * {@code ToolPlanService} 가 받는 {@code app.agent.enabled}.
+     */
+    private List<SettingItem> chatFixedItems() {
+        int questionMax = Math.max(QuestionLimit.MIN_CONFIGURED, Math.min(QuestionLimit.MAX_CONFIGURED,
+                envInt("app.chat.max-question-chars", com.example.ragagent.security.PromptInjectionGuard.MAX_CHAT_QUESTION_LEN)));
+        return List.of(
+                readOnly("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()), RESTART_NOTE,
+                        "settings.desc.max-retry-count"),
+                readOnly("settings.item.memory-fetch-limit-turns", Integer.toString(props.memorySafe().fetchLimitTurns()),
+                        RESTART_NOTE, "settings.desc.memory-fetch-limit-turns"),
+                readOnly("settings.item.chat-max-question-chars", Integer.toString(questionMax), RESTART_NOTE,
+                        "settings.desc.chat-max-question-chars"),
+                readOnly("settings.item.agent-enabled", Boolean.toString(envBool("app.agent.enabled", false)), RESTART_NOTE,
+                        "settings.desc.agent-enabled"));
+    }
+
+    /**
+     * 운영 카드 — 고칠 수 있는 셋(로그 수준 · DB 백업 켜기 · 남길 개수)과 조회 전용 셋(문서 저장 사용량 · 저장 상한 · 문서 백업 상한)이
+     * 한 카드에 섞인다. 조회 전용 줄은 줄마다 배지를 단다(사용량은 설정이 아니라 지금의 측정값이라 배지가 없다).
+     */
+    private List<SettingItem> operationsItems() {
+        List<SettingItem> items = new ArrayList<>(OPERATIONS_HOT_SPECS.size() + 3);
+        for (Spec s : OPERATIONS_HOT_SPECS) items.add(editableItem(s.key()));
+        items.addAll(storageItems());
+        return items;
+    }
+
+    /**
+     * 로그 수준을 실제 로거에 건다 — 오버라이드가 있으면 그 수준을 {@link SettingsKeys#LOGGED_PACKAGES} 셋에(환경변수
+     * {@code LOGGING_LEVEL} 과 같은 범위), 없으면 각 로거를 기동 때의 설정값({@code logging.level.<이름>})으로 되돌린다. 실패는 로그만
+     * 남긴다 — 로그 수준 때문에 설정 저장이 실패하면 안 된다. {@code /actuator/loggers} 로 따로 바꾼 로거도 이 셋이면 덮인다.
+     */
+    private void applyLogLevel() {
+        try {
+            LoggingSystem logging = LoggingSystem.get(getClass().getClassLoader());
+            String override = cache.get(SettingsKeys.LOGGING_LEVEL);
+            for (String name : SettingsKeys.LOGGED_PACKAGES) {
+                String level = override != null ? override : envString("logging.level." + name, null);
+                logging.setLogLevel(name, parseLogLevel(level));
+            }
+        } catch (RuntimeException e) {
+            log.warn("[SETTINGS] could not apply the log level: {}", e.getMessage());
+        }
+    }
+
+    private static LogLevel parseLogLevel(String level) {
+        if (level == null || level.isBlank()) return null;   // null = 상위 로거를 따른다
+        try {
+            return LogLevel.valueOf(level.strip().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** 화면에 보이는 로그 수준 — 오버라이드, 없으면 앱 패키지의 설정값({@code LOGGING_LEVEL}), 그것도 없으면 INFO. */
+    private String effectiveLogLevel() {
+        String override = cache.get(SettingsKeys.LOGGING_LEVEL);
+        if (override != null) return override;
+        LogLevel configured = parseLogLevel(envString("logging.level." + SettingsKeys.LOGGED_PACKAGES.get(0), null));
+        return configured == null ? "INFO" : configured.name();
+    }
+
+    @Override
+    public void setEnvironment(Environment environment) {
+        this.environment = environment;
+    }
+
+    private String envString(String key, String fallback) {
+        if (environment == null) return fallback;
+        String v = environment.getProperty(key);
+        return v == null || v.isBlank() ? fallback : v.strip();
+    }
+
+    private int envInt(String key, int fallback) {
+        String v = envString(key, null);
+        if (v == null) return fallback;
+        try { return Integer.parseInt(v); } catch (NumberFormatException e) { return fallback; }
+    }
+
+    private boolean envBool(String key, boolean fallback) {
+        String v = envString(key, null);
+        return v == null ? fallback : Boolean.parseBoolean(v);
     }
 
     /**
@@ -1006,11 +1120,15 @@ public class SettingsService implements AppProperties.OverrideSource {
                 ? "%s / %s (%d%%)".formatted(StorageQuotaService.formatBytes(used),
                         StorageQuotaService.formatBytes(limit), Math.round(used * 100.0 / limit))
                 : StorageQuotaService.formatBytes(used);
+        long backupMax = props.uploadSafe().backupMaxBytes();
         return List.of(
                 readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
                 readOnly("settings.item.storage-limit",
                         limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
-                        null)
+                        RESTART_NOTE, "settings.desc.storage-limit"),
+                readOnly("settings.item.backup-max-size",
+                        backupMax > 0 ? StorageQuotaService.formatBytes(backupMax) : "무제한",
+                        RESTART_NOTE, "settings.desc.backup-max-size")
         );
     }
 
@@ -1086,6 +1204,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT   -> Integer.toString(followUpQuestionsCount());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
+            case SettingsKeys.LOGGING_LEVEL                   -> effectiveLogLevel();
+            case SettingsKeys.BACKUP_ENABLED                  -> Boolean.toString(
+                    AppProperties.hotBool(key, envBool("app.backup.enabled", true)));
+            case SettingsKeys.BACKUP_KEEP                     -> Integer.toString(
+                    Math.max(1, AppProperties.hotInt(key, envInt("app.backup.keep", 7))));
             default -> ThinkingSite.bySettingsKey(key)
                     .map(site -> props.llmSafe().thinkingLevel(site).value())
                     .orElse("");

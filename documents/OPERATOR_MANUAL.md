@@ -438,7 +438,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
+| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 `/settings` 의 **운영** 카드 「로그 수준」(관리자, 세 로거에 함께 · 재기동 뒤에도 유지 · [기본값]으로 이 환경변수 값에 복귀) 또는 Actuator → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
 | `SPRING_SECURITY_LOGGING_LEVEL` | `WARN` | Spring Security 로그 레벨 (`logging.level.org.springframework.security`). `DEBUG`로 변경하면 인증 필터·세션 생성·권한 결정 과정이 상세하게 출력됨. 인증 이슈 디버깅 시에만 임시 사용 권장 |
 
 #### 설정 예시
@@ -2078,7 +2078,7 @@ Rename-Item data/vector.db memory.db
 | `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
 | `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
 
-모두 **재기동 필요**입니다.
+`app.backup.enabled`·`app.backup.keep` 은 `/settings` 의 **운영** 카드에서 재기동 없이 고칠 수 있습니다(다음 정기 실행·다음 정리부터, 저장한 값이 환경변수를 이깁니다). cron·폴더는 **재기동 필요**입니다.
 
 **어떻게 뜨는가** — 앱의 커넥션 풀이 아닌 별도 연결에서 `VACUUM INTO` 를 실행합니다. 원본에 읽기 트랜잭션 하나만 쥐므로(WAL) **백업 중에도 채팅·인덱싱의 쓰기가 막히지 않고**, 아직 `memory.db-wal` 에만 있는 최근 기록까지 담긴 일관된 한 파일이 나옵니다(파일을 그냥 복사하면 그것을 놓칩니다). 뜬 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 이름을 붙이므로, 그 이름의 파일은 전부 검사를 통과한 완성본입니다(중간에 죽으면 `.partial` 이 남고 다음 실행이 지웁니다). 실측: 54 MB DB 에 약 1초.
 
