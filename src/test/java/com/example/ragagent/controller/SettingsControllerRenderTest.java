@@ -509,12 +509,14 @@ class SettingsControllerRenderTest {
         String forAdmin = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(forAdmin).contains(adminOnly).contains("검색 튜닝", "검색 (조회 전용)");
+        assertThat(forAdmin).as("프로바이더 표의 API 키 칸은 관리자에게 보인다").contains(">API 키<");
 
         // 정식 인증(기본 스텁) 의 일반 사용자 — isAdmin 모델 값은 참이지만 실제 역할이 없다
         AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
         String forUser = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(forUser).doesNotContain(adminOnly.toArray(String[]::new)).contains("검색 튜닝", "검색 (조회 전용)");
+        assertThat(forUser).as("키에 관한 칸은 관리자에게만").doesNotContain(">API 키<");
 
         // 관리 전용 모드의 비관리자
         when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));

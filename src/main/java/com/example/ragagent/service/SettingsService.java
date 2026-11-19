@@ -886,8 +886,20 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
 
     /** PPTX/DOCX conversion knobs — apply on the next upload; already-converted documents are untouched. */
     private List<SettingItem> conversionItems() {
-        List<SettingItem> items = new ArrayList<>(CONVERSION_HOT_SPECS.size());
+        List<SettingItem> items = new ArrayList<>(CONVERSION_HOT_SPECS.size() + 5);
         for (Spec s : CONVERSION_HOT_SPECS) items.add(editableItem(s.key()));
+        // 조회 전용 — 이미지 설명·OCR·EMF/WMF 는 빈 자체를 켜고 끄는 값(@ConditionalOnProperty)이고, 코드 언어는 아직 .env 로만 정한다
+        AppProperties.ImageDescriptionProperties image = props.imageDescriptionSafe();
+        items.add(readOnly("settings.item.md-code-language", envString("app.md-correction.default-code-language", "java"), null,
+                "settings.desc.md-code-language"));
+        items.add(readOnly("settings.item.image-description-enabled", Boolean.toString(image.enabled()), null,
+                "settings.desc.image-description-enabled"));
+        items.add(readOnly("settings.item.image-ocr-enabled", Boolean.toString(image.ocrEnabled()), null,
+                "settings.desc.image-ocr-enabled"));
+        items.add(readOnly("settings.item.docx-emf-convert", Boolean.toString(image.docxEmfConvert()), null,
+                "settings.desc.docx-emf-convert"));
+        items.add(readOnly("settings.item.docx-wmf-convert", Boolean.toString(image.docxWmfConvert()), null,
+                "settings.desc.docx-wmf-convert"));
         return items;
     }
 
@@ -904,7 +916,7 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
      *  (§6.26 A6); only each provider bean's defaultOptions still needs a restart, and that is just
      *  the fallback for callers that attach no options of their own. */
     private List<SettingItem> llmHotItems() {
-        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size() + 4);
+        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size() + 7);
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
         items.addAll(chatFixedItems());
         return items;
@@ -935,7 +947,18 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                         "settings.desc.embed-usage-fallback"),
                 readOnly("settings.item.rerank-max-concurrent",
                         reranker == null || reranker.maxConcurrent() == null ? "2" : Integer.toString(reranker.maxConcurrent()),
-                        null, "settings.desc.rerank-max-concurrent"));
+                        null, "settings.desc.rerank-max-concurrent"),
+                // 키 둘은 관리자에게만(SettingsView.ADMIN_ONLY_ITEMS) — 이 카드는 누구에게나 보인다
+                readOnly("settings.item.embed-api-key", maskSecret(envString("app.embedding.api-key", null)), null,
+                        "settings.desc.embed-api-key"),
+                readOnly("settings.item.rerank-api-key", maskSecret(envString("app.reranker.api-key", null)), null,
+                        "settings.desc.rerank-api-key"),
+                readOnly("settings.item.sqlite-vec-entrypoint", envString("app.vectorstore.sqlite-vec.entrypoint", "(자동)"), null,
+                        "settings.desc.sqlite-vec-entrypoint"),
+                readOnly("settings.item.chroma-host", envString("spring.ai.vectorstore.chroma.client.host", "http://localhost"),
+                        null, "settings.desc.chroma-host"),
+                readOnly("settings.item.chroma-port", envString("spring.ai.vectorstore.chroma.client.port", "8001"), null,
+                        "settings.desc.chroma-port"));
     }
 
     /**
@@ -944,6 +967,7 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
      */
     private List<SettingItem> securityItems() {
         AppProperties.AuthConfig auth = props.authSafe();
+        AppProperties.RateLimitConfig rate = props.rateLimitSafe();
         return List.of(
                 readOnly("settings.item.auth-enabled", Boolean.toString(auth.enabled()), null, "settings.desc.auth-enabled"),
                 readOnly("settings.item.auth-management-only", Boolean.toString(auth.managementOnly()), null,
@@ -956,15 +980,32 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                         "settings.desc.secure-cookie"),
                 readOnly("settings.item.mcp-server-enabled", Boolean.toString(envBool("spring.ai.mcp.server.enabled", false)),
                         null, "settings.desc.mcp-server-enabled"),
-                readOnly("settings.item.mcp-read-api-key", keyState("app.mcp.read-api-key"), null,
+                readOnly("settings.item.mcp-read-api-key", maskSecret(envString("app.mcp.read-api-key", null)), null,
                         "settings.desc.mcp-read-api-key"),
-                readOnly("settings.item.mcp-admin-api-key", keyState("app.mcp.admin-api-key"), null,
-                        "settings.desc.mcp-admin-api-key"));
+                readOnly("settings.item.mcp-admin-api-key", maskSecret(envString("app.mcp.admin-api-key", null)), null,
+                        "settings.desc.mcp-admin-api-key"),
+                readOnly("settings.item.rate-limit-enabled", Boolean.toString(rate.enabled()), null,
+                        "settings.desc.rate-limit-enabled"),
+                readOnly("settings.item.rate-limit-chat", rate.chatPerMinute() + "/분", null, "settings.desc.rate-limit-chat"),
+                readOnly("settings.item.rate-limit-upload", rate.uploadPerMinute() + "/분", null, "settings.desc.rate-limit-upload"),
+                readOnly("settings.item.rate-limit-sync", rate.syncPerMinute() + "/분", null, "settings.desc.rate-limit-sync"),
+                readOnly("settings.item.rate-limit-image", rate.imagePerMinute() + "/분", null, "settings.desc.rate-limit-image"),
+                readOnly("settings.item.rate-limit-default", rate.defaultPerMinute() + "/분", null,
+                        "settings.desc.rate-limit-default"),
+                readOnly("settings.item.rate-limit-mcp",
+                        (rate.mcpPerMinute() == null || rate.mcpPerMinute() <= 0 ? 60 : rate.mcpPerMinute()) + "/분", null,
+                        "settings.desc.rate-limit-mcp"));
     }
 
-    /** 비밀 값의 표시 — 있으면 "설정됨", 없으면 "미설정". 값 자체(일부라도)는 내보내지 않는다. */
-    private String keyState(String key) {
-        return envString(key, null) != null ? "설정됨" : "미설정";
+    /**
+     * 비밀 값의 표시 — 앞뒤 3글자만 보이고 가운데는 {@code ***}(예: {@code abc***xyz}). 6글자 이하면 앞뒤만으로 전부 드러나므로
+     * {@code ***} 만, 없으면 "미설정". 이 줄들은 관리자에게만 실린다({@code SettingsView.ADMIN_ONLY_ITEMS}·관리자 전용 그룹).
+     */
+    static String maskSecret(String value) {
+        if (value == null || value.isBlank()) return "미설정";
+        String v = value.strip();
+        if (v.length() <= 6) return "***";
+        return v.substring(0, 3) + "***" + v.substring(v.length() - 3);
     }
 
     /**
@@ -975,6 +1016,7 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
      * {@code ToolPlanService} 가 받는 {@code app.agent.enabled}.
      */
     private List<SettingItem> chatFixedItems() {
+        AppProperties.SummaryConfig summary = props.summarySafe();
         int questionMax = Math.max(QuestionLimit.MIN_CONFIGURED, Math.min(QuestionLimit.MAX_CONFIGURED,
                 envInt("app.chat.max-question-chars", com.example.ragagent.security.PromptInjectionGuard.MAX_CHAT_QUESTION_LEN)));
         return List.of(
@@ -985,7 +1027,13 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                 readOnly("settings.item.chat-max-question-chars", Integer.toString(questionMax), null,
                         "settings.desc.chat-max-question-chars"),
                 readOnly("settings.item.agent-enabled", Boolean.toString(envBool("app.agent.enabled", false)), null,
-                        "settings.desc.agent-enabled"));
+                        "settings.desc.agent-enabled"),
+                readOnly("settings.item.summary-max-cached-threads", Integer.toString(summary.maxCachedThreads()), null,
+                        "settings.desc.summary-max-cached-threads"),
+                readOnly("settings.item.summary-max-summary-chars", Integer.toString(summary.maxSummaryChars()), null,
+                        "settings.desc.summary-max-summary-chars"),
+                readOnly("settings.item.summary-recent-raw-turns", Integer.toString(summary.recentRawTurns()), null,
+                        "settings.desc.summary-recent-raw-turns"));
     }
 
     /**
@@ -993,9 +1041,24 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
      * 한 카드에 섞인다.
      */
     private List<SettingItem> operationsItems() {
-        List<SettingItem> items = new ArrayList<>(OPERATIONS_HOT_SPECS.size() + 3);
+        List<SettingItem> items = new ArrayList<>(OPERATIONS_HOT_SPECS.size() + 10);
         for (Spec s : OPERATIONS_HOT_SPECS) items.add(editableItem(s.key()));
+        String zone = envString("app.time-zone", "Asia/Seoul");
+        items.add(readOnly("settings.item.db-backup-cron",
+                envString("app.backup.cron", "0 30 3 * * *") + " (" + zone + ")", null, "settings.desc.db-backup-cron"));
         items.addAll(storageItems());
+        items.add(readOnly("settings.item.backup-retention-days", Integer.toString(props.uploadSafe().backupRetentionDays()),
+                null, "settings.desc.backup-retention-days"));
+        items.add(readOnly("settings.item.update-check-enabled", Boolean.toString(envBool("app.update.enabled", false)), null,
+                "settings.desc.update-check-enabled"));
+        items.add(readOnly("settings.item.update-check-cron",
+                envString("app.update.cron", "0 0 9 * * *") + " (" + zone + ")", null, "settings.desc.update-check-cron"));
+        items.add(readOnly("settings.item.update-repo", envString("app.update.repo", "-"), null, "settings.desc.update-repo"));
+        items.add(readOnly("settings.item.update-api-base", envString("app.update.api-base", "https://api.github.com"), null,
+                "settings.desc.update-api-base"));
+        // 감사 로그 — AuditLogger 가 매번 읽는 auditSafe() 그대로(파일 크기·보관 같은 나머지 감사 설정은 화면에 두지 않는다)
+        items.add(readOnly("settings.item.audit-enabled", Boolean.toString(props.auditSafe().enabled()), null,
+                "settings.desc.audit-enabled"));
         return items;
     }
 

@@ -39,10 +39,22 @@ public record SettingsView(
     public static final java.util.Set<String> ADMIN_ONLY_GROUPS =
             java.util.Set.of("indexing", "conversion", "operations", "security");
 
-    /** 보는 사람에게 맞춘 화면 — 관리자면 그대로, 아니면 {@link #ADMIN_ONLY_GROUPS} 를 뺀 사본. */
+    /**
+     * 관리자에게만 보이는 줄 — 키(가린 값이라도). 그룹 자체는 누구에게나 보이는 카드(연결)에 있어서 줄 단위로 뺀다. MCP 키 둘은
+     * 이미 관리자 전용 그룹(보안·접속)에 있지만 그 그룹이 바뀌어도 새지 않게 함께 적는다.
+     */
+    public static final java.util.Set<String> ADMIN_ONLY_ITEMS = java.util.Set.of(
+            "settings.item.embed-api-key", "settings.item.rerank-api-key",
+            "settings.item.mcp-read-api-key", "settings.item.mcp-admin-api-key");
+
+    /** 보는 사람에게 맞춘 화면 — 관리자면 그대로, 아니면 {@link #ADMIN_ONLY_GROUPS} 와 {@link #ADMIN_ONLY_ITEMS} 를 뺀 사본. */
     public SettingsView forViewer(boolean admin) {
         if (admin) return this;
-        List<SettingGroup> visible = groups.stream().filter(g -> !ADMIN_ONLY_GROUPS.contains(g.id())).toList();
+        List<SettingGroup> visible = groups.stream()
+                .filter(g -> !ADMIN_ONLY_GROUPS.contains(g.id()))
+                .map(g -> new SettingGroup(g.id(), g.title(),
+                        g.items().stream().filter(i -> !ADMIN_ONLY_ITEMS.contains(i.label())).toList(), g.note()))
+                .toList();
         return new SettingsView(providers, defaultRoutingMode, temperature, maxTokens, embeddingModel, embeddingBaseUrl,
                 embeddingDimensions, vectorStoreType, visible, rerankerModel, rerankerBaseUrl, embeddingEndpoints,
                 rerankerEndpoints);

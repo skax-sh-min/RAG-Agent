@@ -318,7 +318,10 @@ class SettingsServiceTest {
         // §6.15 저장 상한 — 운영 카드 안의 조회 전용 행이라 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
         assertThat(view.groups()).filteredOn(g -> g.id().equals("operations")).singleElement()
                 .satisfies(g -> assertThat(g.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label)
-                        .containsExactly("settings.item.storage-used", "settings.item.storage-limit", "settings.item.backup-max-size"));
+                        .containsExactly("settings.item.db-backup-cron", "settings.item.storage-used", "settings.item.storage-limit",
+                                "settings.item.backup-max-size", "settings.item.backup-retention-days",
+                                "settings.item.update-check-enabled", "settings.item.update-check-cron",
+                                "settings.item.update-repo", "settings.item.update-api-base", "settings.item.audit-enabled"));
         // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot + ui_hot)
         long editableCount = view.groups().stream()
                 .flatMap(g -> g.items().stream())
@@ -618,11 +621,12 @@ class SettingsServiceTest {
         view.groups().stream().filter(g -> g.id().equals("security")).findFirst().orElseThrow()
                 .items().forEach(i -> security.put(i.label(), i.value()));
 
-        assertThat(security).containsEntry("settings.item.mcp-read-api-key", "설정됨")
+        assertThat(security).containsEntry("settings.item.mcp-read-api-key", "sec***789")
                 .containsEntry("settings.item.mcp-admin-api-key", "미설정")
                 .containsEntry("settings.item.trust-forwarded-for", "true")
                 .containsEntry("settings.item.auth-enabled", Boolean.toString(props.authSafe().enabled()));
-        assertThat(security.values()).noneMatch(v -> v.contains("secret"));
+        assertThat(security.values()).noneMatch(v -> v.contains("secret-read-key"));
+        assertThat(security).containsEntry("settings.item.rate-limit-enabled", Boolean.toString(props.rateLimitSafe().enabled()));
         assertThat(view.groups()).filteredOn(g -> g.id().equals("connection") || g.id().equals("security"))
                 .hasSize(2).allSatisfy(g -> assertThat(g.items()).noneMatch(SettingsView.SettingItem::editable));
         assertThat(view.groups()).filteredOn(g -> g.id().equals("connection")).singleElement()
@@ -630,7 +634,8 @@ class SettingsServiceTest {
                         "settings.item.llm-connect-timeout", "settings.item.llm-read-timeout",
                         "settings.item.llm-default-provider-concurrency", "settings.item.llm-permit-wait-timeout",
                         "settings.item.llm-verify-local-models", "settings.item.embed-usage-fallback",
-                        "settings.item.rerank-max-concurrent"));
+                        "settings.item.rerank-max-concurrent", "settings.item.embed-api-key", "settings.item.rerank-api-key",
+                        "settings.item.sqlite-vec-entrypoint", "settings.item.chroma-host", "settings.item.chroma-port"));
     }
 
     @Test
@@ -707,7 +712,9 @@ class SettingsServiceTest {
         // 조회 전용 행은 기동 때 굳는 대화 설정 넷뿐이다(배지 없음)
         assertThat(llm.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label).containsExactly(
                 "settings.item.max-retry-count", "settings.item.memory-fetch-limit-turns",
-                "settings.item.chat-max-question-chars", "settings.item.agent-enabled");
+                "settings.item.chat-max-question-chars", "settings.item.agent-enabled",
+                "settings.item.summary-max-cached-threads", "settings.item.summary-max-summary-chars",
+                "settings.item.summary-recent-raw-turns");
         assertThat(llm.items()).extracting(SettingsView.SettingItem::label)
                 .noneMatch(label -> label.contains("mode-budget"));
     }
@@ -780,5 +787,35 @@ class SettingsServiceTest {
                 .containsEntry("settings.item.agent-enabled", "true")
                 .containsEntry("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()))
                 .containsEntry("settings.item.memory-fetch-limit-turns", "10");
+    }
+
+    @Test
+    @DisplayName("maskSecret — 앞뒤 3글자만 보이고 가운데 ***, 6글자 이하는 *** 만, 없으면 미설정")
+    void maskSecret_showsOnlyTheEnds() {
+        assertThat(SettingsService.maskSecret("abcdefghijklmnop")).isEqualTo("abc***nop");
+        assertThat(SettingsService.maskSecret("  abcdefg  ")).isEqualTo("abc***efg");
+        assertThat(SettingsService.maskSecret("abcdef")).isEqualTo("***");
+        assertThat(SettingsService.maskSecret("")).isEqualTo("미설정");
+        assertThat(SettingsService.maskSecret(null)).isEqualTo("미설정");
+    }
+
+    @Test
+    @DisplayName("forViewer — 비관리자에게는 관리자 전용 그룹과 키 줄(연결 카드의 임베딩·리랭커 키)이 빠진다")
+    void forViewer_dropsKeyRowsForNonAdmins() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.embedding.api-key", "embed-key-123456"));
+        SettingsView full = service.buildView();
+        SettingsView guest = full.forViewer(false);
+
+        assertThat(full.forViewer(true)).isSameAs(full);
+        assertThat(guest.groups()).extracting(SettingsView.SettingGroup::id)
+                .doesNotContain("indexing", "conversion", "operations", "security");
+        assertThat(guest.groups().stream().flatMap(g -> g.items().stream()))
+                .extracting(SettingsView.SettingItem::label)
+                .doesNotContain("settings.item.embed-api-key", "settings.item.rerank-api-key")
+                .contains("settings.item.chroma-host");
+        assertThat(full.groups().stream().flatMap(g -> g.items().stream())
+                .filter(i -> i.label().equals("settings.item.embed-api-key")).findFirst().orElseThrow().value())
+                .isEqualTo("emb***456");
     }
 }

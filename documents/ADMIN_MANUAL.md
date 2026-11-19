@@ -64,7 +64,7 @@ RAG Agent 의 관리자 화면(`/admin`·`/settings`)과 관리자 전용 기능
 
 > **맨 위 "화면 표시" 카드는 서버 설정이 아닙니다** — 채팅 글자 크기(최소 12 · 작게 14 · 보통 16 · 크게 18px)를 고르는 곳으로, 값은 각 사용자의 **브라우저에만** 저장되고 누구나 바꿀 수 있습니다. 서버·다른 사용자에게는 영향이 없고 운영자가 기본값을 정하는 설정도 없습니다(기본은 보통). 자세한 동작은 [UI.md §9.4](UI.md#94-채팅-글자-크기-최소작게보통크게).
 
-**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 문서 변환 → 운영(로그·백업·저장 공간) → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(LLM·임베딩 연결 · 보안·접속 · 검색 · 쿼리 임베딩 캐시).
+**카드 순서**: 화면 표시 → LLM 라우팅 → LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹 → 문서 변환 → 운영(로그·백업·저장 공간) → 생각(추론) 수준(관리자에게만) → 조회 전용 카드(외부 서버 연결 · 보안·접속 · 검색 · 쿼리 임베딩 캐시).
 
 **관리자에게만 보이는 카드**: 인덱싱/청킹 · 문서 변환 · 운영 · 보안·접속 · 생각(추론) 수준. 관리자가 아니면(정식 인증의 일반 사용자, 관리 기능만 로그인 모드의 게스트) 이 카드들은 화면에 없고 페이지 HTML 에도 실리지 않습니다. 인증을 끈 평문 모드는 단일 운영자 전제라 모두 보입니다.
 
@@ -148,7 +148,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | PPTX 흩어진 도형 그림화 | `app.pptx-image.rasterize-shapes` (`PPTX_IMAGE_RASTERIZE_SHAPES`) | true/false |
 | DOCX 그림·도형 합성 (실험적) | `app.docx-image.merge-annotated-shapes` (`DOCX_IMAGE_MERGE_ANNOTATED_SHAPES`) | true/false |
 
-> DOCX 의 EMF/WMF 그림 변환(`DOCX_EMF_CONVERT`·`DOCX_WMF_CONVERT`)과 코드 블록 기본 언어(`MD_CORRECTION_DEFAULT_CODE_LANGUAGE`)는 여기에 없습니다 — 앞의 둘은 변환기 빈 자체를 켜고 끄는 값이라 재기동해야 바뀌고, 코드 언어는 아직 `.env` 로만 정합니다.
+> 같은 카드 아래쪽에 **조회 전용** 줄이 있습니다: 코드 블록 기본 언어(`MD_CORRECTION_DEFAULT_CODE_LANGUAGE`) · 이미지 설명(`IMAGE_DESCRIPTION_ENABLED`) · 스캔 PDF OCR(`IMAGE_OCR_ENABLED`) · DOCX EMF/WMF 그림 변환(`DOCX_EMF_CONVERT`·`DOCX_WMF_CONVERT`). 이미지·OCR·EMF/WMF 는 그 기능의 빈 자체를 켜고 끄는 값이라, 코드 언어는 아직 `.env` 로만 정하는 값이라 화면에서 고칠 수 없습니다.
 
 **운영 카드 (로그·백업·저장 공간)** — 고칠 수 있는 줄과 조회 전용 줄이 한 카드에 섞여 있습니다.
 
@@ -160,6 +160,10 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 문서 저장 사용량 | (측정값) | 조회 전용 |
 | 저장 상한 | `app.upload.max-total-size` (`UPLOAD_MAX_TOTAL_SIZE`) | 조회 전용 |
 | 문서 백업 총 용량 상한 | `app.upload.backup-max-size` (`BACKUP_MAX_SIZE`) | 조회 전용 |
+| DB 백업 시각 | `app.backup.cron` (`DB_BACKUP_CRON`) — 시간대(`APP_TIME_ZONE`)와 함께 | 조회 전용 |
+| 문서 백업 보관 일수 | `app.upload.backup-retention-days` (`BACKUP_RETENTION_DAYS`) | 조회 전용 |
+| 새 버전 확인 · 확인 시각 · 릴리즈 저장소 · GitHub API 주소 | `app.update.*` (`UPDATE_CHECK_ENABLED` · `UPDATE_CHECK_CRON` · `UPDATE_REPO` · `UPDATE_API_BASE`) | 조회 전용 |
+| 감사 로그 | `app.audit.enabled` (`AUDIT_ENABLED`) | 조회 전용 |
 
 > **로그 수준**은 `LOGGING_LEVEL` 과 같은 세 로거(앱 패키지 `com.example.ragagent` · `org.springframework.ai.openai` · `reactor.netty.http.client`)에 한꺼번에 걸립니다. [기본값]을 누르면 각 로거가 설정 파일의 값으로 돌아갑니다(앱 INFO · Spring AI WARN · Netty INFO — `LOGGING_LEVEL` 을 줬으면 그 값). 저장한 수준은 재기동 뒤에도 이깁니다. `/actuator/loggers` 로 그 세 로거를 따로 바꿨다면 여기서 저장할 때 덮입니다. `DEBUG`·`TRACE` 는 프롬프트 원문·검색 문서가 로그에 남으니 짧게만 켜십시오. DB 백업의 시각(`DB_BACKUP_CRON`)·폴더(`DB_BACKUP_DIR`)는 스케줄러·경로가 기동 때 굳어 여기에 없습니다(재기동 필요). `/admin` 의 「DB 백업」 카드는 여기서 고친 값을 보여 줍니다.
 
@@ -191,7 +195,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 초과 시 제외 문서 수 | `app.llm.shrink-step` (`LLM_SHRINK_STEP`) | 1 ~ 10 (기본 1) |
 | 출력 상한 (max-tokens) | `app.llm.max-tokens` (`LLM_MAX_TOKENS`) | 8000 ~ 64000 |
 
-같은 카드 아래쪽에는 **조회 전용** 네 줄이 있습니다(기동 때 굳는 값이라 `.env` 를 고치고 재기동해야 바뀝니다): 답변 재시도 상한(`MAX_RETRY_COUNT`) · 이력 조회 턴 수(`MEMORY_FETCH_LIMIT_TURNS`) · 질문 최대 글자 수(`CHAT_MAX_QUESTION_CHARS` — 앱이 실제로 쓰는 500~100,000 으로 누른 값) · Tool 선택(`AGENT_ENABLED`).
+같은 카드 아래쪽에는 **조회 전용** 줄이 있습니다(기동 때 굳는 값이라 `.env` 를 고치고 재기동해야 바뀝니다): 답변 재시도 상한(`MAX_RETRY_COUNT`) · 이력 조회 턴 수(`MEMORY_FETCH_LIMIT_TURNS`) · 질문 최대 글자 수(`CHAT_MAX_QUESTION_CHARS` — 앱이 실제로 쓰는 500~100,000 으로 누른 값) · Tool 선택(`AGENT_ENABLED`) · 요약 캐시 대화 수 · 요약 최대 글자 수 · 요약 뒤 원문 턴 수(`SUMMARY_MAX_CACHED_THREADS` · `SUMMARY_MAX_SUMMARY_CHARS` · `SUMMARY_RECENT_RAW_TURNS`).
 
 > **답변 뒤 질문 다듬기·추가 질문**은 답변이 끝날 때마다 소형 모델 계층(`MICRO_TEXT`)으로 LLM 을 **한 번 더** 부릅니다. 둘 다 켜져 있으면 **한 번의 호출**로 다듬은 질문과 추가 질문(`llm.follow-up-questions-count` 개, 기본 3)을 함께 받고(JSON), 추가 질문만 켜져 있으면 같은 호출에서 추가 질문만 쓰며, 질문 다듬기만 켜져 있으면 재사용될 수 있는 턴(문서를 검색한 N 답변)에서만 한 줄을 받습니다. 다듬은 질문은 `conversation_turns.clarified_question` 에 저장되고 질문 추천·재사용이 그 문장을 씁니다(§8) — 원문으로 충분했거나 결과를 버린 턴은 원문 사본을 저장하지 않고 **빈 문자열**("시도함" 표시)만 남깁니다 — 추가 질문이 켜져 있으면 S·C·Direct 턴에도 저장되지만 화면 표시용이고 재사용 후보가 되지는 않습니다. **추가 질문은 대화마다 마지막 답변의 것만 DB(`thread_follow_up`)에 저장합니다** — 채팅 화면이 가장 최근 답변 아래에 칩으로 보여 주고, 대화를 다시 열면 다시 붙습니다. 새 답변이 덮어쓰고, 제안을 만들지 않은 답변(대상 아님·꺼짐·호출 실패)은 지난 제안을 지웁니다. 끄면 저장된 제안도 내보내지 않습니다. 검색 0건 정형 답변·인사 뒤에는 부르지 않습니다. 사용량은 `/llm-usage` 에 `postanswer` 카드로 따로 잡힙니다. 출력이 짧아 **모델의 생각(thinking)을 끄고** 부르며, llama.cpp + gemma-4-E2B 실측으로 다듬기만은 턴마다 1초 안팎, 추가 질문까지 받으면 3~4초입니다. 응답을 JSON 으로 읽지 못하면 그 턴은 아무것도 저장하지 않으며(다듬은 질문은 NULL 로 남아 다시 시도할 수 있다) Spring AI 가 `BeanOutputConverter` ERROR 한 줄을 남깁니다. 다만 이 스위치는 **LOCAL 프로바이더에만** 실리고(아래 "추론 모델의 생각 끄기"), LM Studio 의 OpenAI 호환 경로처럼 스위치를 모르는 서버에서는 모델이 여전히 생각합니다 — 켠 채로는 턴마다 400~700 토큰, 10~17초의 백그라운드 생성이었습니다. 그 사이에 보낸 다음 질문은 같은 서버를 나눠 쓰므로(병렬 1 이면 기다리므로) 답이 그만큼 늦어질 수 있습니다. 소형 모델을 `type=MICRO_TEXT` 로 따로 등록하면 답변 모델에는 영향이 없고, 부담되면 끄십시오. 끄면 다음 턴부터 호출하지 않습니다(이미 다듬은 질문은 그대로 쓰입니다).
 
@@ -243,8 +247,10 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 카드 | 항목 (환경변수) |
 |------|----|
-| LLM·임베딩 연결 | LLM 연결·읽기 타임아웃(`LLM_CONNECT_TIMEOUT_SECONDS`·`LLM_READ_TIMEOUT_SECONDS`) · 프로바이더 기본 동시 호출 수(`LLM_DEFAULT_PROVIDER_CONCURRENCY`) · 동시 호출 대기 상한(`LLM_PERMIT_WAIT_TIMEOUT_SECONDS`) · 기동 시 로컬 모델 확인(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`) · 임베딩 사용량 추정(`EMBED_USAGE_FALLBACK_ENABLED`) · 리랭커 동시 호출 수(`RERANK_MAX_CONCURRENT`) |
-| 보안·접속 | 로그인 인증(`AUTH_ENABLED`) · 관리 기능만 로그인(`AUTH_MANAGEMENT_ONLY`) · 게스트 식별 방식(`AUTH_GUEST_IDENTITY`) · X-Forwarded-For 신뢰(`TRUST_FORWARDED_FOR`) · 세션 쿠키 Secure(`USE_CADDY_REVERSE_PROXY_HTTPS`) · MCP 서버(`MCP_SERVER_ENABLED`) · MCP 읽기·관리자 키(`MCP_READ_API_KEY`·`MCP_ADMIN_API_KEY` — **설정됨/미설정만** 보이고 값은 보이지 않습니다. 이 화면은 게스트도 볼 수 있습니다) |
+| 외부 서버 연결 | LLM 연결·읽기 타임아웃(`LLM_CONNECT_TIMEOUT_SECONDS`·`LLM_READ_TIMEOUT_SECONDS`) · 프로바이더 기본 동시 호출 수(`LLM_DEFAULT_PROVIDER_CONCURRENCY`) · 동시 호출 대기 상한(`LLM_PERMIT_WAIT_TIMEOUT_SECONDS`) · 기동 시 로컬 모델 확인(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`) · 임베딩 사용량 추정(`EMBED_USAGE_FALLBACK_ENABLED`) · 리랭커 동시 호출 수(`RERANK_MAX_CONCURRENT`) · 임베딩·리랭커 API 키(`EMBED_API_KEY`·`RERANK_API_KEY` — **관리자에게만**) · sqlite-vec 진입점(`SQLITE_VEC_ENTRYPOINT`) · Chroma 호스트·포트(`CHROMA_HOST`·`CHROMA_PORT`) |
+| 보안·접속 | 로그인 인증(`AUTH_ENABLED`) · 관리 기능만 로그인(`AUTH_MANAGEMENT_ONLY`) · 게스트 식별 방식(`AUTH_GUEST_IDENTITY`) · X-Forwarded-For 신뢰(`TRUST_FORWARDED_FOR`) · 세션 쿠키 Secure(`USE_CADDY_REVERSE_PROXY_HTTPS`) · MCP 서버(`MCP_SERVER_ENABLED`) · MCP 읽기·관리자 키(`MCP_READ_API_KEY`·`MCP_ADMIN_API_KEY`) · 요청 제한(`RATE_LIMIT_ENABLED`)과 분당 한도 여섯(`RATE_LIMIT_CHAT_PER_MINUTE` · `_UPLOAD_` · `_SYNC_` · `_IMAGE_` · `_DEFAULT_` · `_MCP_PER_MINUTE`) |
+
+> **키 값의 표시**: API 키(임베딩 · 리랭커 · MCP 둘)는 **앞뒤 3글자만** 보이고 가운데는 `***` 입니다(예: `abc***xyz`, 6글자 이하는 `***` 만, 없으면 "미설정"). 키에 관한 줄과 LLM 라우팅 표의 **API 키** 칸은 관리자에게만 보입니다 — 이 화면은 게스트도 열 수 있습니다.
 
 그 밖의 조회 전용 값: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 4종(일반·Direct·인덱싱·응용(C))은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반 temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
 

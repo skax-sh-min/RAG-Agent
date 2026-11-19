@@ -77,7 +77,8 @@
             <th th:text="#{settings.col.model}">Model</th>
             <th class="text-center" th:text="#{settings.col.context-window}">Context</th>
             <th th:text="#{settings.col.base-url}">Endpoint URL</th>
-            <th th:text="#{settings.col.key}">API Key</th>
+            <!--/* 키에 관한 칸은 관리자에게만 — /settings 는 showSecrets 를 싣고, 표를 다시 그리는 다른 엔드포인트는 관리자 전용이라 isAdmin */-->
+            <th th:if="${showSecrets ?: isAdmin}" th:text="#{settings.col.key}">API Key</th>
             <th th:text="#{settings.col.status}">Status</th>
             <th th:classappend="${!isAdmin} ? 'pe-3'" th:text="#{settings.col.enabled}">Enabled</th>
             <th th:if="${isAdmin}" th:text="#{settings.col.thinking-control}">Thinking control</th>
@@ -113,7 +114,7 @@
             <td class="small text-center text-nowrap" th:text="${p.contextWindow}">-</td>
             <td class="small text-truncate d-inline-block" style="max-width:180px;" tabindex="0"
                 th:text="${p.baseUrl}" th:title="${p.baseUrl}">http://localhost:1234/v1</td>
-            <td>
+            <td th:if="${showSecrets ?: isAdmin}">
                 <th:block th:unless="${p.pendingAdd()}">
                 <span th:if="${p.configured}" class="badge bg-success"
                       th:text="#{settings.key.set}">set</span>

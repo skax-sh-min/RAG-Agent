@@ -58,7 +58,10 @@ public class SettingsController {
 
     @GetMapping("/settings")
     public String settingsPage(Model model) {
-        model.addAttribute("settings", settingsService.buildView().forViewer(viewerIsAdmin(model)));
+        boolean admin = viewerIsAdmin(model);
+        model.addAttribute("settings", settingsService.buildView().forViewer(admin));
+        // 프로바이더 표의 API 키 칸 — 키에 관한 것은 관리자에게만(다른 엔드포인트가 그리는 표는 관리자 전용이라 isAdmin 으로 충분하다)
+        model.addAttribute("showSecrets", admin);
         if (aboutService != null) model.addAttribute("about", aboutService.info());
         return "settings";
     }
