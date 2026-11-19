@@ -273,7 +273,7 @@ public class DocumentController {
             @PathVariable String docId,
             @RequestParam(defaultValue = "latest") String version,
             @RequestParam(defaultValue = "md") String format,
-            @RequestParam(defaultValue = "true") boolean includeImageDescriptions,
+            @RequestParam(defaultValue = "false") boolean includeImageDescriptions,   // 기본은 그림 설명 태그 제외
             @RequestParam(defaultValue = "false") boolean addHeadingNumbersAndToc) {
 
         ExportFormat target = ExportFormat.parse(format);   // unknown → 400 via GlobalExceptionHandler

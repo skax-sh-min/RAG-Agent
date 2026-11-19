@@ -288,6 +288,37 @@ class DocumentControllerHtmxTest {
                 .andExpect(status().isOk());
     }
 
+    // ── 내보내기 옵션 기본값 ───────────────────────
+
+    @Test
+    @DisplayName("GET /ui/documents/{docId}/export — 옵션을 안 주면 그림 설명 태그를 뺀다(기본 제외)")
+    void export_defaultsToExcludingImageDescriptions() throws Exception {
+        when(documentExportService.export(any(), any(), any(), any())).thenReturn(
+                new DocumentExportService.Result("x".getBytes(), "f.md", "text/markdown"));
+
+        mvc.perform(get("/ui/documents/doc1/export").param("format", "md"))
+                .andExpect(status().isOk());
+
+        verify(documentExportService).export(eq("doc1"), eq("latest"),
+                eq(com.example.ragagent.export.ExportFormat.MD),
+                eq(new DocumentExportService.Options(false, false)));
+    }
+
+    @Test
+    @DisplayName("GET /ui/documents/{docId}/export — includeImageDescriptions=true 면 그림 설명을 싣는다")
+    void export_includesImageDescriptionsWhenAsked() throws Exception {
+        when(documentExportService.export(any(), any(), any(), any())).thenReturn(
+                new DocumentExportService.Result("x".getBytes(), "f.md", "text/markdown"));
+
+        mvc.perform(get("/ui/documents/doc1/export").param("format", "md")
+                        .param("includeImageDescriptions", "true"))
+                .andExpect(status().isOk());
+
+        verify(documentExportService).export(eq("doc1"), eq("latest"),
+                eq(com.example.ragagent.export.ExportFormat.MD),
+                eq(new DocumentExportService.Options(true, false)));
+    }
+
     // ── 태그 편집 (HTMX view/edit toggle) ───────────────────────
 
     @Test

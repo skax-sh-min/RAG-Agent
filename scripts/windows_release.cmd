@@ -14,6 +14,11 @@ REM   windows_release.cmd --pr                   main only accepts pull requests
 REM                                              branch + the tag, open the PR, keep the release a draft
 REM   windows_release.cmd --help
 REM
+REM Every run except --build-only asks in this console before building: make a
+REM release now? is the version right? It asks once more before committing.
+REM The questions cannot be skipped: -y / --yes is rejected. Anything but y/yes,
+REM or no input at all, means no, and stopping before the build changes nothing.
+REM
 REM Needs Git for Windows (it ships bash.exe). WSL's C:\Windows\System32\bash.exe
 REM is NOT used: it cannot read Windows paths. To use another bash, set RELEASE_BASH.
 REM Publishing also needs the GitHub CLI (winget install GitHub.cli, then gh auth login);

@@ -140,17 +140,11 @@ public class PptxImageExtractor {
     /** Clusters larger than this are treated as a crowded slide, not a diagram — see class javadoc. */
     private static final int MAX_CLUSTER_SHAPES = 25;
 
-    private final double minShapeDimensionPt;
-    private final double clusterProximityPaddingPt;
-    private final boolean mergeAnnotatedPictures;
-    private final boolean rasterizeShapes;
+    /** Read on every use, not cached — the four knobs are hot-editable on /settings (문서 변환). */
+    private final AppProperties props;
 
     public PptxImageExtractor(AppProperties props) {
-        AppProperties.PptxShapeExtractionConfig config = props.pptxImageSafe();
-        this.minShapeDimensionPt = config.minShapeDimensionPt();
-        this.clusterProximityPaddingPt = config.clusterProximityPaddingPt();
-        this.mergeAnnotatedPictures = config.mergeAnnotatedPictures();
-        this.rasterizeShapes = config.rasterizeShapes();
+        this.props = props;
     }
 
     private enum ShapeRole { SEED, CANDIDATE, NOT_ELIGIBLE }
@@ -281,7 +275,7 @@ public class PptxImageExtractor {
             }
         }
 
-        if (rasterizeShapes) {
+        if (props.pptxImageSafe().rasterizeShapes()) {
             rasterizeWithClustering(pictures, tables, alwaysSeeds, looseSeeds, candidates,
                     slideNum, imgIdx, imageId, imagesDir, images);
         } else {
@@ -308,7 +302,7 @@ public class PptxImageExtractor {
         clusterable.addAll(alwaysSeeds);
         clusterable.addAll(looseSeeds);
         for (XSLFShape c : candidates) clusterable.add(new Clusterable(c, false, -1));
-        if (mergeAnnotatedPictures) {
+        if (props.pptxImageSafe().mergeAnnotatedPictures()) {
             for (XSLFPictureShape pic : pictures) clusterable.add(new Clusterable(pic, false, -1));
         }
         // Tables are always non-seed passengers — a lone table never rasterizes (no seed), but a
@@ -362,7 +356,7 @@ public class PptxImageExtractor {
 
         // 1) Picture anchors — composite with overlapping loose seeds (annotation markup), else verbatim.
         for (XSLFPictureShape pic : pictures) {
-            List<XSLFShape> overlapping = mergeAnnotatedPictures
+            List<XSLFShape> overlapping = props.pptxImageSafe().mergeAnnotatedPictures()
                     ? overlappingLooseSeeds(pic, looseSeeds, consumed) : List.of();
             if (!overlapping.isEmpty()) {
                 List<XSLFShape> members = new ArrayList<>();
@@ -485,7 +479,7 @@ public class PptxImageExtractor {
     /** 가로/세로 중 큰 쪽만 기준으로 삼아, 가늘고 긴 커넥터가 걸러지지 않도록 한다. */
     private boolean passesSizeFilter(XSLFShape shape) {
         Rectangle2D anchor = shape.getAnchor();
-        return Math.max(anchor.getWidth(), anchor.getHeight()) >= minShapeDimensionPt;
+        return Math.max(anchor.getWidth(), anchor.getHeight()) >= props.pptxImageSafe().minShapeDimensionPt();
     }
 
     /**
@@ -524,6 +518,7 @@ public class PptxImageExtractor {
     }
 
     private Rectangle2D pad(Rectangle2D r) {
+        double clusterProximityPaddingPt = props.pptxImageSafe().clusterProximityPaddingPt();
         return new Rectangle2D.Double(
                 r.getX() - clusterProximityPaddingPt,
                 r.getY() - clusterProximityPaddingPt,

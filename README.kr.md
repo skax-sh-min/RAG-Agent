@@ -16,7 +16,7 @@ Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(�
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | `scripts/` 의 스크립트 |
 |---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd` / `.bat`) |
+| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd`) |
 | macOS arm64(Apple Silicon) · x64(Intel) | 지원 | 번들 | `macos_*` (Docker Desktop, Apple Silicon 은 Apple Container 도 가능) |
 | Linux x64 · arm64, glibc(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들 | `ubuntu_*` (Docker) |
 | Docker 이미지(Alpine / musl) | 지원 | **번들 사용 불가** — 직접 준 `vec0` 마운트 | `docker-compose.yml` |
@@ -294,8 +294,6 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `AUDIT_MAX_FILE_SIZE` | `10MB` | 롤링 크기 기준 — Logback `AUDIT_FILE` appender의 롤오버 기준이기도 함 |
 | `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축된 감사 파일 보관 일수 |
 | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 전체 크기 상한 |
-
-> `app.image-description.mode`·`app.image-description.min-image-bytes`는 바인딩만 남아 있고 **읽는 코드가 없습니다** — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점 캐시로 옮겨갔습니다. 그래서 환경변수도 일부러 만들지 않았습니다.
 
 ### RAG 튜닝
 

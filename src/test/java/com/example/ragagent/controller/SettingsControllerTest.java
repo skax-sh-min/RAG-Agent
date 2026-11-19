@@ -51,7 +51,8 @@ class SettingsControllerTest {
         String name = controller.settingsPage(model);
 
         assertThat(name).isEqualTo("settings");
-        assertThat(model.getAttribute("settings")).isSameAs(view);
+        // 컨트롤러는 보는 사람에 맞춘 사본을 싣는다(관리자 전용 그룹 제외) — 이 뷰에는 그룹이 없으니 내용이 같다
+        assertThat(model.getAttribute("settings")).isEqualTo(view);
     }
 
     @Test

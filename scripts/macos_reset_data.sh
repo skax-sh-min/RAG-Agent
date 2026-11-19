@@ -49,6 +49,8 @@ echo "  data/vector.db     — 구 설정(SQLITE_VEC_DB_PATH)이 쓰던 DB 파�
 echo "  data/documents/    — 업로드 원본 문서"
 echo "  data/images/       — 추출 이미지"
 echo "  data/converted/    — 변환된 Markdown 파일"
+echo "  data/db-backups/   — DB 정기 백업 사본(memory-*.db)과 업데이트 전 백업"
+echo "  data/updates/      — 앱 안 업데이트가 내려받은 jar·체크섬"
 echo ""
 echo "  data/audit/        — 감사 로그"
 echo ""
@@ -81,7 +83,8 @@ for f in data/memory.db data/memory.db-wal data/memory.db-shm \
   fi
 done
 
-for dir in data/documents data/images data/converted; do
+# db-backups: 지우지 않으면 초기화한 DB 의 사본(대화·계정)이 그대로 남는다. updates: 내려받은 jar 캐시.
+for dir in data/documents data/images data/converted data/db-backups data/updates; do
   if [ -d "$dir" ]; then
     rm -rf "$dir"
     echo "  ✓ $dir 삭제 완료"

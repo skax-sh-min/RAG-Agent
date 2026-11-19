@@ -16,7 +16,7 @@ The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-
 
 | OS / architecture | App (jar) | sqlite-vec bundled in the jar | Scripts in `scripts/` |
 |---|---|---|---|
-| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd` / `.bat`) |
+| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd`) |
 | macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `macos_*` (Docker Desktop, or Apple Container on Apple Silicon) |
 | Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `ubuntu_*` (Docker) |
 | Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |
@@ -292,8 +292,6 @@ curl -s https://api.github.com/repos/skax-sh-min/RAG-Agent/releases/latest
 | `AUDIT_MAX_FILE_SIZE` | `10MB` | Rolling size threshold — also the Logback `AUDIT_FILE` appender's rollover trigger |
 | `AUDIT_MAX_HISTORY_DAYS` | `7` | Retention for compressed audit files |
 | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | Total size cap for `data/audit/` |
-
-> `app.image-description.mode` and `app.image-description.min-image-bytes` still bind but **nothing reads them** — the strip/describe decision now lives in the upload-time "이미지 설명 추가" checkbox plus `LazyVisionService`'s query-time cache. They have no env var on purpose.
 
 ### RAG Tuning
 

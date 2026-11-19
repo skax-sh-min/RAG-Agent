@@ -486,6 +486,51 @@ class SettingsControllerRenderTest {
         assertThat(forGuest).doesNotContain("thinking-card").doesNotContain("/admin/settings/thinking");
     }
 
+    @Test
+    @DisplayName("GET /settings — 인덱싱/청킹 · 문서 변환 · 운영 · 보안·접속은 관리자에게만 (정식 인증의 일반 사용자 · 관리 전용 모드의 게스트는 HTML 에도 없다)")
+    void adminOnlyGroupsAreHiddenFromNonAdmins() throws Exception {
+        SettingItem ro = new SettingItem(null, "settings.item.rerank-enabled", "false", "text", false, false, null, null, null, null);
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        when(settingsService.buildView()).thenReturn(new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)),
+                        new SettingGroup("indexing", "settings.group.indexing", List.of(hot)),
+                        new SettingGroup("conversion", "settings.group.conversion", List.of(hot)),
+                        new SettingGroup("operations", "settings.group.operations", List.of(hot)),
+                        new SettingGroup("security", "settings.group.security", List.of(ro)),
+                        new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(ro)))));
+        // 그룹 제목 전문으로 본다 — 템플릿 주석에 "인덱싱/청킹" 같은 낱말이 있다
+        List<String> adminOnly = List.of("인덱싱/청킹 (다음 인덱싱부터 적용)", "문서 변환 (다음 업로드부터 적용)",
+                "운영 (로그·백업·저장 공간)", "보안·접속 (조회 전용)");
+
+        AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+        String forAdmin = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forAdmin).contains(adminOnly).contains("검색 튜닝", "검색 (조회 전용)");
+        assertThat(forAdmin).as("프로바이더 표의 API 키 칸은 관리자에게 보인다").contains(">API 키<");
+
+        // 정식 인증(기본 스텁) 의 일반 사용자 — isAdmin 모델 값은 참이지만 실제 역할이 없다
+        AppUserDetails user = new AppUserDetails("id-2", "user@local", "", "User", "USER", true, false);
+        String forUser = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forUser).doesNotContain(adminOnly.toArray(String[]::new)).contains("검색 튜닝", "검색 (조회 전용)");
+        assertThat(forUser).as("키에 관한 칸은 관리자에게만").doesNotContain(">API 키<");
+
+        // 관리 전용 모드의 비관리자
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+        String forGuest = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(forGuest).doesNotContain(adminOnly.toArray(String[]::new)).contains("검색 (조회 전용)");
+
+        // 평문 no-auth — 단일 운영자 전제라 다 보인다
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
+        String plain = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(user)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(plain).contains(adminOnly);
+    }
+
     private void stubMinimalView() {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
                 "number", true, false, null, 1.0, 1000.0, 1.0);
@@ -795,33 +840,23 @@ class SettingsControllerRenderTest {
     // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
 
     @Test
-    @DisplayName("GET /settings — '재기동 필요' 는 그룹 제목 옆에 한 번 붙고, 제목에서 중복 문구가 빠졌으며, 임베딩 차원 옆에는 없다")
-    void restartBadgeSitsOnTheGroupTitle() throws Exception {
+    @DisplayName("GET /settings — 조회 전용 그룹에는 '재기동 필요' 배지가 없고(고칠 수 없는 값), 제목에 '조회 전용'이 보이며, 임베딩 차원 옆에도 없다")
+    void readOnlyGroupHasNoRestartBadge() throws Exception {
         SettingItem fixed = new SettingItem(null, "settings.item.rerank-enabled", "false",
                 "text", false, false, null, null, null, null);
-        SettingsView withNote = new SettingsView(
+        SettingsView view = new SettingsView(
                 List.of(providerRow("local", true, false, SettingsView.ProviderConnection.pending())),
                 "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
-                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed), "settings.note.restart")));
-        when(settingsService.buildView()).thenReturn(withNote);
+                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
+        when(settingsService.buildView()).thenReturn(view);
         AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
 
         String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(count(html, "재기동 필요")).as("그룹 제목 옆에 한 번 — 항목 옆·제목 문구·임베딩 차원 옆 어디에도 더 없다").isEqualTo(1);
         assertThat(html).contains("검색 (조회 전용)");
-        assertThat(html.indexOf("검색 (조회 전용)")).isLessThan(html.indexOf("재기동 필요"));
+        assertThat(html).doesNotContain("재기동 필요");
         assertThat(html).containsPattern("1024</span>\\s*</td>");   // 임베딩 차원 값 바로 뒤에 배지가 없다
-
-        // note 가 없는 그룹에는 배지가 없다
-        SettingsView without = new SettingsView(withNote.providers(), "COST_FIRST", "0.0", "6000", "bge-m3",
-                "http://localhost:1234/v1", "1024", "chroma",
-                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
-        when(settingsService.buildView()).thenReturn(without);
-        String plain = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(plain).doesNotContain("재기동 필요");
     }
 
     @Test

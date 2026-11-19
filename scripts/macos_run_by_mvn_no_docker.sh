@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# windows_run_by_mvn_cmd_no_docker.bat 의 macOS 판.
+# windows_run_by_mvn_cmd_no_docker.cmd 의 macOS 판.
 # Docker 없이 .env 를 로드해 소스에서 바로 Spring Boot 를 띄운다.
 
 # scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
@@ -15,7 +15,7 @@ echo "현재 경로: $(pwd)"
 ENV_FILE=".env"
 
 if [ ! -f "$ENV_FILE" ]; then
-  # .bat 은 .env 가 없으면 아무것도 하지 않고 조용히 끝났다 — 원인을 알기 어려우므로 여기서는 명시적으로 실패시킨다.
+  # .env 가 없으면 조용히 끝나지 않고 원인을 알리며 실패한다(예전 .bat 은 아무것도 하지 않고 끝나 원인을 알기 어려웠다).
   echo "오류: $ENV_FILE 파일이 없습니다. 'cp .env.example .env' 후 값을 채우고 다시 실행하세요."
   exit 1
 fi
@@ -23,7 +23,7 @@ fi
 echo ".env 환경변수를 로딩합니다..."
 set -a; . "./$ENV_FILE"; set +a
 
-# .bat 과 동일하게 .env 값을 덮어써서 8081 로 띄운다(다른 포트를 쓰려면 이 줄을 수정).
+# .cmd 와 동일하게 .env 값을 덮어써서 8081 로 띄운다(다른 포트를 쓰려면 이 줄을 수정).
 SERVER_PORT=8081
 export SERVER_PORT
 

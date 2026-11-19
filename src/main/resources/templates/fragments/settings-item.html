@@ -38,8 +38,9 @@
               th:text="#{settings.badge.overridden}">overridden</span>
         <span th:if="${item.note != null}" class="badge bg-warning text-dark ms-1"
               th:text="#{__${item.note}__}">note</span>
+        <!--/* 키는 app.* 아래의 접미사다 — 로그 수준(logging.level)만 app. 밖이라 그대로 보인다 */-->
         <code th:if="${item.key != null}" class="d-block small text-secondary mt-1"
-              th:text="'app.' + ${item.key}">app.key</code>
+              th:text="${#strings.startsWith(item.key, 'logging.')} ? ${item.key} : 'app.' + ${item.key}">app.key</code>
     </div>
 
     <!-- Value / editor — `.setting-value-col` is a FIXED width (see app.css), identical on every
@@ -64,6 +65,10 @@
                     th:title="#{settings.range.bool}">
                 <option value="true"  th:selected="${item.value == 'true'}">true</option>
                 <option value="false" th:selected="${item.value == 'false'}">false</option>
+            </select>
+            <select th:if="${item.type == 'choice'}" name="value" class="form-select setting-value">
+                <option th:each="c : ${item.choices}" th:value="${c}" th:text="${c}"
+                        th:selected="${c == item.value}">choice</option>
             </select>
             <button type="button" class="btn btn-outline-secondary" th:if="${item.overridden}"
                     hx-post="/admin/settings/reset"

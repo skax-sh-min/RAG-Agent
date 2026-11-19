@@ -147,7 +147,7 @@ rag_java/
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | 제공 스크립트(`scripts/`) | 비고 |
 |---|---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`·`.bat`, `windows_run_by_mvn_cmd_no_docker.bat`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
+| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`, `windows_run_by_mvn_cmd_no_docker.cmd`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
 | macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `macos_run_by_apple_container.sh`·`macos_run_by_jar_no_docker.sh`·`macos_run_by_mvn_no_docker.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data.sh` | Docker Desktop 또는 Apple Container(위 표) |
 | macOS Intel(x64) | 지원 | 번들(macOS x64) | 위와 같은 `macos_*` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
 | Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
@@ -438,7 +438,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
+| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 `/settings` 의 **운영** 카드 「로그 수준」(관리자, 세 로거에 함께 · 재기동 뒤에도 유지 · [기본값]으로 이 환경변수 값에 복귀) 또는 Actuator → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
 | `SPRING_SECURITY_LOGGING_LEVEL` | `WARN` | Spring Security 로그 레벨 (`logging.level.org.springframework.security`). `DEBUG`로 변경하면 인증 필터·세션 생성·권한 결정 과정이 상세하게 출력됨. 인증 이슈 디버깅 시에만 임시 사용 권장 |
 
 #### 설정 예시
@@ -482,10 +482,6 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `app.image-description.tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 또는 시스템 기본 경로를 따름 |
 | `app.image-description.docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
 | `app.image-description.docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
-
-> **`mode` / `min-image-bytes`는 현재 코드에서 읽지 않습니다.** `ImageDescriptionProperties`에 바인딩만 되어 있고
-> 소비처가 없어(strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점
-> 캐시로 옮겨감) 값을 바꿔도 동작이 달라지지 않습니다. 바인딩 호환을 위해 남겨둔 것이라 환경변수도 두지 않았습니다.
 
 > **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION`·`type=LIGHT_BOTH`·`type=BOTH` — `supports(VISION)`이 참인 세 가지).
 > 프로바이더가 없으면 설명 없이 마커만 남습니다.
@@ -1295,7 +1291,7 @@ export VECTORSTORE_TYPE=sqlite-vec
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
 
-- **Vision 설명**: `IMAGE_DESCRIPTION_ENABLED=false`면 Vision 호출이 아예 없습니다(모델 불요). 켜 두더라도 실제 설명은 업로드 시 "이미지 설명 추가"를 체크한 문서에서만 생성되므로, 설명이 필요하면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록하세요. (`app.image-description.mode`는 **읽지 않는 값**입니다 — §3.2 참고.)
+- **Vision 설명**: `IMAGE_DESCRIPTION_ENABLED=false`면 Vision 호출이 아예 없습니다(모델 불요). 켜 두더라도 실제 설명은 업로드 시 "이미지 설명 추가"를 체크한 문서에서만 생성되므로, 설명이 필요하면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록하세요.
 - **OCR**: 스캔 PDF 처리에만 사용. 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
 
 #### 6) 기동 확인 체크리스트
@@ -2082,7 +2078,7 @@ Rename-Item data/vector.db memory.db
 | `app.backup.keep` | `DB_BACKUP_KEEP` | `7` | 남길 사본 수(최소 1). 넘으면 오래된 것부터 지움 |
 | `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
 
-모두 **재기동 필요**입니다.
+`app.backup.enabled`·`app.backup.keep` 은 `/settings` 의 **운영** 카드에서 재기동 없이 고칠 수 있습니다(다음 정기 실행·다음 정리부터, 저장한 값이 환경변수를 이깁니다). cron·폴더는 **재기동 필요**입니다.
 
 **어떻게 뜨는가** — 앱의 커넥션 풀이 아닌 별도 연결에서 `VACUUM INTO` 를 실행합니다. 원본에 읽기 트랜잭션 하나만 쥐므로(WAL) **백업 중에도 채팅·인덱싱의 쓰기가 막히지 않고**, 아직 `memory.db-wal` 에만 있는 최근 기록까지 담긴 일관된 한 파일이 나옵니다(파일을 그냥 복사하면 그것을 놓칩니다). 뜬 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 이름을 붙이므로, 그 이름의 파일은 전부 검사를 통과한 완성본입니다(중간에 죽으면 `.partial` 이 남고 다음 실행이 지웁니다). 실측: 54 MB DB 에 약 1초.
 
@@ -2201,14 +2197,15 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 | `--notes-file 파일` | 릴리즈 노트 파일. 기본은 GitHub 이 자동 생성 |
 | `--pr` | **`main` 이 풀 리퀘스트로만 받는 저장소**용 — 아래 「PR 로만 받는 main」 |
 | `--any-branch` | `main` 이 아닌 브랜치에서 릴리즈(기본은 거절, `RELEASE_BRANCH` 로 기준 브랜치 변경) |
-| `-y`, `--yes` | 확인 질문 생략 |
+
+**확인 질문은 건너뛸 수 없습니다** — `--build-only` 가 아니면 매번 묻습니다(예전의 `-y`/`--yes` 는 이제 오류로 거절합니다). 빌드 **전에** ① 「릴리즈를 할 것인가」(이번 실행이 할 일 — 푸시·게시 여부 포함 — 이 질문에 적힙니다) ② 「릴리즈할 버전이 맞는가」(버전·태그·지금 pom 버전·다음 SNAPSHOT 이 보입니다)를 묻고, 빌드·검증이 끝난 뒤 커밋 직전에 한 번 더 묻습니다. `y`/`yes` 외의 답이나 입력 없음(EOF)은 모두 "아니오"이고, 빌드 전 질문에서 멈추면 아무것도 바뀌지 않습니다.
 
 **순서** (각 단계는 앞 단계가 통과해야 갑니다):
 
-1. **사전 점검** — 작업 트리가 깨끗한가(새 파일도 — jar 에 섞여 들어갑니다) · `main` 인가 · 원격보다 뒤처지지 않았나 · 태그가 비어 있나(로컬·원격) · Maven 이 Java 21 로 도는가 · `gh` 로그인. **아직 아무것도 바뀌지 않았습니다.**
+1. **사전 점검** — 작업 트리가 깨끗한가(새 파일도 — jar 에 섞여 들어갑니다) · `main` 인가 · 원격보다 뒤처지지 않았나 · 태그가 비어 있나(로컬·원격) · Maven 이 Java 21 로 도는가 · `gh` 로그인. 통과하면 릴리즈 여부와 버전을 묻습니다(`--build-only` 는 묻지 않음). **아직 아무것도 바뀌지 않았습니다.**
 2. **빌드** — pom 의 버전을 릴리즈 버전으로 바꾸고 `mvn clean package`. 실패하면 pom 을 되돌립니다.
 3. **검증·산출물** — jar 안의 `build.version` 이 릴리즈 버전과 같고 `Start-Class` 가 이 앱의 것인지 확인합니다(앱도 같은 검사로 어긋난 릴리즈의 업데이트를 거절합니다). `target/release/` 에 `rag-agent-X.Y.Z.jar` 와 `rag-agent-X.Y.Z.jar.sha256`(`sha256sum` 형식)을 만들고, **런처 jar**(`rag-agent-X.Y.Z-launcher.jar` — `Main-Class` 를 확인하고 없으면 릴리즈하지 않습니다)와 그 `.sha256` 도 같은 곳에 둡니다.
-4. **git** — 확인 질문 뒤에 `release: vX.Y.Z` 커밋 → 주석 태그 `vX.Y.Z` → pom 을 다음 SNAPSHOT 으로 올려 `chore: begin …` 커밋(안 올리면 이후 빌드가 계속 방금 릴리즈한 버전이라 자처합니다).
+4. **git** — 마지막 확인 질문 뒤에 `release: vX.Y.Z` 커밋 → 주석 태그 `vX.Y.Z` → pom 을 다음 SNAPSHOT 으로 올려 `chore: begin …` 커밋(안 올리면 이후 빌드가 계속 방금 릴리즈한 버전이라 자처합니다).
 5. **게시** — 브랜치와 태그를 푸시하고, **초안(draft)** 릴리즈에 네 파일을 올린 뒤 **업로드가 끝나면 게시**합니다(반쯤 올라간 릴리즈가 보이지 않게 — 앱은 업로드가 끝난 jar 가 있는 릴리즈만 알립니다).
 
 **PR 로만 받는 main (`--pr`)**: 보호 규칙이 `main` 으로의 직접 푸시를 막으면 기본 흐름은 4단계(로컬 커밋·태그)까지 가고 5단계의 `git push origin main` 에서 거절됩니다 — 원격에는 아무것도 올라가지 않고, 로컬 `main` 만 커밋 2개 앞서 있습니다. `--pr` 은 그 흐름을 PR 로 바꿉니다:

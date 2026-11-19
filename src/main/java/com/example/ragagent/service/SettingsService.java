@@ -24,6 +24,10 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.logging.LogLevel;
+import org.springframework.boot.logging.LoggingSystem;
+import org.springframework.context.EnvironmentAware;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -52,7 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * bean-creation time, so accepting an override for them would silently do nothing until a restart.
  */
 @Service
-public class SettingsService implements AppProperties.OverrideSource {
+public class SettingsService implements AppProperties.OverrideSource, EnvironmentAware {
 
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
 
@@ -106,7 +110,28 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
             new Spec(SettingsKeys.CHUNK_SPLIT_GRANULAR,            Kind.BOOL,   0,   0,    0,    "settings.item.chunk-split-granular"),
             new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   4,    1,    "settings.item.max-concurrent-files"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls"),
+            new Spec(SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE,     Kind.INT,    1,   20,   1,    "settings.item.keyword-batch-size"),
+            new Spec(SettingsKeys.INDEXING_KEYWORD_TIMEOUT,        Kind.INT,    10,  3600, 10,   "settings.item.keyword-timeout-seconds"),
+            // 0 = 끔(상한 없음). 켤 때는 chunk-size 보다 크게 — 작으면 정상 크기의 청크까지 잘린다.
+            new Spec(SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS,       Kind.INT,    0,   32000, 100, "settings.item.embed-max-chunk-chars"),
+            new Spec(SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES, Kind.INT,   1,   8,    1,    "settings.item.embed-max-concurrent-batches")
+    );
+
+    // Insertion order = render order in the "문서 변환" group. Apply on the next upload — the converters
+    // read them per conversion; documents already converted don't change.
+    // DOCX EMF/WMF 변환은 여기에 없다: @ConditionalOnProperty 빈(EmfToPngConverter·LibreOfficeConverter)의
+    // 게이트라 화면에서 켜도 빈이 없으면 아무 일도 하지 않는다(재기동 필요).
+    private static final List<Spec> CONVERSION_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES,    Kind.BOOL,   0,   0,    0,    "settings.item.pptx-remove-duplicate-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_DIVIDER_SLIDES,        Kind.BOOL,   0,   0,    0,    "settings.item.pptx-drop-divider-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES, Kind.BOOL,  0,   0,    0,    "settings.item.pptx-drop-redundant-title-slides"),
+            new Spec(SettingsKeys.PPTX_DROP_ENDING_SLIDE,          Kind.BOOL,   0,   0,    0,    "settings.item.pptx-drop-ending-slide"),
+            new Spec(SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION,  Kind.DOUBLE, 0.0, 500.0, 1.0, "settings.item.pptx-image-min-shape-dimension"),
+            new Spec(SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING,      Kind.DOUBLE, 0.0, 100.0, 1.0, "settings.item.pptx-image-cluster-padding"),
+            new Spec(SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED,      Kind.BOOL,   0,   0,    0,    "settings.item.pptx-image-merge-annotated"),
+            new Spec(SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES,     Kind.BOOL,   0,   0,    0,    "settings.item.pptx-image-rasterize-shapes"),
+            new Spec(SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED,      Kind.BOOL,   0,   0,    0,    "settings.item.docx-image-merge-annotated")
     );
 
     /** 추가 질문 개수의 허용 범위와 기본값 — 화면 스펙과 followUpQuestionsCount()가 같은 값을 쓴다. */
@@ -136,13 +161,26 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED,   Kind.BOOL,   0,   0,    0,    "settings.item.retrieval-metrics-enabled")
         );
 
+    /** 로그 수준의 허용 값 — 화면에 이 모양(대문자) 그대로 저장·표시된다. */
+    static final List<String> LOG_LEVEL_CHOICES = List.of("TRACE", "DEBUG", "INFO", "WARN", "ERROR");
+
+    // 운영 — 로그 수준은 저장 즉시(LoggingSystem 에 직접 건다), DB 백업 둘은 다음 정기 실행·다음 정리부터(DatabaseBackupService 가
+    // 쓸 때마다 다시 읽는다). cron·폴더는 스케줄러·경로가 기동 때 굳어 여기에 없다.
+    private static final List<Spec> OPERATIONS_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.LOGGING_LEVEL,  Kind.CHOICE, 0, 0,   0, "settings.item.logging-level", LOG_LEVEL_CHOICES),
+            new Spec(SettingsKeys.BACKUP_ENABLED, Kind.BOOL,   0, 0,   0, "settings.item.backup-enabled"),
+            new Spec(SettingsKeys.BACKUP_KEEP,    Kind.INT,    1, 365, 1, "settings.item.backup-keep")
+    );
+
     private static final Map<String, Spec> SPECS;
     static {
         Map<String, Spec> m = new LinkedHashMap<>();
         for (Spec s : SEARCH_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : CONVERSION_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : UI_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : OPERATIONS_HOT_SPECS) m.put(s.key(), s);
         // §6.29 — 호출 지점별 생각 수준. 키는 ThinkingSite 가 만든다(사이트를 더하면 여기도 저절로 는다). 일반 항목 격자(*_HOT_SPECS)에는
         // 넣지 않는다 — 이 키들의 유일한 편집 자리는 생각 수준 카드다.
         for (ThinkingSite site : ThinkingSite.values()) {
@@ -168,6 +206,12 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final ProviderCatalog providerCatalog;
     /** 교차 인코더 리랭커(§6.33) — 상태 배지만 읽는다. 빈이 없으면 {@code null}. */
     private CrossEncoderReranker crossEncoder;
+
+    /**
+     * 기동 때의 설정값(로그 수준의 기본값 · 백업 기본값 · 조회 전용 행)을 읽는 곳. 스프링이 {@link #setEnvironment} 로 넣는다 —
+     * 생성자가 테스트용으로 여럿이라 거기에 더하지 않았다. {@code null}(생성자를 직접 부르는 테스트)이면 각 값의 기본값을 쓴다.
+     */
+    private Environment environment;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
@@ -230,6 +274,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             if (SPECS.containsKey(key)) baseValues.put(key, effectiveValue(key));
         }
         AppProperties.bindOverrides(this);
+        if (cache.containsKey(SettingsKeys.LOGGING_LEVEL)) applyLogLevel();   // 저장된 로그 수준은 재기동 뒤에도 이긴다
         log.info("[SETTINGS] runtime override layer bound — {} override(s) loaded: {}",
                 cache.size(), cache.keySet());
         warnOnDivergingOverrides(baseValues);
@@ -285,6 +330,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         String before = effectiveValue(key);
         repo.upsert(key, canonical);
         cache.put(key, canonical);
+        if (SettingsKeys.LOGGING_LEVEL.equals(key)) applyLogLevel();
         String after = effectiveValue(key);
         audit.log("settings.update", key, Map.of("from", before, "to", after));
         log.info("[SETTINGS] override set: {} = {} (was {})", key, after, before);
@@ -306,6 +352,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         boolean had = cache.containsKey(key);
         repo.delete(key);
         cache.remove(key);
+        if (SettingsKeys.LOGGING_LEVEL.equals(key)) applyLogLevel();
         String after = effectiveValue(key);
         if (had) {
             audit.log("settings.reset", key, Map.of("from", before, "to", after));
@@ -335,12 +382,10 @@ public class SettingsService implements AppProperties.OverrideSource {
                 yield Integer.toString(n);
             }
             case CHOICE -> {
-                String choice = v.toLowerCase(java.util.Locale.ROOT);
-                if (!spec.choices().contains(choice)) {
-                    throw new IllegalArgumentException(
-                            "허용 값은 %s 입니다: %s".formatted(String.join(" / ", spec.choices()), raw));
-                }
-                yield choice;
+                // 대소문자는 가리지 않고, 저장은 목록에 적힌 모양 그대로(생각 수준은 소문자, 로그 수준은 대문자)
+                yield spec.choices().stream().filter(c -> c.equalsIgnoreCase(v)).findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "허용 값은 %s 입니다: %s".formatted(String.join(" / ", spec.choices()), raw)));
             }
             case DOUBLE -> {
                 double d;
@@ -357,11 +402,6 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     // ── View ─────────────────────────────────────────────────────────────────
 
-    /**
-     * 값이 기동 때 굳어 바꾸려면 재기동이 필요한 그룹의 제목 옆에 붙이는 표시. 예전에는 항목마다 붙였다 — 같은 말이 줄마다
-     * 반복돼 오히려 어느 값이 그런지 읽히지 않았고, 그룹이 통째로 조회 전용이라 줄 단위로 가를 이유도 없었다.
-     */
-    private static final String RESTART_NOTE = "settings.note.restart";
 
     /**
      * Full {@code /settings} model with overrides already applied.
@@ -380,9 +420,12 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
-                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
-                new SettingGroup("storage", "settings.group.storage", storageItems(), RESTART_NOTE),
-                new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
+                new SettingGroup("conversion", "settings.group.conversion", conversionItems()),
+                new SettingGroup("operations", "settings.group.operations", operationsItems()),
+                new SettingGroup("connection", "settings.group.connection", connectionItems()),
+                new SettingGroup("security", "settings.group.security", securityItems()),
+                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
+                new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
         AppProperties.LlmConfig llm = props.llmSafe();
@@ -761,7 +804,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 bool || choice ? null : spec.min(),
                 bool || choice ? null : spec.max(),
                 bool || choice ? null : spec.step(),
-                choice ? null : descriptionKey(spec.labelKey()));
+                descriptionKey(spec.labelKey()),
+                spec.choices());
     }
 
     /**
@@ -779,7 +823,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     /** 이 화면의 편집 가능한 일반 항목 전부(검색 · 인덱싱 · LLM · 화면 표시) — 설명 키 확인용. */
     static List<String> hotItemLabelKeys() {
         List<String> keys = new ArrayList<>();
-        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS)) {
+        for (List<Spec> specs : List.of(SEARCH_HOT_SPECS, INDEXING_HOT_SPECS, CONVERSION_HOT_SPECS, LLM_HOT_SPECS, UI_HOT_SPECS,
+                OPERATIONS_HOT_SPECS)) {
             for (Spec spec : specs) keys.add(spec.labelKey());
         }
         return keys;
@@ -839,6 +884,25 @@ public class SettingsService implements AppProperties.OverrideSource {
         return items;
     }
 
+    /** PPTX/DOCX conversion knobs — apply on the next upload; already-converted documents are untouched. */
+    private List<SettingItem> conversionItems() {
+        List<SettingItem> items = new ArrayList<>(CONVERSION_HOT_SPECS.size() + 5);
+        for (Spec s : CONVERSION_HOT_SPECS) items.add(editableItem(s.key()));
+        // 조회 전용 — 이미지 설명·OCR·EMF/WMF 는 빈 자체를 켜고 끄는 값(@ConditionalOnProperty)이고, 코드 언어는 아직 .env 로만 정한다
+        AppProperties.ImageDescriptionProperties image = props.imageDescriptionSafe();
+        items.add(readOnly("settings.item.md-code-language", envString("app.md-correction.default-code-language", "java"), null,
+                "settings.desc.md-code-language"));
+        items.add(readOnly("settings.item.image-description-enabled", Boolean.toString(image.enabled()), null,
+                "settings.desc.image-description-enabled"));
+        items.add(readOnly("settings.item.image-ocr-enabled", Boolean.toString(image.ocrEnabled()), null,
+                "settings.desc.image-ocr-enabled"));
+        items.add(readOnly("settings.item.docx-emf-convert", Boolean.toString(image.docxEmfConvert()), null,
+                "settings.desc.docx-emf-convert"));
+        items.add(readOnly("settings.item.docx-wmf-convert", Boolean.toString(image.docxWmfConvert()), null,
+                "settings.desc.docx-wmf-convert"));
+        return items;
+    }
+
     /** LLM tuning (§6.18): all three temperatures are hot — general/RAG temperature
      *  (ClassifierService/AnswerService/RerankerService read it per call), direct-temperature
      *  (DirectAnswerService reads it per call), and indexing-temperature (every ungated
@@ -852,9 +916,207 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  (§6.26 A6); only each provider bean's defaultOptions still needs a restart, and that is just
      *  the fallback for callers that attach no options of their own. */
     private List<SettingItem> llmHotItems() {
-        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
+        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size() + 7);
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
+        items.addAll(chatFixedItems());
         return items;
+    }
+
+    /**
+     * LLM·임베딩·리랭커 서버와의 연결 — 전부 기동 때 클라이언트·게이트·검증에 굳는 값이라 조회 전용이다. 소비자와 같은 접근자에서 읽는다
+     * ({@code llmSafe()} · {@code embeddingSafe()} · {@code rerankerSafe()}).
+     */
+    private List<SettingItem> connectionItems() {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        AppProperties.RerankerConfig reranker = props.rerankerSafe();
+        return List.of(
+                readOnly("settings.item.llm-connect-timeout", llm.connectTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-connect-timeout"),
+                readOnly("settings.item.llm-read-timeout", llm.readTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-read-timeout"),
+                readOnly("settings.item.llm-default-provider-concurrency", Integer.toString(llm.defaultProviderConcurrency()),
+                        null, "settings.desc.llm-default-provider-concurrency"),
+                readOnly("settings.item.llm-permit-wait-timeout", llm.permitWaitTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-permit-wait-timeout"),
+                readOnly("settings.item.llm-verify-local-models",
+                        Boolean.toString(llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup()), null,
+                        "settings.desc.llm-verify-local-models"),
+                readOnly("settings.item.embed-usage-fallback",
+                        Boolean.toString(props.embeddingSafe().usageFallbackEnabled() == null
+                                || props.embeddingSafe().usageFallbackEnabled()), null,
+                        "settings.desc.embed-usage-fallback"),
+                readOnly("settings.item.rerank-max-concurrent",
+                        reranker == null || reranker.maxConcurrent() == null ? "2" : Integer.toString(reranker.maxConcurrent()),
+                        null, "settings.desc.rerank-max-concurrent"),
+                // 키 둘은 관리자에게만(SettingsView.ADMIN_ONLY_ITEMS) — 이 카드는 누구에게나 보인다
+                readOnly("settings.item.embed-api-key", maskSecret(envString("app.embedding.api-key", null)), null,
+                        "settings.desc.embed-api-key"),
+                readOnly("settings.item.rerank-api-key", maskSecret(envString("app.reranker.api-key", null)), null,
+                        "settings.desc.rerank-api-key"),
+                readOnly("settings.item.sqlite-vec-entrypoint", envString("app.vectorstore.sqlite-vec.entrypoint", "(자동)"), null,
+                        "settings.desc.sqlite-vec-entrypoint"),
+                readOnly("settings.item.chroma-host", envString("spring.ai.vectorstore.chroma.client.host", "http://localhost"),
+                        null, "settings.desc.chroma-host"),
+                readOnly("settings.item.chroma-port", envString("spring.ai.vectorstore.chroma.client.port", "8001"), null,
+                        "settings.desc.chroma-port"));
+    }
+
+    /**
+     * 인증·접속 경로·MCP — 보안 체인이 기동 때 굳히는 값이라 조회 전용. <b>비밀은 보이지 않는다</b>: MCP API 키는 설정 여부만 보인다
+     * (이 화면은 게스트에게도 열린다). 인증 셋은 {@code authSafe()}(모드 정규화 뒤의 값), 나머지는 보안 설정이 읽는 그 속성이다.
+     */
+    private List<SettingItem> securityItems() {
+        AppProperties.AuthConfig auth = props.authSafe();
+        AppProperties.RateLimitConfig rate = props.rateLimitSafe();
+        return List.of(
+                readOnly("settings.item.auth-enabled", Boolean.toString(auth.enabled()), null, "settings.desc.auth-enabled"),
+                readOnly("settings.item.auth-management-only", Boolean.toString(auth.managementOnly()), null,
+                        "settings.desc.auth-management-only"),
+                readOnly("settings.item.auth-guest-identity", auth.guestIdentity(), null, "settings.desc.auth-guest-identity"),
+                readOnly("settings.item.trust-forwarded-for", Boolean.toString(envBool("app.trust-forwarded-for", false)), null,
+                        "settings.desc.trust-forwarded-for"),
+                readOnly("settings.item.secure-cookie",
+                        Boolean.toString(envBool("server.servlet.session.cookie.secure", true)), null,
+                        "settings.desc.secure-cookie"),
+                readOnly("settings.item.mcp-server-enabled", Boolean.toString(envBool("spring.ai.mcp.server.enabled", false)),
+                        null, "settings.desc.mcp-server-enabled"),
+                readOnly("settings.item.mcp-read-api-key", maskSecret(envString("app.mcp.read-api-key", null)), null,
+                        "settings.desc.mcp-read-api-key"),
+                readOnly("settings.item.mcp-admin-api-key", maskSecret(envString("app.mcp.admin-api-key", null)), null,
+                        "settings.desc.mcp-admin-api-key"),
+                readOnly("settings.item.rate-limit-enabled", Boolean.toString(rate.enabled()), null,
+                        "settings.desc.rate-limit-enabled"),
+                readOnly("settings.item.rate-limit-chat", rate.chatPerMinute() + "/분", null, "settings.desc.rate-limit-chat"),
+                readOnly("settings.item.rate-limit-upload", rate.uploadPerMinute() + "/분", null, "settings.desc.rate-limit-upload"),
+                readOnly("settings.item.rate-limit-sync", rate.syncPerMinute() + "/분", null, "settings.desc.rate-limit-sync"),
+                readOnly("settings.item.rate-limit-image", rate.imagePerMinute() + "/분", null, "settings.desc.rate-limit-image"),
+                readOnly("settings.item.rate-limit-default", rate.defaultPerMinute() + "/분", null,
+                        "settings.desc.rate-limit-default"),
+                readOnly("settings.item.rate-limit-mcp",
+                        (rate.mcpPerMinute() == null || rate.mcpPerMinute() <= 0 ? 60 : rate.mcpPerMinute()) + "/분", null,
+                        "settings.desc.rate-limit-mcp"));
+    }
+
+    /**
+     * 비밀 값의 표시 — 앞뒤 3글자만 보이고 가운데는 {@code ***}(예: {@code abc***xyz}). 6글자 이하면 앞뒤만으로 전부 드러나므로
+     * {@code ***} 만, 없으면 "미설정". 이 줄들은 관리자에게만 실린다({@code SettingsView.ADMIN_ONLY_ITEMS}·관리자 전용 그룹).
+     */
+    static String maskSecret(String value) {
+        if (value == null || value.isBlank()) return "미설정";
+        String v = value.strip();
+        if (v.length() <= 6) return "***";
+        return v.substring(0, 3) + "***" + v.substring(v.length() - 3);
+    }
+
+    /**
+     * 대화 흐름을 정하지만 기동 때 굳는 값 넷 — 같은 카드에 조회 전용으로 붙는다(조회 전용 줄에는 "재기동 필요" 배지를 달지 않는다 —
+     * 고칠 수 없는 줄에 붙이면 뜻이 없다. 그 배지는 고칠 수 있는데 재기동해야 반영되는 칸(프로바이더 편집)만의 것이다). 값은 소비자가 실제로
+     * 쓰는 것과 같은 출처에서 읽는다: 재시도 상한은 {@code AgentGraph}·{@code AnswerService} 가 기동 때 받는 {@code maxRetryCount()},
+     * 이력 조회 상한은 {@code memorySafe()}, 질문 길이는 {@code QuestionLimit} 과 같은 범위(500~100,000)로 누른 값, Tool 선택은
+     * {@code ToolPlanService} 가 받는 {@code app.agent.enabled}.
+     */
+    private List<SettingItem> chatFixedItems() {
+        AppProperties.SummaryConfig summary = props.summarySafe();
+        int questionMax = Math.max(QuestionLimit.MIN_CONFIGURED, Math.min(QuestionLimit.MAX_CONFIGURED,
+                envInt("app.chat.max-question-chars", com.example.ragagent.security.PromptInjectionGuard.MAX_CHAT_QUESTION_LEN)));
+        return List.of(
+                readOnly("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()), null,
+                        "settings.desc.max-retry-count"),
+                readOnly("settings.item.memory-fetch-limit-turns", Integer.toString(props.memorySafe().fetchLimitTurns()),
+                        null, "settings.desc.memory-fetch-limit-turns"),
+                readOnly("settings.item.chat-max-question-chars", Integer.toString(questionMax), null,
+                        "settings.desc.chat-max-question-chars"),
+                readOnly("settings.item.agent-enabled", Boolean.toString(envBool("app.agent.enabled", false)), null,
+                        "settings.desc.agent-enabled"),
+                readOnly("settings.item.summary-max-cached-threads", Integer.toString(summary.maxCachedThreads()), null,
+                        "settings.desc.summary-max-cached-threads"),
+                readOnly("settings.item.summary-max-summary-chars", Integer.toString(summary.maxSummaryChars()), null,
+                        "settings.desc.summary-max-summary-chars"),
+                readOnly("settings.item.summary-recent-raw-turns", Integer.toString(summary.recentRawTurns()), null,
+                        "settings.desc.summary-recent-raw-turns"));
+    }
+
+    /**
+     * 운영 카드 — 고칠 수 있는 셋(로그 수준 · DB 백업 켜기 · 남길 개수)과 조회 전용 셋(문서 저장 사용량 · 저장 상한 · 문서 백업 상한)이
+     * 한 카드에 섞인다.
+     */
+    private List<SettingItem> operationsItems() {
+        List<SettingItem> items = new ArrayList<>(OPERATIONS_HOT_SPECS.size() + 10);
+        for (Spec s : OPERATIONS_HOT_SPECS) items.add(editableItem(s.key()));
+        String zone = envString("app.time-zone", "Asia/Seoul");
+        items.add(readOnly("settings.item.db-backup-cron",
+                envString("app.backup.cron", "0 30 3 * * *") + " (" + zone + ")", null, "settings.desc.db-backup-cron"));
+        items.addAll(storageItems());
+        items.add(readOnly("settings.item.backup-retention-days", Integer.toString(props.uploadSafe().backupRetentionDays()),
+                null, "settings.desc.backup-retention-days"));
+        items.add(readOnly("settings.item.update-check-enabled", Boolean.toString(envBool("app.update.enabled", false)), null,
+                "settings.desc.update-check-enabled"));
+        items.add(readOnly("settings.item.update-check-cron",
+                envString("app.update.cron", "0 0 9 * * *") + " (" + zone + ")", null, "settings.desc.update-check-cron"));
+        items.add(readOnly("settings.item.update-repo", envString("app.update.repo", "-"), null, "settings.desc.update-repo"));
+        items.add(readOnly("settings.item.update-api-base", envString("app.update.api-base", "https://api.github.com"), null,
+                "settings.desc.update-api-base"));
+        // 감사 로그 — AuditLogger 가 매번 읽는 auditSafe() 그대로(파일 크기·보관 같은 나머지 감사 설정은 화면에 두지 않는다)
+        items.add(readOnly("settings.item.audit-enabled", Boolean.toString(props.auditSafe().enabled()), null,
+                "settings.desc.audit-enabled"));
+        return items;
+    }
+
+    /**
+     * 로그 수준을 실제 로거에 건다 — 오버라이드가 있으면 그 수준을 {@link SettingsKeys#LOGGED_PACKAGES} 셋에(환경변수
+     * {@code LOGGING_LEVEL} 과 같은 범위), 없으면 각 로거를 기동 때의 설정값({@code logging.level.<이름>})으로 되돌린다. 실패는 로그만
+     * 남긴다 — 로그 수준 때문에 설정 저장이 실패하면 안 된다. {@code /actuator/loggers} 로 따로 바꾼 로거도 이 셋이면 덮인다.
+     */
+    private void applyLogLevel() {
+        try {
+            LoggingSystem logging = LoggingSystem.get(getClass().getClassLoader());
+            String override = cache.get(SettingsKeys.LOGGING_LEVEL);
+            for (String name : SettingsKeys.LOGGED_PACKAGES) {
+                String level = override != null ? override : envString("logging.level." + name, null);
+                logging.setLogLevel(name, parseLogLevel(level));
+            }
+        } catch (RuntimeException e) {
+            log.warn("[SETTINGS] could not apply the log level: {}", e.getMessage());
+        }
+    }
+
+    private static LogLevel parseLogLevel(String level) {
+        if (level == null || level.isBlank()) return null;   // null = 상위 로거를 따른다
+        try {
+            return LogLevel.valueOf(level.strip().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** 화면에 보이는 로그 수준 — 오버라이드, 없으면 앱 패키지의 설정값({@code LOGGING_LEVEL}), 그것도 없으면 INFO. */
+    private String effectiveLogLevel() {
+        String override = cache.get(SettingsKeys.LOGGING_LEVEL);
+        if (override != null) return override;
+        LogLevel configured = parseLogLevel(envString("logging.level." + SettingsKeys.LOGGED_PACKAGES.get(0), null));
+        return configured == null ? "INFO" : configured.name();
+    }
+
+    @Override
+    public void setEnvironment(Environment environment) {
+        this.environment = environment;
+    }
+
+    private String envString(String key, String fallback) {
+        if (environment == null) return fallback;
+        String v = environment.getProperty(key);
+        return v == null || v.isBlank() ? fallback : v.strip();
+    }
+
+    private int envInt(String key, int fallback) {
+        String v = envString(key, null);
+        if (v == null) return fallback;
+        try { return Integer.parseInt(v); } catch (NumberFormatException e) { return fallback; }
+    }
+
+    private boolean envBool(String key, boolean fallback) {
+        String v = envString(key, null);
+        return v == null ? fallback : Boolean.parseBoolean(v);
     }
 
     /**
@@ -976,11 +1238,15 @@ public class SettingsService implements AppProperties.OverrideSource {
                 ? "%s / %s (%d%%)".formatted(StorageQuotaService.formatBytes(used),
                         StorageQuotaService.formatBytes(limit), Math.round(used * 100.0 / limit))
                 : StorageQuotaService.formatBytes(used);
+        long backupMax = props.uploadSafe().backupMaxBytes();
         return List.of(
                 readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
                 readOnly("settings.item.storage-limit",
                         limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
-                        null)
+                        null, "settings.desc.storage-limit"),
+                readOnly("settings.item.backup-max-size",
+                        backupMax > 0 ? StorageQuotaService.formatBytes(backupMax) : "무제한",
+                        null, "settings.desc.backup-max-size")
         );
     }
 
@@ -1031,6 +1297,19 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.CHUNK_SPLIT_GRANULAR            -> Boolean.toString(props.chunkSplitGranularSafe());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
+            case SettingsKeys.INDEXING_KEYWORD_BATCH_SIZE     -> Integer.toString(props.indexingSafe().keywordBatchSize());
+            case SettingsKeys.INDEXING_KEYWORD_TIMEOUT        -> Integer.toString(props.indexingSafe().keywordTimeoutSeconds());
+            case SettingsKeys.EMBEDDING_MAX_CHUNK_CHARS       -> Integer.toString(props.embeddingSafe().maxChunkChars());
+            case SettingsKeys.EMBEDDING_MAX_CONCURRENT_BATCHES -> Integer.toString(props.embeddingSafe().maxConcurrentBatches());
+            case SettingsKeys.PPTX_REMOVE_DUPLICATE_SLIDES    -> Boolean.toString(props.pptxRemoveDuplicateSlidesSafe());
+            case SettingsKeys.PPTX_DROP_DIVIDER_SLIDES        -> Boolean.toString(props.pptxDropDividerSlidesSafe());
+            case SettingsKeys.PPTX_DROP_REDUNDANT_TITLE_SLIDES -> Boolean.toString(props.pptxDropRedundantTitleSlidesSafe());
+            case SettingsKeys.PPTX_DROP_ENDING_SLIDE          -> Boolean.toString(props.pptxDropEndingSlideSafe());
+            case SettingsKeys.PPTX_IMAGE_MIN_SHAPE_DIMENSION  -> trimNum(props.pptxImageSafe().minShapeDimensionPt());
+            case SettingsKeys.PPTX_IMAGE_CLUSTER_PADDING      -> trimNum(props.pptxImageSafe().clusterProximityPaddingPt());
+            case SettingsKeys.PPTX_IMAGE_MERGE_ANNOTATED      -> Boolean.toString(props.pptxImageSafe().mergeAnnotatedPictures());
+            case SettingsKeys.PPTX_IMAGE_RASTERIZE_SHAPES     -> Boolean.toString(props.pptxImageSafe().rasterizeShapes());
+            case SettingsKeys.DOCX_IMAGE_MERGE_ANNOTATED      -> Boolean.toString(props.docxImageSafe().mergeAnnotatedShapes());
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
@@ -1043,6 +1322,11 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_FOLLOW_UP_QUESTIONS_COUNT   -> Integer.toString(followUpQuestionsCount());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
+            case SettingsKeys.LOGGING_LEVEL                   -> effectiveLogLevel();
+            case SettingsKeys.BACKUP_ENABLED                  -> Boolean.toString(
+                    AppProperties.hotBool(key, envBool("app.backup.enabled", true)));
+            case SettingsKeys.BACKUP_KEEP                     -> Integer.toString(
+                    Math.max(1, AppProperties.hotInt(key, envInt("app.backup.keep", 7))));
             default -> ThinkingSite.bySettingsKey(key)
                     .map(site -> props.llmSafe().thinkingLevel(site).value())
                     .orElse("");

@@ -299,26 +299,29 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/ui_hot/storage/cache 7그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — llm_hot/ui_hot/search_hot/indexing/conversion/operations/connection/security/search_fixed/cache 10그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(7);
+        assertThat(view.groups()).hasSize(10);
         // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
         assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
-                "llm_hot", "ui_hot", "search_hot", "indexing", "search_fixed", "storage", "cache");
+                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations", "connection", "security", "search_fixed", "cache");
         assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing");
+                .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations");
         assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("search_fixed", "storage", "cache");
-        assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
+                .containsExactly("connection", "security", "search_fixed", "cache");
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("ui_hot"));
-        // §6.15 저장 상한 — 조회 전용이므로 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
-        assertThat(view.groups()).anyMatch(g -> g.id().equals("storage")
-                && g.items().stream().noneMatch(SettingsView.SettingItem::editable));
+        // §6.15 저장 상한 — 운영 카드 안의 조회 전용 행이라 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("operations")).singleElement()
+                .satisfies(g -> assertThat(g.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label)
+                        .containsExactly("settings.item.db-backup-cron", "settings.item.storage-used", "settings.item.storage-limit",
+                                "settings.item.backup-max-size", "settings.item.backup-retention-days",
+                                "settings.item.update-check-enabled", "settings.item.update-check-cron",
+                                "settings.item.update-repo", "settings.item.update-api-base", "settings.item.audit-enabled"));
         // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot + ui_hot)
         long editableCount = view.groups().stream()
                 .flatMap(g -> g.items().stream())
@@ -594,22 +597,45 @@ class SettingsServiceTest {
     // ── 그룹 제목 옆 표시 · 사라진 응답 예산 행 ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("buildView — '재기동 필요' 는 항목마다가 아니라 그룹 제목 옆에 한 번 붙는다(조회 전용 세 그룹)")
-    void buildView_restartNoteSitsOnTheGroupTitle() {
+    @DisplayName("buildView — 조회 전용 줄·그룹에는 '재기동 필요' 배지가 없다(고칠 수 없는 값이라 뜻이 없다) — 항목 배지는 리랭커 상태 둘뿐")
+    void buildView_readOnlyRowsCarryNoRestartBadge() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).filteredOn(g -> g.note() != null).extracting(SettingsView.SettingGroup::id)
-                .containsExactlyInAnyOrder("search_fixed", "storage", "cache");
-        assertThat(view.groups()).filteredOn(g -> g.note() != null)
-                .allSatisfy(g -> assertThat(g.note()).isEqualTo("settings.note.restart"));
-        // 재기동 필요는 그룹 제목으로 옮겼다. 항목 옆 배지는 리랭커 상태(§6.33)를 알리는 파생 항목 둘의 것뿐이다.
+        assertThat(view.groups()).allSatisfy(g -> assertThat(g.note()).as(g.id()).isNull());
         assertThat(view.groups().stream().flatMap(g -> g.items().stream())
                 .filter(item -> item.note() != null))
-                .as("항목 옆에는 리랭커 상태 배지 말고 붙이지 않는다")
                 .allSatisfy(item -> {
-                    assertThat(item.label()).isIn("settings.item.rerank-candidates","settings.item.rerank-top-k");
+                    assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
                     assertThat(item.note()).startsWith("settings.note.reranker-");
                 });
+    }
+
+    @Test
+    @DisplayName("buildView — 연결·보안 카드는 조회 전용이고, MCP 키는 값이 아니라 설정 여부만 보인다")
+    void buildView_connectionAndSecurityRows() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.mcp.read-api-key", "secret-read-key-0123456789")
+                .withProperty("app.trust-forwarded-for", "true"));
+        SettingsView view = service.buildView();
+        Map<String, String> security = new LinkedHashMap<>();
+        view.groups().stream().filter(g -> g.id().equals("security")).findFirst().orElseThrow()
+                .items().forEach(i -> security.put(i.label(), i.value()));
+
+        assertThat(security).containsEntry("settings.item.mcp-read-api-key", "sec***789")
+                .containsEntry("settings.item.mcp-admin-api-key", "미설정")
+                .containsEntry("settings.item.trust-forwarded-for", "true")
+                .containsEntry("settings.item.auth-enabled", Boolean.toString(props.authSafe().enabled()));
+        assertThat(security.values()).noneMatch(v -> v.contains("secret-read-key"));
+        assertThat(security).containsEntry("settings.item.rate-limit-enabled", Boolean.toString(props.rateLimitSafe().enabled()));
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("connection") || g.id().equals("security"))
+                .hasSize(2).allSatisfy(g -> assertThat(g.items()).noneMatch(SettingsView.SettingItem::editable));
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("connection")).singleElement()
+                .satisfies(g -> assertThat(g.items()).extracting(SettingsView.SettingItem::label).containsExactly(
+                        "settings.item.llm-connect-timeout", "settings.item.llm-read-timeout",
+                        "settings.item.llm-default-provider-concurrency", "settings.item.llm-permit-wait-timeout",
+                        "settings.item.llm-verify-local-models", "settings.item.embed-usage-fallback",
+                        "settings.item.rerank-max-concurrent", "settings.item.embed-api-key", "settings.item.rerank-api-key",
+                        "settings.item.sqlite-vec-entrypoint", "settings.item.chroma-host", "settings.item.chroma-port"));
     }
 
     @Test
@@ -683,8 +709,113 @@ class SettingsServiceTest {
         SettingsView.SettingGroup llm = service.buildView().groups().stream()
                 .filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow();
 
-        assertThat(llm.items()).as("남은 행은 전부 편집 가능한 설정이다").allMatch(SettingsView.SettingItem::editable);
+        // 조회 전용 행은 기동 때 굳는 대화 설정 넷뿐이다(배지 없음)
+        assertThat(llm.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label).containsExactly(
+                "settings.item.max-retry-count", "settings.item.memory-fetch-limit-turns",
+                "settings.item.chat-max-question-chars", "settings.item.agent-enabled",
+                "settings.item.summary-max-cached-threads", "settings.item.summary-max-summary-chars",
+                "settings.item.summary-recent-raw-turns");
         assertThat(llm.items()).extracting(SettingsView.SettingItem::label)
                 .noneMatch(label -> label.contains("mode-budget"));
+    }
+
+    // ── 운영 카드: 로그 수준 · DB 백업 · 조회 전용 대화 설정 ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("로그 수준 — 저장하면 세 로거에 즉시 걸리고(대소문자 무관, 대문자로 저장), 기본값으로 되돌리면 각 로거의 설정값으로 돌아간다")
+    void logLevel_appliesToTheThreeLoggersAndResetsToConfigured() {
+        org.springframework.mock.env.MockEnvironment env = new org.springframework.mock.env.MockEnvironment()
+                .withProperty("logging.level.com.example.ragagent", "INFO")
+                .withProperty("logging.level.org.springframework.ai.openai", "WARN")
+                .withProperty("logging.level.reactor.netty.http.client", "INFO");
+        service.setEnvironment(env);
+        Logger app = com.example.ragagent.LogbackTestSupport.logger("com.example.ragagent");
+        Logger openai = com.example.ragagent.LogbackTestSupport.logger("org.springframework.ai.openai");
+        Level appBefore = app.getLevel();
+        Level openaiBefore = openai.getLevel();
+        try {
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).value()).isEqualTo("INFO");
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).choices())
+                    .containsExactly("TRACE", "DEBUG", "INFO", "WARN", "ERROR");
+
+            assertThat(service.update(SettingsKeys.LOGGING_LEVEL, "debug")).isEqualTo("DEBUG");
+            assertThat(repo.store).containsEntry(SettingsKeys.LOGGING_LEVEL, "DEBUG");
+            assertThat(app.getLevel()).isEqualTo(Level.DEBUG);
+            assertThat(openai.getLevel()).isEqualTo(Level.DEBUG);
+            assertThatThrownBy(() -> service.update(SettingsKeys.LOGGING_LEVEL, "verbose"))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            service.reset(SettingsKeys.LOGGING_LEVEL);
+            assertThat(app.getLevel()).isEqualTo(Level.INFO);
+            assertThat(openai.getLevel()).isEqualTo(Level.WARN);
+            assertThat(service.editableItem(SettingsKeys.LOGGING_LEVEL).value()).isEqualTo("INFO");
+        } finally {
+            app.setLevel(appBefore);
+            openai.setLevel(openaiBefore);
+            (com.example.ragagent.LogbackTestSupport.logger("reactor.netty.http.client")).setLevel(null);
+        }
+    }
+
+    @Test
+    @DisplayName("DB 백업 — 켜기·보관 개수는 저장 즉시 AppProperties.hotBool/hotInt 로 읽히고, 없으면 설정값(app.backup.*)")
+    void backupKnobs_areHot() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.backup.enabled", "true").withProperty("app.backup.keep", "9"));
+        assertThat(service.editableItem(SettingsKeys.BACKUP_KEEP).value()).isEqualTo("9");
+
+        service.update(SettingsKeys.BACKUP_ENABLED, "false");
+        service.update(SettingsKeys.BACKUP_KEEP, "3");
+        assertThat(AppProperties.hotBool(SettingsKeys.BACKUP_ENABLED, true)).isFalse();
+        assertThat(AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, 7)).isEqualTo(3);
+        assertThatThrownBy(() -> service.update(SettingsKeys.BACKUP_KEEP, "0")).isInstanceOf(IllegalArgumentException.class);
+
+        service.reset(SettingsKeys.BACKUP_KEEP);
+        assertThat(AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, 7)).isEqualTo(7);
+        assertThat(service.editableItem(SettingsKeys.BACKUP_KEEP).value()).isEqualTo("9");
+    }
+
+    @Test
+    @DisplayName("조회 전용 대화 설정 — 질문 길이는 QuestionLimit 과 같은 범위로 눌러 보이고, Tool 선택은 app.agent.enabled 그대로")
+    void chatFixedItems_showWhatTheConsumersUse() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.chat.max-question-chars", "200").withProperty("app.agent.enabled", "true"));
+        Map<String, String> values = new LinkedHashMap<>();
+        service.buildView().groups().stream().filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow()
+                .items().stream().filter(i -> !i.editable()).forEach(i -> values.put(i.label(), i.value()));
+
+        assertThat(values).containsEntry("settings.item.chat-max-question-chars", "500")
+                .containsEntry("settings.item.agent-enabled", "true")
+                .containsEntry("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()))
+                .containsEntry("settings.item.memory-fetch-limit-turns", "10");
+    }
+
+    @Test
+    @DisplayName("maskSecret — 앞뒤 3글자만 보이고 가운데 ***, 6글자 이하는 *** 만, 없으면 미설정")
+    void maskSecret_showsOnlyTheEnds() {
+        assertThat(SettingsService.maskSecret("abcdefghijklmnop")).isEqualTo("abc***nop");
+        assertThat(SettingsService.maskSecret("  abcdefg  ")).isEqualTo("abc***efg");
+        assertThat(SettingsService.maskSecret("abcdef")).isEqualTo("***");
+        assertThat(SettingsService.maskSecret("")).isEqualTo("미설정");
+        assertThat(SettingsService.maskSecret(null)).isEqualTo("미설정");
+    }
+
+    @Test
+    @DisplayName("forViewer — 비관리자에게는 관리자 전용 그룹과 키 줄(연결 카드의 임베딩·리랭커 키)이 빠진다")
+    void forViewer_dropsKeyRowsForNonAdmins() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.embedding.api-key", "embed-key-123456"));
+        SettingsView full = service.buildView();
+        SettingsView guest = full.forViewer(false);
+
+        assertThat(full.forViewer(true)).isSameAs(full);
+        assertThat(guest.groups()).extracting(SettingsView.SettingGroup::id)
+                .doesNotContain("indexing", "conversion", "operations", "security");
+        assertThat(guest.groups().stream().flatMap(g -> g.items().stream()))
+                .extracting(SettingsView.SettingItem::label)
+                .doesNotContain("settings.item.embed-api-key", "settings.item.rerank-api-key")
+                .contains("settings.item.chroma-host");
+        assertThat(full.groups().stream().flatMap(g -> g.items().stream())
+                .filter(i -> i.label().equals("settings.item.embed-api-key")).findFirst().orElseThrow().value())
+                .isEqualTo("emb***456");
     }
 }

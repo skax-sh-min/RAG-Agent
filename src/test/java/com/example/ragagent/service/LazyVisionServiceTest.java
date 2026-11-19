@@ -49,7 +49,7 @@ class LazyVisionServiceTest {
         when(props.dataDir()).thenReturn(dataDir.toString());
         when(props.imageDescriptionSafe())
                 .thenReturn(new AppProperties.ImageDescriptionProperties(
-                        "strip", false, false, null, 1_000, false, false));
+                        false, false, null, false, false));
         when(props.indexingSafe())
                 .thenReturn(new AppProperties.IndexingConfig(2, 3, 180, 2));
 

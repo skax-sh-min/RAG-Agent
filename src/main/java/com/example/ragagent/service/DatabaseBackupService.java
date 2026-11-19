@@ -1,5 +1,7 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.config.SettingsKeys;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +46,10 @@ import java.util.stream.Stream;
  * <p><b>담지 않는 것</b>: Chroma 백엔드의 벡터(Chroma 서버에 있다) · 문서 원본·변환본·이미지({@code documents/} · {@code converted/} ·
  * {@code images/} — 파일이다). 복구 절차와 함께 OPERATOR_MANUAL 에 적혀 있다.
  *
- * <p>설정은 기동 시 한 번 읽는다({@code app.backup.*} — 재기동 필요, {@code CircuitBreaker} 의 {@code @Value} 선례).
+ * <p>설정은 기동 시 한 번 읽는다({@code app.backup.*} — 재기동 필요, {@code CircuitBreaker} 의 {@code @Value} 선례). 예외는
+ * {@code enabled}·{@code keep} 둘이다: {@code /settings} 의 운영 카드에서 고친 값({@code SettingsKeys.BACKUP_ENABLED}·{@code BACKUP_KEEP})을
+ * 쓸 때마다 다시 읽는다({@link #enabled()}·{@link #keep()}) — 기동 때 받은 값은 오버라이드가 없을 때의 기본값이다. cron·폴더는
+ * 스케줄러·경로가 기동 때 굳으므로 그대로 재기동이 필요하다.
  *
  * <p><b>정기 실행 시각과 파일 이름의 시각은 {@code app.time-zone}(기본 KST) 기준이다</b> — JVM 기본 시간대가 아니다. 둘 다
  * JVM 기본 시간대를 따르던 동안 UTC 로 도는 컨테이너(TZ 설정 없는 이미지)에서는 "03:30" 이 KST 낮 12:30 이었고, 이름도 9시간
@@ -74,10 +79,10 @@ public class DatabaseBackupService {
                          RunResult last, List<BackupFile> backups) {}
 
     private final DataSource dataSource;
-    private final boolean enabled;
+    private final boolean configuredEnabled;
     private final String cron;
     private final ZoneId zone;
-    private final int keep;
+    private final int configuredKeep;
     private final Path dir;
     private volatile boolean running;
     private volatile RunResult last;
@@ -90,19 +95,29 @@ public class DatabaseBackupService {
                                  @Value("${app.backup.dir:}") String backupDir,
                                  @Value("${app.time-zone:Asia/Seoul}") String timeZone) {
         this.dataSource = dataSource;
-        this.enabled = enabled;
+        this.configuredEnabled = enabled;
         this.cron = cron;
         this.zone = ZoneId.of(timeZone);   // 틀린 값이면 기동이 멈춘다 — @Scheduled 의 zone 도 같은 값으로 그렇게 한다
-        this.keep = Math.max(1, keep);
+        this.configuredKeep = Math.max(1, keep);
         this.dir = (backupDir == null || backupDir.isBlank())
                 ? Path.of(dataDir).resolve("db-backups")
                 : Path.of(backupDir);
     }
 
-    /** 정기 실행 — {@code app.backup.enabled=false} 면 아무것도 하지 않는다(수동 실행은 그래도 된다). */
+    /** 정기 백업을 하는가 — {@code /settings} 오버라이드가 있으면 그 값, 없으면 {@code app.backup.enabled}. 쓸 때마다 다시 읽는다. */
+    public boolean enabled() {
+        return AppProperties.hotBool(SettingsKeys.BACKUP_ENABLED, configuredEnabled);
+    }
+
+    /** 남길 백업 수 — {@code /settings} 오버라이드가 있으면 그 값, 없으면 {@code app.backup.keep}. 1 아래로는 내려가지 않는다. */
+    public int keep() {
+        return Math.max(1, AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, configuredKeep));
+    }
+
+    /** 정기 실행 — {@link #enabled()} 가 거짓이면 아무것도 하지 않는다(수동 실행은 그래도 된다). */
     @Scheduled(cron = "${app.backup.cron:0 30 3 * * *}", zone = "${app.time-zone:Asia/Seoul}")
     void scheduled() {
-        if (!enabled) return;
+        if (!enabled()) return;
         run("scheduled");
     }
 
@@ -167,7 +182,7 @@ public class DatabaseBackupService {
     }
 
     public Status status() {
-        return new Status(enabled, cron, zone.getId(), keep, dir.toAbsolutePath().toString(), running, last, listBackups());
+        return new Status(enabled(), cron, zone.getId(), keep(), dir.toAbsolutePath().toString(), running, last, listBackups());
     }
 
     /** 이름이 {@code memory-yyyyMMdd-HHmmss.db} 인 완성본만, 최신부터. */
@@ -191,9 +206,10 @@ public class DatabaseBackupService {
         }
     }
 
-    /** 가장 최근 {@link #keep} 개만 남긴다. 이름이 시각 순이라 이름으로 정렬한다(파일 시각은 복사로 바뀔 수 있다). */
+    /** 가장 최근 {@link #keep()} 개만 남긴다. 이름이 시각 순이라 이름으로 정렬한다(파일 시각은 복사로 바뀔 수 있다). */
     int prune() {
         List<BackupFile> all = listBackups();
+        int keep = keep();
         int removed = 0;
         for (BackupFile f : all.subList(Math.min(keep, all.size()), all.size())) {
             try {

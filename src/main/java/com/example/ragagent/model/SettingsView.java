@@ -31,6 +31,35 @@ public record SettingsView(
                 embeddingDimensions, vectorStoreType, groups, "-", "-", List.of(), List.of());
     }
 
+    /**
+     * 관리자에게만 보이는 그룹 — 인덱싱/청킹 · 문서 변환 · 운영(로그·백업·저장 공간) · 보안·접속. {@code /settings} 는 게스트에게도
+     * 열리지만 이 넷은 운영자의 관심사이고, 보안·접속은 배포의 방어 설정을 드러낸다. 템플릿이 숨기는 것이 아니라 컨트롤러가
+     * {@link #forViewer(boolean)} 로 <b>모델에서 뺀다</b> — 그래야 HTML 에도 실리지 않는다.
+     */
+    public static final java.util.Set<String> ADMIN_ONLY_GROUPS =
+            java.util.Set.of("indexing", "conversion", "operations", "security");
+
+    /**
+     * 관리자에게만 보이는 줄 — 키(가린 값이라도). 그룹 자체는 누구에게나 보이는 카드(연결)에 있어서 줄 단위로 뺀다. MCP 키 둘은
+     * 이미 관리자 전용 그룹(보안·접속)에 있지만 그 그룹이 바뀌어도 새지 않게 함께 적는다.
+     */
+    public static final java.util.Set<String> ADMIN_ONLY_ITEMS = java.util.Set.of(
+            "settings.item.embed-api-key", "settings.item.rerank-api-key",
+            "settings.item.mcp-read-api-key", "settings.item.mcp-admin-api-key");
+
+    /** 보는 사람에게 맞춘 화면 — 관리자면 그대로, 아니면 {@link #ADMIN_ONLY_GROUPS} 와 {@link #ADMIN_ONLY_ITEMS} 를 뺀 사본. */
+    public SettingsView forViewer(boolean admin) {
+        if (admin) return this;
+        List<SettingGroup> visible = groups.stream()
+                .filter(g -> !ADMIN_ONLY_GROUPS.contains(g.id()))
+                .map(g -> new SettingGroup(g.id(), g.title(),
+                        g.items().stream().filter(i -> !ADMIN_ONLY_ITEMS.contains(i.label())).toList(), g.note()))
+                .toList();
+        return new SettingsView(providers, defaultRoutingMode, temperature, maxTokens, embeddingModel, embeddingBaseUrl,
+                embeddingDimensions, vectorStoreType, visible, rerankerModel, rerankerBaseUrl, embeddingEndpoints,
+                rerankerEndpoints);
+    }
+
     /** 임베딩·리랭커 표의 주소 한 줄 — 주소와 그 주소의 마지막 접속 확인. */
     public record EndpointRow(String url, ProviderConnection connection) {}
 
@@ -302,6 +331,7 @@ public record SettingsView(
      * @param step       numeric input step (nullable / number type only)
      * @param tooltip    i18n key for a hover explanation (nullable) — 값 열이 좁아 한 줄로는
      *                   담을 수 없는 계산 근거·적용 범위를 여기에 둔다
+     * @param choices    {@code "choice"} 행의 허용 값(그 순서로 선택 상자에 그린다). 다른 행은 빈 목록
      */
     public record SettingItem(
             String key,
@@ -314,8 +344,20 @@ public record SettingsView(
             Double min,
             Double max,
             Double step,
-            String tooltip
+            String tooltip,
+            List<String> choices
     ) {
+        public SettingItem {
+            choices = choices == null ? List.of() : List.copyOf(choices);
+        }
+
+        /** 선택지가 없는 행(대다수) — 선택지 필드를 더하면서 기존 호출부를 흔들지 않게. */
+        public SettingItem(String key, String label, String value, String type,
+                           boolean editable, boolean overridden, String note,
+                           Double min, Double max, Double step, String tooltip) {
+            this(key, label, value, type, editable, overridden, note, min, max, step, tooltip, List.of());
+        }
+
         /**
          * 툴팁 없는 행(대다수)을 위한 편의 생성자 — {@code SourceRef} 의 5/8/11-인자 생성자와 같은
          * 선례다. 툴팁은 값 열에 담을 수 없는 긴 설명이 있을 때만 붙으므로, 그 필드를 추가하면서

@@ -801,6 +801,8 @@ RAG 답변 프롬프트가 넘칠 때 **무엇을 어떤 순서로** 줄이는�
 
 `ExportPreprocessor` 가 내는 것만 다루는 줄 단위 POI(`XWPFDocument`) 렌더러(헤딩·문단·파이프 표·펜스 코드·목록·인용·`**bold**`/`*italic*`/`` `code` ``). `imageToken(absolutePath)`(NUL 구분 — 문서 본문과 충돌하지 않는다)로 그림을 넣는다: 줄 단독이면 본문 폭 가운데 정렬, 표 셀 안이면 **그 자리에** 열 폭 비율로 축소, 파일이 없으면 텍스트 노트로 degrade. 셀 안 `<br>` 은 실제 줄바꿈이다. 펜스 코드는 **1×1 표**(Word 에 코드 상자 스타일이 없어 셀 테두리를 쓴다), 좌측 정렬·고정폭, 주석은 초록(`008000`) — `splitComments()` 가 `//`·`#`·여러 줄 `/* … */` 를 처리하되 문자열 리터럴을 추적하고(`"http://…"`·`"a#b"` 는 색칠 안 함) `#` 앞 토큰 경계를 요구한다.
 
+**소제목은 스타일 정의가 있어야 소제목이다** (2026-11-18). `new XWPFDocument()` 에는 스타일 파트가 없어 `setStyle("Heading2")` 가 존재하지 않는 스타일을 가리켰고, Word 는 그 단락을 일반 단락으로 봤다 — 글자 크기는 런에 직접 박아 그럴듯해 보였지만 **개요 수준이 없어** 탐색 창·개요 보기에 안 나오고 Word 의 목차 만들기가 비었으며 "제목 N" 스타일과도 연결되지 않았다. 이제 `addHeadingStyles()` 가 Word 기본 이름(`heading 1`…`heading 6`, 화면에는 "제목 1")과 `w:outlineLvl`(0~5)을 가진 스타일을 문서에 넣고, 서식(굵게·크기·간격)도 **스타일에만** 둔다 — 런에 직접 크기를 박으면 Word 에서 스타일을 고쳐도 소제목이 따라오지 않는다. 스타일은 CT* API 가 아니라 XML 을 파싱해 넣는다(poi-ooxml-lite 에 스타일 속성 클래스가 다 들어 있지 않다). `DocxRendererTest.headingsUseBuiltInStylesWithOutlineLevels` 가 지킨다.
+
 ### `ingestion/SimilarityFallback.java`
 
 **임계값이 너무 많이 걸렀으면 한 번만 0.05 낮춘다.** 기준은 통과한 청크 수 < `ceil(70% × min(요청 개수, app.search-top-k))`.

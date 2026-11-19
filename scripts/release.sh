@@ -34,7 +34,8 @@
 #   --next X.Y.Z-SNAPSHOT   version to continue with. Default: patch + 1.
 #   --notes-file F  release notes from file F. Default: let GitHub generate them from the merged work.
 #   --any-branch    allow releasing from a branch other than main.
-#   -y, --yes       do not ask for confirmation.
+#                   Every run except --build-only asks before building: is this a release, and is the version right?
+#                   It asks once more before committing. The answers cannot be skipped (-y/--yes is no longer accepted).
 #   -h, --help
 # Environment: RELEASE_MVN, RELEASE_GH (command names/paths), RELEASE_BRANCH (default main).
 # Publishing needs the GitHub CLI (https://cli.github.com, "gh auth login"); without it use --no-publish and upload the four
@@ -121,8 +122,7 @@ jar_build_version() { jar_entry "$1" META-INF/build-info.properties | tr -d '\r'
 jar_start_class() { jar_entry "$1" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Start-Class: //p' | head -n 1; }
 jar_min_launcher_protocol() { jar_entry "$1" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Min-Launcher-Protocol: //p' | head -n 1; }
 
-confirm() {  # confirm <question>
-  [ "$YES" -eq 1 ] && return 0
+confirm() {  # confirm <question> - always asks; anything but y/yes (or end of input) is a no
   printf '%s [y/N] ' "$1"
   read -r answer || answer=""
   case "$answer" in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
@@ -135,7 +135,6 @@ main() {
   NEXT=""
   BUILD_ONLY=0
   NO_PUBLISH=0
-  YES=0
   SKIP_TESTS=0
   ANY_BRANCH=0
   VIA_PR=0
@@ -147,7 +146,7 @@ main() {
       --pr) VIA_PR=1 ;;
       --skip-tests) SKIP_TESTS=1 ;;
       --any-branch) ANY_BRANCH=1 ;;
-      -y | --yes) YES=1 ;;
+      -y | --yes) die "$1 is no longer accepted: a release always asks for confirmation (use --build-only to build without asking)" ;;
       --next) shift; NEXT="${1:-}" ;;
       --notes-file) shift; NOTES_FILE="${1:-}" ;;
       -h | --help) usage; exit 0 ;;
@@ -229,6 +228,21 @@ $(git status --short)"
     info "releasing $VERSION through a pull request: commits go on $RBRANCH, '$BRANCH' stays untouched (pom is $CURRENT, next will be $NEXT)"
   else
     info "releasing $VERSION from '$BRANCH' (pom is $CURRENT, next will be $NEXT)"
+  fi
+
+  # ask before the build (minutes) - a wrong version or an accidental run stops here with nothing changed
+  if [ "$BUILD_ONLY" -ne 1 ]; then
+    if [ "$VIA_PR" -eq 1 ] && [ "$PUBLISH" -eq 1 ]; then
+      what="build, commit on $RBRANCH, push it with tag $TAG, create a DRAFT GitHub release and open a pull request into '$BRANCH'"
+    elif [ "$VIA_PR" -eq 1 ]; then
+      what="build and commit on $RBRANCH locally (nothing is pushed)"
+    elif [ "$PUBLISH" -eq 1 ]; then
+      what="build, commit, push '$BRANCH' + tag $TAG to origin and PUBLISH the GitHub release"
+    else
+      what="build and commit on '$BRANCH' locally (nothing is pushed)"
+    fi
+    confirm "Make a release now? ($what)" || die "aborted before building (nothing changed)"
+    confirm "Release version $VERSION (tag $TAG; pom is $CURRENT, next will be $NEXT) - is this the right version?"       || die "aborted before building (nothing changed) - pass the version explicitly: scripts/release.sh X.Y.Z"
   fi
 
   # ---- 2. build ---------------------------------------------------------------------------------------------------

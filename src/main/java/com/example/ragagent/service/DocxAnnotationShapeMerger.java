@@ -71,10 +71,11 @@ public class DocxAnnotationShapeMerger {
     private static final int MAX_CANVAS_DIMENSION_PX = 6000;
     private static final float STROKE_WIDTH_PX = 2f;
 
-    private final boolean mergeAnnotatedShapes;
+    /** Read per paragraph, not cached — merge-annotated-shapes is hot-editable on /settings (문서 변환). */
+    private final AppProperties props;
 
     public DocxAnnotationShapeMerger(AppProperties props) {
-        this.mergeAnnotatedShapes = props.docxImageSafe().mergeAnnotatedShapes();
+        this.props = props;
     }
 
     /**
@@ -95,7 +96,7 @@ public class DocxAnnotationShapeMerger {
      * position couldn't be parsed.
      */
     List<VmlShape> findShapes(XWPFParagraph para) {
-        if (!mergeAnnotatedShapes || para == null || para.getCTP() == null) return List.of();
+        if (!props.docxImageSafe().mergeAnnotatedShapes() || para == null || para.getCTP() == null) return List.of();
         Node root = para.getCTP().getDomNode();
         if (root == null) return List.of();
         List<VmlShape> out = new ArrayList<>();
