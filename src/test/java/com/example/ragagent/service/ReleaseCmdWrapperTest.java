@@ -57,12 +57,12 @@ class ReleaseCmdWrapperTest extends ReleaseHarness {
     }
 
     @Test
-    @DisplayName("버전·값이 있는 옵션·스위치가 그대로 넘어간다 — 0.6.0 --next 0.7.0-SNAPSHOT --no-publish --yes")
+    @DisplayName("버전·값이 있는 옵션·스위치가 그대로 넘어간다 — 0.6.0 --next 0.7.0-SNAPSHOT --no-publish (확인은 표준 입력)")
     void argumentsPassThrough() throws Exception {
-        List<String> a = args("0.6.0", "--no-publish", "--yes");
+        List<String> a = args("0.6.0", "--no-publish");
         a.addAll(valueOpt("next", "0.7.0-SNAPSHOT"));
 
-        Result r = run(a);
+        Result r = run(a, Map.of(), ANSWER_ALL_YES);
 
         assertThat(r.exit()).as(r.out()).isZero();
         assertThat(git("tag")).isEqualTo("v0.6.0");
@@ -75,11 +75,11 @@ class ReleaseCmdWrapperTest extends ReleaseHarness {
         Path dir = Files.createDirectories(tmp.resolve("my notes"));
         Path notes = dir.resolve("release notes.md");
         Files.writeString(notes, "- things\n");
-        List<String> a = args("--no-publish", "--yes");
+        List<String> a = args("--no-publish");
         a.add("--notes-file");
         a.add(notes.toString());
 
-        Result r = run(a);
+        Result r = run(a, Map.of(), ANSWER_ALL_YES);
 
         // 스크립트는 파일이 없으면 "notes file not found" 로 멈춘다 — 통과했다는 것은 경로가 온전히 도착했다는 뜻이다
         assertThat(r.exit()).as(r.out()).isZero();
@@ -95,6 +95,27 @@ class ReleaseCmdWrapperTest extends ReleaseHarness {
 
         assertThat(r.exit()).isNotZero();
         assertThat(r.out()).contains("not clean");
+    }
+
+    @Test
+    @DisplayName("래퍼로도 버전 확인을 묻는다 — 버전이 보이고, n 이면 빌드하지 않는다")
+    void wrapperAsksForTheVersion() throws Exception {
+        Result r = run(args(), Map.of(), "y\nn\n");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("Make a release now?").contains("Release version 0.5.6").contains("aborted before building");
+        assertNothingChanged();
+        assertThat(mvnCalls()).noneMatch(l -> l.contains("package"));
+    }
+
+    @Test
+    @DisplayName("래퍼로도 --yes 는 거절된다 — 확인을 건너뛸 수 없다")
+    void wrapperRejectsYes() throws Exception {
+        Result r = run(args("--no-publish", "--yes"), Map.of(), "");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("no longer accepted");
+        assertNothingChanged();
     }
 
     @Test

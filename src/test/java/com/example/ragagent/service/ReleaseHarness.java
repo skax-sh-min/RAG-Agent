@@ -35,7 +35,12 @@ import java.util.zip.ZipFile;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class ReleaseHarness {
 
+    /** {@code YES} 는 스크립트 옵션이 아니다 — 스크립트는 언제나 묻는다. 인자 목록에 표지로 넣으면 {@link #run} 이 빼고 모든 질문에 y 로 답한다. */
     enum Opt { BUILD_ONLY, NO_PUBLISH, SKIP_TESTS, ANY_BRANCH, YES, PR }
+
+    /** 확인 질문 셋(릴리즈 여부 · 버전 · 커밋 전)에 모두 y. */
+    static final String ANSWER_ALL_YES = "y\ny\ny\n";
+    private static final String YES_MARKER = "<answer-all-yes>";
 
     static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("windows");
     private static final Path SCRIPTS = Path.of("scripts").toAbsolutePath();
@@ -272,7 +277,7 @@ abstract class ReleaseHarness {
             case NO_PUBLISH -> "--no-publish";
             case SKIP_TESTS -> "--skip-tests";
             case ANY_BRANCH -> "--any-branch";
-            case YES -> "--yes";
+            case YES -> YES_MARKER;
             case PR -> "--pr";
         };
     }
@@ -305,6 +310,10 @@ abstract class ReleaseHarness {
 
     Result run(List<String> args, Map<String, String> extraEnv, String stdin) throws Exception {
         List<String> cmd = new ArrayList<>(command(repo.resolve("scripts")));
+        if (args.contains(YES_MARKER)) {
+            args = args.stream().filter(a -> !YES_MARKER.equals(a)).toList();
+            stdin = ANSWER_ALL_YES + stdin;
+        }
         cmd.addAll(args);
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true);
         Map<String, String> env = pb.environment();
@@ -352,6 +361,10 @@ abstract class ReleaseHarness {
         org.assertj.core.api.Assertions.assertThat(git("status", "--porcelain")).as("pom.xml 이 원래대로여야 한다").isEmpty();
         org.assertj.core.api.Assertions.assertThat(remoteGit("tag")).isEmpty();
         org.assertj.core.api.Assertions.assertThat(remoteGit("rev-list", "--count", "main")).isEqualTo("1");
+    }
+
+    List<String> mvnCalls() throws IOException {
+        return Files.exists(mvnLog) ? Files.readAllLines(mvnLog).stream().map(String::strip).filter(l -> !l.isEmpty()).toList() : List.of();
     }
 
     List<String> ghCalls() throws IOException {

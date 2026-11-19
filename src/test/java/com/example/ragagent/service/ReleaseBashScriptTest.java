@@ -435,9 +435,64 @@ class ReleaseBashScriptTest extends ReleaseHarness {
     // ── 확인·게시 단계 ──────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("확인에 n 이라고 답하면 커밋하지 않는다 — 산출물은 남고 pom 은 원래대로")
-    void decliningTheConfirmationChangesNothing() throws Exception {
+    @DisplayName("릴리즈 여부에 n — 빌드도 하지 않고 멈춘다")
+    void decliningTheReleaseStopsBeforeBuilding() throws Exception {
         Result r = run(args(), Map.of(), "n\n");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("Make a release now?").contains("aborted before building");
+        assertNothingChanged();
+        assertThat(mvnCalls()).noneMatch(l -> l.contains("package"));
+        assertThat(repo.resolve("target/release")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("버전 확인에 n — 질문에 버전·태그·다음 버전이 보이고, 빌드하지 않고 멈춘다")
+    void decliningTheVersionStopsBeforeBuilding() throws Exception {
+        Result r = run(args(), Map.of(), "y\nn\n");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("Release version 0.5.6 (tag v0.5.6").contains("next will be 0.5.7-SNAPSHOT")
+                .contains("aborted before building");
+        assertNothingChanged();
+        assertThat(mvnCalls()).noneMatch(l -> l.contains("package"));
+    }
+
+    @Test
+    @DisplayName("입력이 없으면(EOF) 아니오로 본다 — 확인 없이 릴리즈되지 않는다")
+    void noAnswerMeansNo() throws Exception {
+        Result r = run(args(opt(Opt.NO_PUBLISH)), Map.of(), "");
+
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("aborted before building");
+        assertNothingChanged();
+    }
+
+    @Test
+    @DisplayName("-y/--yes 는 더 이상 받지 않는다 — 확인을 건너뛸 방법이 없다")
+    void yesOptionIsRejected() throws Exception {
+        for (String flag : List.of("--yes", "-y")) {
+            Result r = run(args(flag), Map.of(), "");
+
+            assertThat(r.exit()).as(flag).isNotZero();
+            assertThat(r.out()).contains("no longer accepted");
+            assertNothingChanged();
+        }
+    }
+
+    @Test
+    @DisplayName("--build-only 는 묻지 않는다")
+    void buildOnlyDoesNotAsk() throws Exception {
+        Result r = run(args(opt(Opt.BUILD_ONLY)), Map.of(), "");
+
+        assertThat(r.exit()).as(r.out()).isZero();
+        assertThat(r.out()).doesNotContain("[y/N]");
+    }
+
+    @Test
+    @DisplayName("마지막 확인(커밋 전)에 n 이라고 답하면 커밋하지 않는다 — 산출물은 남고 pom 은 원래대로")
+    void decliningTheConfirmationChangesNothing() throws Exception {
+        Result r = run(args(), Map.of(), "y\ny\nn\n");
 
         assertThat(r.exit()).isNotZero();
         assertThat(r.out()).contains("aborted");
@@ -447,9 +502,9 @@ class ReleaseBashScriptTest extends ReleaseHarness {
     }
 
     @Test
-    @DisplayName("y 라고 답하면 진행한다")
+    @DisplayName("세 질문에 모두 y 라고 답하면 진행한다")
     void answeringYesProceeds() throws Exception {
-        Result r = run(args(), Map.of(), "y\n");
+        Result r = run(args(), Map.of(), "y\ny\ny\n");
 
         assertThat(r.exit()).as(r.out()).isZero();
         assertThat(remoteGit("tag")).isEqualTo("v0.5.6");
