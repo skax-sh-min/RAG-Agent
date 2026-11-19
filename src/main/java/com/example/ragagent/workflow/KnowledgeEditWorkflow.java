@@ -486,11 +486,10 @@ public class KnowledgeEditWorkflow {
         if (parsed.verdict() == Verdict.NONE) return Edit.skip("모델이 바꿀 곳이 없다고 판단했다" + reasonSuffix(parsed.reason()));
         if (parsed.verdict() == Verdict.UNREADABLE) return Edit.skip("편집 응답을 읽지 못했다");
         if (remove && parsed.verdict() == Verdict.DELETE_CHUNK) {
-            String heading = firstHeading(before);
-            if (heading != null && ImpactAnalysisWorkflow.hasStandaloneOccurrence(heading, intent.subject())) {
+            if (EditGuards.wholeChunkBelongsTo(before, intent.subject())) {
                 return new Edit("", true, "[{\"op\":\"DELETE_CHUNK\"}]", false, null, null);
             }
-            return Edit.skip("청크 전체 삭제를 제안했지만 섹션 제목에 대상이 없다");
+            return Edit.skip("청크 전체 삭제를 제안했지만 청크의 본문이 전부 대상 섹션 안에 있지 않다");
         }
         List<AnchoredEdit.Operation> kept = new ArrayList<>();
         List<String> dropped = new ArrayList<>();
@@ -722,14 +721,6 @@ public class KnowledgeEditWorkflow {
 
     private static String shown(String text) {
         return text.length() > MAX_CHUNK_CHARS ? text.substring(0, MAX_CHUNK_CHARS) : text;
-    }
-
-    private static String firstHeading(String text) {
-        for (String line : text.split("\n")) {
-            if (line.strip().matches("#{1,6}\\s+\\S.*")) return line.strip();
-            if (!line.isBlank()) return null;
-        }
-        return null;
     }
 
     /** 제목 줄·마커·펜스 줄·공백을 뺀 남은 본문 길이. */

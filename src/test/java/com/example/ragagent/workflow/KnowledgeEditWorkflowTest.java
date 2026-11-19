@@ -275,6 +275,20 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("내용 삭제 — 청크가 상위 클래스 제목으로 시작해도 대상 메서드 섹션뿐이면 delete_chunk 가 된다")
+    void removeWholeChunkUnderAClassHeading() {
+        String text = "## 26. 클래스: FileUtils\n### 26.46 메서드: `readLines(java.io.File)`\n\n파일을 줄 단위로 읽는다.";
+        mentions("c1", text);
+        chunk("c1", text, "26.46 메서드: `readLines(java.io.File)`", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"파일을 줄 단위로 읽는다.\"}", "판정: 청크 전체 삭제\n이유: readLines 섹션");
+
+        workflow.propose(jobId, "readLines 내용을 삭제해", new EditIntent("remove", "readLines", null, null, null, null), Locale.KOREAN);
+
+        assertThat(stored()).singleElement().extracting(ChangeProposalRepository.Proposal::kind)
+                .isEqualTo(ChangeProposalRepository.KIND_DELETE_CHUNK);
+    }
+
+    @Test
     @DisplayName("설명 수정 — 지시문에 없는 숫자를 넣은 바꾸기는 G4 가 버린다, 지시문의 숫자는 통과")
     void reviseRejectsInventedNumbers() {
         mentions("c1", A_CHUNK);

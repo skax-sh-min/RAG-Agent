@@ -53,6 +53,33 @@ class EditGuardsTest {
     }
 
     @Test
+    @DisplayName("청크 전체 삭제 — 위치 표시용 상위 제목 아래의 대상 섹션이면 받는다(6c 사전 평가의 readLines·closeQuietly 모양)")
+    void wholeChunkUnderABreadcrumbHeading() {
+        String text = "## 26. 클래스: nexcore.framework.core.util.FileUtils\n### 26.46 메서드: `readLines(java.io.File)`\n\n"
+                + "**패키지:** `nexcore.framework.core.util`\n\n```java\n@Deprecated public static List readLines(File f)\n# 펜스 안은 제목이 아니다\n```\n\n"
+                + "#### 26.46.1 반환값\n\n줄 목록.";
+        assertThat(EditGuards.wholeChunkBelongsTo(text, "readLines")).isTrue();
+        assertThat(EditGuards.wholeChunkBelongsTo("## B 기능\n\nB 는 이렇게 쓴다.", "B 기능")).isTrue();
+    }
+
+    @Test
+    @DisplayName("청크 전체 삭제 — 다른 섹션의 본문이 섞였거나 첫 제목 위에 이어진 글이 있거나 대상 제목이 없으면 거절")
+    void wholeChunkWithForeignBodyIsRejected() {
+        // 앞 메서드(getRuntimeMode)의 본문 + 대상 메서드 — 통째로 지우면 앞 메서드 설명까지 사라진다
+        String mixed = "## 1. 클래스: BaseUtils\n### 1.4 메서드: `getRuntimeMode()`\n\n실행 모드를 돌려준다.\n\n"
+                + "### 1.5 메서드: `isSingleJvmBatch()`\n\n단일 JVM 배치인지.";
+        assertThat(EditGuards.wholeChunkBelongsTo(mixed, "isSingleJvmBatch")).isFalse();
+        // 앞 섹션에서 이어진 글이 제목보다 먼저 온다
+        assertThat(EditGuards.wholeChunkBelongsTo("앞 섹션의 꼬리.\n\n## B 기능\n\nB 설명.", "B")).isFalse();
+        // 상위 제목에만 대상이 있고 본문은 대상과 무관한 형제 섹션 — 상위 제목의 하위라면 받는다
+        assertThat(EditGuards.wholeChunkBelongsTo("## B 기능\n### 설정\n\n값을 넣는다.", "B")).isTrue();
+        assertThat(EditGuards.wholeChunkBelongsTo("## 26. 클래스: FileUtils\n### 26.1 메서드: `copy()`\n\n복사.", "readLines")).isFalse();
+        assertThat(EditGuards.wholeChunkBelongsTo("## B 기능", "B")).isFalse();   // 본문 없음
+        // 단어 경계 — readLinesAll 제목은 readLines 의 섹션이 아니다
+        assertThat(EditGuards.wholeChunkBelongsTo("### 메서드: `readLinesAll()`\n\n설명.", "readLines")).isFalse();
+    }
+
+    @Test
     @DisplayName("G4 — 새 숫자는 원문·지시문에 있어야 하고, 어디에도 없는 낱말은 하나까지")
     void newFacts() {
         String chunk = "A 는 30초 동안 기다린다.";
