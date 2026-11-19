@@ -1,0 +1,1166 @@
+{
+ "note": "6c 사전 평가 골든셋 (AGENT_MCP_DESIGN §10.12). 본문은 담지 않는다 — 하네스가 -Dedit-eval.db 의 memory.db 복사본에서 청크 id 로 읽는다. pool 은 지시 대상이 글자 그대로 나오는 청크 전부(앱의 전수 조회) + 같은 파일에서 지시와 가장 닮은 방해 후보 2개. label: D 설명함 · M 언급만 · U 무관 · A 애매(정밀도·재현율에서 뺀다). 생성: scripts/knowledge_edit_eval/build_gold.py",
+ "cases": [
+  {
+   "id": "dep-callBatchNow",
+   "instruction": "callBatchNow 는 더 이상 사용되지 않습니다. 대신 callBatchAfterCommit 을 사용하세요.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "callBatchNow",
+    "replacement": "callBatchAfterCommit"
+   },
+   "pool": [
+    {
+     "chunkId": "0f8458a3-6750-4c6b-8e33-f0e71a3e7511",
+     "label": "D"
+    },
+    {
+     "chunkId": "fb33e957-6e94-485f-8991-4a603c9c5123",
+     "label": "A"
+    },
+    {
+     "chunkId": "c2ff5cf8-fad6-47c0-a585-03fcfcef170f",
+     "label": "D"
+    },
+    {
+     "chunkId": "b9501cfc-5a4e-442f-a885-b356b9cf4109",
+     "label": "M"
+    },
+    {
+     "chunkId": "b757982f-3d92-4083-96ca-8f5e91294d96",
+     "label": "A"
+    },
+    {
+     "chunkId": "7bb201a3-4d52-424e-b99a-6f4ecf4d011a",
+     "label": "M"
+    },
+    {
+     "chunkId": "624108d4-66bb-4ef4-b5a9-eaaeeafe98e0",
+     "label": "A"
+    },
+    {
+     "chunkId": "8ec9950c-0272-4a1f-9b4c-f5523a3794ce",
+     "label": "U"
+    },
+    {
+     "chunkId": "42015e7b-63cd-49fc-a988-85dda66dc3e1",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "dep-reserveCallTimerService",
+   "instruction": "reserveCallTimerService 는 이제 사용하지 않습니다.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "reserveCallTimerService"
+   },
+   "pool": [
+    {
+     "chunkId": "d60a5055-e32a-4e94-99cb-2423660790a2",
+     "label": "M"
+    },
+    {
+     "chunkId": "46df9dd6-8436-4e82-b1e1-de37766299d6",
+     "label": "D"
+    },
+    {
+     "chunkId": "5a7adfa5-1209-4be9-bf68-f8686ac07e4c",
+     "label": "M"
+    },
+    {
+     "chunkId": "86fe0e0c-19c5-473b-b87b-55f41d7530a7",
+     "label": "D"
+    },
+    {
+     "chunkId": "69980cfa-57e9-4a6d-a440-56a81d338463",
+     "label": "D"
+    },
+    {
+     "chunkId": "0f819358-d6d1-45a9-a1b2-b28b8f81937d",
+     "label": "D"
+    },
+    {
+     "chunkId": "0a8d1471-9c55-4b65-ab94-7753656ea44e",
+     "label": "A"
+    },
+    {
+     "chunkId": "ee90de9e-41ec-43b6-b2ad-f1d72c9632d2",
+     "label": "U"
+    },
+    {
+     "chunkId": "b21d0272-36af-4952-934b-5060fa562793",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "dep-OldFileDailyCleaner",
+   "instruction": "OldFileDailyCleaner 클래스는 폐기되었습니다.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "OldFileDailyCleaner"
+   },
+   "pool": [
+    {
+     "chunkId": "5bed4e19-bb7d-4ec3-8daa-1630f1635e01",
+     "label": "D"
+    },
+    {
+     "chunkId": "8ab7b1f8-e797-4bb2-902a-68efe8d45d85",
+     "label": "A"
+    },
+    {
+     "chunkId": "7fba6574-240d-4ac8-b192-ec8471be7927",
+     "label": "A"
+    },
+    {
+     "chunkId": "c9ca8579-3b9d-4275-baad-d6fea8eae17d",
+     "label": "A"
+    },
+    {
+     "chunkId": "f4f76bdf-4447-4316-926f-77bdf1f3592e",
+     "label": "A"
+    },
+    {
+     "chunkId": "75d06572-f85f-42b7-a055-8f1b8531e52e",
+     "label": "A"
+    },
+    {
+     "chunkId": "a8b09635-bb5e-43da-92bd-cb33130791c6",
+     "label": "A"
+    },
+    {
+     "chunkId": "b69e76d4-6a4d-4dba-9a58-5f9d455da9bf",
+     "label": "U"
+    },
+    {
+     "chunkId": "a9dfe4bc-b121-4b39-ae32-c9a463f011df",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "dep-CaseIgnoreHashMap",
+   "instruction": "CaseIgnoreHashMap 은 사용 중단되었으니 대신 HashMap 을 쓰세요.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "CaseIgnoreHashMap",
+    "replacement": "HashMap"
+   },
+   "pool": [
+    {
+     "chunkId": "af1180f1-ab9b-40ab-9f6c-516691ebb628",
+     "label": "M"
+    },
+    {
+     "chunkId": "1f12e83a-0f02-4ccc-b84b-a3745b32cf76",
+     "label": "D"
+    },
+    {
+     "chunkId": "986d266d-8ccd-4b72-94b1-ea1e6d198ae2",
+     "label": "A"
+    },
+    {
+     "chunkId": "9e685a0d-3af2-41c1-8aef-5b0cbdaa5f89",
+     "label": "A"
+    },
+    {
+     "chunkId": "55d49e9a-9f5d-4b0e-bc53-81e80a6c447a",
+     "label": "A"
+    },
+    {
+     "chunkId": "18d2382e-1d15-4447-956b-09c82cde061b",
+     "label": "A"
+    },
+    {
+     "chunkId": "a062e03a-8493-4fa2-ac61-227a76e07f70",
+     "label": "A"
+    },
+    {
+     "chunkId": "7dd253b9-e3d8-4429-bfde-d3fed9e1afcc",
+     "label": "U"
+    },
+    {
+     "chunkId": "6e633608-345f-4d5f-b36e-ca20c208f280",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "dep-PaddableDataOutputStream",
+   "instruction": "PaddableDataOutputStream 은 더 이상 지원하지 않습니다.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "PaddableDataOutputStream"
+   },
+   "pool": [
+    {
+     "chunkId": "3d09d635-2da2-4eea-9ad1-e7843f3ea4ae",
+     "label": "M"
+    },
+    {
+     "chunkId": "4d0693ce-d6d1-4a28-b6ff-6a989142dc5c",
+     "label": "D"
+    },
+    {
+     "chunkId": "eb47060b-9e97-476d-9ccf-a83ad52e0eb5",
+     "label": "A"
+    },
+    {
+     "chunkId": "3f694d9d-46f9-4618-93fd-9a6b226f2284",
+     "label": "A"
+    },
+    {
+     "chunkId": "2fc3ae22-205f-4b68-adc6-8f461f74b704",
+     "label": "A"
+    },
+    {
+     "chunkId": "f2e58dae-25fc-47c3-9d9c-a724b0a4a664",
+     "label": "A"
+    },
+    {
+     "chunkId": "0bbd8b4b-3702-4bfe-8faa-bb412a8d9153",
+     "label": "A"
+    },
+    {
+     "chunkId": "d76003b3-9a12-449f-a8ce-21b7bd018318",
+     "label": "U"
+    },
+    {
+     "chunkId": "cd3013ca-a7fa-437b-b08f-b0ab62ee3a73",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "dep-FUAttcFileMng",
+   "instruction": "FUAttcFileMng 는 더 이상 쓰이지 않습니다. 대신 FUFileMng 를 사용하세요.",
+   "expect": {
+    "type": "deprecate",
+    "subject": "FUAttcFileMng",
+    "replacement": "FUFileMng"
+   },
+   "pool": [
+    {
+     "chunkId": "7e812ad8-54e4-42ee-8dac-b1eeea0cb880",
+     "label": "D"
+    },
+    {
+     "chunkId": "7925da25-f946-4aef-9ee8-e22770780b41",
+     "label": "M"
+    },
+    {
+     "chunkId": "1b50fde8-09d4-4c39-8d3c-f3f96adefa6f",
+     "label": "A"
+    },
+    {
+     "chunkId": "52c06f51-fd05-4a26-b428-8134fc80c984",
+     "label": "D"
+    },
+    {
+     "chunkId": "8063d6fd-3e29-42c8-aa4a-39692e29fcb0",
+     "label": "D"
+    },
+    {
+     "chunkId": "f10e3358-fa52-4dad-a0d9-cb2135681134",
+     "label": "D"
+    },
+    {
+     "chunkId": "7d4f48f9-58b1-4c33-99ed-8fcaaf1ed5db",
+     "label": "M"
+    },
+    {
+     "chunkId": "7bea49b8-d212-4d35-b04c-29a5e124262b",
+     "label": "U"
+    },
+    {
+     "chunkId": "3d9388fe-2a34-499e-a7f4-8311b9ad751f",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-isSingleJvmBatch",
+   "instruction": "isSingleJvmBatch 에 대한 설명을 삭제해",
+   "expect": {
+    "type": "remove",
+    "subject": "isSingleJvmBatch"
+   },
+   "pool": [
+    {
+     "chunkId": "97959659-d1f5-4790-bee4-25f8585387b5",
+     "label": "M"
+    },
+    {
+     "chunkId": "1332a6bf-15b8-41bb-ad2a-37c1d5a34a5b",
+     "label": "M"
+    },
+    {
+     "chunkId": "4fe326c5-b31e-43a4-92a1-e0ac6d7b0ff0",
+     "label": "M"
+    },
+    {
+     "chunkId": "51689137-c905-43c7-9621-496116dc4dfb",
+     "label": "M"
+    },
+    {
+     "chunkId": "ec2578fb-c2b4-430b-90d1-0d70ac79d477",
+     "label": "M"
+    },
+    {
+     "chunkId": "040aa752-1288-400e-aa9b-1e6cbd62bad1",
+     "label": "M"
+    },
+    {
+     "chunkId": "04c3b3d8-0511-4398-9a03-2c9a381a6c0c",
+     "label": "D"
+    },
+    {
+     "chunkId": "bf1e7801-de8b-4a71-93ad-3bd4037fe9d3",
+     "label": "U"
+    },
+    {
+     "chunkId": "a90c78c5-93c5-40d7-bd3b-2145f2bd8941",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-waitForAllReceiveEnd",
+   "instruction": "waitForAllReceiveEnd 관련 내용은 지워줘",
+   "expect": {
+    "type": "remove",
+    "subject": "waitForAllReceiveEnd"
+   },
+   "pool": [
+    {
+     "chunkId": "fdeb839d-03a6-4f01-80db-d1a42651d26d",
+     "label": "M"
+    },
+    {
+     "chunkId": "301a3841-454b-4d2c-8799-a49e7c526e0e",
+     "label": "M"
+    },
+    {
+     "chunkId": "9668db79-78c0-4927-b6b8-2c0575287d19",
+     "label": "D"
+    },
+    {
+     "chunkId": "2fae6c21-087b-4138-8fb7-498938647087",
+     "label": "D"
+    },
+    {
+     "chunkId": "827d5aff-c679-4551-a26b-9371b77aa5ca",
+     "label": "M"
+    },
+    {
+     "chunkId": "7b0a4747-1c1b-47bd-b6da-142ac3c66b13",
+     "label": "M"
+    },
+    {
+     "chunkId": "ee166be2-54a0-4b44-a80b-389bcec2768c",
+     "label": "D"
+    },
+    {
+     "chunkId": "c904868a-d59c-4034-88ac-b0c517659247",
+     "label": "U"
+    },
+    {
+     "chunkId": "4df6fe58-4064-496c-b116-f78e4a3d0e5a",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-readLines",
+   "instruction": "readLines 메서드 설명은 문서에서 빼 줘",
+   "expect": {
+    "type": "remove",
+    "subject": "readLines"
+   },
+   "pool": [
+    {
+     "chunkId": "1115e67f-bee7-444a-a3f7-587999cddd19",
+     "label": "A"
+    },
+    {
+     "chunkId": "f1af649c-30d1-44fd-a372-f31aa67ee291",
+     "label": "D"
+    },
+    {
+     "chunkId": "071bcadd-a0b3-45a9-abba-0921ff3410d2",
+     "label": "D"
+    },
+    {
+     "chunkId": "c950b511-186d-4294-b5b2-9f4bebc6c748",
+     "label": "A"
+    },
+    {
+     "chunkId": "432ffd5e-81e8-4547-a8b5-431282190e5e",
+     "label": "D"
+    },
+    {
+     "chunkId": "fec468a2-f267-4a17-95ad-db91eff1844e",
+     "label": "D"
+    },
+    {
+     "chunkId": "c42d7394-d0c2-46cf-b0a1-00b3b3d439e3",
+     "label": "D"
+    },
+    {
+     "chunkId": "dab85ba0-f5e3-47b6-9b03-c9bc17fe9583",
+     "label": "U"
+    },
+    {
+     "chunkId": "8854b797-219d-4c65-9b9c-616f8e587462",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-callAsyncServiceAfterCommit",
+   "instruction": "callAsyncServiceAfterCommit 에 대한 내용을 삭제해",
+   "expect": {
+    "type": "remove",
+    "subject": "callAsyncServiceAfterCommit"
+   },
+   "pool": [
+    {
+     "chunkId": "d60a5055-e32a-4e94-99cb-2423660790a2",
+     "label": "M"
+    },
+    {
+     "chunkId": "9549695b-78c0-4194-b67c-3879dd0508c6",
+     "label": "D"
+    },
+    {
+     "chunkId": "5a7adfa5-1209-4be9-bf68-f8686ac07e4c",
+     "label": "M"
+    },
+    {
+     "chunkId": "86fe0e0c-19c5-473b-b87b-55f41d7530a7",
+     "label": "D"
+    },
+    {
+     "chunkId": "cbc54e0c-48ef-4ba0-9aa5-717a25307a9b",
+     "label": "M"
+    },
+    {
+     "chunkId": "42015e7b-63cd-49fc-a988-85dda66dc3e1",
+     "label": "A"
+    },
+    {
+     "chunkId": "f98c4db6-0d02-4c7f-bacc-fbd63a00ec1e",
+     "label": "A"
+    },
+    {
+     "chunkId": "b21d0272-36af-4952-934b-5060fa562793",
+     "label": "U"
+    },
+    {
+     "chunkId": "0a8d1471-9c55-4b65-ab94-7753656ea44e",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-addErrorCountAmount",
+   "instruction": "addErrorCountAmount 설명을 지워",
+   "expect": {
+    "type": "remove",
+    "subject": "addErrorCountAmount"
+   },
+   "pool": [
+    {
+     "chunkId": "6e858da9-a36f-4f3b-a1c9-c124302228b7",
+     "label": "D"
+    },
+    {
+     "chunkId": "35951a81-29ea-43db-8b72-7a6038e112f0",
+     "label": "M"
+    },
+    {
+     "chunkId": "931b66f3-1e2f-493c-8c61-c33e19d35856",
+     "label": "M"
+    },
+    {
+     "chunkId": "3ef435b7-b171-4819-aa77-5e1dac9357a9",
+     "label": "M"
+    },
+    {
+     "chunkId": "a5f2e166-dfb5-4b9c-928e-a754b7400006",
+     "label": "A"
+    },
+    {
+     "chunkId": "0641f105-d475-4179-a0dd-8471a61437bc",
+     "label": "D"
+    },
+    {
+     "chunkId": "5b1ab2f4-ed4b-4c62-a29a-ee4cd71bdef9",
+     "label": "D"
+    },
+    {
+     "chunkId": "c730a4d4-7c03-4e41-a34b-37432e2cc0c0",
+     "label": "U"
+    },
+    {
+     "chunkId": "c8331bc6-890f-4537-b4b8-ed5ef7888481",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rm-closeQuietly",
+   "instruction": "closeQuietly 에 관한 설명을 삭제해 주세요",
+   "expect": {
+    "type": "remove",
+    "subject": "closeQuietly"
+   },
+   "pool": [
+    {
+     "chunkId": "a1390050-e605-4e41-b026-9e02537ddfbb",
+     "label": "A"
+    },
+    {
+     "chunkId": "49cbb655-424f-440d-aab7-43fa6f4e94f1",
+     "label": "D"
+    },
+    {
+     "chunkId": "cc2aa6a1-8a17-4bdc-bd41-0c5b8e46791c",
+     "label": "D"
+    },
+    {
+     "chunkId": "4b840f14-7b40-4159-b5d2-8aabcd811d7d",
+     "label": "D"
+    },
+    {
+     "chunkId": "7e13de0e-d646-484f-bd4d-09aa924866b7",
+     "label": "D"
+    },
+    {
+     "chunkId": "a84d0ab4-ccc4-404f-8208-498cfa44ff4d",
+     "label": "D"
+    },
+    {
+     "chunkId": "92ed84cd-0d44-4793-a6ef-15ce000a5813",
+     "label": "D"
+    },
+    {
+     "chunkId": "60790895-78f3-4ce6-8282-513b419d81ce",
+     "label": "U"
+    },
+    {
+     "chunkId": "b3c38fea-e2cb-42c9-a5b0-74ab8204f725",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-getJobExecutionId",
+   "instruction": "getJobExecutionId 에 '같은 Job 을 재실행하면 실행 ID 가 새로 발급된다' 는 주의 사항을 추가해",
+   "expect": {
+    "type": "add_note",
+    "subject": "getJobExecutionId",
+    "content": "같은 Job 을 재실행하면 실행 ID 가 새로 발급된다"
+   },
+   "pool": [
+    {
+     "chunkId": "0bdaa7e5-adf8-4c03-9d76-b6cc72c765e1",
+     "label": "D"
+    },
+    {
+     "chunkId": "8c92b24f-711f-4933-bbfa-a3392714e1fb",
+     "label": "M"
+    },
+    {
+     "chunkId": "de40151d-7110-409f-ba50-ae089cd71d47",
+     "label": "M"
+    },
+    {
+     "chunkId": "ec8feba6-7f53-4c1f-9551-f111bf183671",
+     "label": "M"
+    },
+    {
+     "chunkId": "ae4fd27e-cc67-4b5b-afb4-d36575f3bc4f",
+     "label": "M"
+    },
+    {
+     "chunkId": "d852d2e8-a3f0-481c-89a2-faa7eb9d2865",
+     "label": "A"
+    },
+    {
+     "chunkId": "a4a127a8-4755-479b-a00b-aec35504ca42",
+     "label": "U"
+    },
+    {
+     "chunkId": "02ff6fd6-fec5-4321-a5e6-dddc9c32f4fb",
+     "label": "U"
+    },
+    {
+     "chunkId": "eaf95617-d4b1-4c94-b4ba-6bc558d0f993",
+     "label": "A"
+    },
+    {
+     "chunkId": "28b4d2df-e185-4190-9719-4b7b29b0a4d3",
+     "label": "U"
+    },
+    {
+     "chunkId": "914138ad-160f-4780-a273-77b715a84bdb",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-CSVFileOption",
+   "instruction": "CSVFileOption 에 '인코딩을 지정하지 않으면 서버 기본 인코딩이 쓰인다' 는 주의 사항을 추가해",
+   "expect": {
+    "type": "add_note",
+    "subject": "CSVFileOption",
+    "content": "인코딩을 지정하지 않으면 서버 기본 인코딩이 쓰인다"
+   },
+   "pool": [
+    {
+     "chunkId": "a1bfa375-18c7-4123-bb94-70c416e7c40f",
+     "label": "D"
+    },
+    {
+     "chunkId": "dc966e3e-d816-4c17-a8d4-13bcbc8111c6",
+     "label": "A"
+    },
+    {
+     "chunkId": "0592559f-c5f0-41ad-be96-ca99c0ecd01e",
+     "label": "A"
+    },
+    {
+     "chunkId": "7e957b92-2890-4629-8edf-b5aaac63e9d0",
+     "label": "A"
+    },
+    {
+     "chunkId": "3f64d95e-0007-4b14-bca9-6dfe58731585",
+     "label": "A"
+    },
+    {
+     "chunkId": "c4e6b330-01c6-4aec-9bd4-ec6df52de085",
+     "label": "A"
+    },
+    {
+     "chunkId": "490526e7-96b2-4bcf-b39a-dc8ff3fe4701",
+     "label": "M"
+    },
+    {
+     "chunkId": "ee728a01-4375-4e0f-9b0d-0cfbb757c19f",
+     "label": "U"
+    },
+    {
+     "chunkId": "76b46f49-aea6-4a24-b7c4-5b3bc06a458e",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-dbSelectMulti",
+   "instruction": "dbSelectMulti 와 관련해 '조회 건수가 많으면 메모리가 부족해질 수 있다' 는 주의 사항을 추가해",
+   "expect": {
+    "type": "add_note",
+    "subject": "dbSelectMulti",
+    "content": "조회 건수가 많으면 메모리가 부족해질 수 있다"
+   },
+   "pool": [
+    {
+     "chunkId": "1b7bdf34-cbf8-4712-96c3-54747b4ea6a2",
+     "label": "D"
+    },
+    {
+     "chunkId": "c70d5551-ab1c-4cc5-8cb4-20f794a2df1f",
+     "label": "D"
+    },
+    {
+     "chunkId": "a0203d2c-81fd-4774-ace1-ca2031a7201a",
+     "label": "M"
+    },
+    {
+     "chunkId": "90fdf768-dc5f-4cf3-9d03-b53edff4c303",
+     "label": "M"
+    },
+    {
+     "chunkId": "39e1aa81-f22d-4632-b749-f2a17d2ba332",
+     "label": "M"
+    },
+    {
+     "chunkId": "0c4f0e06-6272-4292-8ce8-de0e23331c60",
+     "label": "M"
+    },
+    {
+     "chunkId": "e2f802db-182d-485d-886c-292c27dd8690",
+     "label": "M"
+    },
+    {
+     "chunkId": "778a0a2e-2593-4f5e-a52d-a3b0928ce869",
+     "label": "U"
+    },
+    {
+     "chunkId": "4abd9f2c-19fb-413b-86a0-654df298f307",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-copyFile",
+   "instruction": "copyFile 에 '대상 파일이 이미 있으면 덮어쓴다' 는 주의 사항을 넣어줘",
+   "expect": {
+    "type": "add_note",
+    "subject": "copyFile",
+    "content": "대상 파일이 이미 있으면 덮어쓴다"
+   },
+   "pool": [
+    {
+     "chunkId": "0b95e444-586f-4a80-850c-af0984f22e9e",
+     "label": "M"
+    },
+    {
+     "chunkId": "be0887f7-1af5-4ab7-b825-b991a5ce9ed4",
+     "label": "M"
+    },
+    {
+     "chunkId": "2489489b-d7dd-4b4b-8d7c-d5930915eb2e",
+     "label": "D"
+    },
+    {
+     "chunkId": "06d47365-9955-48ef-a85a-76e237d47981",
+     "label": "D"
+    },
+    {
+     "chunkId": "5872cff9-0b87-4579-b9b4-964bdca77ff1",
+     "label": "D"
+    },
+    {
+     "chunkId": "6f6b87c0-df3b-45dd-98fe-5f4697be032d",
+     "label": "D"
+    },
+    {
+     "chunkId": "83f3ae85-7ae5-46f9-98e4-d281db839549",
+     "label": "A"
+    },
+    {
+     "chunkId": "41560c5b-4809-4cde-83b4-2de18592ef91",
+     "label": "U"
+    },
+    {
+     "chunkId": "48fdeab4-7a3a-497d-bc23-ed31af851a7b",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-cancelCallTimerService",
+   "instruction": "cancelCallTimerService 에 '취소에 실패하면 false 를 돌려주므로 반드시 결과를 확인해야 한다' 는 주의 사항을 추가해",
+   "expect": {
+    "type": "add_note",
+    "subject": "cancelCallTimerService",
+    "content": "취소에 실패하면 false 를 돌려주므로 반드시 결과를 확인해야 한다"
+   },
+   "pool": [
+    {
+     "chunkId": "ee90de9e-41ec-43b6-b2ad-f1d72c9632d2",
+     "label": "M"
+    },
+    {
+     "chunkId": "6f9db640-8087-4444-b334-e65e2aa89700",
+     "label": "M"
+    },
+    {
+     "chunkId": "86fe0e0c-19c5-473b-b87b-55f41d7530a7",
+     "label": "D"
+    },
+    {
+     "chunkId": "69980cfa-57e9-4a6d-a440-56a81d338463",
+     "label": "M"
+    },
+    {
+     "chunkId": "12f300a1-bf2b-4e3f-b844-1b6565524a18",
+     "label": "D"
+    },
+    {
+     "chunkId": "b21d0272-36af-4952-934b-5060fa562793",
+     "label": "M"
+    },
+    {
+     "chunkId": "476f5c4a-cfd5-4140-a2cb-de4948612eba",
+     "label": "M"
+    },
+    {
+     "chunkId": "5ea4ddc8-5831-4a24-886d-f98d7d64eaa9",
+     "label": "A"
+    },
+    {
+     "chunkId": "0a8d1471-9c55-4b65-ab94-7753656ea44e",
+     "label": "D"
+    },
+    {
+     "chunkId": "46df9dd6-8436-4e82-b1e1-de37766299d6",
+     "label": "U"
+    },
+    {
+     "chunkId": "a20789cd-3c6a-498d-a49a-908532363971",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "note-sendDummyReturnNow",
+   "instruction": "sendDummyReturnNow 에 '비동기 요청 거래에서만 호출해야 한다' 는 주의 사항을 추가해",
+   "expect": {
+    "type": "add_note",
+    "subject": "sendDummyReturnNow",
+    "content": "비동기 요청 거래에서만 호출해야 한다"
+   },
+   "pool": [
+    {
+     "chunkId": "ee90de9e-41ec-43b6-b2ad-f1d72c9632d2",
+     "label": "D"
+    },
+    {
+     "chunkId": "615b7ce8-98b6-42f4-b545-9d84007bc63a",
+     "label": "D"
+    },
+    {
+     "chunkId": "cddc3d6d-bbdc-4ba2-97f2-fbb719685613",
+     "label": "D"
+    },
+    {
+     "chunkId": "b21d0272-36af-4952-934b-5060fa562793",
+     "label": "M"
+    },
+    {
+     "chunkId": "626c3ef7-1ca6-470c-8404-02c61bf950c0",
+     "label": "M"
+    },
+    {
+     "chunkId": "a7fcdabd-6cdf-4c48-9270-2b966c79f2fe",
+     "label": "A"
+    },
+    {
+     "chunkId": "d006ef6b-a108-46b2-acab-5d224d57e72a",
+     "label": "D"
+    },
+    {
+     "chunkId": "dca98a13-29ee-4997-a9ee-9b724e591ffc",
+     "label": "U"
+    },
+    {
+     "chunkId": "f72d0d91-b8f6-4d86-9adb-bf719c882475",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-dbSelectSingleLockRetry",
+   "instruction": "dbSelectSingleLockRetry 의 재시도 간격은 0.5초가 아니라 1초다",
+   "expect": {
+    "type": "revise",
+    "subject": "dbSelectSingleLockRetry",
+    "content": "1초"
+   },
+   "pool": [
+    {
+     "chunkId": "02734e5d-aa71-44e7-b748-ae49b55844cd",
+     "label": "D"
+    },
+    {
+     "chunkId": "38628c35-66d2-4f80-a6fb-193a3cc27110",
+     "label": "D"
+    },
+    {
+     "chunkId": "debf28d7-129b-4152-8783-3285addda7ed",
+     "label": "M"
+    },
+    {
+     "chunkId": "503fa0e6-fc3f-4d3b-a278-bb4f051846c0",
+     "label": "D"
+    },
+    {
+     "chunkId": "bd5a9e46-8365-4f19-bd6d-2ccce96598e6",
+     "label": "D"
+    },
+    {
+     "chunkId": "aadffed5-b7ca-4430-ab24-029852dad5e2",
+     "label": "D"
+    },
+    {
+     "chunkId": "500b1092-ace6-42ed-9a9f-a13785016913",
+     "label": "D"
+    },
+    {
+     "chunkId": "c386d48b-3779-4915-a1d4-4149d9579953",
+     "label": "U"
+    },
+    {
+     "chunkId": "f10e3358-fa52-4dad-a0d9-cb2135681134",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-sendErrorResponseOnFail",
+   "instruction": "sendDummyReturnNow 의 sendErrorResponseOnFail 기본값은 true 가 아니라 false 다",
+   "expect": {
+    "type": "revise",
+    "subject": "sendErrorResponseOnFail",
+    "content": "false",
+    "subjectAlternates": [
+     "sendDummyReturnNow"
+    ]
+   },
+   "pool": [
+    {
+     "chunkId": "615b7ce8-98b6-42f4-b545-9d84007bc63a",
+     "label": "D"
+    },
+    {
+     "chunkId": "d006ef6b-a108-46b2-acab-5d224d57e72a",
+     "label": "D"
+    },
+    {
+     "chunkId": "cddc3d6d-bbdc-4ba2-97f2-fbb719685613",
+     "label": "U"
+    },
+    {
+     "chunkId": "b21d0272-36af-4952-934b-5060fa562793",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-getSharedQueue",
+   "instruction": "getSharedQueue 의 Timeout 기본값은 10초가 아니라 30초다",
+   "expect": {
+    "type": "revise",
+    "subject": "getSharedQueue",
+    "content": "30초"
+   },
+   "pool": [
+    {
+     "chunkId": "de40151d-7110-409f-ba50-ae089cd71d47",
+     "label": "M"
+    },
+    {
+     "chunkId": "ae4fd27e-cc67-4b5b-afb4-d36575f3bc4f",
+     "label": "M"
+    },
+    {
+     "chunkId": "9668db79-78c0-4927-b6b8-2c0575287d19",
+     "label": "D"
+    },
+    {
+     "chunkId": "49dfe3c8-2d9c-43c7-8c39-b26d43537bcd",
+     "label": "M"
+    },
+    {
+     "chunkId": "2fae6c21-087b-4138-8fb7-498938647087",
+     "label": "D"
+    },
+    {
+     "chunkId": "92833882-c369-44c9-85b4-7fe9248b8e2d",
+     "label": "M"
+    },
+    {
+     "chunkId": "26e13ad2-5a01-4edb-bbc0-24ba9aaf782b",
+     "label": "M"
+    },
+    {
+     "chunkId": "13f0dd3d-a62d-4080-87ea-b8f64de2eda3",
+     "label": "A"
+    },
+    {
+     "chunkId": "5efb2f62-54f2-4e7b-bba7-ed9c9ea165b8",
+     "label": "U"
+    },
+    {
+     "chunkId": "5067a9c5-f087-46b1-8df0-068290dfdeec",
+     "label": "U"
+    },
+    {
+     "chunkId": "ec8feba6-7f53-4c1f-9551-f111bf183671",
+     "label": "U"
+    },
+    {
+     "chunkId": "827d5aff-c679-4551-a26b-9371b77aa5ca",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-NEXCORE_RUNTIME_MODE",
+   "instruction": "NEXCORE_RUNTIME_MODE 의 기본값은 'L' 이 아니라 'D' 다",
+   "expect": {
+    "type": "revise",
+    "subject": "NEXCORE_RUNTIME_MODE",
+    "content": "'D'"
+   },
+   "pool": [
+    {
+     "chunkId": "04c3b3d8-0511-4398-9a03-2c9a381a6c0c",
+     "label": "D"
+    },
+    {
+     "chunkId": "7f36d38d-d4ae-4766-962d-93ac2d1b4015",
+     "label": "M"
+    },
+    {
+     "chunkId": "162804d2-9be3-4856-a988-dfbabfe4a53b",
+     "label": "U"
+    },
+    {
+     "chunkId": "8fd3122a-0394-445a-b3bb-f2769c19b4be",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-callAsyncServiceNow",
+   "instruction": "callAsyncServiceNow 는 기동 거래가 에러로 끝나면 수동 거래를 실행하지 않는다",
+   "expect": {
+    "type": "revise",
+    "subject": "callAsyncServiceNow",
+    "content": "기동 거래가 에러로 끝나면 수동 거래를 실행하지 않는다"
+   },
+   "pool": [
+    {
+     "chunkId": "d60a5055-e32a-4e94-99cb-2423660790a2",
+     "label": "M"
+    },
+    {
+     "chunkId": "9549695b-78c0-4194-b67c-3879dd0508c6",
+     "label": "D"
+    },
+    {
+     "chunkId": "5a7adfa5-1209-4be9-bf68-f8686ac07e4c",
+     "label": "M"
+    },
+    {
+     "chunkId": "86fe0e0c-19c5-473b-b87b-55f41d7530a7",
+     "label": "D"
+    },
+    {
+     "chunkId": "3f0d9518-945f-40bf-acd4-3297d87b7d16",
+     "label": "D"
+    },
+    {
+     "chunkId": "040e6152-45aa-4d6f-a075-46d3fae18d5b",
+     "label": "A"
+    },
+    {
+     "chunkId": "cbc54e0c-48ef-4ba0-9aa5-717a25307a9b",
+     "label": "M"
+    },
+    {
+     "chunkId": "f98c4db6-0d02-4c7f-bacc-fbd63a00ec1e",
+     "label": "D"
+    },
+    {
+     "chunkId": "4dad266e-21b5-4757-92ea-54494b95817d",
+     "label": "U"
+    },
+    {
+     "chunkId": "0a01699f-7aa9-4c69-9265-270109d662dc",
+     "label": "U"
+    }
+   ]
+  },
+  {
+   "id": "rev-BaseRuntimeException",
+   "instruction": "BaseRuntimeException 은 프레임워크 내부 예외가 아니라 업무 예외의 부모 클래스다",
+   "expect": {
+    "type": "revise",
+    "subject": "BaseRuntimeException",
+    "content": "업무 예외의 부모 클래스"
+   },
+   "pool": [
+    {
+     "chunkId": "b8d63f5b-2d96-46ec-ab42-e780f9254d2c",
+     "label": "D"
+    },
+    {
+     "chunkId": "53e8ca5d-6945-46ae-b9e0-43cd73462f33",
+     "label": "M"
+    },
+    {
+     "chunkId": "609819f0-44c8-46ad-b64d-54f351ef3781",
+     "label": "M"
+    },
+    {
+     "chunkId": "a4d8981d-6cbf-45bc-b0ec-60a9b7dc08bb",
+     "label": "M"
+    },
+    {
+     "chunkId": "e68c7061-d4a5-4201-9d4d-32f89af5a9aa",
+     "label": "M"
+    },
+    {
+     "chunkId": "056182df-6ef7-4b55-8a49-b71dc156e3a7",
+     "label": "M"
+    },
+    {
+     "chunkId": "ad303632-b105-4ac8-8a79-12b93d4047f7",
+     "label": "U"
+    },
+    {
+     "chunkId": "a8c5160c-876d-4932-8677-d6832bb3c768",
+     "label": "M"
+    },
+    {
+     "chunkId": "bb7fd246-fd74-4dc0-ab8d-6abdc7911bf0",
+     "label": "U"
+    },
+    {
+     "chunkId": "ede0d282-b0c9-4965-bf24-cf4fbbdfbc0a",
+     "label": "U"
+    }
+   ]
+  }
+ ],
+ "interpretOnly": [
+  {
+   "id": "int-replace-1",
+   "instruction": "문서에 나오는 Job Mind 를 배치 스케줄러로 바꿔",
+   "expect": {
+    "type": "replace",
+    "from": "Job Mind",
+    "to": "배치 스케줄러"
+   }
+  },
+  {
+   "id": "int-replace-2",
+   "instruction": "MCI 를 채널통합으로 전부 바꿔 줘",
+   "expect": {
+    "type": "replace",
+    "from": "MCI",
+    "to": "채널통합"
+   }
+  },
+  {
+   "id": "int-replace-3",
+   "instruction": "NEXCORE 9.0 표기를 NEXCORE 10 으로 고쳐",
+   "expect": {
+    "type": "replace",
+    "from": "NEXCORE 9.0",
+    "to": "NEXCORE 10"
+   }
+  },
+  {
+   "id": "int-unclear-1",
+   "instruction": "문서 좀 정리해 줘",
+   "expect": {
+    "type": "unclear"
+   }
+  },
+  {
+   "id": "int-unclear-2",
+   "instruction": "온라인 거래 쪽 내용이 좀 이상한 것 같아",
+   "expect": {
+    "type": "unclear"
+   }
+  }
+ ]
+}
