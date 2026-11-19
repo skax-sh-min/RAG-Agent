@@ -299,18 +299,18 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — llm_hot/ui_hot/search_hot/indexing/conversion/operations/search_fixed/cache 8그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — llm_hot/ui_hot/search_hot/indexing/conversion/operations/connection/security/search_fixed/cache 10그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(8);
+        assertThat(view.groups()).hasSize(10);
         // 화면 순서 — 편집 가능한 그룹(LLM 튜닝 → UI → 검색 튜닝 → 인덱싱/청킹), 그 뒤 조회 전용(템플릿이 사이에 생각 수준 카드를 끼운다)
         assertThat(view.groups()).extracting(SettingsView.SettingGroup::id).containsExactly(
-                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations", "search_fixed", "cache");
+                "llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations", "connection", "security", "search_fixed", "cache");
         assertThat(view.editableGroups()).extracting(SettingsView.SettingGroup::id)
                 .containsExactly("llm_hot", "ui_hot", "search_hot", "indexing", "conversion", "operations");
         assertThat(view.readOnlyGroups()).extracting(SettingsView.SettingGroup::id)
-                .containsExactly("search_fixed", "cache");
+                .containsExactly("connection", "security", "search_fixed", "cache");
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
@@ -594,30 +594,43 @@ class SettingsServiceTest {
     // ── 그룹 제목 옆 표시 · 사라진 응답 예산 행 ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("buildView — 통째로 조회 전용인 그룹은 제목 옆에 한 번, 편집 카드에 섞인 조회 전용 행은 그 줄에 '재기동 필요'")
-    void buildView_restartNoteSitsOnTheGroupTitle() {
+    @DisplayName("buildView — 조회 전용 줄·그룹에는 '재기동 필요' 배지가 없다(고칠 수 없는 값이라 뜻이 없다) — 항목 배지는 리랭커 상태 둘뿐")
+    void buildView_readOnlyRowsCarryNoRestartBadge() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).filteredOn(g -> g.note() != null).extracting(SettingsView.SettingGroup::id)
-                .containsExactlyInAnyOrder("search_fixed", "cache");
-        assertThat(view.groups()).filteredOn(g -> g.note() != null)
-                .allSatisfy(g -> assertThat(g.note()).isEqualTo("settings.note.restart"));
-        // 항목 옆 배지는 리랭커 상태(§6.33)를 알리는 파생 항목 둘, 그리고 편집 카드에 섞인 조회 전용 행의 '재기동 필요'뿐이다.
+        assertThat(view.groups()).allSatisfy(g -> assertThat(g.note()).as(g.id()).isNull());
         assertThat(view.groups().stream().flatMap(g -> g.items().stream())
                 .filter(item -> item.note() != null))
                 .allSatisfy(item -> {
-                    if (item.note().equals("settings.note.restart")) {
-                        assertThat(item.editable()).as(item.label()).isFalse();
-                    } else {
-                        assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
-                        assertThat(item.note()).startsWith("settings.note.reranker-");
-                    }
+                    assertThat(item.label()).isIn("settings.item.rerank-candidates", "settings.item.rerank-top-k");
+                    assertThat(item.note()).startsWith("settings.note.reranker-");
                 });
-        assertThat(view.groups()).filteredOn(g -> g.id().equals("llm_hot")).singleElement()
-                .satisfies(g -> assertThat(g.items()).filteredOn(i -> "settings.note.restart".equals(i.note()))
-                        .extracting(SettingsView.SettingItem::label).containsExactly(
-                                "settings.item.max-retry-count", "settings.item.memory-fetch-limit-turns",
-                                "settings.item.chat-max-question-chars", "settings.item.agent-enabled"));
+    }
+
+    @Test
+    @DisplayName("buildView — 연결·보안 카드는 조회 전용이고, MCP 키는 값이 아니라 설정 여부만 보인다")
+    void buildView_connectionAndSecurityRows() {
+        service.setEnvironment(new org.springframework.mock.env.MockEnvironment()
+                .withProperty("app.mcp.read-api-key", "secret-read-key-0123456789")
+                .withProperty("app.trust-forwarded-for", "true"));
+        SettingsView view = service.buildView();
+        Map<String, String> security = new LinkedHashMap<>();
+        view.groups().stream().filter(g -> g.id().equals("security")).findFirst().orElseThrow()
+                .items().forEach(i -> security.put(i.label(), i.value()));
+
+        assertThat(security).containsEntry("settings.item.mcp-read-api-key", "설정됨")
+                .containsEntry("settings.item.mcp-admin-api-key", "미설정")
+                .containsEntry("settings.item.trust-forwarded-for", "true")
+                .containsEntry("settings.item.auth-enabled", Boolean.toString(props.authSafe().enabled()));
+        assertThat(security.values()).noneMatch(v -> v.contains("secret"));
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("connection") || g.id().equals("security"))
+                .hasSize(2).allSatisfy(g -> assertThat(g.items()).noneMatch(SettingsView.SettingItem::editable));
+        assertThat(view.groups()).filteredOn(g -> g.id().equals("connection")).singleElement()
+                .satisfies(g -> assertThat(g.items()).extracting(SettingsView.SettingItem::label).containsExactly(
+                        "settings.item.llm-connect-timeout", "settings.item.llm-read-timeout",
+                        "settings.item.llm-default-provider-concurrency", "settings.item.llm-permit-wait-timeout",
+                        "settings.item.llm-verify-local-models", "settings.item.embed-usage-fallback",
+                        "settings.item.rerank-max-concurrent"));
     }
 
     @Test
@@ -691,10 +704,10 @@ class SettingsServiceTest {
         SettingsView.SettingGroup llm = service.buildView().groups().stream()
                 .filter(g -> g.id().equals("llm_hot")).findFirst().orElseThrow();
 
-        // 조회 전용 행은 기동 때 굳는 대화 설정 넷(재기동 필요 배지)뿐이다
-        assertThat(llm.items()).filteredOn(i -> !i.editable())
-                .allSatisfy(i -> assertThat(i.note()).isEqualTo("settings.note.restart"))
-                .hasSize(4);
+        // 조회 전용 행은 기동 때 굳는 대화 설정 넷뿐이다(배지 없음)
+        assertThat(llm.items()).filteredOn(i -> !i.editable()).extracting(SettingsView.SettingItem::label).containsExactly(
+                "settings.item.max-retry-count", "settings.item.memory-fetch-limit-turns",
+                "settings.item.chat-max-question-chars", "settings.item.agent-enabled");
         assertThat(llm.items()).extracting(SettingsView.SettingItem::label)
                 .noneMatch(label -> label.contains("mode-budget"));
     }

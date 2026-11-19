@@ -795,33 +795,23 @@ class SettingsControllerRenderTest {
     // ── 설정 화면 정리: 재기동 필요 · 임베딩 차원 · 접히는 카드 ────────────────────────────────────
 
     @Test
-    @DisplayName("GET /settings — '재기동 필요' 는 그룹 제목 옆에 한 번 붙고, 제목에서 중복 문구가 빠졌으며, 임베딩 차원 옆에는 없다")
-    void restartBadgeSitsOnTheGroupTitle() throws Exception {
+    @DisplayName("GET /settings — 조회 전용 그룹에는 '재기동 필요' 배지가 없고(고칠 수 없는 값), 제목에 '조회 전용'이 보이며, 임베딩 차원 옆에도 없다")
+    void readOnlyGroupHasNoRestartBadge() throws Exception {
         SettingItem fixed = new SettingItem(null, "settings.item.rerank-enabled", "false",
                 "text", false, false, null, null, null, null);
-        SettingsView withNote = new SettingsView(
+        SettingsView view = new SettingsView(
                 List.of(providerRow("local", true, false, SettingsView.ProviderConnection.pending())),
                 "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
-                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed), "settings.note.restart")));
-        when(settingsService.buildView()).thenReturn(withNote);
+                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
+        when(settingsService.buildView()).thenReturn(view);
         AppUserDetails admin = new AppUserDetails("id-1", "admin@local", "", "Admin", "ADMIN", true, false);
 
         String html = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
 
-        assertThat(count(html, "재기동 필요")).as("그룹 제목 옆에 한 번 — 항목 옆·제목 문구·임베딩 차원 옆 어디에도 더 없다").isEqualTo(1);
         assertThat(html).contains("검색 (조회 전용)");
-        assertThat(html.indexOf("검색 (조회 전용)")).isLessThan(html.indexOf("재기동 필요"));
+        assertThat(html).doesNotContain("재기동 필요");
         assertThat(html).containsPattern("1024</span>\\s*</td>");   // 임베딩 차원 값 바로 뒤에 배지가 없다
-
-        // note 가 없는 그룹에는 배지가 없다
-        SettingsView without = new SettingsView(withNote.providers(), "COST_FIRST", "0.0", "6000", "bge-m3",
-                "http://localhost:1234/v1", "1024", "chroma",
-                List.of(new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
-        when(settingsService.buildView()).thenReturn(without);
-        String plain = mvc.perform(get("/settings").locale(Locale.KOREAN).with(user(admin)))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(plain).doesNotContain("재기동 필요");
     }
 
     @Test

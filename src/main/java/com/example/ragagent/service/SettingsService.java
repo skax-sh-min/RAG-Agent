@@ -402,11 +402,6 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
 
     // ── View ─────────────────────────────────────────────────────────────────
 
-    /**
-     * 값이 기동 때 굳어 바꾸려면 재기동이 필요한 그룹의 제목 옆에 붙이는 표시. 예전에는 항목마다 붙였다 — 같은 말이 줄마다
-     * 반복돼 오히려 어느 값이 그런지 읽히지 않았고, 그룹이 통째로 조회 전용이라 줄 단위로 가를 이유도 없었다.
-     */
-    private static final String RESTART_NOTE = "settings.note.restart";
 
     /**
      * Full {@code /settings} model with overrides already applied.
@@ -427,8 +422,10 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("conversion", "settings.group.conversion", conversionItems()),
                 new SettingGroup("operations", "settings.group.operations", operationsItems()),
-                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems(), RESTART_NOTE),
-                new SettingGroup("cache", "settings.group.cache", cacheItems(), RESTART_NOTE)
+                new SettingGroup("connection", "settings.group.connection", connectionItems()),
+                new SettingGroup("security", "settings.group.security", securityItems()),
+                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
+                new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
         AppProperties.LlmConfig llm = props.llmSafe();
@@ -914,7 +911,65 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
     }
 
     /**
-     * 대화 흐름을 정하지만 기동 때 굳는 값 넷 — 같은 카드에 조회 전용으로, 줄마다 "재기동 필요" 배지를 단다. 값은 소비자가 실제로
+     * LLM·임베딩·리랭커 서버와의 연결 — 전부 기동 때 클라이언트·게이트·검증에 굳는 값이라 조회 전용이다. 소비자와 같은 접근자에서 읽는다
+     * ({@code llmSafe()} · {@code embeddingSafe()} · {@code rerankerSafe()}).
+     */
+    private List<SettingItem> connectionItems() {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        AppProperties.RerankerConfig reranker = props.rerankerSafe();
+        return List.of(
+                readOnly("settings.item.llm-connect-timeout", llm.connectTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-connect-timeout"),
+                readOnly("settings.item.llm-read-timeout", llm.readTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-read-timeout"),
+                readOnly("settings.item.llm-default-provider-concurrency", Integer.toString(llm.defaultProviderConcurrency()),
+                        null, "settings.desc.llm-default-provider-concurrency"),
+                readOnly("settings.item.llm-permit-wait-timeout", llm.permitWaitTimeoutSeconds() + "s", null,
+                        "settings.desc.llm-permit-wait-timeout"),
+                readOnly("settings.item.llm-verify-local-models",
+                        Boolean.toString(llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup()), null,
+                        "settings.desc.llm-verify-local-models"),
+                readOnly("settings.item.embed-usage-fallback",
+                        Boolean.toString(props.embeddingSafe().usageFallbackEnabled() == null
+                                || props.embeddingSafe().usageFallbackEnabled()), null,
+                        "settings.desc.embed-usage-fallback"),
+                readOnly("settings.item.rerank-max-concurrent",
+                        reranker == null || reranker.maxConcurrent() == null ? "2" : Integer.toString(reranker.maxConcurrent()),
+                        null, "settings.desc.rerank-max-concurrent"));
+    }
+
+    /**
+     * 인증·접속 경로·MCP — 보안 체인이 기동 때 굳히는 값이라 조회 전용. <b>비밀은 보이지 않는다</b>: MCP API 키는 설정 여부만 보인다
+     * (이 화면은 게스트에게도 열린다). 인증 셋은 {@code authSafe()}(모드 정규화 뒤의 값), 나머지는 보안 설정이 읽는 그 속성이다.
+     */
+    private List<SettingItem> securityItems() {
+        AppProperties.AuthConfig auth = props.authSafe();
+        return List.of(
+                readOnly("settings.item.auth-enabled", Boolean.toString(auth.enabled()), null, "settings.desc.auth-enabled"),
+                readOnly("settings.item.auth-management-only", Boolean.toString(auth.managementOnly()), null,
+                        "settings.desc.auth-management-only"),
+                readOnly("settings.item.auth-guest-identity", auth.guestIdentity(), null, "settings.desc.auth-guest-identity"),
+                readOnly("settings.item.trust-forwarded-for", Boolean.toString(envBool("app.trust-forwarded-for", false)), null,
+                        "settings.desc.trust-forwarded-for"),
+                readOnly("settings.item.secure-cookie",
+                        Boolean.toString(envBool("server.servlet.session.cookie.secure", true)), null,
+                        "settings.desc.secure-cookie"),
+                readOnly("settings.item.mcp-server-enabled", Boolean.toString(envBool("spring.ai.mcp.server.enabled", false)),
+                        null, "settings.desc.mcp-server-enabled"),
+                readOnly("settings.item.mcp-read-api-key", keyState("app.mcp.read-api-key"), null,
+                        "settings.desc.mcp-read-api-key"),
+                readOnly("settings.item.mcp-admin-api-key", keyState("app.mcp.admin-api-key"), null,
+                        "settings.desc.mcp-admin-api-key"));
+    }
+
+    /** 비밀 값의 표시 — 있으면 "설정됨", 없으면 "미설정". 값 자체(일부라도)는 내보내지 않는다. */
+    private String keyState(String key) {
+        return envString(key, null) != null ? "설정됨" : "미설정";
+    }
+
+    /**
+     * 대화 흐름을 정하지만 기동 때 굳는 값 넷 — 같은 카드에 조회 전용으로 붙는다(조회 전용 줄에는 "재기동 필요" 배지를 달지 않는다 —
+     * 고칠 수 없는 줄에 붙이면 뜻이 없다. 그 배지는 고칠 수 있는데 재기동해야 반영되는 칸(프로바이더 편집)만의 것이다). 값은 소비자가 실제로
      * 쓰는 것과 같은 출처에서 읽는다: 재시도 상한은 {@code AgentGraph}·{@code AnswerService} 가 기동 때 받는 {@code maxRetryCount()},
      * 이력 조회 상한은 {@code memorySafe()}, 질문 길이는 {@code QuestionLimit} 과 같은 범위(500~100,000)로 누른 값, Tool 선택은
      * {@code ToolPlanService} 가 받는 {@code app.agent.enabled}.
@@ -923,19 +978,19 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
         int questionMax = Math.max(QuestionLimit.MIN_CONFIGURED, Math.min(QuestionLimit.MAX_CONFIGURED,
                 envInt("app.chat.max-question-chars", com.example.ragagent.security.PromptInjectionGuard.MAX_CHAT_QUESTION_LEN)));
         return List.of(
-                readOnly("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()), RESTART_NOTE,
+                readOnly("settings.item.max-retry-count", Integer.toString(props.maxRetryCount()), null,
                         "settings.desc.max-retry-count"),
                 readOnly("settings.item.memory-fetch-limit-turns", Integer.toString(props.memorySafe().fetchLimitTurns()),
-                        RESTART_NOTE, "settings.desc.memory-fetch-limit-turns"),
-                readOnly("settings.item.chat-max-question-chars", Integer.toString(questionMax), RESTART_NOTE,
+                        null, "settings.desc.memory-fetch-limit-turns"),
+                readOnly("settings.item.chat-max-question-chars", Integer.toString(questionMax), null,
                         "settings.desc.chat-max-question-chars"),
-                readOnly("settings.item.agent-enabled", Boolean.toString(envBool("app.agent.enabled", false)), RESTART_NOTE,
+                readOnly("settings.item.agent-enabled", Boolean.toString(envBool("app.agent.enabled", false)), null,
                         "settings.desc.agent-enabled"));
     }
 
     /**
      * 운영 카드 — 고칠 수 있는 셋(로그 수준 · DB 백업 켜기 · 남길 개수)과 조회 전용 셋(문서 저장 사용량 · 저장 상한 · 문서 백업 상한)이
-     * 한 카드에 섞인다. 조회 전용 줄은 줄마다 배지를 단다(사용량은 설정이 아니라 지금의 측정값이라 배지가 없다).
+     * 한 카드에 섞인다.
      */
     private List<SettingItem> operationsItems() {
         List<SettingItem> items = new ArrayList<>(OPERATIONS_HOT_SPECS.size() + 3);
@@ -1125,10 +1180,10 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                 readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
                 readOnly("settings.item.storage-limit",
                         limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
-                        RESTART_NOTE, "settings.desc.storage-limit"),
+                        null, "settings.desc.storage-limit"),
                 readOnly("settings.item.backup-max-size",
                         backupMax > 0 ? StorageQuotaService.formatBytes(backupMax) : "무제한",
-                        RESTART_NOTE, "settings.desc.backup-max-size")
+                        null, "settings.desc.backup-max-size")
         );
     }
 
