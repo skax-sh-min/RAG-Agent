@@ -147,7 +147,7 @@ rag_java/
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | 제공 스크립트(`scripts/`) | 비고 |
 |---|---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`·`.bat`, `windows_run_by_mvn_cmd_no_docker.bat`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
+| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`, `windows_run_by_mvn_cmd_no_docker.cmd`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
 | macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `macos_run_by_apple_container.sh`·`macos_run_by_jar_no_docker.sh`·`macos_run_by_mvn_no_docker.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data.sh` | Docker Desktop 또는 Apple Container(위 표) |
 | macOS Intel(x64) | 지원 | 번들(macOS x64) | 위와 같은 `macos_*` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
 | Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |

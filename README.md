@@ -16,7 +16,7 @@ The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-
 
 | OS / architecture | App (jar) | sqlite-vec bundled in the jar | Scripts in `scripts/` |
 |---|---|---|---|
-| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd` / `.bat`) |
+| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd`) |
 | macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `macos_*` (Docker Desktop, or Apple Container on Apple Silicon) |
 | Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `ubuntu_*` (Docker) |
 | Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |

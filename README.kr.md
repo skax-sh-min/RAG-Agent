@@ -16,7 +16,7 @@ Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(�
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | `scripts/` 의 스크립트 |
 |---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd` / `.bat`) |
+| Windows 10 이상, x64 | 지원 | 번들 | `windows_*` (`.cmd`) |
 | macOS arm64(Apple Silicon) · x64(Intel) | 지원 | 번들 | `macos_*` (Docker Desktop, Apple Silicon 은 Apple Container 도 가능) |
 | Linux x64 · arm64, glibc(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들 | `ubuntu_*` (Docker) |
 | Docker 이미지(Alpine / musl) | 지원 | **번들 사용 불가** — 직접 준 `vec0` 마운트 | `docker-compose.yml` |
