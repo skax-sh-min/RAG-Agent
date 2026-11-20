@@ -960,7 +960,7 @@ classDiagram
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 완료(2026-11-20, 사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% — [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md): `deprecate`·`add_note` 만, `deprecate` 배치 규칙은 같은 날 고침 · 재측정 남음)** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 완료(2026-11-20, 사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% — [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md): `deprecate`·`add_note` 만, `deprecate` 배치 규칙은 같은 날 고쳐 수용 93.5%)** · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
 
 ### Phase 0. 선결 결함과 검색 기준선
 
