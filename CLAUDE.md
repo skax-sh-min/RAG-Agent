@@ -9,6 +9,7 @@
 > 검색 품질(골든셋 recall@k · 질의 확장 · 후속 질문 독립화)의 측정 결과는 [documents/SEARCH_EVALUATION.md](documents/SEARCH_EVALUATION.md) — 검색 튜닝 기본값을 바꾸거나 문서를 크게 바꿨으면 같은 하네스로 다시 재고 그 문서도 고칠 것.
 > Agent·MCP 전환(§6.33)의 설계·Tool 명세·시퀀스는 [documents/AGENT_MCP_DESIGN.md](documents/AGENT_MCP_DESIGN.md) — 구현이 설계와 다른 자리는 거기 「구현:」 표시를 따른다. 운영·사용 절차는 ADMIN_MANUAL §10 · USER_MANUAL §2.8.
 > Phase 3 Tool 선택 방식(네이티브 Tool Calling vs 프롬프트 JSON)을 정한 사전 평가는 [documents/AGENT_EVALUATION.md](documents/AGENT_EVALUATION.md) — 다른 서버·모델이 들어오면 `ToolCallingEvaluationTest` 로 다시 재고 그 문서도 고칠 것.
+> 자연어 지식 수정(§6.33 6c)의 사전 평가(모델별 해석·판정·가드·수용률과 판단표 대입)는 [documents/KNOWLEDGE_EDIT_EVALUATION.md](documents/KNOWLEDGE_EDIT_EVALUATION.md) — 다른 모델이 들어오거나 판정·가드 규칙을 바꾸면 `KnowledgeEditEvaluationTest` 로 다시 재고 그 문서도 고칠 것.
 > 프롬프트 축소 사다리(§6.30 — 칸 순서 · 바닥 50% · 재시도 규칙)를 사다리 전 순서와 비교한 측정과 이력 제외 체크박스(§6.31 — 부스트 식 · 검증 쪽 상한)의 측정은 [documents/PROMPT_LADDER_EVALUATION.md](documents/PROMPT_LADDER_EVALUATION.md) — 칸 순서·바닥·재시도의 뺄 순서·부스트를 바꾸려면 같은 하네스로 다시 재고 그 문서도 고칠 것.
 
 ## Stack
