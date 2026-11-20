@@ -429,7 +429,7 @@ public class KnowledgeEditWorkflow {
         static Edit skip(String why) { return new Edit(null, false, null, false, null, why); }
     }
 
-    /** 사용 중단 — 위치는 코드가 정하고(섹션 제목 아래 · 대상이 처음 나오는 문단 앞), 문장은 LLM 이 다듬고 G10 으로 대조한다. 원문은 지우지 않는다. */
+    /** 사용 중단 — 위치는 코드가 정하고(대상 이름이 든 제목 아래 · 없으면 대상이 처음 나오는 블록 앞), 문장은 LLM 이 다듬고 G10 으로 대조한다. 원문은 지우지 않는다. */
     Edit deprecate(String before, EditIntent intent, Locale locale) {
         String reference = intent.replacement() == null
                 ? message("edit.sentence.deprecated", locale, intent.subject())
@@ -687,21 +687,56 @@ public class KnowledgeEditWorkflow {
         return new ArrayList<>(best.values());
     }
 
-    /** 사용 중단 안내를 넣을 자리 — 청크가 제목 줄로 시작하면 그 줄 끝, 아니면 대상이 처음 단독으로 나오는 문단의 시작. */
+    /**
+     * 사용 중단 안내를 넣을 자리 — ① 대상 이름이 (단어 경계에서) 든 첫 제목 줄의 끝, ② 없으면 대상이 처음 나오는 블록의 시작
+     * (코드 펜스 안이면 그 펜스의 여는 줄 앞), ③ 청크에 대상이 없으면 첫 제목 줄 끝 또는 맨 앞.
+     *
+     * <p>예전에는 청크가 제목으로 시작하면 늘 그 첫 제목 아래였다. 청크의 첫 제목은 흔히 위치 표시용 상위 제목
+     * ({@code ### 3.4 어플리케이션 호출}, {@code ## 6. 클래스: …ProcessUnit})이라 메서드 하나의 중단이 섹션 전체의 중단처럼 읽혔고,
+     * 6c 사전 평가에서 거절된 사용 중단 수정안이 전부 그 모양이었다(KNOWLEDGE_EDIT_EVALUATION §3.3).
+     */
     static int deprecationPosition(String text, String subject) {
         String[] lines = text.split("\n", -1);
-        int offset = 0;
-        for (String line : lines) {
-            if (!line.isBlank()) {
-                if (line.strip().matches("#{1,6}\\s+\\S.*")) return offset + line.length();
-                break;
+        int[] starts = new int[lines.length];
+        for (int i = 0, off = 0; i < lines.length; off += lines[i].length() + 1, i++) starts[i] = off;
+
+        int firstHeading = -1;
+        int occurrence = -1;          // 대상이 처음 나오는 줄(제목 아님)
+        int occurrenceFence = -1;     // 그 줄이 펜스 안이면 여는 줄
+        boolean inFence = false;
+        int fenceOpen = -1;
+        for (int i = 0; i < lines.length; i++) {
+            String s = lines[i].strip();
+            if (s.startsWith("```") || s.startsWith("~~~")) {
+                if (!inFence) fenceOpen = i;
+                inFence = !inFence;
+                continue;
             }
-            offset += line.length() + 1;
+            boolean heading = !inFence && HEADING_LINE.matcher(s).matches();
+            boolean has = ImpactAnalysisWorkflow.hasStandaloneOccurrence(lines[i], subject);
+            if (heading) {
+                if (firstHeading < 0) firstHeading = i;
+                if (has) return starts[i] + lines[i].length();
+            } else if (has && occurrence < 0) {
+                occurrence = i;
+                occurrenceFence = inFence ? fenceOpen : -1;
+            }
         }
-        int at = text.toLowerCase(Locale.ROOT).indexOf(subject.toLowerCase(Locale.ROOT));
-        if (at < 0) return 0;
-        int para = text.lastIndexOf("\n\n", at);
-        return para < 0 ? 0 : para + 2;
+        if (occurrence >= 0) {
+            int line = occurrenceFence >= 0 ? occurrenceFence : occurrence;
+            // 블록의 시작 — 위로 빈 줄이나 제목 줄을 만날 때까지(펜스 여는 줄이면 그 줄 자체)
+            while (occurrenceFence < 0 && line > 0 && !lines[line - 1].isBlank()
+                    && !HEADING_LINE.matcher(lines[line - 1].strip()).matches()) line--;
+            return starts[line];
+        }
+        return firstHeading >= 0 && firstHeading == firstNonBlank(lines) ? starts[firstHeading] + lines[firstHeading].length() : 0;
+    }
+
+    private static final Pattern HEADING_LINE = Pattern.compile("#{1,6}\\s+\\S.*");
+
+    private static int firstNonBlank(String[] lines) {
+        for (int i = 0; i < lines.length; i++) if (!lines[i].isBlank()) return i;
+        return -1;
     }
 
     /** {@code at} 에 블록을 빈 줄로 띄워 넣는다. */

@@ -142,6 +142,45 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("사용 중단 위치 — 대상 이름이 든 제목 아래, 없으면 대상이 나오는 블록 앞(위치 표시용 상위 제목 아래가 아니다)")
+    void deprecationPositionPrefersTheHeadingThatNamesTheSubject() {
+        // 상위 제목 아래 대상 이름이 든 하위 제목 — 6c 사전 평가 E4B P1 모양
+        String named = "## 47. PUSample — 온디맨드 배치 호출\n\n### 47.1 개요 (키워드: callBatchNow)\n\n본문.";
+        assertThat(insertedAfterLine(named, "callBatchNow")).isEqualTo("### 47.1 개요 (키워드: callBatchNow)");
+
+        // 제목에는 대상이 없고 본문 문단에만 — 상위 제목(3.4·3.4.9) 아래가 아니라 그 문단 앞(E4B P7 모양)
+        String guide = "### 3.4 어플리케이션 호출\n#### 3.4.9 연동거래\n\n연동거래는 여러 방식이 있다.\n\n"
+                + "지연 호출은 reserveCallTimerService 로\n예약한다.\n\n다른 문단.";
+        assertThat(from(guide, "reserveCallTimerService")).startsWith("지연 호출은 reserveCallTimerService");
+        assertThat(from("한 줄.\n둘째 줄 reserveCallTimerService.", "reserveCallTimerService")).startsWith("한 줄.");
+
+        // 제목 바로 밑(빈 줄 없이)의 문단이면 제목을 넘어 올라가지 않는다
+        assertThat(from("## 6. 클래스: ProcessUnit\n메서드 reserveCallTimerService 를 쓴다.", "reserveCallTimerService"))
+                .startsWith("메서드 reserveCallTimerService");
+
+        // 코드 펜스 안에서만 나오면 펜스 여는 줄 앞 — 펜스 안 '# 주석' 은 제목이 아니다
+        assertThat(from("## 예제\n\n설명.\n\n```java\n# callBatchNow 주석\nsvc.callBatchNow(x);\n```", "callBatchNow"))
+                .startsWith("```java");
+
+        // 단어 경계 — callBatchNowAll 제목은 callBatchNow 의 제목이 아니다
+        assertThat(from("## callBatchNowAll\n\ncallBatchNow 는 따로 있다.", "callBatchNow")).startsWith("callBatchNow 는");
+
+        // 대상이 청크에 없으면 예전처럼 첫 제목 아래(청크가 제목으로 시작할 때만), 아니면 맨 앞
+        assertThat(insertedAfterLine("# A 기능\n\n본문.", "없는이름")).isEqualTo("# A 기능");
+        assertThat(KnowledgeEditWorkflow.deprecationPosition("본문만.\n\n## 뒤 제목", "없는이름")).isZero();
+    }
+
+    private static String from(String text, String subject) {
+        return text.substring(KnowledgeEditWorkflow.deprecationPosition(text, subject));
+    }
+
+    /** 위치가 어느 줄의 끝인지 — 그 줄을 돌려준다. */
+    private static String insertedAfterLine(String text, String subject) {
+        String head = text.substring(0, KnowledgeEditWorkflow.deprecationPosition(text, subject));
+        return head.substring(head.lastIndexOf('\n') + 1);
+    }
+
+    @Test
     @DisplayName("다듬은 문장이 뜻을 뒤집으면(부정 표현 수가 다르면) 지시문 기준 문장을 그대로 넣는다(G10)")
     void polishedSentenceThatFlipsMeaningFallsBack() {
         mentions("c1", A_CHUNK);

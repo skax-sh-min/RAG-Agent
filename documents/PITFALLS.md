@@ -661,7 +661,7 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **리포트는 두 모양이 같은 칸에 산다.** `change_job.summary_json` 에 글자 치환은 `MaintenanceWorkflow.Report`, 자연어는 `KnowledgeEditWorkflow.Report`(`mode=nl`)가 들어간다. 화면은 `intent_json` 의 `mode` 로 가른다 — 자연어 리포트를 글자 치환 모양으로 읽으면(관대한 매퍼라 실패하지 않는다) 바꿀 말이 비어 "null → null" 로 그려진다. `ChangeApplyService` 는 그 모양으로 읽어도 `from` 이 없어 치환 규칙 없이(줄 구간 대조로) 간다.
 - **판정의 "설명함"은 인용이 원문에 있을 때만** — 없으면 "언급만"으로 내려 수정안을 만들지 않고 목록에 남긴다(영향도의 `unverified` 와 같은 생각).
 - **호출 지점은 새 사이트가 아니다** — 해석은 `CONDENSE`(256), 판정·편집·다듬기는 `RERANK`(512·1,024). `ThinkingSite` 를 더하면 설정 카드·미리보기가 함께 바뀐다(3단계·4a 와 같은 이유).
-- **알려진 한계.** 사전 평가 결과는 [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md)(2026-11-20, 12B·E4B·E2B — precision 0.65 로 잠정 `deprecate`·`add_note` 만, 사람 수용률 남음; 그때까지 네 유형 모두 열려 있다) · 판정이 대상을 *쓰는* 예제 청크를 "설명함"으로 올린다(세 모델 공통) · `unclear` 해석은 작업 실패 · 겹침 짝 없음 · 판정 40곳 상한 · 주의 사항의 "추가 적용 후보"는 판정 때의 순서(교차 인코더가 있으면 점수순)로 고른다.
+- **알려진 한계.** 사전 평가 결과는 [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md)(2026-11-20, 12B·E4B·E2B — precision 0.65 · 사람 수용률 E4B 55.9%(`deprecate`+`add_note` 76.9%, `remove` 21%) 로 `deprecate`·`add_note` 만 — 닫기 전까지 네 유형 모두 열려 있다) · **사용 중단 안내를 청크의 첫 제목 아래에 넣으면** 가이드 문서 속 메서드 하나의 중단이 상위 섹션 전체의 중단처럼 읽힌다(사전 평가에서 거절된 사용 중단 수정안 전부가 이 모양) — 그래서 `deprecationPosition` 은 대상 이름이 든 제목 → 대상이 나오는 블록(펜스 안이면 펜스 앞) → 첫 제목 순으로 고른다(2026-11-20). "첫 제목이 곧 섹션"으로 되돌리지 말 것 · `remove` 가 대상을 쓰는 예제 코드 줄까지 지운다 · 판정이 대상을 *쓰는* 예제 청크를 "설명함"으로 올린다(세 모델 공통) · `unclear` 해석은 작업 실패 · 겹침 짝 없음 · 판정 40곳 상한 · 주의 사항의 "추가 적용 후보"는 판정 때의 순서(교차 인코더가 있으면 점수순)로 고른다.
 
 ### 자연어 지식 수정 6d — 신고에서 수정안 만들기
 
