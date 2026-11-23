@@ -1071,7 +1071,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 ### Phase 4. 영향도 분석과 문서 유지보수
 
-> **구현 완료 2026-11-10** — 4a 영향도(V12) · 4b-1 수정안 · 4b-2 문서 단위 승인·적용 · 의미 변경 옵션 · 대소문자 변형 옵션 · 채팅 관리자 호출 · 문서 쓰기 잠금(`DocumentWriteLocks`). 실제 코퍼스 복사본 종단 확인과 하네스는 `scripts/maintenance_e2e/`. 아래 완료 기준 중 **영향도 실모델 실측**(심은 언급 100% 회수)과 **임베딩 실패 주입의 종단 확인**은 남았다(단위 테스트로는 고정). 요약은 [PLAN.md §6.33](PLAN.md) "4단계 요약".
+> **구현 완료 2026-11-10** — 4a 영향도(V12) · 4b-1 수정안 · 4b-2 문서 단위 승인·적용 · 의미 변경 옵션 · 대소문자 변형 옵션 · 채팅 관리자 호출 · 문서 쓰기 잠금(`DocumentWriteLocks`). 실제 코퍼스 복사본 종단 확인과 하네스는 `scripts/maintenance_e2e/`. 아래 완료 기준 중 **영향도 실모델 실측**(심은 언급 100% 회수)은 남았다(단위 테스트로는 고정). **임베딩 실패 주입의 종단 확인**은 2026-11-23 검토 화면 경로로 했다(`scripts/maintenance_e2e/review.py fail`). 요약은 [PLAN.md §6.33](PLAN.md) "4단계 요약".
 
 - **작업 (4a, 영향도)**: `ImpactAnalysisWorkflow`, `change_job`, 판정 프롬프트, 리포트 화면, 진행 이벤트.
 - **작업 (4b, 유지보수)**: `MaintenanceWorkflow`, `change_proposal`, 불변식 검사, `/admin` 대기열(Diff 화면은 `fragments/admin-chunk-reports.html` 재사용), `AdminService.applyChunkEdit()`, `ChangeApplyService`, `MarkdownWriteBack`, 결과 리포트.

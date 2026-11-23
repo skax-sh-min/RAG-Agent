@@ -172,6 +172,16 @@ public class AdminChangeReviewController {
         return "admin-change-review :: item";
     }
 
+    /** 임베딩 실패로 끝난 수정안을 다시 적용 줄에 넣는다 — 응답은 같은 항목(적용 중). */
+    @PostMapping("/admin/change-jobs/{id}/review/{pid}/reapply")
+    public String reapply(@PathVariable long id, @PathVariable long pid, Model model, HttpServletResponse response) {
+        ChangeJobRepository.Job job = requireJob(id);
+        applyService.reapplyFailed(id, pid, currentUser.userId());
+        fillItem(job, pid, model);
+        response.setHeader("HX-Trigger", "review-list-changed");
+        return "admin-change-review :: item";
+    }
+
     /** 일괄 적용(R10) — 응답은 목록. 작업이 하나씩 확인해야 하면 409. */
     @PostMapping("/admin/change-jobs/{id}/review/batch")
     public String batch(@PathVariable long id, @RequestParam(required = false) String doc, Model model, HttpServletResponse response) {

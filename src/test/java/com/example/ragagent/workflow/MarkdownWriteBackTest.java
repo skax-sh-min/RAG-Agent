@@ -170,6 +170,42 @@ class MarkdownWriteBackTest {
     }
 
     @Test
+    @DisplayName("넣을 자리의 앞 줄이 흔한 줄(---)이면 그 위의 바뀌지 않은 줄을 붙여 한 곳으로 좁힌다(검토 화면 실측 2026-11-23)")
+    void insertionAfterARepeatedLineUsesMoreContext() throws IOException {
+        Path md = write("d1.md", "# 1\n\n| C | BEDU2002 |\n\n---\n\n# 2\n\n본문\n\n---\n\n# 3\n");
+
+        MarkdownWriteBack.Result r = MarkdownWriteBack.applyEdits(dir, "d1", List.of(edit(
+                "# 1\n\n| C | BEDU2002 |\n\n---",
+                "# 1\n\n| C | NEWID |\n\n---\n\n검토자 메모: 확인했다.")));
+
+        assertThat(r.status()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("# 1\n\n| C | NEWID |\n\n---\n\n검토자 메모: 확인했다.\n\n# 2\n\n본문\n\n---\n\n# 3\n");
+    }
+
+    @Test
+    @DisplayName("지울 줄이 여러 번 나와도 앞뒤의 바뀌지 않은 줄이 한 곳을 가리키면 그 자리만 바꾼다")
+    void repeatedRemovedLineIsNarrowedByContext() throws IOException {
+        Path md = write("d1.md", "# A\n기본값\n\n# B\n기본값\n");
+
+        MarkdownWriteBack.Result r = MarkdownWriteBack.applyEdits(dir, "d1", List.of(edit("# B\n기본값", "# B\n새 값")));
+
+        assertThat(r.status()).isEqualTo(MarkdownWriteBack.APPLIED);
+        assertThat(Files.readString(md)).isEqualTo("# A\n기본값\n\n# B\n새 값\n");
+    }
+
+    @Test
+    @DisplayName("맥락을 붙여도 여러 곳이면 그대로 MD_CONFLICT")
+    void contextThatIsAlsoRepeatedStillConflicts() throws IOException {
+        String original = "# A\n기본값\n\n# A\n기본값\n";
+        Path md = write("d1.md", original);
+
+        MarkdownWriteBack.Result r = MarkdownWriteBack.applyEdits(dir, "d1", List.of(edit("# A\n기본값", "# A\n새 값")));
+
+        assertThat(r.status()).isEqualTo(MarkdownWriteBack.CONFLICT);
+        assertThat(Files.readString(md)).isEqualTo(original);
+    }
+
+    @Test
     @DisplayName("겹침 짝이 만든 같은 구간은 한 번만 적용한다")
     void identicalHunksFromAnOverlapPairApplyOnce() throws IOException {
         Path md = write("d1.md", "앞\nA 는 30초다.\n뒤\n");

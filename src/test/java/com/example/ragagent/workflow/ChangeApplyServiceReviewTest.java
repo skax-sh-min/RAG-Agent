@@ -328,4 +328,69 @@ class ChangeApplyServiceReviewTest {
         verify(backups, never()).run(anyString());
         verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
     }
+
+    @Test
+    @DisplayName("작업 백업은 그 작업이 건드릴 문서의 변환 MD 도 같은 시점에 떠 둔다(원본·교정본 둘 다) — 뜨지 못하면 쓰지 않는다")
+    void jobBackupAlsoCopiesTheConvertedMd() throws Exception {
+        long job = nlJob(EditIntent.DEPRECATE);
+        Files.writeString(converted.resolve("d1.md"), "callBatchNow 즉시 호출\n");
+        Files.writeString(converted.resolve("d1_corrected.md"), "callBatchNow 즉시 호출\n");
+        Files.writeString(converted.resolve("d2.md"), "다른 문서\n");
+        long a = insertOnly(job, "d1", "c1", "callBatchNow 즉시 호출");
+
+        assertThat(service.confirmOne(job, a, proposals.find(a).orElseThrow().afterText(), hash(a), "root")).isNull();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Path>> files = ArgumentCaptor.forClass(List.class);
+        verify(backups).copyConvertedFiles(eq("b.db"), files.capture());
+        assertThat(files.getValue()).extracting(p -> p.getFileName().toString()).containsExactly("d1.md", "d1_corrected.md");
+        assertThat(jobs.backupName(job)).isEqualTo("b.db");
+
+        // 사본을 못 뜨면 백업 이름을 남기지 않고 적용하지 않는다
+        long job2 = nlJob(EditIntent.DEPRECATE);
+        long b = insertOnly(job2, "d1", "c9", "callBatchNow 즉시 호출");
+        org.mockito.Mockito.doThrow(new java.io.IOException("디스크 가득")).when(backups).copyConvertedFiles(anyString(), any());
+        service.confirmOne(job2, b, proposals.find(b).orElseThrow().afterText(), hash(b), "root");
+        assertThat(status(b)).isEqualTo(ChangeProposalRepository.APPROVED);
+        assertThat(jobs.backupName(job2)).isNull();
+        assertThat(service.noteFor(b)).contains("변환 MD 사본");
+    }
+
+    @Test
+    @DisplayName("기동 때 — 백업 이름 없는 작업의 남은 승인(작업 전 사본으로 복원한 DB)은 대기로 돌아가고 사유가 붙는다, 백업 있는 작업의 승인은 그대로")
+    void restoredApprovalsAreReleasedOnStartup() {
+        long restored = nlJob(EditIntent.DEPRECATE);
+        long a = insertOnly(restored, "d1", "c1", "callBatchNow 즉시 호출");
+        proposals.transition(a, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        long deferred = nlJob(EditIntent.DEPRECATE);
+        long b = insertOnly(deferred, "d2", "c2", "다른 줄 호출");
+        proposals.transition(b, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, "root");
+        jobs.setBackupName(deferred, "b.db");
+
+        service.releaseRestoredApprovals();
+
+        assertThat(status(a)).isEqualTo(ChangeProposalRepository.PENDING);
+        assertThat(proposals.find(a).orElseThrow().reviewedBy()).isNull();
+        assertThat(service.noteFor(a)).contains("대기로 되돌렸습니다");
+        assertThat(status(b)).isEqualTo(ChangeProposalRepository.APPROVED);
+        verify(admin, never()).applyChunkEdit(anyString(), anyString(), anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("임베딩 실패는 사유를 남기고, [다시 적용] 은 같은 수정안을 다시 승인해 적용한다 — failed 가 아닌 것은 받지 않는다")
+    void failedProposalCanBeReapplied() {
+        long job = nlJob(EditIntent.DEPRECATE);
+        long a = insertOnly(job, "d1", "c1", "callBatchNow 즉시 호출");
+        when(admin.applyChunkEdit(eq("latest"), eq("c1"), anyString(), any(), anyString())).thenReturn(AdminService.ApplyOutcome.EMBED_FAILED);
+
+        service.confirmOne(job, a, proposals.find(a).orElseThrow().afterText(), hash(a), "root");
+        assertThat(status(a)).isEqualTo(ChangeProposalRepository.FAILED);
+        assertThat(service.noteFor(a)).contains("임베딩 서버");
+
+        when(admin.applyChunkEdit(eq("latest"), eq("c1"), anyString(), any(), anyString())).thenReturn(AdminService.ApplyOutcome.APPLIED);
+        assertThat(service.reapplyFailed(job, a, "root")).isTrue();
+        assertThat(status(a)).isEqualTo(ChangeProposalRepository.APPLIED);
+        assertThat(service.noteFor(a)).isNull();
+        assertThat(service.reapplyFailed(job, a, "root")).isFalse();
+    }
 }

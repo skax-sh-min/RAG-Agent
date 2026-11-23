@@ -130,6 +130,24 @@ public class ChangeProposalRepository {
                 """, to, reviewer, DbTimestamp.now(), id, from) > 0;
     }
 
+    /**
+     * 백업 이름이 없는 작업의 {@code approved} 수정안을 {@code pending} 으로 되돌린다 — 기동 때만 부른다. 작업당 사본은 첫 [확인] 뒤·적용 전에 뜨고
+     * 이름은 그 뒤에 쓰므로, 그 사본으로 복원한 DB 에서는 "승인됨 + 백업 이름 없음"이 된다. 그대로 두면 [다시 시도] 한 번에 되돌린 작업이 다시
+     * 적용된다(2026-11-23 리허설). 백업이 실패해 남은 승인도 같은 모양이라 함께 풀린다(다시 확인하면 된다).
+     *
+     * @return 되돌린 수정안의 (작업, 수정안) id
+     */
+    public List<long[]> releaseApprovedWithoutBackup() {
+        List<long[]> ids = jdbc.query("""
+                SELECT p.job_id, p.id FROM change_proposal p JOIN change_job j ON j.id = p.job_id
+                WHERE p.status = 'approved' AND j.backup_name IS NULL ORDER BY p.job_id, p.id
+                """, (rs, i) -> new long[] {rs.getLong(1), rs.getLong(2)});
+        for (long[] id : ids) {
+            jdbc.update("UPDATE change_proposal SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL WHERE id = ? AND status = 'approved'", id[1]);
+        }
+        return ids;
+    }
+
     /** 한 문서의 수정안을 상태별로 — 승인·적용이 문서 단위이므로 이 단위로 읽는다. */
     public List<Proposal> listByJobDocStatus(long jobId, String docId, String status) {
         return jdbc.query("SELECT * FROM change_proposal WHERE job_id = ? AND doc_id = ? AND status = ? ORDER BY id",

@@ -51,6 +51,11 @@ st, _, md = http('GET', '/ui/documents/%s/export?format=md' % urllib.parse.quote
 print('export status', st, 'len', len(md))
 if st == 200:
     check('내보내기에 새 말이 있고 옛 말은 없다', NEW in md and OLD not in md)
+if os.environ.get("E2E_HUMAN_LINE"):
+    c = db()
+    rows = c.execute("select content from vec_document_chunks where doc_id=? and version='latest'", (doc,)).fetchall()
+    c.close()
+    check('재인덱싱 뒤 검토 화면에서 사람이 덧붙인 줄이 남는다', any(os.environ['E2E_HUMAN_LINE'] in r[0] for r in rows))
 bad = [n for n, ok in results if not ok]
 print('SUMMARY(E): %d passed, %d failed' % (len(results) - len(bad), len(bad)))
 for n in bad:

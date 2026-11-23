@@ -165,6 +165,15 @@ public final class MarkdownWriteBack {
                 for (List<String> c : candidates) {
                     if (c.isEmpty()) continue;
                     List<Integer> hits = findBlock(md, c);
+                    if (hits.size() > 1 && c == block) {
+                        // 같은 줄 묶음이 여러 번 — 앞뒤의 바뀌지 않은 줄을 붙여 한 곳으로 좁힌다
+                        int lead = 0;
+                        while (lead < removed.size() && removed.get(lead).isBlank()) lead++;
+                        int tail = 0;
+                        while (tail < removed.size() - lead && removed.get(removed.size() - 1 - tail).isBlank()) tail++;
+                        int pos = narrow(md, sameBefore(ls, from), blanks(lead), block, blanks(tail), sameAfter(ls, i));
+                        if (pos >= 0) { at = pos; found = c; break; }
+                    }
                     if (hits.size() > 1) return "지울 줄이 MD 에 여러 번 나온다: " + preview(c);
                     if (hits.size() == 1) { at = hits.get(0); found = c; break; }
                 }
@@ -187,6 +196,11 @@ public final class MarkdownWriteBack {
             if (!l.same()) break;
             if (l.text().isBlank()) { gap++; continue; }
             List<Integer> hits = findBlock(md, List.of(l.text()));
+            if (hits.size() > 1) {
+                // 앞 줄이 흔한 줄(`---`·빈 표 칸 등)이면 그 위의 바뀌지 않은 줄을 더 붙여 한 곳으로 좁힌다
+                int at = narrow(md, sameBefore(ls, from), List.of(), List.of(), List.of(), sameAfter(ls, to));
+                if (at >= 0) { out.add(new Hunk(at, at, List.copyOf(added))); return null; }
+            }
             if (hits.size() != 1) return "넣을 자리(앞 줄)를 MD 에서 하나로 찾지 못했다: " + preview(List.of(l.text()));
             int pos = hits.get(0) + 1;
             for (int g = 0; g < gap; g++) {
@@ -201,6 +215,10 @@ public final class MarkdownWriteBack {
             if (!l.same()) break;
             if (l.text().isBlank()) { gap++; continue; }
             List<Integer> hits = findBlock(md, List.of(l.text()));
+            if (hits.size() > 1) {
+                int at = narrow(md, List.of(), List.of(), List.of(), List.of(), sameAfter(ls, to));
+                if (at >= 0) { out.add(new Hunk(at, at, List.copyOf(added))); return null; }
+            }
             if (hits.size() != 1) return "넣을 자리(뒤 줄)를 MD 에서 하나로 찾지 못했다: " + preview(List.of(l.text()));
             int pos = hits.get(0) - gap;
             for (int g = 0; g < gap; g++) {
@@ -211,6 +229,59 @@ public final class MarkdownWriteBack {
             return null;
         }
         return "넣을 자리를 가리킬 바뀌지 않은 줄이 없다";
+    }
+
+    /**
+     * 수정 구간이 MD 에 여러 번 나올 때 앞뒤 맥락으로 한 곳을 고른다 — {@code block} 앞에 청크의 바뀌지 않은 줄({@code before}, 가까운 것이 끝)을
+     * 하나씩 더 붙여 보고, 그래도 여러 곳이면 뒤({@code after}, 가까운 것이 앞)를 붙여 본다. 붙인 맥락이 MD 에 없으면(청크가 덧붙인 앞머리 등) 그 방향은
+     * 멈춘다. {@code lead}·{@code tail} 은 구간 앞뒤의 빈 줄(맥락과 구간 사이에 그대로 있어야 한다). 반환은 {@code block} 이 시작하는 MD 줄(빈 구간이면
+     * 넣을 자리), 한 곳으로 못 좁히면 -1.
+     */
+    static int narrow(List<String> md, List<String> before, List<String> lead, List<String> block, List<String> tail,
+                      List<String> after) {
+        List<String> core = new ArrayList<>(lead);
+        core.addAll(block);
+        core.addAll(tail);
+        for (int n = 1; n <= before.size(); n++) {
+            List<String> ctx = new ArrayList<>(before.subList(before.size() - n, before.size()));
+            ctx.addAll(core);
+            List<Integer> hits = findBlock(md, ctx);
+            if (hits.size() == 1) return hits.get(0) + n + lead.size();
+            if (hits.isEmpty()) break;
+        }
+        for (int m = 1; m <= after.size(); m++) {
+            List<String> ctx = new ArrayList<>(core);
+            ctx.addAll(after.subList(0, m));
+            List<Integer> hits = findBlock(md, ctx);
+            if (hits.size() == 1) return hits.get(0) + lead.size();
+            if (hits.isEmpty()) break;
+        }
+        return -1;
+    }
+
+    /**
+     * {@code from} 앞의 <b>수정 전</b> 줄들(바뀌지 않은 줄 + 지운 줄, 청크 순서) — 찾는 MD 는 아직 수정 전이라, 다른 구간이 바꾼 줄도 옛 모양 그대로
+     * 맥락이 된다. 넣은 줄은 MD 에 없으니 건너뛴다.
+     */
+    private static List<String> sameBefore(List<ChunkDiff.Line> ls, int from) {
+        List<String> out = new ArrayList<>();
+        for (int k = from - 1; k >= 0; k--) {
+            if (ls.get(k).same() || ls.get(k).removed()) out.add(0, ls.get(k).text());
+        }
+        return out;
+    }
+
+    /** {@code to} 부터의 수정 전 줄들. */
+    private static List<String> sameAfter(List<ChunkDiff.Line> ls, int to) {
+        List<String> out = new ArrayList<>();
+        for (int k = to; k < ls.size(); k++) {
+            if (ls.get(k).same() || ls.get(k).removed()) out.add(ls.get(k).text());
+        }
+        return out;
+    }
+
+    private static List<String> blanks(int n) {
+        return java.util.Collections.nCopies(n, "");
     }
 
     /**

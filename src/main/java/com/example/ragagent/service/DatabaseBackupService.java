@@ -63,6 +63,7 @@ public class DatabaseBackupService {
     static final String PREFIX = "memory-";
     static final String SUFFIX = ".db";
     static final String PARTIAL = ".partial";
+    static final String CONVERTED_SUFFIX = ".converted";
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final Pattern BACKUP_NAME = Pattern.compile("memory-\\d{8}-\\d{6}\\.db");
 
@@ -181,6 +182,24 @@ public class DatabaseBackupService {
         return dir.resolve(name).toAbsolutePath();
     }
 
+    /** 백업 하나에 딸린 변환 MD 사본 폴더({@code memory-….db.converted}) — DB 와 함께 되돌릴 파일. 백업이 정리될 때 함께 지운다. */
+    public Path convertedCopyDir(String name) {
+        return dir.resolve(name + CONVERTED_SUFFIX).toAbsolutePath();
+    }
+
+    /**
+     * 변환 MD 파일들을 그 백업의 사본 폴더에 복사한다 — 유지보수 적용은 DB 와 함께 {@code converted/} 의 MD 도 고치므로, DB 사본만으로는 되돌린
+     * 수정이 다음 재인덱싱에서 되살아난다(2026-11-23 리허설). 이미 있는 같은 이름은 덮어쓰지 않는다(첫 사본이 "적용 전"이다).
+     */
+    public void copyConvertedFiles(String name, List<Path> files) throws IOException {
+        Path target = convertedCopyDir(name);
+        Files.createDirectories(target);
+        for (Path f : files) {
+            Path to = target.resolve(f.getFileName().toString());
+            if (!Files.exists(to)) Files.copy(f, to);
+        }
+    }
+
     public Status status() {
         return new Status(enabled(), cron, zone.getId(), keep(), dir.toAbsolutePath().toString(), running, last, listBackups());
     }
@@ -214,6 +233,7 @@ public class DatabaseBackupService {
         for (BackupFile f : all.subList(Math.min(keep, all.size()), all.size())) {
             try {
                 Files.deleteIfExists(dir.resolve(f.name()));
+                deleteTree(convertedCopyDir(f.name()));
                 removed++;
             } catch (IOException e) {
                 log.warn("[DB-BACKUP] 오래된 백업을 지우지 못했다 {}: {}", f.name(), e.getMessage());
@@ -246,6 +266,13 @@ public class DatabaseBackupService {
     private void deleteLeftoverPartials() throws IOException {
         try (Stream<Path> files = Files.list(dir)) {
             files.filter(p -> p.getFileName().toString().endsWith(SUFFIX + PARTIAL)).forEach(DatabaseBackupService::deleteQuietly);
+        }
+    }
+
+    private static void deleteTree(Path p) throws IOException {
+        if (!Files.isDirectory(p)) return;
+        try (Stream<Path> walk = Files.walk(p)) {
+            for (Path q : walk.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(q);
         }
     }
 

@@ -135,6 +135,8 @@
                         <div th:if="${item.stale}" class="alert alert-warning py-1 px-2 mt-1 mb-0" th:text="#{review.stale}">stale</div>
                         <div th:if="${item.groupSize > 1}" class="alert alert-light border py-1 px-2 mt-1 mb-0" th:text="#{review.group.note(${item.groupSize})}">pair</div>
                         <div th:if="${item.note != null}" class="alert alert-warning py-1 px-2 mt-1 mb-0" th:text="${item.note}">note</div>
+                        <div th:if="${item.note == null and item.row.state == 'failed'}" class="alert alert-warning py-1 px-2 mt-1 mb-0"
+                             th:text="#{review.failed.note}">failed</div>
                         <div th:if="${p.mdStatus != null and p.mdStatus != 'applied'}" class="alert alert-warning py-1 px-2 mt-1 mb-0"
                              th:text="#{'maint.md.' + ${p.mdStatus}}">md</div>
                         <div id="rv-item-error" class="alert alert-danger py-1 px-2 mt-1 mb-0"
@@ -170,6 +172,11 @@
                                 <div th:if="${p.afterContext != null and !p.edited()}"><span th:text="#{maint.context}">Context</span>: <span th:text="${p.afterContext}">ctx</span></div>
                                 <div th:if="${p.afterKeywords != null and !p.edited()}"><span th:text="#{maint.keywords}">Keywords</span>: <span th:text="${p.afterKeywords}">kw</span></div>
                             </details>
+                            <div class="d-flex gap-2 justify-content-end flex-wrap" th:if="${item.row.state == 'failed'}">
+                                <button type="button" class="btn btn-primary btn-sm"
+                                        th:attr="hx-post=@{/admin/change-jobs/{id}/review/{pid}/reapply(id=${jobId},pid=${p.id})}"
+                                        hx-target="#review-item" hx-swap="outerHTML" th:text="#{review.reapply}">Apply again</button>
+                            </div>
                             <div class="d-flex gap-2 justify-content-end flex-wrap" th:if="${item.row.state == 'pending' or item.row.state == 'edited'}">
                                 <button type="button" class="btn btn-outline-secondary btn-sm" th:if="${p.edited()}"
                                         th:attr="hx-post=@{/admin/change-jobs/{id}/review/{pid}/restore(id=${jobId},pid=${p.id})}"

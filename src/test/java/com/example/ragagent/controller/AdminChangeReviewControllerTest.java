@@ -105,6 +105,22 @@ class AdminChangeReviewControllerTest {
     }
 
     @Test
+    @DisplayName("임베딩 실패 항목 — 사유와 [다시 적용] 이 보이고, 누르면 그 수정안을 다시 적용 줄에 넣는다")
+    void failedItemOffersReapply() throws Exception {
+        when(proposals.find(3L)).thenReturn(Optional.of(proposal(3, "failed")));
+        when(proposals.listByJob(5L)).thenReturn(List.of(proposal(1, "pending"), proposal(3, "failed")));
+
+        mvc.perform(get("/admin/change-jobs/5/review/3").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("임베딩 실패")))
+                .andExpect(content().string(containsString("/admin/change-jobs/5/review/3/reapply")));
+
+        mvc.perform(post("/admin/change-jobs/5/review/3/reapply").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk());
+        verify(applyService).reapplyFailed(5L, 3L, "root");
+    }
+
+    @Test
     @DisplayName("원문을 바꾸는 작업에서는 일괄 적용 버튼 대신 하나씩 확인하라는 안내")
     void noBatchButtonForRevise() throws Exception {
         when(jobs.find(5L)).thenReturn(Optional.of(job("revise")));

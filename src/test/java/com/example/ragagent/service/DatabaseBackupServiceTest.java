@@ -141,6 +141,26 @@ class DatabaseBackupServiceTest {
     }
 
     @Test
+    @DisplayName("변환 MD 사본 — 백업 옆 폴더에 복사하고(이미 있는 이름은 덮지 않는다), 그 백업이 정리될 때 함께 지운다")
+    void convertedCopiesFollowTheirBackup() throws Exception {
+        Files.createDirectories(backupDir);
+        Files.writeString(backupDir.resolve("memory-20260101-030000.db"), "x");
+        Path md = Files.writeString(tmp.resolve("d1_corrected.md"), "적용 전");
+        DatabaseBackupService svc = service(true, 1);
+
+        svc.copyConvertedFiles("memory-20260101-030000.db", List.of(md));
+        Files.writeString(md, "적용 후");
+        svc.copyConvertedFiles("memory-20260101-030000.db", List.of(md));
+
+        Path copy = svc.convertedCopyDir("memory-20260101-030000.db").resolve("d1_corrected.md");
+        assertThat(Files.readString(copy)).isEqualTo("적용 전");
+
+        svc.run("scheduled");   // keep=1 — 옛 백업이 정리된다
+
+        assertThat(svc.convertedCopyDir("memory-20260101-030000.db")).doesNotExist();
+    }
+
+    @Test
     @DisplayName("run — 실패는 예외가 아니라 결과로 남는다(정기 실행이 스케줄러를 죽이지 않게) · 원본 URL 을 모르면 실패")
     void run_failureIsRecordedNotThrown() {
         DriverManagerDataSource notHikari = new DriverManagerDataSource("jdbc:sqlite:" + tmp.resolve("x.db"));

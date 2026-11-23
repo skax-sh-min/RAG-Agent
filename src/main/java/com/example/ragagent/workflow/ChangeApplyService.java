@@ -210,6 +210,7 @@ public class ChangeApplyService {
                     }
                     case EMBED_FAILED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.FAILED, null);
+                        notes.put(p.id(), EMBED_FAILED_NOTE);
                         failed++;
                     }
                 }
@@ -404,6 +405,26 @@ public class ChangeApplyService {
      */
     private final Map<Long, String> notes = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * 기동 때 — 적용되지 않은 채 남은 승인 중 그 작업의 백업 이름이 없는 것을 대기로 되돌린다({@link ChangeProposalRepository#releaseApprovedWithoutBackup}).
+     * 작업 전 사본으로 DB 를 복원하면 그 작업의 수정안이 "승인됨"으로 돌아오는데, 그대로 두면 [다시 시도]·다음 [확인] 이 되돌린 작업을 통째로 다시
+     * 적용한다. 기동 직후에는 순차 실행기가 없으므로 "적용을 기다리는 승인"은 있을 수 없다.
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void releaseRestoredApprovals() {
+        try {
+            List<long[]> released = proposals.releaseApprovedWithoutBackup();
+            if (released.isEmpty()) return;
+            for (long[] id : released) {
+                notes.put(id[1], "적용되지 않은 승인이 남아 있어(DB 복원 또는 백업 실패) 대기로 되돌렸습니다 — 적용하려면 다시 확인하세요");
+            }
+            log.warn("[APPLY] 적용되지 않은 승인 {}건을 대기로 되돌렸다(백업 이름 없는 작업 — DB 를 작업 전 사본으로 복원했거나 백업이 실패했다) 작업={}",
+                    released.size(), released.stream().map(i -> i[0]).distinct().toList());
+        } catch (Exception e) {
+            log.warn("[APPLY] 남은 승인 확인 실패: {}", e.getMessage());
+        }
+    }
+
     /** 검토 화면이 항목에 보일 사유 — 없으면 {@code null}. */
     public String noteFor(long proposalId) {
         return notes.get(proposalId);
@@ -436,8 +457,30 @@ public class ChangeApplyService {
         }
         DatabaseBackupService.RunResult r = backups.run("pre-change-" + jobId);
         if (!r.ok()) return r.error();
-        if (r.file() != null) jobs.setBackupName(jobId, r.file());
+        if (r.file() != null) {
+            // 적용은 변환 MD 도 고친다 — DB 사본만으로 되돌리면 다음 재인덱싱이 수정을 되살리므로 그 작업이 건드릴 문서의 MD 를 같은 시점에 떠 둔다.
+            // 뜨지 못하면 복구 지점이 반쪽이라 쓰지 않는다(DB 백업 실패와 같다). 이름은 MD 를 뜬 뒤에 남긴다 — 뜨다 죽으면 다음 적용이 다시 뜬다.
+            try {
+                backups.copyConvertedFiles(r.file(), convertedFilesOf(jobId));
+            } catch (Exception e) {
+                return "변환 MD 사본을 뜨지 못했다: " + e.getMessage();
+            }
+            jobs.setBackupName(jobId, r.file());
+        }
         return null;
+    }
+
+    /** 작업의 수정안이 가리키는 문서들의 변환 MD(원본 변환본·교정본 중 있는 것 전부). */
+    private List<Path> convertedFilesOf(long jobId) {
+        Path dir = Path.of(props.dataDir()).resolve("converted");
+        List<Path> out = new ArrayList<>();
+        for (String docId : new java.util.TreeSet<>(proposals.listByJob(jobId).stream().map(ChangeProposalRepository.Proposal::docId).toList())) {
+            for (String name : List.of(docId + ".md", docId + "_corrected.md")) {
+                Path f = dir.resolve(name);
+                if (java.nio.file.Files.isRegularFile(f)) out.add(f);
+            }
+        }
+        return out;
     }
 
     /** 확인·임시 저장의 공통 검사 — 거절 사유 또는 {@code null}. 사람 편집은 G2·G6 만 강제한다(R7). */
@@ -485,6 +528,27 @@ public class ChangeApplyService {
     public String saveDraft(long jobId, long proposalId, String text, String expectedHash, String editor) {
         ChangeProposalRepository.Proposal p = openForReview(jobId, proposalId, expectedHash);
         return saveEdit(p, normalize(text), editor);
+    }
+
+    static final String EMBED_FAILED_NOTE = "임베딩 서버에 닿지 못해 적용하지 못했습니다 — 청크·검색 색인은 그대로입니다. 서버를 확인한 뒤 [다시 적용]을 누르세요";
+
+    /**
+     * 임베딩 실패({@code failed})로 끝난 수정안을 다시 승인해 적용 줄에 넣는다 — 임베딩이 먼저라 실패한 적용은 아무것도 바꾸지 않았으므로 같은 본문을
+     * 다시 보내면 된다(청크가 그사이 바뀌었으면 적용이 {@code stale} 로 가른다). 겹침 짝이면 짝 전체.
+     *
+     * @return 다시 넣었으면 {@code true}
+     */
+    public boolean reapplyFailed(long jobId, long proposalId, String reviewer) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null || !ChangeProposalRepository.FAILED.equals(p.status())) return false;
+        int n = p.groupKey() == null
+                ? (proposals.transition(proposalId, ChangeProposalRepository.FAILED, ChangeProposalRepository.APPROVED, reviewer) ? 1 : 0)
+                : proposals.transitionGroup(jobId, p.groupKey(), ChangeProposalRepository.FAILED, ChangeProposalRepository.APPROVED, reviewer);
+        if (n == 0) return false;
+        notes.remove(proposalId);
+        audit("change.approve", p, Map.of("reviewer", String.valueOf(reviewer), "count", n, "via", "reapply"));
+        enqueue(jobId);
+        return true;
     }
 
     /** 기계 수정안으로 되돌린다. @return 되돌렸으면 {@code true} */
@@ -646,7 +710,10 @@ public class ChangeApplyService {
                         if (p.chunkId().equals(reportChunk)) reportedChunkApplied = true;
                     }
                     case STALE, NOT_FOUND, CURATED -> proposals.finishApply(p.id(), ChangeProposalRepository.STALE, null);
-                    case EMBED_FAILED -> proposals.finishApply(p.id(), ChangeProposalRepository.FAILED, null);
+                    case EMBED_FAILED -> {
+                        proposals.finishApply(p.id(), ChangeProposalRepository.FAILED, null);
+                        notes.put(p.id(), EMBED_FAILED_NOTE);
+                    }
                 }
                 audit("change.apply", p, Map.of("result", outcome.name(), "via", "review"));
             }
