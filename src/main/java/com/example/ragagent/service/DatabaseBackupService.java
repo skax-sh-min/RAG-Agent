@@ -70,9 +70,16 @@ public class DatabaseBackupService {
     /** 백업 파일 하나 — 이름이 곧 만든 시각이다({@code app.time-zone} 기준). */
     public record BackupFile(String name, long bytes, Instant modifiedAt) {}
 
-    /** 마지막 실행의 결과. {@code error} 가 있으면 실패다(그때 {@code file} 은 null). */
-    public record RunResult(String trigger, Instant finishedAt, String file, long bytes, long millis, String error) {
+    /**
+     * 마지막 실행의 결과. {@code error} 가 있으면 실패다(그때 {@code file} 은 null). {@code unchangedFrom} 이 있으면 정기 실행이 뜬 사본이 그 최근
+     * 사본과 바이트 단위로 같아 남기지 않았다는 뜻이다(그때도 {@code file} 은 null — 같은 시점의 사본은 {@code unchangedFrom} 이다).
+     */
+    public record RunResult(String trigger, Instant finishedAt, String file, long bytes, long millis, String error, String unchangedFrom) {
+        public RunResult(String trigger, Instant finishedAt, String file, long bytes, long millis, String error) {
+            this(trigger, finishedAt, file, bytes, millis, error, null);
+        }
         public boolean ok() { return error == null; }
+        public boolean skipped() { return unchangedFrom != null; }
     }
 
     /** {@code /admin} 카드가 그리는 것 — 설정 · 마지막 실행 · 남아 있는 백업. {@code zone} 은 cron 과 파일 이름의 시간대. */
@@ -115,11 +122,17 @@ public class DatabaseBackupService {
         return Math.max(1, AppProperties.hotInt(SettingsKeys.BACKUP_KEEP, configuredKeep));
     }
 
-    /** 정기 실행 — {@link #enabled()} 가 거짓이면 아무것도 하지 않는다(수동 실행은 그래도 된다). */
+    static final String SCHEDULED = "scheduled";
+
+    /**
+     * 정기 실행 — {@link #enabled()} 가 거짓이면 아무것도 하지 않는다(수동 실행은 그래도 된다). DB 가 가장 최근 사본 이후 바뀌지 않았으면 새 사본을
+     * 남기지 않는다({@link #run}) — 보존은 개수({@link #keep()})라, 쓰지 않는 날마다 같은 사본을 쌓으면 그보다 오래된 서로 다른 시점과 유지보수·업데이트
+     * 직전 사본이 그만큼 일찍 밀려난다.
+     */
     @Scheduled(cron = "${app.backup.cron:0 30 3 * * *}", zone = "${app.time-zone:Asia/Seoul}")
     void scheduled() {
         if (!enabled()) return;
-        run("scheduled");
+        run(SCHEDULED);
     }
 
     /**
@@ -149,6 +162,18 @@ public class DatabaseBackupService {
             String check = quickCheck(partial);
             if (!"ok".equalsIgnoreCase(check)) {
                 throw new IllegalStateException("백업본 무결성 검사 실패: " + check);
+            }
+            if (SCHEDULED.equals(trigger)) {
+                // 변화 판정은 "뜬 사본 = 가장 최근 사본" 이다. VACUUM INTO 는 같은 내용이면 같은 바이트를 낸다(실측 — DatabaseBackupServiceTest).
+                // DB 파일의 수정 시각으로 가르지 않는다: 기동 때의 정리 같은 쓰기·체크포인트가 내용과 무관하게 시각을 바꾼다.
+                String same = sameAsNewest(partial);
+                if (same != null) {
+                    deleteQuietly(partial);
+                    partial = null;
+                    long ms = (System.nanoTime() - t0) / 1_000_000;
+                    log.info("[DB-BACKUP] {} 건너뜀 — 가장 최근 사본 {} 이후 바뀐 것이 없다 ({} ms)", trigger, same, ms);
+                    return last = new RunResult(trigger, Instant.now(), null, 0, ms, null, same);
+                }
             }
             Files.move(partial, target, StandardCopyOption.ATOMIC_MOVE);
             partial = null;
@@ -260,6 +285,29 @@ public class DatabaseBackupService {
              ResultSet rs = s.executeQuery("PRAGMA quick_check")) {
             return rs.next() ? rs.getString(1) : "결과 없음";
         }
+    }
+
+    /** 가장 최근 완성본이 {@code candidate} 와 바이트 단위로 같으면 그 이름, 아니면(없거나 다르거나 읽지 못하면) {@code null}. */
+    String sameAsNewest(Path candidate) {
+        List<BackupFile> all = listBackups();
+        if (all.isEmpty()) return null;
+        Path newest = dir.resolve(all.get(0).name());
+        try {
+            if (Files.size(newest) != Files.size(candidate)) return null;
+            return java.util.Arrays.equals(sha256(newest), sha256(candidate)) ? all.get(0).name() : null;
+        } catch (Exception e) {
+            log.debug("[DB-BACKUP] 최근 사본과 비교하지 못했다 — 새 사본을 남긴다: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static byte[] sha256(Path file) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        try (java.io.InputStream in = Files.newInputStream(file)) {
+            byte[] buf = new byte[1 << 16];
+            for (int n; (n = in.read(buf)) > 0; ) md.update(buf, 0, n);
+        }
+        return md.digest();
     }
 
     /** 앞선 실행이 중간에 죽어 남긴 {@code .partial} — 완성본이 아니므로 지운다. */

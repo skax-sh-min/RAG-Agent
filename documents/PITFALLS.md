@@ -385,11 +385,13 @@ SQLite FTS5 `chunk_fts`(하이브리드 검색의 BM25 축), `tokenize='trigram'
 
 ### `service/DatabaseBackupService.java`
 
-SQLite DB 의 정기 백업. 결정 셋:
+SQLite DB 의 정기 백업. 결정 넷:
 
 - **앱 풀의 연결을 쓰지 않는다.** 풀이 1개라 그 연결로 백업하면 백업 동안 모든 요청이 기다린다. 원본과 같은 JDBC URL 로 **새 연결**을 연다 — vec0 확장은 싣지 않는다(`VACUUM INTO` 는 가상 테이블을 스키마 행으로, 데이터는 그림자 테이블로 옮기므로 모듈이 필요 없다; 사본의 `vec_*`·`chunk_fts*` 행 수와 FTS 검색이 원본과 같다 — 실측).
 - **파일 복사가 아니라 `VACUUM INTO` 다.** WAL 모드에서는 최근 커밋이 체크포인트 전까지 `-wal` 에만 있어 `memory.db` 복사가 그것을 놓치고, 쓰는 도중 복사는 찢어진 파일이다. `VACUUM INTO` 는 원본에 읽기 트랜잭션 하나만 쥐고 일관된 사본을 쓰므로 다른 연결의 쓰기를 막지 않는다(57 MB 백업 0.5초 동안 쓰기 383건, 최악 13 ms). Online Backup API 는 쓰기를 만나면 처음부터 다시 시작할 수 있어 쓰지 않았다.
 - **이름이 완성의 표시다.** `.partial` 로 쓰고 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 로 바꾼다. 보관 개수 정리와 `/admin` 목록은 **그 이름 패턴만** 본다. 실패는 예외가 아니라 결과(`RunResult.error`)로 남는다(정기 실행은 스케줄러 스레드, `CuratedImageStore.sweepOrphans()` 와 공유).
+
+- **정기 실행은 바뀐 것이 없으면 사본을 남기지 않는다**(2026-11-23). 보존이 **개수**(`keep`)라, 쓰지 않는 날마다 같은 사본을 쌓으면 그보다 오래된 서로 다른 시점과 유지보수·업데이트 직전 사본(`pre-change-*`·`pre-update-*` — 같은 개수 안에서 센다)이 그만큼 일찍 밀려났다. 판정은 **"뜬 사본 = 가장 최근 완성본"**(크기 → SHA-256, `sameAsNewest`)이다 — 같은 내용이면 `VACUUM INTO` 가 같은 바이트를 낸다(테스트 + 실제 58MB DB·앱 실행 중 실측). DB 파일의 수정 시각으로 가르지 않는 이유는 기동 때의 정리 같은 쓰기·체크포인트가 내용과 무관하게 시각을 바꾸기 때문이다. 같으면 새 사본을 지우고 `RunResult.unchangedFrom` 에 그 최근 사본 이름을 남긴다(카드: "변화 없음 — 건너뜀"). **정기 실행(`scheduled`)만** 건너뛴다 — 수동·`pre-change-*`·`pre-update-*` 는 그 시점의 사본 자체가 목적이라 늘 남긴다(작업이 이름을 기록한다). 대가는 사본을 한 번 뜨는 비용(약 1초)이 그대로라는 것뿐이다.
 
 ### `service/DocumentBackupCleaner.java`
 
