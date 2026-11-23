@@ -960,7 +960,7 @@ classDiagram
 
 Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
 
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 완료(2026-11-20, 사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% — [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md): `deprecate`·`add_note` 만, `deprecate` 배치 규칙은 같은 날 고쳐 수용 93.5%)** · 6e 수정안 검토 화면 설계(2026-11-20, §10.15 — 미구현) · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
+**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 완료(2026-11-20, 사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% — [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md): `deprecate`·`add_note` 만, `deprecate` 배치 규칙은 같은 날 고쳐 수용 93.5%)** · 6e 수정안 검토 화면(설계 2026-11-20, 구현 2026-11-23, §10.15) · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
 
 ### Phase 0. 선결 결함과 검색 기준선
 
@@ -1244,7 +1244,7 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 >
 > **구현: 6b (2026-11-17)** — `AnchoredEdit`(작업 넷, G1·G2·G5·G6·G7) · `ChangeProposalService.proposeExternal`/`jobSummary` · `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`, 모두 ADMIN) · `getChunkContext` 출력에 `contentHash`·`heading`·`chunkContext`. 설계와 다른 곳: 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 G3·G4·G10(지시문이 있어야 하는 가드)을 걸지 않는다 · `newText` 는 크기 상한이 2만 자(G5 의 `revise` 30% 대신).
 >
-> **설계: 6e (2026-11-20, 미구현)** — 수정안 검토 화면(목록 : 수정 전 : 수정 후 = 1 : 3 : 3, 수정 후 칸에서 바로 고치고 [확인] 으로 그 청크 하나를 적용 — 맥락·키워드 재생성 → 임베딩 → 저장 → FTS → MD. 일괄 적용은 `deprecate`·`add_note` 만, `remove`·`revise` 등은 모두 하나씩). §10.15.
+> **6e (설계 2026-11-20, 구현 2026-11-23)** — 수정안 검토 화면(목록 : 수정 전 : 수정 후 = 1 : 3 : 3, 수정 후 칸에서 바로 고치고 [확인] 으로 그 청크 하나를 적용 — 맥락·키워드 재생성 → 임베딩 → 저장 → FTS → MD. 일괄 적용은 `deprecate`·`add_note` 만, `remove`·`revise` 등은 모두 하나씩). §10.15.
 >
 > **구현: 6c (2026-11-17)** — `EditIntent`(해석·근거 검사) · `EditGuards`(G3·G4·G10) · `KnowledgeEditWorkflow`(①③④⑤⑥⑦⑧⑩, `proposeForChunks`) · `/admin/change-jobs` 의 유형 선택·자연어 리포트·추가 적용 후보 · 채팅 되묻기(`ToolDispatchService.askNaturalLanguage`, `Pending` 에 해석 저장) · `requestDocumentChange` 의 자연어·`type` 인자. **설계와 다른 곳**: ① **사전 평가 없이 구현했다**(사용자 요청 — 판단표로 범위를 줄이지 않고 네 유형 모두 열려 있다. 사전 평가는 뒤에 했다(2026-11-20, [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md) — 12B·E4B 는 판단표 둘째 줄, E2B 는 셋째 줄; 사람 수용률이 나오면 범위를 줄인다)) ② 청크 삭제 승격은 **남은 본문이 전혀 없을 때만**(설계 40자 — G3 을 지나 남은 무관한 문장까지 지우게 되어 바꿨다. 글자가 남으면 늘 문장 수정) ③ 겹침 짝(⑨)은 만들지 않았다(기본 `chunk_overlap=0`) ④ `revise` 의 G5(바뀐 글자 30%)는 걸지 않았다 — G3·G4 와 `AnchoredEdit` 의 바꾸기 2,000자 상한만 ⑤ 지우기 요청에서 일부 작업이 버려져도 남은 작업으로 수정안을 만든다(외부 제안과 달리 — 사람이 검토하고 리포트에 사유가 남는다) ⑥ 의도 해석의 `unclear` 는 작업 실패로 끝난다.
 
@@ -1593,7 +1593,9 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 | 반영 날짜 | 문장에 넣지 않는다. 청크 수정일(`edited_at`)로 보고 감사 로그에 기록 | §10.4, §10.8 |
 | 청크 삭제 | 승인 뒤 허용(`delete_chunk`, MD 구간도 지운다) | §10.3, §10.8 |
 
-### 10.15 수정안 검토 화면 (6e — 설계 2026-11-20, 미구현)
+### 10.15 수정안 검토 화면 (6e — 설계 2026-11-20, 구현 2026-11-23)
+
+> **구현:** `AdminChangeReviewController` · `workflow/ReviewRules`(R10) · `workflow/ReviewDiff`(R5) · `ChangeApplyService.confirmOne`/`saveDraft`/`restoreMachine`/`approveBatch`/`drain`/`applyReviewed`/`ensureJobBackup` · V18. 설계와 다른 곳: ① 992px 미만은 탭 전환이 아니라 칸을 위아래로 쌓는다 ② 수정 전 칸의 근거 인용 밑줄은 없다(위쪽 띠에 인용으로) ③ 임시 저장 성공은 목록 항목 조각이 아니라 204 + 목록 새로 읽기, 거절은 422 + 사유 평문 ④ 맥락 재생성의 "대화형 게이트 30초 상한"은 따로 두지 않았다(`KeywordExtractor` 의 기존 호출 그대로) ⑤ 미뤄진 적용의 다시 시도는 작업 화면이 아니라 검토 화면 목록의 [미뤄진 적용 다시 시도] ⑥ 채팅·신고의 작업 링크는 작업 화면 그대로다(작업이 끝나면 작업 화면이 검토 화면으로 넘긴다), MCP 의 검토 주소만 `/review` 로 바꿨다. 브라우저 확인(시드 DB, 임베딩 서버 없음): 강조 층 정렬(긴 줄 줄바꿈 포함)·입력 중 옛 강조 숨김·2초 뒤 갱신·커서 유지·임시 저장·마커 가드·청크 삭제 적용·작업당 백업 한 번·다크 모드. 실제 임베딩으로의 적용과 한글 IME 조합 입력은 아직 보지 않았다. 함정은 PITFALLS 「수정안 검토 화면 6e」.
 
 **왜.** 6c 사전 평가([KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md))에서 E4B 의 `deprecate` 수용률은 배치 수정 뒤 93.5%, `deprecate`+`add_note` 는 94.6% 다. 쓸 만하지만 **스무 개 중 하나는 틀린다**. 그래서 Agent 에게 적용까지 맡기지 않고 사람이 청크 하나씩 보고 고쳐서 확정하는 화면을 둔다. 지금 `/admin/change-jobs/{id}` 는 문서별 카드에 Diff 가 세로로 쌓이고, 고치기는 카드 안의 폼이며, 승인은 문서 단위다. 수정안이 수십 개면 훑어보기 어렵고, 고친 결과를 Diff 로 다시 볼 수 없고, 한 청크만 확정할 수도 없다.
 

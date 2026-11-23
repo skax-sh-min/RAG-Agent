@@ -41,6 +41,11 @@ public class ChangeProposalService {
     /** 검토 화면 주소(상대 경로) — 에이전트가 사람에게 건넨다. */
     public static final String REVIEW_PATH = "/admin/change-jobs/";
 
+    /** 외부 에이전트에게 돌려주는 검토 주소 — 수정안 검토 화면(6e, AGENT_MCP_DESIGN §10.15.5). */
+    static String reviewUrl(long jobId) {
+        return REVIEW_PATH + jobId + "/review";
+    }
+
     /**
      * @param accepted   대기열에 들어갔는가
      * @param jobId      수정안이 붙은 작업(거절돼도 새로 만든 작업이 있으면 그 번호, 없으면 요청의 번호 또는 0)
@@ -139,7 +144,7 @@ public class ChangeProposalService {
             if (!r.usable() || !r.rejected().isEmpty()) {
                 // 일부만 통과한 제안은 받지 않는다 — 에이전트가 의도한 편집의 일부만 적용되면 뜻이 달라질 수 있다.
                 if (violations.isEmpty()) violations.add("적용할 편집이 없습니다");
-                return new ProposeResult(false, jid, 0, List.copyOf(violations), jid > 0 ? REVIEW_PATH + jid : null);
+                return new ProposeResult(false, jid, 0, List.copyOf(violations), jid > 0 ? reviewUrl(jid) : null);
             }
             after = r.text();
             opsJson = MAPPER.writeValueAsString(r.applied());
@@ -155,7 +160,7 @@ public class ChangeProposalService {
                 .mapToLong(ChangeProposalRepository.Proposal::id).max().orElse(0);
         audit(jid, pid, chunkId, row.docId(), kind, userId);
         log.info("[PROPOSE] 외부 수정안 job={} proposal={} chunk={} kind={}", jid, pid, chunkId, kind);
-        return new ProposeResult(true, jid, pid, List.of(), REVIEW_PATH + jid);
+        return new ProposeResult(true, jid, pid, List.of(), reviewUrl(jid));
     }
 
     /** 유지보수 작업 하나의 상태와 수정안(축약 Diff) — 관리자용. 없거나 유지보수 작업이 아니면 비어 있다. */
@@ -173,7 +178,7 @@ public class ChangeProposalService {
         }
         ChangeJobRepository.Job j = job.get();
         return Optional.of(new JobSummary(j.id(), j.requestText(), j.status(), j.error(), all.size(), byStatus, List.copyOf(rows),
-                all.size() > maxProposals, REVIEW_PATH + j.id()));
+                all.size() > maxProposals, reviewUrl(j.id())));
     }
 
     private boolean ownExternalJob(ChangeJobRepository.Job j, String userId) {
@@ -182,7 +187,7 @@ public class ChangeProposalService {
     }
 
     private static ProposeResult reject(long jobId, String reason) {
-        return new ProposeResult(false, jobId, 0, List.of(reason), jobId > 0 ? REVIEW_PATH + jobId : null);
+        return new ProposeResult(false, jobId, 0, List.of(reason), jobId > 0 ? reviewUrl(jobId) : null);
     }
 
     private static String firstLine(String s) {

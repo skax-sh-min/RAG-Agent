@@ -185,10 +185,21 @@ class AdminChangeControllerTest {
                 .andExpect(content().string(containsString("수동 처리가 필요합니다")))
                 .andExpect(content().string(containsString("이미지 마커가 바뀜")))
                 .andExpect(content().string(containsString("아직 아무것도 바뀌지 않았습니다")))
-                .andExpect(content().string(containsString("승인하고 적용")))
-                .andExpect(content().string(containsString("/admin/change-jobs/5/docs/approve")))
+                // R10(6e) — 글자 치환은 원문을 바꾸므로 문서 단위 승인이 없고 검토 화면에서 하나씩 확인한다.
+                .andExpect(content().string(not(containsString("/admin/change-jobs/5/docs/approve"))))
+                .andExpect(content().string(containsString("/admin/change-jobs/5/review")))
                 .andExpect(content().string(containsString("/admin/change-jobs/5/docs/reject")))
                 .andExpect(content().string(not(containsString("every 3s"))));
+    }
+
+    @Test
+    @DisplayName("R10 — 문서 단위 승인이 거절되면(원문을 바꾸는 요청) 작업 화면으로 돌아가 하나씩 확인하라고 알린다")
+    void documentApprovalRefusedForTextChangingJobs() throws Exception {
+        when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", null)));
+        when(applyService.approveAndApply(5L, "d1", "root")).thenThrow(new ChangeApplyService.BatchNotAllowedException());
+        mvc.perform(post("/admin/change-jobs/5/docs/approve").param("docId", "d1").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "/admin/change-jobs/5?notice=review-only"));
     }
 
     @Test

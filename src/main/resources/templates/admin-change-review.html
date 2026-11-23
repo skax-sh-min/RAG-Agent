@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{review.title}">Review proposals</title>
+</head>
+<body>
+<!--/* 수정안 검토 화면(6e, AGENT_MCP_DESIGN §10.15) — 목록 1 : 수정 전 3 : 수정 후 3.
+     강조는 서버(ReviewDiff)가 계산한다. 수정 후 칸은 투명한 textarea 와 그 뒤의 강조 층이고, 둘의 글꼴·여백·줄바꿈이 같아야 한다(app.css '수정안 검토').
+     본문은 전부 th:text 로만 넣는다 — 청크 본문은 신뢰 경계 밖이라 JS 의 innerHTML 로 넣지 않는다. */-->
+<section layout:fragment="content" class="container-fluid py-3 review-page" th:attr="data-job=${job.id}">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+        <h5 class="fw-semibold mb-0">
+            <i class="bi bi-ui-checks-grid me-2"></i><span th:text="#{review.title}">Review proposals</span>
+            <span class="text-muted fs-6" th:text="'#' + ${job.id}">#1</span>
+            <span class="fs-6 ms-2" th:text="${job.requestText}">request</span>
+        </h5>
+        <div class="small d-flex gap-3 align-items-center">
+            <span class="text-muted" th:text="#{review.keys}">keys</span>
+            <a th:href="@{/admin/change-jobs/{id}(id=${job.id})}" th:text="#{review.job-page}">Job page</a>
+        </div>
+    </div>
+
+    <div class="review-grid">
+        <!--/* ── 목록 칸 ── */-->
+        <aside th:fragment="list" id="review-list" class="review-list-pane border rounded"
+               th:attr="hx-get=@{/admin/change-jobs/{id}/review/list(id=${job.id})},
+                        hx-trigger=${polling} ? 'review-list-changed from:body, refresh, every 1500ms' : 'review-list-changed from:body, refresh'"
+               hx-include="#review-filters" hx-swap="outerHTML">
+            <div class="p-2 border-bottom small">
+                <div class="d-flex flex-wrap gap-1 mb-2">
+                    <span class="badge bg-secondary" th:text="#{review.count.pending(${countPending})}">pending</span>
+                    <span class="badge bg-info text-dark" th:if="${countApplying > 0}" th:text="#{review.count.applying(${countApplying})}">applying</span>
+                    <span class="badge bg-success" th:text="#{review.count.applied(${countApplied})}">applied</span>
+                    <span class="badge bg-light text-dark border" th:if="${countWithdrawn > 0}" th:text="#{review.count.withdrawn(${countWithdrawn})}">withdrawn</span>
+                    <span class="badge bg-warning text-dark" th:if="${countProblems > 0}" th:text="#{review.count.problems(${countProblems})}">problems</span>
+                </div>
+                <div id="review-filters" class="d-flex gap-1">
+                    <select name="status" class="form-select form-select-sm" onchange="htmx.trigger('#review-list', 'refresh')"
+                            th:attr="aria-label=#{review.filter.status}">
+                        <option th:each="s : ${ {'open','applying','applied','problems','withdrawn','all'} }" th:value="${s}"
+                                th:selected="${s == filterStatus}" th:text="#{'review.filter.' + ${s}}">open</option>
+                    </select>
+                    <select name="doc" id="review-filter-doc" class="form-select form-select-sm" onchange="htmx.trigger('#review-list', 'refresh')"
+                            th:attr="aria-label=#{review.filter.doc}">
+                        <option value="" th:text="#{review.filter.all-docs}">All documents</option>
+                        <option th:each="d : ${docs}" th:value="${d.key}" th:selected="${d.key == filterDoc}" th:text="${d.value}">doc</option>
+                    </select>
+                </div>
+                <div class="mt-2" th:if="${batchAllowed}">
+                    <button type="button" class="btn btn-primary btn-sm w-100" th:disabled="${batchCount == 0}"
+                            th:attr="hx-post=@{/admin/change-jobs/{id}/review/batch(id=${job.id})},
+                                     hx-confirm=#{review.batch.confirm(${batchCount}, ${batchDocs}, ${batchLlmCalls})}"
+                            hx-include="#review-filter-doc" hx-target="#review-list" hx-swap="outerHTML"
+                            th:text="#{review.batch(${batchCount})}">Batch apply</button>
+                    <div class="text-muted mt-1" th:text="#{review.batch.hint}">Skim first</div>
+                </div>
+                <div class="text-muted mt-2" th:unless="${batchAllowed}" th:text="#{review.batch.not-allowed}">One by one</div>
+                <div class="mt-2" th:if="${canRetry}">
+                    <button type="button" class="btn btn-outline-warning btn-sm w-100"
+                            th:attr="hx-post=@{/admin/change-jobs/{id}/review/retry(id=${job.id})}"
+                            hx-include="#review-filters" hx-target="#review-list" hx-swap="outerHTML"
+                            th:text="#{review.retry}">Retry</button>
+                </div>
+            </div>
+            <div class="review-rows">
+                <div th:if="${rows.isEmpty()}" class="p-3 small text-muted" th:text="#{review.list.empty}">Nothing here</div>
+                <a th:each="r : ${rows}" href="#" class="review-row d-block px-2 py-1 border-bottom text-decoration-none"
+                   th:classappend="${currentPid != null and currentPid == r.proposal.id} ? 'active'"
+                   th:attr="data-pid=${r.proposal.id}" onclick="rvOpen(this.dataset.pid); return false;">
+                    <div class="d-flex justify-content-between gap-1">
+                        <span class="small fw-semibold text-truncate" th:text="'P' + ${r.proposal.id} + ' · ' + ${r.proposal.filename}">P1 file</span>
+                        <span class="badge review-state" th:classappend="'review-state-' + ${r.state}"
+                              th:text="#{'review.state.' + ${r.state}}">pending</span>
+                    </div>
+                    <div class="small text-muted text-truncate">
+                        <span th:text="#{${r.typeKey}}">type</span>
+                        <span th:if="${r.proposal.targetRole != null}" th:text="' · ' + #{'review.role.' + ${r.proposal.targetRole}}">role</span>
+                        <span th:if="${r.proposal.groupKey != null}" th:text="' · ' + #{review.group}">pair</span>
+                        <span th:if="${r.needsDirect}" class="text-warning" th:text="' ⚑ ' + #{review.needs-direct}">direct</span>
+                    </div>
+                </a>
+            </div>
+        </aside>
+
+        <!--/* ── 수정 전·후 칸 ── */-->
+        <div th:fragment="item" id="review-item" class="review-item-area"
+             th:attr="data-pid=${item != null ? item.row.proposal.id : ''}"
+             th:with="jobId=${job.id}">
+            <div th:if="${item == null}" class="review-done border rounded p-4">
+                <h6 th:text="#{review.done.title}">Nothing left to review</h6>
+                <ul class="small mb-3">
+                    <li th:text="#{review.done.applied(${summaryApplied})}">applied</li>
+                    <li th:if="${summaryApplying > 0}" th:text="#{review.done.applying(${summaryApplying})}">applying</li>
+                    <li th:if="${summaryStale > 0}" th:text="#{review.done.stale(${summaryStale})}">stale</li>
+                    <li th:if="${summaryFailed > 0}" th:text="#{review.done.failed(${summaryFailed})}">failed</li>
+                    <li th:if="${summaryMd > 0}" class="text-warning" th:text="#{review.done.md(${summaryMd})}">md</li>
+                </ul>
+                <a class="btn btn-outline-secondary btn-sm" th:href="@{/admin/change-jobs/{id}(id=${jobId})}" th:text="#{review.job-page}">Job page</a>
+            </div>
+
+            <th:block th:if="${item != null}" th:with="p=${item.row.proposal},
+                       editable=${(item.row.state == 'pending' or item.row.state == 'edited') and !item.stale and item.groupSize == 1 and p.kind != 'delete_chunk'},
+                       confirmable=${(item.row.state == 'pending' or item.row.state == 'edited') and !item.stale}">
+                <!--/* 수정 전 */-->
+                <div class="review-pane border rounded">
+                    <div class="review-band small">
+                        <div class="fw-semibold text-truncate">
+                            <span th:text="${p.filename}">file</span>
+                            <span class="text-muted" th:if="${item.heading != null}" th:text="' · ' + ${item.heading}">heading</span>
+                        </div>
+                        <div class="text-muted text-truncate" th:text="${p.chunkId}">chunk</div>
+                        <div th:if="${p.evidenceQuote != null}" class="text-muted"><span th:text="#{review.evidence}">Evidence</span>:
+                            <q th:text="${p.evidenceQuote}">quote</q></div>
+                        <div th:if="${p.rationale != null}" class="text-muted text-truncate" th:text="${p.rationale}">rationale</div>
+                    </div>
+                    <div class="review-scroll">
+                        <div id="rv-before-body" class="review-text"><th:block th:replace="~{::rows(${item.panes.before})}"></th:block></div>
+                    </div>
+                </div>
+
+                <!--/* 수정 후 */-->
+                <div class="review-pane border rounded">
+                    <div class="review-band small">
+                        <div class="d-flex flex-wrap gap-1 align-items-center">
+                            <span class="badge bg-primary" th:text="#{${item.row.typeKey}}">type</span>
+                            <span class="badge review-state" th:classappend="'review-state-' + ${item.row.state}"
+                                  th:text="#{'review.state.' + ${item.row.state}}">state</span>
+                            <span class="badge bg-info text-dark" th:if="${p.edited()}" th:text="#{maint.edited}">edited</span>
+                            <span class="badge bg-warning text-dark" th:if="${item.row.needsDirect}" th:text="'⚑ ' + #{review.needs-direct}">direct</span>
+                            <span class="text-muted" th:if="${item.panes.tooLarge}" th:text="#{review.too-large}">too large</span>
+                        </div>
+                        <div th:if="${item.stale}" class="alert alert-warning py-1 px-2 mt-1 mb-0" th:text="#{review.stale}">stale</div>
+                        <div th:if="${item.groupSize > 1}" class="alert alert-light border py-1 px-2 mt-1 mb-0" th:text="#{review.group.note(${item.groupSize})}">pair</div>
+                        <div th:if="${item.note != null}" class="alert alert-warning py-1 px-2 mt-1 mb-0" th:text="${item.note}">note</div>
+                        <div th:if="${p.mdStatus != null and p.mdStatus != 'applied'}" class="alert alert-warning py-1 px-2 mt-1 mb-0"
+                             th:text="#{'maint.md.' + ${p.mdStatus}}">md</div>
+                        <div id="rv-item-error" class="alert alert-danger py-1 px-2 mt-1 mb-0"
+                             th:classappend="${itemError == null} ? 'd-none'" th:text="${itemError}">error</div>
+                    </div>
+                    <form id="rv-form" class="review-form"
+                          th:attr="hx-post=@{/admin/change-jobs/{id}/review/{pid}/confirm(id=${jobId},pid=${p.id})}"
+                          hx-target="#review-item" hx-swap="outerHTML" hx-include="#review-filter-doc">
+                        <input type="hidden" name="expectedHash" th:value="${item.afterHash}"/>
+                        <div class="review-scroll">
+                            <div th:if="${p.kind == 'delete_chunk'}" class="p-3 text-danger fw-semibold" th:text="#{review.delete-chunk}">This chunk is deleted</div>
+                            <div th:unless="${p.kind == 'delete_chunk'}" class="review-editor">
+                                <div id="rv-backdrop" class="review-text review-backdrop" aria-hidden="true"
+                                     th:classappend="${!item.panes.aligned} ? 'rv-plain'"><th:block th:replace="~{::rows(${item.panes.after})}"></th:block></div>
+                                <textarea id="rv-text" name="text" class="review-text review-input" spellcheck="false"
+                                          th:readonly="${!editable}" th:data-saved="${p.afterText}"
+                                          th:attr="hx-post=${editable} ? @{/admin/change-jobs/{id}/review/{pid}/diff(id=${jobId},pid=${p.id})} : null,
+                                                   hx-trigger=${editable} ? 'input changed delay:2s' : null,
+                                                   hx-target=${editable} ? '#rv-before-body' : null,
+                                                   hx-swap=${editable} ? 'innerHTML' : null"
+                                          th:text="${itemText != null ? itemText : p.afterText}">after</textarea>
+                            </div>
+                        </div>
+                        <div class="review-footer small">
+                            <details class="mb-2" th:unless="${p.kind == 'delete_chunk'}">
+                                <summary th:text="#{review.context}">Context and keywords</summary>
+                                <th:block th:if="${item.row.state == 'pending' or item.row.state == 'edited'}">
+                                    <div class="text-muted" th:if="${p.edited() or (p.afterContext == null and p.afterKeywords == null)}"
+                                         th:text="#{review.context.regenerate}">regenerated on confirm</div>
+                                    <div class="text-muted" th:unless="${p.edited() or (p.afterContext == null and p.afterKeywords == null)}"
+                                         th:text="#{review.context.prepared}">prepared value</div>
+                                </th:block>
+                                <div th:if="${p.afterContext != null and !p.edited()}"><span th:text="#{maint.context}">Context</span>: <span th:text="${p.afterContext}">ctx</span></div>
+                                <div th:if="${p.afterKeywords != null and !p.edited()}"><span th:text="#{maint.keywords}">Keywords</span>: <span th:text="${p.afterKeywords}">kw</span></div>
+                            </details>
+                            <div class="d-flex gap-2 justify-content-end flex-wrap" th:if="${item.row.state == 'pending' or item.row.state == 'edited'}">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" th:if="${p.edited()}"
+                                        th:attr="hx-post=@{/admin/change-jobs/{id}/review/{pid}/restore(id=${jobId},pid=${p.id})}"
+                                        hx-target="#review-item" hx-swap="outerHTML" th:text="#{review.restore}">Back to machine proposal</button>
+                                <button type="button" class="btn btn-outline-danger btn-sm"
+                                        th:attr="hx-post=@{/admin/change-jobs/{id}/review/{pid}/withdraw(id=${jobId},pid=${p.id})},
+                                                 hx-confirm=#{maint.withdraw.confirm}"
+                                        hx-include="#review-filter-doc" hx-target="#review-item" hx-swap="outerHTML"
+                                        th:text="#{review.withdraw}">Withdraw</button>
+                                <button type="submit" class="btn btn-primary btn-sm" th:disabled="${!confirmable}"
+                                        th:text="#{review.confirm}">Confirm</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </th:block>
+        </div>
+    </div>
+
+    <!--/* 아래 두 조각은 따로 불릴 때만 그린다(전체 화면에서는 건너뛴다 — 조각 선택은 바깥 조건을 보지 않는다). */-->
+    <th:block th:if="${false}">
+    <!--/* 강조 갱신 응답 — 수정 전 칸(대상 #rv-before-body) + 강조 층(oob). */-->
+    <th:block th:fragment="diff"><th:block th:replace="~{::rows(${panes.before})}"></th:block><div id="rv-backdrop" class="review-text review-backdrop" aria-hidden="true" th:classappend="${!panes.aligned} ? 'rv-plain'" hx-swap-oob="outerHTML"><th:block th:replace="~{::rows(${panes.after})}"></th:block></div></th:block>
+
+    <!--/* 줄 렌더 — 줄 사이·구간 사이에 공백 텍스트가 끼면 강조 층이 textarea 와 어긋나므로 한 줄에 쓴다. */-->
+    <th:block th:fragment="rows(rows)"><div th:each="r : ${rows}" class="rv-l" th:classappend="${r.mark == 'add'} ? 'rv-add' : (${r.mark == 'del'} ? 'rv-del' : '')"><span th:each="s : ${r.segs}" th:text="${s.text}" th:classappend="${s.changed} ? 'rv-ch'"></span></div></th:block>
+    </th:block>
+
+    <script th:inline="javascript">
+    (function () {
+        const JOB = /*[[${job.id}]]*/ 0;
+        const MSG_CONFLICT = /*[[#{review.conflict}]]*/ 'Changed by someone else';
+        const base = '/admin/change-jobs/' + JOB + '/review';
+
+        window.rvCurrent = function () {
+            const el = document.getElementById('review-item');
+            return el ? (el.dataset.pid || '') : '';
+        };
+
+        function textarea() { return document.getElementById('rv-text'); }
+
+        function grow() {
+            const t = textarea();
+            if (!t) return;
+            t.style.height = 'auto';
+            t.style.height = t.scrollHeight + 'px';
+        }
+
+        function markActive() {
+            const pid = rvCurrent();
+            document.querySelectorAll('.review-row').forEach(function (a) {
+                a.classList.toggle('active', a.dataset.pid === pid);
+            });
+        }
+
+        function showError(msg) {
+            const box = document.getElementById('rv-item-error');
+            if (!box) { alert(msg); return; }
+            box.textContent = msg;
+            box.classList.remove('d-none');
+        }
+
+        function load(pid) {
+            htmx.ajax('GET', base + '/' + pid, { target: '#review-item', swap: 'outerHTML' });
+        }
+
+        /* 항목을 옮긴다 — 고친 내용이 저장값과 다르면 먼저 임시 저장하고, 불변식에 걸리면 옮기지 않는다. */
+        window.rvOpen = function (pid) {
+            const t = textarea();
+            // 저장값과 비교한다 — defaultValue 는 확인이 거절돼 다시 그린 칸에서는 사용자가 친 글이라, 그것과 비교하면 고친 내용을 조용히 버린다.
+            const saved = (t && t.dataset.saved || '').replace(/\r\n/g, '\n');
+            if (!t || t.readOnly || t.value.replace(/\r\n/g, '\n') === saved || String(pid) === rvCurrent()) { load(pid); return; }
+            const form = document.getElementById('rv-form');
+            const body = new URLSearchParams();
+            body.set('text', t.value);
+            body.set('expectedHash', form.querySelector('[name=expectedHash]').value);
+            fetch(base + '/' + rvCurrent() + '/draft', {
+                method: 'POST',
+                headers: Object.assign({ 'Content-Type': 'application/x-www-form-urlencoded' }, getCsrfHeaders()),
+                body: body
+            }).then(function (r) {
+                if (r.status === 204) { htmx.trigger('#review-list', 'refresh'); load(pid); return; }
+                return r.text().then(function (msg) {
+                    if (r.status === 409) { alert(msg || MSG_CONFLICT); load(pid); return; }
+                    showError(msg);
+                });
+            });
+        };
+
+        function rows() { return Array.from(document.querySelectorAll('.review-row')); }
+
+        function move(delta) {
+            const list = rows();
+            if (!list.length) return;
+            let i = list.findIndex(function (a) { return a.dataset.pid === rvCurrent(); });
+            i = i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + delta));
+            rvOpen(list[i].dataset.pid);
+        }
+
+        /* 다음·이전 변경으로 — 두 칸에서 바뀐 줄을 찾아 스크롤한다. */
+        let changeIdx = -1;
+        function jump(delta) {
+            const marks = Array.from(document.querySelectorAll('#rv-before-body .rv-add, #rv-before-body .rv-del, #rv-backdrop .rv-add'));
+            if (!marks.length) return;
+            changeIdx = (changeIdx + delta + marks.length) % marks.length;
+            marks[changeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (!document.querySelector('.review-page')) return;
+            if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); move(e.key === 'ArrowDown' ? 1 : -1); }
+            else if (e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); jump(1); }
+            else if (e.altKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); jump(-1); }
+            else if (e.ctrlKey && e.key === 'Enter') {
+                const form = document.getElementById('rv-form');
+                const btn = form && form.querySelector('button[type=submit]');
+                if (btn && !btn.disabled) { e.preventDefault(); form.requestSubmit(); }
+            }
+        });
+
+        document.addEventListener('input', function (e) {
+            if (e.target && e.target.id === 'rv-text') {
+                grow();
+                // 서버가 새 강조를 보낼 때까지 옛 강조를 숨긴다 — 어긋난 강조보다 없는 편이 낫다.
+                const bd = document.getElementById('rv-backdrop');
+                if (bd) bd.classList.add('rv-pending');
+            }
+        });
+
+        /* 동시 편집(409)·일괄 적용 거절(409)은 사유를 보이고 항목을 다시 연다. */
+        document.body.addEventListener('htmx:beforeSwap', function (e) {
+            if (!document.querySelector('.review-page')) return;
+            if (e.detail.xhr && e.detail.xhr.status === 409) {
+                e.detail.shouldSwap = false;
+                e.detail.isError = false;
+                alert(e.detail.xhr.responseText || MSG_CONFLICT);
+                const pid = rvCurrent();
+                if (pid) load(pid);
+                htmx.trigger('#review-list', 'refresh');
+            }
+        });
+
+        document.body.addEventListener('htmx:afterSettle', function () {
+            if (!document.querySelector('.review-page')) return;
+            grow();
+            markActive();
+        });
+
+        /* 목록을 다시 읽을 때 지금 연 항목을 함께 보낸다(강조 표시용) — hx-vals="js:" 는 CSP 가 막는 eval 이라 리스너로. */
+        document.body.addEventListener('htmx:configRequest', function (e) {
+            if (e.detail.elt && e.detail.elt.id === 'review-list') e.detail.parameters.p = rvCurrent();
+        });
+
+        document.body.addEventListener('review-item-changed', function () {
+            const pid = rvCurrent();
+            if (pid) load(pid);
+        });
+
+        window.addEventListener('resize', grow);
+        grow();
+        markActive();
+    })();
+    </script>
+</section>
+
+</body>
+</html>

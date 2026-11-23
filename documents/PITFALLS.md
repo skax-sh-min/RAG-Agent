@@ -675,6 +675,19 @@ Phase 1b([AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §3 · §6.1)의 읽기 Tool �
 - **사라진 청크·큐레이션 청크로는 시작하지 않는다**(화면에서 폼을 숨기고 워크플로도 거절). 큐레이션 청크의 단일 출처는 `curated_qa` 다.
 - **알려진 한계.** 실모델·브라우저로 확인하지 않았다(단위·슬라이스 테스트뿐) · 오류 사유는 작업 목록의 `error=invalid`/`busy` 로만 보인다(사유 문장은 없다).
 
+### 수정안 검토 화면 6e — 하나씩 확인 · 작업당 백업 · 강조 층
+
+[AGENT_MCP_DESIGN](AGENT_MCP_DESIGN.md) §10.15. 2026-11-23. `AdminChangeReviewController`(`/admin/change-jobs/{id}/review/**`) · `ChangeApplyService.confirmOne`/`approveBatch`/`drain`/`applyReviewed` · `ReviewRules`(R10) · `ReviewDiff`(R5).
+
+- **강조 층은 `textarea` 와 글이 한 글자도 다르면 안 된다.** 수정 후 칸은 투명한 `textarea` 와 그 뒤의 `#rv-backdrop`(같은 글꼴·크기·줄 높이·안쪽 여백·1px 테두리·`pre-wrap`+`overflow-wrap:anywhere`). 셋을 지킨다: ① 줄마다 `div.rv-l`(줄 배경) + 구간 `span` 을 **한 줄에** 쓴다 — 템플릿 줄바꿈이 `span` 사이에 공백 텍스트로 끼면 그 줄이 밀린다. ② 바깥 `.review-text` 는 `white-space: normal` — `pre-wrap` 이면 `div` 사이의 공백 텍스트가 빈 줄로 그려진다. ③ `textarea` 는 스크롤하지 않고 내용만큼 자란다(`overflow:hidden` + JS 높이) — 세로 스크롤바가 생기면 폭이 줄어 줄바꿈이 강조 층과 갈린다. 서버(`ReviewDiff`)는 수정 후 쪽 줄을 이은 글이 입력과 다르면 강조를 끈다(`rv-plain`), 화면은 입력 중 옛 강조를 숨긴다(`rv-pending`, 서버 응답이 층을 통째로 바꿔 풀린다). **브라우저 확인은 아래 「알려진 한계」.**
+- **사유 평문은 문자셋을 밝힌다.** `MediaType.TEXT_PLAIN` 만 주면 `ISO-8859-1` 로 나가 409·422 사유의 한국어가 깨진다 — 슬라이스 테스트가 잡았다(`AdminChangeReviewControllerTest`). `text/plain;charset=UTF-8`.
+- **조각 두 개(`diff`·`rows`)는 `th:if="${false}"` 안에 둔다.** 전체 화면을 그릴 때 페이지 끝의 `diff` 조각이 모델에 없는 `panes` 를 읽어 500 이 났다. 조각 선택(`:: diff`, `~{::rows(...)}`)은 바깥 조건을 보지 않으므로 따로 부를 때는 그려진다.
+- **R10 은 서버가 건다.** `approveAndApply`(작업 화면의 문서 단위 승인)도 `ReviewRules.batchAllowed` 가 거짓이고 대기 수정안이 있으면 `BatchNotAllowedException`(화면은 `?notice=review-only`) — **4b 글자 치환 작업의 문서 단위 승인이 이것으로 사라졌다**(설계 §10.15.7 에서 확정). 이미 승인된 수정안의 다시 시도는 그대로 된다. 일괄 대상에서 겹침 짝은 뺀다(짝은 하나씩).
+- **작업당 백업(R2)은 `change_job.backup_name`(V18) + 파일 존재로 판정한다.** `DatabaseBackupService.backupFile(name)` 이 없거나 파일이 없으면 다시 만든다 — 테스트의 목은 `backupFile` 이 `null` 이라 기존 `ChangeApplyServiceTest` 의 "문서마다 백업" 기대가 그대로 통과한다.
+- **MD 결과는 수정안 행에만**(`setMdStatusFor`). 예전 `setMdStatus(job, doc)` 는 그 문서의 `applied` 행 전부를 덮어, 검토 화면에서 하나씩 적용한 수정안의 결과가 다음 적용의 결과로 바뀌었다. 문서 단위 승인도 이번에 적용한 행에만 쓴다. 그 문서에 이미 하나씩 적용된 수정안이 있으면 발생 수 대조(`literalOnly`)를 끄고 줄 구간 대조로 간다(R9).
+- **순차 실행기는 작업마다 하나**(`draining` 집합). 잠금 충돌·백업 실패로 적용하지 못한 수정안은 `approved` 로 두고 그 실행에서 건너뛴다(무한 반복 방지) — 화면의 [다시 시도]가 `retry` 로 다시 띄운다. 끝내기 직전에 들어온 확인을 놓치지 않으려고 표시를 지운 뒤 한 번 더 본다. 사유(`noteFor`)는 메모리라 재기동하면 사라진다(상태는 DB 에 남는다). 테스트는 `runDrainInline()` 으로 호출한 스레드에서 돈다.
+- **알려진 한계.** 좁은 화면(992px 미만)은 설계의 탭 전환이 아니라 칸을 위아래로 쌓는다 · 수정 전 칸에 근거 인용 밑줄은 없다(위쪽 띠에 인용으로만) · 임시 저장 성공은 목록 항목 조각이 아니라 204 + 목록 새로 읽기 · 실모델로 끝까지 확인하지 않았다(임베딩 서버 없이 시드 DB 로 화면만 확인 — 아래 PLAN 참고).
+
 ### 문서 쓰기 잠금 (`DocumentWriteLocks`)
 
 같은 문서에서 `↺ 재인덱싱`(`DocumentIndexer.reindexFromMd`)과 유지보수 적용(`ChangeApplyService`)이 겹치면 — 재인덱싱이 청크 id 를 **모두 새로 만들고** 변환 MD 를 읽는 동안 적용이 옛 id 를 고쳐 쓰거나(수정은 사라지고 일부는 `stale`), 적용이 청크를 바꾸는 사이에 재인덱싱이 MD 를 읽어 반쯤 바뀐 문서가 된다. 적용 서비스 안의 잠금은 **서비스끼리만** 막았다.

@@ -70,7 +70,7 @@ class ChangeProposalServiceTest {
 
         assertThat(r.accepted()).isTrue();
         assertThat(r.violations()).isEmpty();
-        assertThat(r.reviewUrl()).isEqualTo("/admin/change-jobs/" + r.jobId());
+        assertThat(r.reviewUrl()).isEqualTo("/admin/change-jobs/" + r.jobId() + "/review");
         ChangeProposalRepository.Proposal p = proposals.find(r.proposalId()).orElseThrow();
         assertThat(p.status()).isEqualTo(ChangeProposalRepository.PENDING);
         assertThat(p.kind()).isEqualTo(ChangeProposalRepository.KIND_EDIT);
@@ -157,7 +157,7 @@ class ChangeProposalServiceTest {
         assertThat(s.total()).isEqualTo(1);
         assertThat(s.byStatus()).containsEntry(ChangeProposalRepository.PENDING, 1);
         assertThat(s.proposals().get(0).diff()).contains("+> **주의**");
-        assertThat(s.reviewUrl()).isEqualTo("/admin/change-jobs/" + job);
+        assertThat(s.reviewUrl()).isEqualTo("/admin/change-jobs/" + job + "/review");
         assertThat(service.jobSummary(impact, 50, 1_500)).isEmpty();
     }
 }
