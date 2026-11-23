@@ -191,6 +191,33 @@ class ToolDispatchServiceTest {
     }
 
     @Test
+    @DisplayName("내용 삭제·설명 수정으로 해석되면 되묻지도 기억하지도 않고, 유형·대상을 채운 화면 링크를 준다")
+    void removeAndReviseArePointedToTheForm() {
+        changeSetUp();
+        com.example.ragagent.workflow.KnowledgeEditWorkflow edit = mock(com.example.ragagent.workflow.KnowledgeEditWorkflow.class);
+        changeDispatch.setKnowledgeEdit(edit);
+        org.mockito.Mockito.when(edit.interpret(org.mockito.ArgumentMatchers.eq("B 기능 설명을 지워 줘"), any()))
+                .thenReturn(new com.example.ragagent.workflow.EditIntent("remove", "B 기능", null, null, null, null));
+        AgentState state = AgentState.of("B 기능 설명을 지워 줘", "latest", "t1", "root", "", RoutingMode.COST_FIRST, false,
+                java.util.Locale.KOREAN).toBuilder()
+                .toolPlan(new ToolPlan("requestDocumentChange", "{\"instruction\":\"B 기능 설명 삭제\"}"))
+                .callerAdmin(true).build();
+
+        AgentState out = changeDispatch.execute(state);
+
+        assertThat(out.answer()).contains("「B 기능」").contains("채팅으로 받지 않습니다")
+                .contains("/admin/change-jobs?type=remove&subject=B+%EA%B8%B0%EB%8A%A5");
+        assertThat(pending.isPending("root", "t1")).isFalse();
+        verify(edit, org.mockito.Mockito.never()).start(any(), any(), any(), any());
+
+        org.mockito.Mockito.when(edit.interpret(org.mockito.ArgumentMatchers.eq("A 기능 설명을 60초로 고쳐"), any()))
+                .thenReturn(new com.example.ragagent.workflow.EditIntent("revise", "A 기능", "60초", null, null, null));
+        AgentState revise = state.toBuilder().question("A 기능 설명을 60초로 고쳐").build();
+        assertThat(changeDispatch.execute(revise).answer()).contains("설명을 고치는 요청").contains("type=revise").contains("content=60%EC%B4%88");
+        assertThat(pending.isPending("root", "t1")).isFalse();
+    }
+
+    @Test
     @DisplayName("해석하지 못하면 시작도 되묻기도 하지 않고 화면 링크를 준다")
     void unreadableNaturalLanguageRequestPointsToTheScreen() {
         changeSetUp();

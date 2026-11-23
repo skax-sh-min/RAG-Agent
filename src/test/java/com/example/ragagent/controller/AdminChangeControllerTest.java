@@ -193,6 +193,22 @@ class AdminChangeControllerTest {
     }
 
     @Test
+    @DisplayName("채팅이 돌려보낸 링크 — 유형·대상·내용이 폼에 미리 채워지고, 모르는 유형은 버린다(값은 이스케이프)")
+    void requestFormIsPrefilledFromTheChatLink() throws Exception {
+        when(jobs.recentByKind(any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+        mvc.perform(get("/admin/change-jobs").param("type", "revise").param("subject", "A 기능").param("content", "<b>60초</b>")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("value=\"revise\" selected")))
+                .andExpect(content().string(containsString("value=\"A 기능\"")))
+                .andExpect(content().string(containsString("&lt;b&gt;60초&lt;/b&gt;")));
+        mvc.perform(get("/admin/change-jobs").param("type", "drop_table").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("selected=\"selected\""))))
+                .andExpect(content().string(not(containsString("\" selected"))));
+    }
+
+    @Test
     @DisplayName("R10 — 문서 단위 승인이 거절되면(원문을 바꾸는 요청) 작업 화면으로 돌아가 하나씩 확인하라고 알린다")
     void documentApprovalRefusedForTextChangingJobs() throws Exception {
         when(jobs.find(5L)).thenReturn(Optional.of(job(5, "maintenance", "done", null)));

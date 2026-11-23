@@ -210,6 +210,18 @@ public class ToolDispatchService {
             return fixedAnswer(state, text("chat.answer.edit-unclear",
                     "무엇을 어떻게 바꿀지 읽지 못했습니다. 화면에서 유형과 대상을 골라 요청하세요: [/admin/change-jobs](/admin/change-jobs)", state));
         }
+        if (intent.formOnly()) {
+            // 내용 삭제·설명 수정은 지시문 해석으로 받지 않는다(EditIntent.FORM_ONLY — 6c 사전 평가) — 되묻지도 기억하지도 않고, 유형과 대상을 미리 채운
+            // 화면 링크를 준다. 거기서 관리자가 유형을 직접 고르고 수정안은 검토 화면에서 하나씩 확인한다.
+            log.info("[TOOL] 자연어 수정 폼 전용 유형 type={} thread={}", intent.type(), state.threadId());
+            StringBuilder link = new StringBuilder("/admin/change-jobs?type=").append(enc(intent.type()))
+                    .append("&subject=").append(enc(intent.subject() == null ? "" : intent.subject()));
+            if (intent.content() != null) link.append("&content=").append(enc(intent.content()));
+            return fixedAnswer(state, text("chat.answer.edit-form-only." + intent.type(), intent.type().equals(EditIntent.REMOVE)
+                            ? "「{0}」에 대한 설명을 지우는 요청은 채팅으로 받지 않습니다 — 원문을 지우는 수정이라 관리자 화면에서 유형을 직접 고르고 수정안을 하나씩 확인해야 합니다: [{1}]({1})"
+                            : "「{0}」의 설명을 고치는 요청은 채팅으로 받지 않습니다 — 원문을 바꾸는 수정이라 관리자 화면에서 유형을 직접 고르고 수정안을 하나씩 확인해야 합니다: [{1}]({1})",
+                    state, intent.subject(), link.toString()));
+        }
         if (intent.isReplace()) {
             pending.put(state.userId(), state.threadId(), new PendingChangeConfirmations.Pending(question, intent.from(), intent.to()));
             return fixedAnswer(state, text("chat.answer.change-ask", "「{0}」을(를) 「{1}」(으)로 바꾸는 수정안을 만들까요? 만들려면 네 라고 답해 주세요. "
@@ -220,12 +232,10 @@ public class ToolDispatchService {
                 intent.type(), intent.subject(), intent.content(), intent.replacement()));
         log.info("[TOOL] 자연어 수정 되묻기 type={} user={} thread={}", intent.type(), state.userId(), state.threadId());
         String key = "chat.answer.edit-ask." + intent.type();
-        String fallback = switch (intent.type()) {
-            case EditIntent.DEPRECATE -> "「{0}」을(를) 사용 중단으로 표시하는 수정안을 만들까요? {0} 을(를) 설명하는 섹션마다 안내 문장을 넣고 원문은 지우지 않습니다. 만들려면 네 라고 답해 주세요.";
-            case EditIntent.REMOVE -> "「{0}」에 대한 설명을 지우는 수정안을 만들까요? 언급만 한 곳은 지우지 않습니다. 만들려면 네 라고 답해 주세요.";
-            case EditIntent.ADD_NOTE -> "「{0}」 관련 청크에 다음 주의 사항을 넣는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
-            default -> "「{0}」에 대한 설명을 다음 내용으로 고치는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
-        };
+        // 여기까지 오는 유형은 사용 중단·주의 사항 둘뿐이다(내용 삭제·설명 수정은 위에서 화면으로 돌렸다).
+        String fallback = EditIntent.DEPRECATE.equals(intent.type())
+                ? "「{0}」을(를) 사용 중단으로 표시하는 수정안을 만들까요? {0} 을(를) 설명하는 섹션마다 안내 문장을 넣고 원문은 지우지 않습니다. 만들려면 네 라고 답해 주세요."
+                : "「{0}」 관련 청크에 다음 주의 사항을 넣는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
         return fixedAnswer(state, text(key, fallback, state, intent.subject(), intent.content() == null ? "" : intent.content()));
     }
 

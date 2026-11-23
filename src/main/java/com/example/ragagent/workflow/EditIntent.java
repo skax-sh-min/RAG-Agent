@@ -44,6 +44,27 @@ public record EditIntent(String type, String subject, String content, String rep
         to = blankToNull(to);
     }
 
+    /**
+     * <b>지시문 해석으로는 받지 않는 유형</b> — 원문을 지우거나 바꾸는 둘. 6c 사전 평가({@code documents/KNOWLEDGE_EDIT_EVALUATION.md}
+     * §1, 판단표 둘째 줄 — 2026-11-20)에서 사람 수용률이 {@code remove} 21% · {@code revise} 44% 로 기준(70%)에 한참 못 미쳤다. 해석 자체는 맞았다 —
+     * 모자란 것은 판정 precision 과 편집 품질이다. 그래서 채팅 되묻기 · {@code /admin} 의 "자동" · 신고 폼의 "자동" · MCP 의 지시문만 요청에서는 거절하고,
+     * 관리자가 <b>유형을 직접 고른 폼</b>과 외부 에이전트의 청크 편집 제안(6b {@code proposeChunkEdit})으로만 받는다. 해석 프롬프트는 바꾸지 않는다 —
+     * 지우기 요청을 다른 유형으로 잘못 읽게 하는 것보다 지우기로 읽고 거절하며 길을 알려 주는 편이 낫다.
+     */
+    public static final Set<String> FORM_ONLY = Set.of(REMOVE, REVISE);
+
+    /** 이 유형은 지시문 해석으로는 받지 않는다({@link #FORM_ONLY}). */
+    public boolean formOnly() {
+        return FORM_ONLY.contains(type);
+    }
+
+    /** 해석으로 받지 않는 유형을 거절할 때의 사유 — 작업 실패 사유·MCP 오류로 그대로 보인다. */
+    public static String formOnlyReason(String type) {
+        String label = REMOVE.equals(type) ? "내용 삭제" : "설명 수정";
+        return "「" + label + "」은(는) 지시문 해석으로 받지 않습니다 — 원문을 지우거나 바꾸는 수정이라 /admin/change-jobs 에서 수정 유형을 직접 고르거나,"
+                + " 외부 에이전트라면 findChunks·proposeChunkEdit 로 제안하세요";
+    }
+
     public boolean isReplace() {
         return REPLACE.equals(type);
     }

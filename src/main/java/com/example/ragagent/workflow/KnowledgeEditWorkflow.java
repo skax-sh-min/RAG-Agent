@@ -213,7 +213,7 @@ public class KnowledgeEditWorkflow {
     /** 신고에서 시작한 작업의 몸체 — 테스트의 입구. 어떤 실패도 {@code failed} 로 남는다. */
     void runForReport(long jobId, String instruction, EditIntent given, String chunkId, Locale locale) {
         try {
-            EditIntent intent = given != null ? given : interpret(instruction, locale);
+            EditIntent intent = given != null ? given : interpretForRequest(instruction, locale);
             if (intent.isReplace()) {
                 jobs.setIntent(jobId, intent.toJson("literal"));
                 maintenance.proposeAndStoreForChunk(jobId, instruction, intent.from(), intent.to(), chunkId);
@@ -248,7 +248,7 @@ public class KnowledgeEditWorkflow {
     /** 작업 몸체 — 테스트의 입구. 어떤 실패도 {@code failed} 로 남는다. */
     void run(long jobId, String instruction, EditIntent given, Locale locale) {
         try {
-            EditIntent intent = given != null ? given : interpret(instruction, locale);
+            EditIntent intent = given != null ? given : interpretForRequest(instruction, locale);
             if (intent.isReplace()) {
                 jobs.setIntent(jobId, intent.toJson("literal"));
                 maintenance.proposeAndStore(jobId, instruction, intent.from(), intent.to(), locale);
@@ -279,6 +279,20 @@ public class KnowledgeEditWorkflow {
         EditIntent intent = EditIntent.parse(result.text());
         String problem = intent.groundingProblem(instruction);
         if (problem != null) throw new IllegalArgumentException(problem + " — 화면에서 유형과 대상을 직접 고르세요");
+        return intent;
+    }
+
+    /**
+     * 요청을 실행하려고 해석한다 — {@link #interpret} 와 같고, <b>해석으로는 받지 않는 유형({@link EditIntent#FORM_ONLY} — 내용 삭제·설명 수정)이면
+     * 거절한다</b>(작업은 그 사유로 {@code failed}). 사람이 유형을 직접 고른 요청은 이 길을 지나지 않는다. 채팅은 되묻기 전에 같은 판정을 스스로 한다
+     * ({@code ToolDispatchService.askNaturalLanguage}).
+     */
+    EditIntent interpretForRequest(String instruction, Locale locale) {
+        EditIntent intent = interpret(instruction, locale);
+        if (intent.formOnly()) {
+            log.info("[KNOWLEDGE-EDIT] 해석 결과가 폼 전용 유형이라 거절 type={} subject={}", intent.type(), intent.subject());
+            throw new IllegalArgumentException(EditIntent.formOnlyReason(intent.type()));
+        }
         return intent;
     }
 

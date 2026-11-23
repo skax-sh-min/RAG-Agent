@@ -376,6 +376,49 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("폼 전용 유형 — 지시문이 내용 삭제·설명 수정으로 해석되면 아무것도 찾지 않고 작업을 사유와 함께 실패시킨다")
+    void interpretedRemoveOrReviseIsRefused() {
+        llm("{\"type\":\"remove\",\"subject\":\"B 기능\"}");
+        workflow.run(jobId, "B 기능에 대한 내용을 삭제해", null, Locale.KOREAN);
+
+        ChangeJobRepository.Job job = jobs.find(jobId).orElseThrow();
+        assertThat(job.status()).isEqualTo(ChangeJobRepository.FAILED);
+        assertThat(job.error()).contains("내용 삭제").contains("수정 유형을 직접");
+        assertThat(job.intentJson()).isNull();
+        assertThat(stored()).isEmpty();
+        verify(keywords, never()).findMentions(eq("latest"), anyString(), anyInt());
+
+        long reviseJob = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, "지시", "root");
+        llm("{\"type\":\"revise\",\"subject\":\"A 기능\",\"content\":\"60초 동안 기다린다\"}");
+        workflow.run(reviseJob, "A 기능은 60초 동안 기다린다로 설명을 고쳐", null, Locale.KOREAN);
+        assertThat(jobs.find(reviseJob).orElseThrow().error()).contains("설명 수정");
+
+        // 신고 폼의 "자동"도 지시문 해석이다
+        long reportJob = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "B 기능 삭제", "root", "c1");
+        llm("{\"type\":\"remove\",\"subject\":\"B 기능\"}");
+        workflow.runForReport(reportJob, "B 기능에 대한 내용을 삭제해", null, "c1", Locale.KOREAN);
+        assertThat(jobs.find(reportJob).orElseThrow().status()).isEqualTo(ChangeJobRepository.FAILED);
+        assertThat(proposals.listByJob(reportJob)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("폼 전용 유형 — 관리자가 유형을 직접 고른 요청은 그대로 받는다(해석을 지나지 않는다)")
+    void typedRemoveIsStillAccepted() {
+        String text = "## 기능\n\nB 는 이렇게 쓴다.\n\n주의!";
+        mentions("c1", text);
+        chunk("c1", text, "기능", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"B 는 이렇게 쓴다.\"}",
+                "판정: 변경 필요\n이유: B 설명\n@@ 지우기\n처음: B 는 이렇게 쓴다.");
+
+        workflow.run(jobId, "B 에 대한 내용을 삭제해", new EditIntent("remove", "B", null, null, null, null), Locale.KOREAN);
+
+        ChangeJobRepository.Job job = jobs.find(jobId).orElseThrow();
+        assertThat(job.status()).isEqualTo(ChangeJobRepository.DONE);
+        assertThat(job.intentJson()).contains("remove");
+        assertThat(stored()).hasSize(1);
+    }
+
+    @Test
     @DisplayName("글자 바꾸기로 해석되면 기존 글자 치환 워크플로로 넘긴다")
     void replaceDelegatesToTheLiteralWorkflow() {
         workflow.run(jobId, "PostgreSQL 을 Oracle 로 바꿔", new EditIntent("replace", null, null, null, "PostgreSQL", "Oracle"), Locale.KOREAN);
