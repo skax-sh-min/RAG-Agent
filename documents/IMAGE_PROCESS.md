@@ -374,7 +374,7 @@ MD 문서의 그림을 검색에 반영하고 싶다면 이미지를 지식 제�
 
 ## 6. OCR 처리 (L3)
 
-> **구현 완료** — `service/OcrService.java`, `pom.xml` tess4j(현재 5.19.0 — 정확한 버전은 pom.xml) 추가.
+> **구현 완료** — `service/OcrService.java`, `pom.xml` tess4j(현재 5.21.0 — 정확한 버전은 pom.xml) 추가.
 
 스캔 PDF 또는 텍스트 위주 스크린샷에 적용.
 
@@ -384,7 +384,7 @@ MD 문서의 그림을 검색에 반영하고 싶다면 이미지를 지식 제�
 <dependency>
     <groupId>net.sourceforge.tess4j</groupId>
     <artifactId>tess4j</artifactId>
-    <version>5.19.0</version>
+    <version>5.21.0</version>
 </dependency>
 ```
 

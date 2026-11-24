@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.2</version>
+        <version>4.2.0</version>
         <relativePath/>
     </parent>
 
@@ -19,7 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>2.0.2</spring-ai.version>
+        <spring-ai.version>2.1.0</spring-ai.version>
         <!-- 앱 jar 매니페스트 Min-Launcher-Protocol — 이 버전이 요구하는 최소 런처 세대(아래 maven-jar-plugin default-jar 설명) -->
         <min.launcher.protocol>1</min.launcher.protocol>
 
@@ -119,14 +119,14 @@
         <dependency>
             <groupId>net.sourceforge.tess4j</groupId>
             <artifactId>tess4j</artifactId>
-            <version>5.19.0</version>
+            <version>5.21.0</version>
         </dependency>
 
         <!-- Batik for EMF/WMF → PNG conversion -->
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>
             <artifactId>batik-transcoder</artifactId>
-            <version>1.19</version>
+            <version>1.20</version>
             <exclusions>
                 <exclusion>
                     <groupId>commons-logging</groupId>
@@ -137,7 +137,7 @@
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>
             <artifactId>batik-codec</artifactId>
-            <version>1.19</version>
+            <version>1.20</version>
         </dependency>
 
         <!-- Jackson for JSON processing -->
@@ -167,7 +167,7 @@
         <dependency>
             <groupId>org.xerial</groupId>
             <artifactId>sqlite-jdbc</artifactId>
-            <version>3.53.2.0</version>
+            <version>3.54.1.0</version>
         </dependency>
 
         <!-- Flyway: schema migration (SQLite support is built into flyway-core) -->
@@ -221,12 +221,12 @@
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>bootstrap-icons</artifactId>
-            <version>1.13.1</version>
+            <version>1.13.2</version>
         </dependency>
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>htmx.org</artifactId>
-            <version>2.0.10</version>
+            <version>2.0.11</version>
         </dependency>
         <dependency>
             <groupId>org.webjars.npm</groupId>
@@ -236,17 +236,17 @@
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>dompurify</artifactId>
-            <version>3.4.7</version>
+            <version>3.4.18</version>
         </dependency>
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>chart.js</artifactId>
-            <version>4.5.1</version>
+            <version>4.6.2</version>
         </dependency>
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>highlight.js</artifactId>
-            <version>11.11.1</version>
+            <version>11.12.0</version>
         </dependency>
 
         <!-- Test -->
@@ -396,7 +396,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.14</version>
+                <version>0.8.16</version>
                 <executions>
                     <execution>
                         <goals>
