@@ -147,16 +147,18 @@ rag_java/
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | 제공 스크립트(`scripts/`) | 비고 |
 |---|---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`, `windows_run_by_mvn_cmd_no_docker.cmd`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
-| macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `macos_run_by_apple_container.sh`·`macos_run_by_jar_no_docker.sh`·`macos_run_by_mvn_no_docker.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data.sh` | Docker Desktop 또는 Apple Container(위 표) |
-| macOS Intel(x64) | 지원 | 번들(macOS x64) | 위와 같은 `macos_*` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
-| Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
+| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `run_by_jar.cmd`, `run_by_mvn.cmd`, `release_windows.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
+| Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `run_by_jar.sh`·`run_by_mvn.sh`·`ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data_by_docker.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
+| macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `run_by_jar.sh`·`run_by_mvn.sh`·`macos_run_by_apple_container.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data_by_apple_container.sh` | Docker Desktop 또는 Apple Container(위 표) |
+| macOS Intel(x64) | 지원 | 번들(macOS x64) | `run_by_jar.sh`·`run_by_mvn.sh` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
 | Docker 이미지(Alpine = **musl**) | 지원 — 이미지가 Alpine 기반(`eclipse-temurin:21-jre-alpine`) | **번들 사용 불가** | `docker-compose.yml` | sqlite-vec 모드는 musl 용 `vec0` 를 마운트해 `SQLITE_VEC_EXTENSION_PATH` 지정(아래) |
 | 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 | — | chroma 백엔드를 쓰거나 `vec0` 를 직접 받아 `SQLITE_VEC_EXTENSION_PATH` 지정 |
 
 - **검증 수준**: GitHub Actions 를 쓰지 않아 OS 별 자동 검증은 없습니다. 테스트(`mvn test`)와 런처·릴리즈 스크립트의 실제 실행은 **Windows** 에서 확인했습니다. macOS·Linux 는 위 스크립트와 §4 의 절차가 있지만, 번들한 sqlite-vec 의 Windows 외 플랫폼 파일은 SHA-256 만 확인했고 실제 로드는 확인하지 못했습니다(기동 로그의 `vec_version()` 으로 확인하세요).
 - **OCR(Tesseract)**: 스캔 PDF OCR(`IMAGE_OCR_ENABLED`, 기본 켜짐)은 **네이티브 Tesseract + `kor`/`eng` 언어 데이터**가 호스트에 있어야 합니다 — Docker 이미지에는 들어 있고, 로컬(비 Docker) 실행은 OS 별로 설치하거나 `IMAGE_OCR_ENABLED=false` 로 끕니다.
 - **파일 경로·권한**: sqlite-vec 번들은 `{DATA_DIR}/native/` 로 꺼내 로드하므로 그 경로가 쓰기 가능하고 `noexec` 가 아니어야 합니다. DB 파일을 네트워크 공유(NFS/SMB)에 두는 배포는 `mmap_size` 때문에 조건이 붙습니다([§3.3](#33-applicationproperties-전용-설정)의 SQLite 세션 PRAGMA 행).
+
+Windows·linux·macOS 비 Docker 실행 스크립트는 `-b`/`--build`로 `mvn package`, `-cb`/`--clean-build`로 `mvn clean package`를 실행한 뒤 생성된 앱 jar를 시작합니다. 두 빌드 모두 테스트를 실행하며, 실패하면 앱을 시작하지 않습니다. `-h`/`--help`로 옵션을 볼 수 있습니다. 옵션이 없으면 기존처럼 jar 스크립트는 이미 빌드된 jar를, Maven 스크립트는 `mvn spring-boot:run`을 실행합니다.
 
 #### 벡터 스토어 백엔드 선택 (chroma / sqlite-vec)
 
@@ -791,7 +793,7 @@ docker compose down
 JAVA_OPTS=-Xms512m -Xmx3g
 ```
 
-> Docker를 쓰지 않는 실행 경로(`scripts/*_run_by_jar_*`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
+> Docker를 쓰지 않는 실행 경로(`scripts/run_by_jar.sh`, `scripts\run_by_jar.cmd`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
 
 ---
 
@@ -1342,7 +1344,7 @@ Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts +
 
 공통 삭제 대상:
 - `data/memory.db` (+`-wal`/`-shm`)
-- **옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리·벡터가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.2.1](#621-sqlite-파일별-테이블-구성)). `scripts/*_reset_data.sh` 는 두 파일을 모두 지웁니다
+- **옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리·벡터가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.2.1](#621-sqlite-파일별-테이블-구성)). `scripts/ubuntu_reset_data_by_docker.sh` 와 `scripts/macos_reset_data_by_apple_container.sh` 는 `data/memory.db` 와 `data/vector.db` 를 지웁니다
 - `data/documents/`
 - `data/converted/`
 - `data/images/`
@@ -2201,7 +2203,7 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 | 환경 | 명령 (저장소 루트에서) |
 |---|---|
 | Linux · macOS · Git Bash | `sh scripts/release.sh [버전] [옵션]` |
-| Windows | `scripts\windows_release.cmd [버전] [옵션]` — Git for Windows 의 bash 로 같은 `release.sh` 를 실행합니다(WSL 의 bash 는 쓰지 않습니다). 다른 bash 를 쓰려면 `RELEASE_BASH` |
+| Windows | `scripts\release_windows.cmd [버전] [옵션]` — Git for Windows 의 bash 로 같은 `release.sh` 를 실행합니다(WSL 의 bash 는 쓰지 않습니다). 다른 bash 를 쓰려면 `RELEASE_BASH` |
 
 필요한 것: git, Maven 3.9+ 와 **Java 21**, `unzip`(또는 JDK 의 `jar`), 게시하려면 [GitHub CLI](https://cli.github.com)(`gh auth login` 한 번 — Windows: `winget install GitHub.cli`). Windows 는 Git for Windows.
 

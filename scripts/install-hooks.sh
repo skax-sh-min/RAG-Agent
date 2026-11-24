@@ -1,6 +1,7 @@
 #!/bin/sh
-# Install git hooks for this repository.
-# Run once after cloning: sh scripts/install-hooks.sh
+# 저장소의 Git 훅을 .git/hooks에 연결한다.
+# 설치되는 pre-commit 훅은 .env 파일의 실수로 인한 커밋을 막는다.
+# 저장소를 복제한 뒤 한 번 실행: sh scripts/install-hooks.sh
 set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
