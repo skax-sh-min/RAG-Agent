@@ -20,8 +20,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -958,41 +961,72 @@ class AnswerServiceTest {
         assertThat(answerPrompt).doesNotContain("curated_qa | p.1");
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(strings = {"INFO", "DEBUG"})
     @DisplayName("BLOCKING — S는 전용 시스템 프롬프트를 쓰고 스타일 지시문 층은 없다 (§6.24 Step 0-c/1-a)")
-    void blocking_answerPrompt_usesModeSystemPrompt() {
-        // S 모드에서는 평가(evaluate) LLM 호출 자체가 스킵되므로 answer 호출 1회만 발생한다.
-        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
-        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+    @SuppressWarnings("unchecked")
+    void blocking_answerPrompt_usesModeSystemPrompt(String level) {
+        withAnswerLogLevel(level, () -> {
+            ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+            when(messageSource.getMessage(eq("prompt.answer.system.s"), any(), any(Locale.class)))
+                    .thenReturn("S system prompt");
+            when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                    .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+            when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
-        service.execute(newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build());
+            service.execute(newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build());
 
-        // 평가 LLM은 한 번도 호출되지 않는다 (answer LLM 1회만)
-        verify(llmRouter, org.mockito.Mockito.times(1)).executeGatedWithUsage(any(), any(), any());
-        verify(messageSource).getMessage(eq("prompt.answer.system.s"), any(), any(Locale.class));
-        verify(messageSource, org.mockito.Mockito.never())
-                .getMessage(org.mockito.ArgumentMatchers.startsWith("prompt.answer.style"), any(), any(Locale.class));
+            verify(llmRouter, times(1)).executeGatedWithUsage(any(), any(), any());
+            assertAnswerSystemPrompt(callCaptor.getValue(), "S system prompt");
+            verify(messageSource, org.mockito.Mockito.never())
+                    .getMessage(org.mockito.ArgumentMatchers.startsWith("prompt.answer.style"), any(), any(Locale.class));
+        });
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(strings = {"INFO", "DEBUG"})
     @DisplayName("BLOCKING C — 창의 시스템 프롬프트 + 창의 검증 프롬프트를 쓰고, apiGrounded 가 grounded 로 실린다 (§6.24 Step 2-a/2-d)")
-    void blocking_creativeMode_usesCreativePromptsAndMapsApiGrounded() {
-        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn(new LlmRouter.LlmResult("## 요약\n만들었습니다", 100, 40),
-                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
-        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+    @SuppressWarnings("unchecked")
+    void blocking_creativeMode_usesCreativePromptsAndMapsApiGrounded(String level) {
+        withAnswerLogLevel(level, () -> {
+            ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+            when(messageSource.getMessage(eq("prompt.answer.system.c"), any(), any(Locale.class)))
+                    .thenReturn("C system prompt");
+            when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                    .thenReturn(new LlmRouter.LlmResult("## 요약\n만들었습니다", 100, 40),
+                                new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
+            when(llmRouter.findProviderName(any(), any())).thenReturn("local");
 
-        AgentState result = service.execute(
-                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+            AgentState result = service.execute(
+                    newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
 
-        verify(messageSource).getMessage(eq("prompt.answer.system.c"), any(), any(Locale.class));
-        verify(messageSource).getMessage(eq("prompt.answer.eval.creative"), any(), any(Locale.class));
-        // 검증을 '끄지' 않는다 — 답변 1회 + 평가 1회. S(평가 스킵)와 갈리는 지점이다.
-        verify(llmRouter, times(2)).executeGatedWithUsage(any(), any(), any());
-        assertThat(result.grounded()).isTrue();   // apiGrounded → grounded (CriticService 코드 변경 0)
-        assertThat(result.needsRetry()).isFalse();
-        assertThat(result.inventedSymbols()).isEmpty();
+            verify(messageSource).getMessage(eq("prompt.answer.eval.creative"), any(), any(Locale.class));
+            verify(llmRouter, times(2)).executeGatedWithUsage(any(), any(), any());
+            assertAnswerSystemPrompt(callCaptor.getAllValues().get(0), "C system prompt");
+            assertThat(result.grounded()).isTrue();
+            assertThat(result.needsRetry()).isFalse();
+            assertThat(result.inventedSymbols()).isEmpty();
+        });
+    }
+
+    private static void withAnswerLogLevel(String level, Runnable test) {
+        Logger logger = com.example.ragagent.LogbackTestSupport.logger(AnswerService.class);
+        Level previous = logger.getLevel();
+        logger.setLevel(Level.toLevel(level));
+        try {
+            test.run();
+        } finally {
+            logger.setLevel(previous);
+        }
+    }
+
+    private static void assertAnswerSystemPrompt(Function<ChatModel, ChatResponse> call, String expected) {
+        ChatModel model = com.example.ragagent.LlmTestSupport.chatModelMock();
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        when(model.call(prompts.capture())).thenReturn(chatResponse("dummy"));
+        call.apply(model);
+        assertThat(prompts.getValue().getInstructions().get(0).getMessageType()).isEqualTo(MessageType.SYSTEM);
+        assertThat(prompts.getValue().getInstructions().get(0).getText()).isEqualTo(expected);
     }
 
     @Test
