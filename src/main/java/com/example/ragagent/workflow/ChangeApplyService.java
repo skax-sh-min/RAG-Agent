@@ -112,7 +112,21 @@ public class ChangeApplyService {
      * @return 승인된 수정안 수 — 0 이면 승인할 것이 없다(이미 처리됐거나 없는 문서)
      */
     public int approveAndApply(long jobId, String docId, String reviewer) {
-        int approved = proposals.transitionDocument(jobId, docId, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer);
+        // R10(AGENT_MCP_DESIGN §10.15) — 문서 단위 승인은 원문을 건드리지 않는 요청의 "넣기만" 수정안에만 열린다. 그 밖의 작업과 수정안은 검토
+        // 화면에서 하나씩 확인한다. 이미 승인된(앞선 적용이 잠금·백업으로 미룬) 수정안의 다시 시도는 그대로 된다.
+        ChangeJobRepository.Job job = jobs.find(jobId).orElse(null);
+        boolean leftoverBefore = !proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED).isEmpty();
+        boolean hasPending = !proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.PENDING).isEmpty();
+        if (hasPending && !ReviewRules.batchAllowed(job) && !leftoverBefore) throw new BatchNotAllowedException();
+        int approved = 0;
+        if (ReviewRules.batchAllowed(job)) {
+            for (ChangeProposalRepository.Proposal p : proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.PENDING)) {
+                if (ReviewRules.insertOnly(p) && p.groupKey() == null
+                        && proposals.transition(p.id(), ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer)) {
+                    approved++;
+                }
+            }
+        }
         boolean leftover = !proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPROVED).isEmpty();
         if (approved == 0 && !leftover) return 0;
         auditDocument("change.approve", jobId, docId, reviewer, approved);
@@ -154,14 +168,17 @@ public class ChangeApplyService {
                     : new TermReplacement(report.from(), report.to(), report.caseVariants());
             // 발생 수 대조는 "기계가 낸 글자 치환"에만 맞다. 의미 변경·앵커 편집·관리자가 고친 것·청크 삭제가 하나라도 있으면 줄 구간 대조로 되쓴다.
             // 신고 작업의 글자 치환은 청크 하나만 바꾸므로 "문서의 어느 청크에도 바꿀 말이 안 남음"을 전제하는 발생 수 대조가 맞지 않는다 — 줄 구간 대조로.
-            boolean literalOnly = reportChunk == null && todo.stream().allMatch(p -> ChangeProposalRepository.KIND_LITERAL.equals(p.kind()) && !p.edited());
+            // 그 문서에 이미 검토 화면에서 하나씩 적용된 수정안이 있으면 발생 수 대조의 전제("문서의 모든 청크가 이번에 끝난다")가 깨진다 — 줄 구간 대조로(R9).
+            boolean literalOnly = reportChunk == null
+                    && proposals.listByJobDocStatus(jobId, docId, ChangeProposalRepository.APPLIED).isEmpty()
+                    && todo.stream().allMatch(p -> ChangeProposalRepository.KIND_LITERAL.equals(p.kind()) && !p.edited());
             if (literalOnly && rule == null) return DocResult.error(docId, "작업 리포트를 읽지 못했습니다");
 
-            DatabaseBackupService.RunResult backup = backups.run("pre-change-" + jobId);
-            if (!backup.ok()) {
+            String backupError = ensureJobBackup(jobId);
+            if (backupError != null) {
                 // 복구 지점이 없는 채로 쓰지 않는다 — 수정안은 승인 상태로 남아 다시 시도할 수 있다.
-                log.warn("[APPLY] DB 백업 실패 — 적용하지 않는다 job={} doc={}: {}", jobId, docId, backup.error());
-                return DocResult.error(docId, "DB 백업에 실패해 적용하지 않았습니다: " + backup.error());
+                log.warn("[APPLY] DB 백업 실패 — 적용하지 않는다 job={} doc={}: {}", jobId, docId, backupError);
+                return DocResult.error(docId, "DB 백업에 실패해 적용하지 않았습니다: " + backupError);
             }
 
             String collection = adminService.collectionFor(MaintenanceWorkflow.VERSION);
@@ -170,16 +187,18 @@ public class ChangeApplyService {
             int applied = 0, stale = 0, failed = 0, appliedOccurrences = 0;
             boolean reportedChunkApplied = false;
             List<MarkdownWriteBack.Edit> appliedEdits = new ArrayList<>();
+            List<Long> appliedIds = new ArrayList<>();
             for (ChangeProposalRepository.Proposal p : todo) {
                 AdminService.ApplyOutcome outcome;
                 if (p.groupKey() != null && staleGroups.contains(p.groupKey())) {
                     outcome = AdminService.ApplyOutcome.STALE;
                 } else {
-                    outcome = applyOne(collection, p, rule);
+                    outcome = applyOne(collection, p, rule, p.afterContext(), p.afterKeywords());
                 }
                 switch (outcome) {
                     case APPLIED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.APPLIED, null);
+                        appliedIds.add(p.id());
                         applied++;
                         if (p.chunkId().equals(reportChunk)) reportedChunkApplied = true;
                         if (rule != null) appliedOccurrences += rule.count(p.beforeText());
@@ -191,6 +210,7 @@ public class ChangeApplyService {
                     }
                     case EMBED_FAILED -> {
                         proposals.finishApply(p.id(), ChangeProposalRepository.FAILED, null);
+                        notes.put(p.id(), EMBED_FAILED_NOTE);
                         failed++;
                     }
                 }
@@ -209,7 +229,8 @@ public class ChangeApplyService {
                     r = MarkdownWriteBack.applyEdits(convertedDir, docId, appliedEdits);
                 }
                 md = r.status();
-                proposals.setMdStatus(jobId, docId, md);
+                // 이번에 적용한 수정안에만 — 앞서 검토 화면에서 하나씩 적용된 수정안의 MD 결과를 덮지 않는다.
+                for (Long id : appliedIds) proposals.setMdStatusFor(id, md);
                 log.info("[APPLY] 완료 job={} doc={} 적용={} stale={} 실패={} md={} ({})", jobId, docId, applied, stale, failed, md, r.detail());
             } else {
                 log.info("[APPLY] 적용된 청크 없음 job={} doc={} stale={} 실패={}", jobId, docId, stale, failed);
@@ -241,14 +262,15 @@ public class ChangeApplyService {
     }
 
     /** 수정안 하나를 쓴다 — 청크 삭제는 {@link AdminService#applyChunkDelete}, 나머지는 {@link AdminService#applyChunkEdit}. 예외는 실패로 바꾼다. */
-    private AdminService.ApplyOutcome applyOne(String collection, ChangeProposalRepository.Proposal p, TermReplacement rule) {
+    private AdminService.ApplyOutcome applyOne(String collection, ChangeProposalRepository.Proposal p, TermReplacement rule,
+                                               String context, String keywords) {
         try {
             if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) {
                 return adminService.applyChunkDelete(collection, p.chunkId(), p.beforeHash());
             }
             Map<String, String> metaChanges = new HashMap<>();
-            if (p.afterContext() != null) metaChanges.put(MetaKey.CHUNK_CONTEXT, p.afterContext());
-            if (p.afterKeywords() != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, p.afterKeywords());
+            if (context != null) metaChanges.put(MetaKey.CHUNK_CONTEXT, context);
+            if (keywords != null) metaChanges.put(MetaKey.EXCERPT_KEYWORDS, keywords);
             // 섹션 제목에도 같은 치환 — 본문에서 바꾼 말이 제목에 있으면 제목만 옛 이름으로 남는다(종단 확인에서 드러난 것).
             if (rule != null) {
                 String heading = currentHeading(collection, p.chunkId());
@@ -349,6 +371,397 @@ public class ChangeApplyService {
         int n = proposals.withdraw(proposalId, reviewer);
         if (n > 0) audit("change.withdraw", p, Map.of("reviewer", String.valueOf(reviewer), "count", n));
         return n;
+    }
+
+    // ── 검토 화면(6e, AGENT_MCP_DESIGN §10.15) ─────────────────────────────
+
+    /** R10 — 이 작업(또는 수정안)은 하나씩 확인해야 한다. 컨트롤러가 409 로 바꾼다. */
+    public static final class BatchNotAllowedException extends RuntimeException {
+        public BatchNotAllowedException() {
+            super("이 요청은 원문을 바꾸는 요소가 있어 하나씩 확인해야 합니다");
+        }
+    }
+
+    /** 동시 편집 — 화면이 연 뒤 다른 관리자가 수정안을 고쳤거나 처리했다. 컨트롤러가 409 로 바꾼다. */
+    public static final class ProposalConflictException extends RuntimeException {
+        public ProposalConflictException() {
+            super("다른 관리자가 이 수정안을 고쳤거나 처리했습니다 — 다시 엽니다");
+        }
+    }
+
+    /** 테스트용 — 순차 실행기를 가상 스레드가 아니라 호출한 스레드에서 돌린다(확인이 돌아올 때 적용이 끝나 있다). */
+    private boolean inlineDrain;
+
+    void runDrainInline() {
+        this.inlineDrain = true;
+    }
+
+    /** 순차 실행기가 돌고 있는 작업 — 작업마다 하나(R8). */
+    private final Set<Long> draining = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * 적용이 미뤄졌거나 경고가 붙은 수정안의 사유(잠금 충돌·백업 실패·맥락 옛 값) — 화면 표시용이라 메모리에만 둔다(재기동하면 사라진다;
+     * 상태 자체는 DB 의 {@code approved}/{@code applied} 가 말한다).
+     */
+    private final Map<Long, String> notes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 기동 때 — 적용되지 않은 채 남은 승인 중 그 작업의 백업 이름이 없는 것을 대기로 되돌린다({@link ChangeProposalRepository#releaseApprovedWithoutBackup}).
+     * 작업 전 사본으로 DB 를 복원하면 그 작업의 수정안이 "승인됨"으로 돌아오는데, 그대로 두면 [다시 시도]·다음 [확인] 이 되돌린 작업을 통째로 다시
+     * 적용한다. 기동 직후에는 순차 실행기가 없으므로 "적용을 기다리는 승인"은 있을 수 없다.
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void releaseRestoredApprovals() {
+        try {
+            List<long[]> released = proposals.releaseApprovedWithoutBackup();
+            if (released.isEmpty()) return;
+            for (long[] id : released) {
+                notes.put(id[1], "적용되지 않은 승인이 남아 있어(DB 복원 또는 백업 실패) 대기로 되돌렸습니다 — 적용하려면 다시 확인하세요");
+            }
+            log.warn("[APPLY] 적용되지 않은 승인 {}건을 대기로 되돌렸다(백업 이름 없는 작업 — DB 를 작업 전 사본으로 복원했거나 백업이 실패했다) 작업={}",
+                    released.size(), released.stream().map(i -> i[0]).distinct().toList());
+        } catch (Exception e) {
+            log.warn("[APPLY] 남은 승인 확인 실패: {}", e.getMessage());
+        }
+    }
+
+    /** 검토 화면이 항목에 보일 사유 — 없으면 {@code null}. */
+    public String noteFor(long proposalId) {
+        return notes.get(proposalId);
+    }
+
+    /** 수정안이 가리키는 청크의 지금 모습 — 검토 화면의 낡음 판정·섹션 제목. 읽지 못하면 {@code null}. */
+    public AdminService.ChunkRow currentChunk(String chunkId) {
+        try {
+            return adminService.getChunk(adminService.collectionFor(MaintenanceWorkflow.VERSION), chunkId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 이 작업의 순차 실행기가 지금 돌고 있는가 — 목록 폴링과 [다시 시도] 버튼이 읽는다. */
+    public boolean draining(long jobId) {
+        return draining.contains(jobId);
+    }
+
+    /**
+     * R2 — 작업당 백업 하나. 이 작업의 백업이 남아 있으면 다시 만들지 않고, 없거나(첫 쓰기) 보존 정리로 지워졌으면 새로 만들어 이름을 남긴다.
+     *
+     * @return 실패 사유, 쓸 백업이 있으면 {@code null}
+     */
+    String ensureJobBackup(long jobId) {
+        String name = jobs.backupName(jobId);
+        if (name != null) {
+            Path f = backups.backupFile(name);
+            if (f != null && java.nio.file.Files.isRegularFile(f)) return null;
+        }
+        DatabaseBackupService.RunResult r = backups.run("pre-change-" + jobId);
+        if (!r.ok()) return r.error();
+        if (r.file() != null) {
+            // 적용은 변환 MD 도 고친다 — DB 사본만으로 되돌리면 다음 재인덱싱이 수정을 되살리므로 그 작업이 건드릴 문서의 MD 를 같은 시점에 떠 둔다.
+            // 뜨지 못하면 복구 지점이 반쪽이라 쓰지 않는다(DB 백업 실패와 같다). 이름은 MD 를 뜬 뒤에 남긴다 — 뜨다 죽으면 다음 적용이 다시 뜬다.
+            try {
+                backups.copyConvertedFiles(r.file(), convertedFilesOf(jobId));
+            } catch (Exception e) {
+                return "변환 MD 사본을 뜨지 못했다: " + e.getMessage();
+            }
+            jobs.setBackupName(jobId, r.file());
+        }
+        return null;
+    }
+
+    /** 작업의 수정안이 가리키는 문서들의 변환 MD(원본 변환본·교정본 중 있는 것 전부). */
+    private List<Path> convertedFilesOf(long jobId) {
+        Path dir = Path.of(props.dataDir()).resolve("converted");
+        List<Path> out = new ArrayList<>();
+        for (String docId : new java.util.TreeSet<>(proposals.listByJob(jobId).stream().map(ChangeProposalRepository.Proposal::docId).toList())) {
+            for (String name : List.of(docId + ".md", docId + "_corrected.md")) {
+                Path f = dir.resolve(name);
+                if (java.nio.file.Files.isRegularFile(f)) out.add(f);
+            }
+        }
+        return out;
+    }
+
+    /** 확인·임시 저장의 공통 검사 — 거절 사유 또는 {@code null}. 사람 편집은 G2·G6 만 강제한다(R7). */
+    private static String reviewTextError(ChangeProposalRepository.Proposal p, String text) {
+        if (text.isBlank()) return "본문이 비었습니다 — 청크를 지우려면 내용 삭제를 요청하세요";
+        if (text.length() > MAX_EDITED_CHARS) return "본문이 너무 깁니다(" + MAX_EDITED_CHARS + "자 이하)";
+        if (text.equals(p.beforeText())) return "수정 전과 같습니다 — 이 청크를 바꾸지 않으려면 '빼기'를 누르세요";
+        String invariant = MaintenanceWorkflow.invariantViolation(p.beforeText(), text);
+        if (invariant != null) return invariant + " — 그림·페이지 마커와 코드 펜스는 그대로 두어야 합니다";
+        return null;
+    }
+
+    /** 검토 화면이 연 수정안 — {@code pending} 이고 화면이 받은 본문의 해시가 지금과 같아야 한다. */
+    private ChangeProposalRepository.Proposal openForReview(long jobId, long proposalId, String expectedHash) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null || !ChangeProposalRepository.PENDING.equals(p.status())) throw new ProposalConflictException();
+        if (expectedHash != null && !expectedHash.equals(com.example.ragagent.model.TextHash.sha256(p.afterText()))) {
+            throw new ProposalConflictException();
+        }
+        return p;
+    }
+
+    /** 고친 본문을 저장한다(고쳤을 때만) — 거절 사유 또는 {@code null}. */
+    private String saveEdit(ChangeProposalRepository.Proposal p, String text, String editor) {
+        if (text.equals(p.afterText())) return null;
+        if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) return "청크 삭제 수정안은 고칠 본문이 없습니다 — 빼거나 확인하세요";
+        if (p.groupKey() != null) return "겹침 짝은 고칠 수 없습니다 — 확인하거나 빼세요";
+        String error = reviewTextError(p, text);
+        if (error != null) return error;
+        if (!proposals.editAfterTextIfUnchanged(p.id(), p.afterText(), text, editor)) throw new ProposalConflictException();
+        audit("change.edit", p, Map.of("editor", String.valueOf(editor)));
+        return null;
+    }
+
+    private static String normalize(String text) {
+        return text == null ? "" : text.replace("\r\n", "\n");
+    }
+
+    /**
+     * 검토 화면의 임시 저장 — 항목을 옮길 때 고친 내용을 남긴다(상태는 {@code pending}, 배지 "편집함").
+     *
+     * @return 거절 사유, 저장했거나 바뀐 것이 없으면 {@code null}
+     * @throws ProposalConflictException 다른 관리자가 그사이 고쳤거나 처리했다
+     */
+    public String saveDraft(long jobId, long proposalId, String text, String expectedHash, String editor) {
+        ChangeProposalRepository.Proposal p = openForReview(jobId, proposalId, expectedHash);
+        return saveEdit(p, normalize(text), editor);
+    }
+
+    static final String EMBED_FAILED_NOTE = "임베딩 서버에 닿지 못해 적용하지 못했습니다 — 청크·검색 색인은 그대로입니다. 서버를 확인한 뒤 [다시 적용]을 누르세요";
+
+    /**
+     * 임베딩 실패({@code failed})로 끝난 수정안을 다시 승인해 적용 줄에 넣는다 — 임베딩이 먼저라 실패한 적용은 아무것도 바꾸지 않았으므로 같은 본문을
+     * 다시 보내면 된다(청크가 그사이 바뀌었으면 적용이 {@code stale} 로 가른다). 겹침 짝이면 짝 전체.
+     *
+     * @return 다시 넣었으면 {@code true}
+     */
+    public boolean reapplyFailed(long jobId, long proposalId, String reviewer) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        if (p == null || !ChangeProposalRepository.FAILED.equals(p.status())) return false;
+        int n = p.groupKey() == null
+                ? (proposals.transition(proposalId, ChangeProposalRepository.FAILED, ChangeProposalRepository.APPROVED, reviewer) ? 1 : 0)
+                : proposals.transitionGroup(jobId, p.groupKey(), ChangeProposalRepository.FAILED, ChangeProposalRepository.APPROVED, reviewer);
+        if (n == 0) return false;
+        notes.remove(proposalId);
+        audit("change.approve", p, Map.of("reviewer", String.valueOf(reviewer), "count", n, "via", "reapply"));
+        enqueue(jobId);
+        return true;
+    }
+
+    /** 기계 수정안으로 되돌린다. @return 되돌렸으면 {@code true} */
+    public boolean restoreMachine(long jobId, long proposalId) {
+        ChangeProposalRepository.Proposal p = proposals.find(proposalId).filter(x -> x.jobId() == jobId).orElse(null);
+        return p != null && proposals.restoreMachineText(proposalId);
+    }
+
+    /**
+     * 확인 = 그 수정안 하나를 승인하고 곧바로 적용 줄에 넣는다(R1). 고쳤으면 먼저 저장하고(처음 기계 수정안은 {@code machine_after_text} 에 남는다),
+     * 겹침 짝이면 짝 전체를 승인한다. 적용은 작업별 순차 실행기가 확인한 순서대로 한다(R8) — 이 메서드는 기다리지 않는다.
+     *
+     * @return 거절 사유(상태는 그대로), 승인했으면 {@code null}
+     * @throws ProposalConflictException 다른 관리자가 그사이 고쳤거나 처리했다
+     */
+    public String confirmOne(long jobId, long proposalId, String text, String expectedHash, String reviewer) {
+        ChangeProposalRepository.Proposal p = openForReview(jobId, proposalId, expectedHash);
+        if (!ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) {
+            String error = saveEdit(p, normalize(text), reviewer);
+            if (error != null) return error;
+        }
+        int n = p.groupKey() == null
+                ? (proposals.transition(proposalId, ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer) ? 1 : 0)
+                : proposals.transitionGroup(jobId, p.groupKey(), ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer);
+        if (n == 0) throw new ProposalConflictException();
+        notes.remove(proposalId);
+        audit("change.approve", p, Map.of("reviewer", String.valueOf(reviewer), "count", n, "via", "review"));
+        enqueue(jobId);
+        return null;
+    }
+
+    /**
+     * 일괄 적용(R10) — 작업이 일괄 적용을 받을 때만, 대기 중인 "넣기만" 수정안을(문서 필터가 있으면 그 문서만) 한 번에 승인해 순차 실행기에 넣는다.
+     * 그사이 누가 고쳤거나 뺀 것은 CAS 가 건너뛴다.
+     *
+     * @return 승인한 수
+     * @throws BatchNotAllowedException 이 작업은 하나씩 확인해야 한다
+     */
+    public int approveBatch(long jobId, String docFilter, String reviewer) {
+        ChangeJobRepository.Job job = jobs.find(jobId).orElse(null);
+        if (!ReviewRules.batchAllowed(job)) throw new BatchNotAllowedException();
+        int n = 0;
+        Set<String> docs = new HashSet<>();
+        for (ChangeProposalRepository.Proposal p : batchTargets(jobId, docFilter)) {
+            if (proposals.transition(p.id(), ChangeProposalRepository.PENDING, ChangeProposalRepository.APPROVED, reviewer)) {
+                n++;
+                docs.add(p.docId());
+            }
+        }
+        if (n > 0 && auditLogger != null) {
+            try {
+                auditLogger.log("change.approve", "job-" + jobId,
+                        Map.of("job", jobId, "reviewer", String.valueOf(reviewer), "count", n, "docs", docs.size(), "via", "batch"));
+            } catch (Exception e) {
+                log.debug("[APPLY] 감사 기록 실패: {}", e.getMessage());
+            }
+        }
+        if (n > 0) enqueue(jobId);
+        return n;
+    }
+
+    /** 일괄 적용 대상 — 대기 중인 "넣기만" 수정안(겹침 짝 제외 — 짝은 하나씩 확인한다). 작업이 일괄 적용을 받는지는 보지 않는다. */
+    public List<ChangeProposalRepository.Proposal> batchTargets(long jobId, String docFilter) {
+        List<ChangeProposalRepository.Proposal> out = new ArrayList<>();
+        for (ChangeProposalRepository.Proposal p : proposals.listByJobStatus(jobId, ChangeProposalRepository.PENDING)) {
+            if (docFilter != null && !docFilter.isBlank() && !docFilter.equals(p.docId())) continue;
+            if (p.groupKey() == null && ReviewRules.insertOnly(p)) out.add(p);
+        }
+        return out;
+    }
+
+    /** 남은 승인 수정안을 다시 적용한다(잠금 충돌·백업 실패로 미뤄진 것) — 실행기가 이미 돌고 있으면 아무것도 하지 않는다. */
+    public void retry(long jobId) {
+        enqueue(jobId);
+    }
+
+    /** 작업의 순차 실행기를 띄운다 — 돌고 있지 않을 때만(R8). */
+    void enqueue(long jobId) {
+        if (!draining.add(jobId)) return;
+        if (inlineDrain) {
+            drain(jobId);
+            return;
+        }
+        Thread.ofVirtual().name("change-review-" + jobId).start(MdcPropagation.wrap(() -> drain(jobId)));
+    }
+
+    /**
+     * 작업의 {@code approved} 수정안을 확인 시각 순으로 하나씩 적용한다(테스트는 이것을 동기로 부른다). 잠금·백업 때문에 이번에 적용하지 못한 것은
+     * 승인 상태로 두고 건너뛴다(다시 시도). 끝내기 직전에 들어온 확인을 놓치지 않으려고 실행기 표시를 지운 뒤 한 번 더 본다.
+     */
+    void drain(long jobId) {
+        Set<Long> skipped = new HashSet<>();
+        try {
+            while (true) {
+                while (true) {
+                    ChangeProposalRepository.Proposal next = proposals.listByJobStatus(jobId, ChangeProposalRepository.APPROVED).stream()
+                            .filter(p -> !skipped.contains(p.id())).findFirst().orElse(null);
+                    if (next == null) break;
+                    if (!applyReviewed(jobId, next)) skipped.add(next.id());
+                }
+                draining.remove(jobId);
+                boolean more = proposals.listByJobStatus(jobId, ChangeProposalRepository.APPROVED).stream()
+                        .anyMatch(p -> !skipped.contains(p.id()));
+                if (!more || !draining.add(jobId)) return;
+            }
+        } catch (Exception e) {
+            log.warn("[APPLY] 검토 적용 실행기 실패 job={}: {}", jobId, e.getMessage());
+            draining.remove(jobId);
+        }
+    }
+
+    /**
+     * 검토 화면에서 확인한 수정안 하나(겹침 짝이면 짝 전체)를 적용한다. 맥락·키워드는 잠금 밖에서 먼저 만들고(R3·R4), 문서 잠금 → 작업 백업(R2) →
+     * 청크 쓰기 → 그 청크의 줄 구간 MD 되쓰기(R9).
+     *
+     * @return 처리했으면({@code applied}/{@code stale}/{@code failed} 로 끝났으면) {@code true}, 잠금·백업 때문에 승인 상태로 남겼으면 {@code false}
+     */
+    boolean applyReviewed(long jobId, ChangeProposalRepository.Proposal first) {
+        List<ChangeProposalRepository.Proposal> todo = first.groupKey() == null ? List.of(first)
+                : proposals.listByJobStatus(jobId, ChangeProposalRepository.APPROVED).stream()
+                        .filter(p -> first.groupKey().equals(p.groupKey())).toList();
+        String collection = adminService.collectionFor(MaintenanceWorkflow.VERSION);
+
+        // 맥락·키워드 — 잠금 밖(LLM 은 느릴 수 있다).
+        Map<Long, String[]> contexts = new HashMap<>();
+        for (ChangeProposalRepository.Proposal p : todo) contexts.put(p.id(), contextFor(collection, p));
+
+        DocumentWriteLocks.Lease lease = writeLocks.tryAcquire(first.docId());
+        if (lease == null) {
+            notes.put(first.id(), "이 문서에 다른 쓰기 작업(재인덱싱 등)이 진행 중이라 적용을 미뤘습니다 — 다시 시도하세요");
+            return false;
+        }
+        try {
+            String backupError = ensureJobBackup(jobId);
+            if (backupError != null) {
+                notes.put(first.id(), "DB 백업에 실패해 적용하지 않았습니다: " + backupError);
+                return false;
+            }
+            ChangeJobRepository.Job job = jobs.find(jobId).orElse(null);
+            String reportChunk = job != null && job.fromReport() ? job.reportChunkId() : null;
+            MaintenanceWorkflow.Report report = report(job);
+            TermReplacement rule = report == null || report.from() == null || report.to() == null ? null
+                    : new TermReplacement(report.from(), report.to(), report.caseVariants());
+            Set<String> staleGroups = staleGroups(collection, todo);
+            List<MarkdownWriteBack.Edit> edits = new ArrayList<>();
+            List<Long> appliedIds = new ArrayList<>();
+            boolean reportedChunkApplied = false;
+            for (ChangeProposalRepository.Proposal p : todo) {
+                String[] ctx = contexts.get(p.id());
+                AdminService.ApplyOutcome outcome = p.groupKey() != null && staleGroups.contains(p.groupKey())
+                        ? AdminService.ApplyOutcome.STALE
+                        : applyOne(collection, p, rule, ctx[0], ctx[1]);
+                switch (outcome) {
+                    case APPLIED -> {
+                        if (ctx[0] != null || ctx[1] != null) proposals.setAppliedContext(p.id(), ctx[0], ctx[1]);
+                        proposals.finishApply(p.id(), ChangeProposalRepository.APPLIED, null);
+                        appliedIds.add(p.id());
+                        edits.add(new MarkdownWriteBack.Edit(p.beforeText(), p.afterText()));
+                        if (p.chunkId().equals(reportChunk)) reportedChunkApplied = true;
+                    }
+                    case STALE, NOT_FOUND, CURATED -> proposals.finishApply(p.id(), ChangeProposalRepository.STALE, null);
+                    case EMBED_FAILED -> {
+                        proposals.finishApply(p.id(), ChangeProposalRepository.FAILED, null);
+                        notes.put(p.id(), EMBED_FAILED_NOTE);
+                    }
+                }
+                audit("change.apply", p, Map.of("result", outcome.name(), "via", "review"));
+            }
+            if (!edits.isEmpty()) {
+                MarkdownWriteBack.Result r = MarkdownWriteBack.applyEdits(
+                        Path.of(props.dataDir()).resolve("converted"), first.docId(), edits);
+                for (Long id : appliedIds) proposals.setMdStatusFor(id, r.status());
+                log.info("[APPLY] 검토 적용 job={} proposal={} 적용={} md={} ({})", jobId, first.id(), appliedIds.size(), r.status(), r.detail());
+            }
+            if (reportedChunkApplied) closeReports(jobId, reportChunk, first.reviewedBy());
+            return true;
+        } catch (Exception e) {
+            log.warn("[APPLY] 검토 적용 실패 job={} proposal={}: {}", jobId, first.id(), e.getMessage());
+            notes.put(first.id(), "적용 중 오류: " + e.getMessage());
+            return false;
+        } finally {
+            lease.close();
+        }
+    }
+
+    /**
+     * 적용할 맥락·키워드 {@code [context, keywords]} — R3: 사람이 본문을 고치지 않았고 수정안을 만들 때 만든 값이 있으면 그것을 쓴다(LLM 호출 없음).
+     * 아니면 확정 본문으로 한 번 다시 만든다. R4: 다시 만들지 못하면 {@code [null, null]} — 청크의 옛 맥락이 그대로 남고 항목에 경고가 붙는다.
+     * 청크 삭제 수정안은 맥락이 없다.
+     */
+    private String[] contextFor(String collection, ChangeProposalRepository.Proposal p) {
+        if (ChangeProposalRepository.KIND_DELETE_CHUNK.equals(p.kind())) return new String[] {null, null};
+        if (!p.edited() && (p.afterContext() != null || p.afterKeywords() != null)) {
+            return new String[] {p.afterContext(), p.afterKeywords()};
+        }
+        if (keywordExtractor == null) {
+            notes.put(p.id(), "맥락·키워드를 다시 만들지 못해 옛 값으로 적용했습니다 — /admin 청크 화면에서 재인덱싱(키워드 재생성)으로 고치세요");
+            return new String[] {null, null};
+        }
+        try {
+            AdminService.ChunkRow row = adminService.getChunk(collection, p.chunkId());
+            Map<String, Object> meta = row == null ? new HashMap<>() : new HashMap<>(row.metadata());
+            org.springframework.ai.document.Document enriched =
+                    keywordExtractor.enrichSingle(new org.springframework.ai.document.Document(p.afterText(), meta));
+            Object ctx = enriched.getMetadata().get(MetaKey.CHUNK_CONTEXT);
+            Object kw = enriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS);
+            audit("change.regenerate-context", p, Map.of("via", "review"));
+            return new String[] {ctx == null ? null : ctx.toString(), kw == null ? null : kw.toString()};
+        } catch (Exception e) {
+            log.warn("[APPLY] 맥락 재생성 실패 — 옛 맥락으로 적용 proposal={}: {}", p.id(), e.getMessage());
+            notes.put(p.id(), "맥락·키워드를 다시 만들지 못해 옛 값으로 적용했습니다 — /admin 청크 화면에서 재인덱싱(키워드 재생성)으로 고치세요");
+            return new String[] {null, null};
+        }
     }
 
     /** 감사 기록 — 본문은 남기지 않는다(before/after 는 {@code change_proposal} 에 있다). 기록 실패는 적용을 막지 않는다. */

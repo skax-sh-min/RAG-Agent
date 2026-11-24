@@ -130,6 +130,24 @@ public class ChangeProposalRepository {
                 """, to, reviewer, DbTimestamp.now(), id, from) > 0;
     }
 
+    /**
+     * 백업 이름이 없는 작업의 {@code approved} 수정안을 {@code pending} 으로 되돌린다 — 기동 때만 부른다. 작업당 사본은 첫 [확인] 뒤·적용 전에 뜨고
+     * 이름은 그 뒤에 쓰므로, 그 사본으로 복원한 DB 에서는 "승인됨 + 백업 이름 없음"이 된다. 그대로 두면 [다시 시도] 한 번에 되돌린 작업이 다시
+     * 적용된다(2026-11-23 리허설). 백업이 실패해 남은 승인도 같은 모양이라 함께 풀린다(다시 확인하면 된다).
+     *
+     * @return 되돌린 수정안의 (작업, 수정안) id
+     */
+    public List<long[]> releaseApprovedWithoutBackup() {
+        List<long[]> ids = jdbc.query("""
+                SELECT p.job_id, p.id FROM change_proposal p JOIN change_job j ON j.id = p.job_id
+                WHERE p.status = 'approved' AND j.backup_name IS NULL ORDER BY p.job_id, p.id
+                """, (rs, i) -> new long[] {rs.getLong(1), rs.getLong(2)});
+        for (long[] id : ids) {
+            jdbc.update("UPDATE change_proposal SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL WHERE id = ? AND status = 'approved'", id[1]);
+        }
+        return ids;
+    }
+
     /** 한 문서의 수정안을 상태별로 — 승인·적용이 문서 단위이므로 이 단위로 읽는다. */
     public List<Proposal> listByJobDocStatus(long jobId, String docId, String status) {
         return jdbc.query("SELECT * FROM change_proposal WHERE job_id = ? AND doc_id = ? AND status = ? ORDER BY id",
@@ -204,6 +222,53 @@ public class ChangeProposalRepository {
                 UPDATE change_proposal SET status = ?, reviewed_by = ?, reviewed_at = ?
                 WHERE job_id = ? AND group_key = ? AND status = ?
                 """, WITHDRAWN, reviewer, now, p.get().jobId(), p.get().groupKey(), PENDING);
+    }
+
+    // ── 검토 화면(6e, AGENT_MCP_DESIGN §10.15) ─────────────────────────────
+
+    /** 수정안 하나의 MD 되쓰기 결과 — 검토 화면은 청크 하나씩 적용하므로 (작업, 문서)의 행 전부가 아니라 그 행에만 쓴다. */
+    public boolean setMdStatusFor(long id, String mdStatus) {
+        return jdbc.update("UPDATE change_proposal SET md_status = ? WHERE id = ? AND status = ?", mdStatus, id, APPLIED) > 0;
+    }
+
+    /**
+     * 관리자가 고친 본문으로 바꾼다 — {@link #editAfterText} 와 같고, <b>지금 본문이 {@code expectedAfterText} 일 때만</b>(동시 편집의
+     * compare-and-set). 다른 관리자가 그사이 고쳤으면 {@code false}.
+     */
+    public boolean editAfterTextIfUnchanged(long id, String expectedAfterText, String newAfterText, String editor) {
+        return jdbc.update("""
+                UPDATE change_proposal
+                SET machine_after_text = COALESCE(machine_after_text, after_text), after_text = ?, edited_by = ?, edited_at = ?
+                WHERE id = ? AND status = ? AND after_text = ?
+                """, newAfterText, editor, DbTimestamp.now(), id, PENDING, expectedAfterText) > 0;
+    }
+
+    /** 기계 수정안으로 되돌린다 — {@code pending} 이고 고친 적이 있을 때만. 배지("관리자가 고침")도 사라진다. */
+    public boolean restoreMachineText(long id) {
+        return jdbc.update("""
+                UPDATE change_proposal SET after_text = machine_after_text, machine_after_text = NULL, edited_by = NULL, edited_at = NULL
+                WHERE id = ? AND status = ? AND machine_after_text IS NOT NULL
+                """, id, PENDING) > 0;
+    }
+
+    /** 겹침 짝 전체를 {@code from} → {@code to}(CAS). @return 바뀐 수 */
+    public int transitionGroup(long jobId, String groupKey, String from, String to, String reviewer) {
+        return jdbc.update("""
+                UPDATE change_proposal SET status = ?, reviewed_by = ?, reviewed_at = ?
+                WHERE job_id = ? AND group_key = ? AND status = ?
+                """, to, reviewer, DbTimestamp.now(), jobId, groupKey, from);
+    }
+
+    /** 한 작업의 수정안을 상태별로 — 승인한 순서(검토 화면의 순차 실행기가 확인한 순서대로 적용한다). */
+    public List<Proposal> listByJobStatus(long jobId, String status) {
+        return jdbc.query("SELECT * FROM change_proposal WHERE job_id = ? AND status = ? ORDER BY reviewed_at, id",
+                MAPPER, jobId, status);
+    }
+
+    /** 적용 때 실제로 실은 맥락·키워드 — 승인된 수정안에만(검토 화면에서 확인한 뒤 확정 본문으로 다시 만든 값, R3). */
+    public boolean setAppliedContext(long id, String afterContext, String afterKeywords) {
+        return jdbc.update("UPDATE change_proposal SET after_context = ?, after_keywords = ? WHERE id = ? AND status = ?",
+                afterContext, afterKeywords, id, APPROVED) > 0;
     }
 
     public int countByStatus(long jobId, String status) {

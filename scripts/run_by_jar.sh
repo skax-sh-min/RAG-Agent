@@ -2,13 +2,35 @@
 set -e
 
 # windows_run_by_jar_cmd_no_docker.cmd 의 macOS 판.
-# Docker 없이 .env 를 로드해 이미 빌드된 target/rag-agent-*.jar 를 실행한다.
-# 빌드가 먼저 필요하다: mvn clean package -DskipTests
+# Docker 없이 .env 를 로드해 target/rag-agent-*.jar 를 실행한다.
+# -b 는 빌드 후 실행, -cb 는 클린 빌드 후 실행한다.
 
-# scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
-if [ "$(basename "$(pwd)")" = "scripts" ]; then
-  cd ..
+# 도움말은 .env 나 Maven 없이도 볼 수 있다.
+if [ "$#" -gt 1 ]; then
+  echo "오류: 옵션은 하나만 지정하세요. --help 로 사용법을 확인하세요." >&2
+  exit 1
 fi
+BUILD_MODE=""
+case "${1:-}" in
+  "") ;;
+  -b|--build) BUILD_MODE=build ;;
+  -cb|--clean-build) BUILD_MODE=clean ;;
+  -h|--help)
+    echo "사용법: $(basename "$0") [옵션]"
+    echo "  -b,  --build        mvn package 로 빌드한 뒤 JAR 실행"
+    echo "  -cb, --clean-build  mvn clean package 로 빌드한 뒤 JAR 실행"
+    echo "  -h,  --help         도움말 표시"
+    echo "  옵션 없음: 기존 JAR 실행"
+    exit 0
+    ;;
+  *)
+    echo "오류: 알 수 없는 옵션입니다: $1. --help 로 사용법을 확인하세요." >&2
+    exit 1
+    ;;
+esac
+
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
+cd "$SCRIPT_DIR/.."
 
 echo "======================================================="
 echo "현재 경로: $(pwd)"
@@ -37,11 +59,36 @@ set -a; . "./$ENV_FILE"; set +a
 SERVER_PORT=8081
 export SERVER_PORT
 
+if [ -n "$BUILD_MODE" ]; then
+  if ! command -v mvn >/dev/null 2>&1; then
+    echo "오류: mvn 을 찾을 수 없습니다. Maven 3.9+ 와 Java 21 을 설치하세요." >&2
+    exit 1
+  fi
+  if [ "$BUILD_MODE" = clean ]; then
+    mvn clean package
+  else
+    mvn package
+  fi
+fi
+
 # target 폴더에서 실행 대상 JAR 검색.
 # *.jar.original(Boot 재패키징 전 원본)은 glob 에 걸리지 않고, 여러 개면 가장 최근 것을 고른다.
 # 빌드는 앱 jar 옆에 런처 jar(rag-agent-X.Y.Z-launcher.jar — 앱 안 업데이트용 작은 실행기)도 만든다. 앱 jar 보다
 # 나중에 만들어져 가장 최근 파일이 되므로 빼지 않으면 그것을 앱으로 띄운다.
-JAR_PATH=$(ls -t target/rag-agent-*.jar 2>/dev/null | grep -v -- '-launcher\.jar$' | head -1 || true)
+if [ -n "$BUILD_MODE" ]; then
+  if [ ! -f target/maven-archiver/pom.properties ]; then
+    echo "오류: 빌드한 JAR 의 버전 정보를 찾을 수 없습니다." >&2
+    exit 1
+  fi
+  VERSION=$(sed -n 's/^version=//p' target/maven-archiver/pom.properties)
+  JAR_PATH="target/rag-agent-$VERSION.jar"
+  if [ -z "$VERSION" ] || [ ! -f "$JAR_PATH" ]; then
+    echo "오류: 빌드한 JAR 을 찾을 수 없습니다: $JAR_PATH" >&2
+    exit 1
+  fi
+else
+  JAR_PATH=$(ls -t target/rag-agent-*.jar 2>/dev/null | grep -v -- '-launcher\.jar$' | head -1 || true)
+fi
 
 # .cmd 와 같은 자리(data/rag-agent.jar)를 쓴다 — 아래 복사 대상이자 실행 대상.
 RUN_DIR="data"

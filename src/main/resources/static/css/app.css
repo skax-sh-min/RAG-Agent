@@ -686,3 +686,83 @@
     text-decoration-color: var(--bs-secondary-color);
     text-underline-offset: 3px;
 }
+
+/* ── 수정안 검토(6e, AGENT_MCP_DESIGN §10.15) ─────────────────────────────
+   목록 1 : 수정 전 3 : 수정 후 3. 수정 후 칸은 투명한 textarea 와 그 뒤의 강조 층(.review-backdrop)이라
+   두 요소의 글꼴·크기·줄 높이·안쪽 여백·테두리·줄바꿈 규칙이 정확히 같아야 한다 — 하나라도 다르면 엉뚱한 곳이 칠해진다.
+   textarea 는 스크롤하지 않고 내용만큼 자란다(스크롤바가 생기면 폭이 달라져 줄바꿈이 어긋난다); 칸이 스크롤한다. */
+.review-page { --rv-font: var(--bs-font-monospace); --rv-size: 0.82rem; --rv-lh: 1.5; --rv-pad: 0.5rem; }
+.review-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 3fr 3fr;
+    gap: 0.5rem;
+    height: calc(100dvh - 150px);
+    min-height: 420px;
+}
+.review-item-area { grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; min-height: 0; }
+.review-item-area > .review-done { grid-column: span 2; align-self: start; }
+.review-list-pane, .review-pane { display: flex; flex-direction: column; min-height: 0; background: var(--bs-body-bg); }
+.review-rows { overflow-y: auto; flex: 1 1 auto; }
+.review-row { color: inherit; }
+.review-row:hover { background: var(--bs-tertiary-bg); }
+.review-row.active { background: rgba(var(--bs-primary-rgb), 0.18); }   /* 앱 테마 토글은 data-bs-theme 를 바꾸지 않아 *-subtle 변수가 다크에서도 밝다 */
+.review-band { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--bs-border-color); }
+.review-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.review-scroll { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.review-footer { padding: 0.4rem 0.5rem; border-top: 1px solid var(--bs-border-color); }
+
+.review-text {
+    font-family: var(--rv-font);
+    font-size: var(--rv-size);
+    line-height: var(--rv-lh);
+    letter-spacing: normal;
+    tab-size: 4;
+    padding: var(--rv-pad);
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    margin: 0;
+    white-space: normal;               /* 줄 사이 공백 텍스트가 줄로 그려지지 않게 — 줄 안은 .rv-l 이 pre-wrap */
+}
+.rv-l { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; min-height: calc(var(--rv-lh) * 1em); }
+.rv-add { background: var(--diff-add-bg); }
+.rv-add .rv-ch { background: var(--diff-add-hl); }
+.rv-del { background: var(--diff-del-bg); }
+.rv-del .rv-ch { background: var(--diff-del-hl); }
+
+.review-editor { position: relative; }
+.review-backdrop { position: absolute; inset: 0; color: transparent; pointer-events: none; overflow: hidden; }
+.review-backdrop.rv-plain .rv-l, .review-backdrop.rv-pending .rv-l { background: transparent; }
+.review-backdrop.rv-plain .rv-ch, .review-backdrop.rv-pending .rv-ch { background: transparent; }
+.review-input {
+    position: relative;
+    display: block;
+    width: 100%;
+    min-height: 100%;
+    resize: none;
+    overflow: hidden;
+    background: transparent;
+    color: var(--bs-body-color);
+    caret-color: var(--bs-body-color);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    outline: none;
+}
+.review-input:focus { border-color: var(--bs-primary-border-subtle); }
+.review-input[readonly] { cursor: default; }
+
+.review-state { font-weight: 500; }
+.review-state-pending { background: var(--bs-secondary); }
+.review-state-edited { background: var(--bs-info); color: var(--bs-dark); }
+.review-state-applying { background: var(--bs-primary); }
+.review-state-applied { background: var(--bs-success); }
+.review-state-md, .review-state-stale, .review-state-failed { background: var(--bs-warning); color: var(--bs-dark); }
+.review-state-withdrawn, .review-state-rejected { background: var(--bs-light); color: var(--bs-dark); border: 1px solid var(--bs-border-color); }
+
+@media (max-width: 991.98px) {
+    .review-grid { grid-template-columns: 1fr; height: auto; }
+    .review-item-area { grid-column: auto; grid-template-columns: 1fr; }
+    .review-item-area > .review-done { grid-column: auto; }
+    .review-list-pane { max-height: 40vh; }
+    .review-pane { max-height: 70vh; }
+}

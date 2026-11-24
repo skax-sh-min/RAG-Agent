@@ -51,6 +51,36 @@ public final class EditGuards {
         return "대상(" + subject + ")과 관련된 구간이 아니다 — 인용에도 그 섹션 제목에도 대상이 없다";
     }
 
+    /**
+     * 청크 전체 삭제를 받아도 되는가 — 청크의 <b>모든 본문</b>이 대상이 제목에 나오는 섹션(또는 그 하위 섹션) 안에 있어야 한다.
+     * 청크는 위치 표시로 상위 제목(`## 26. 클래스: …FileUtils`)을 앞에 달고 시작하므로 첫 제목만 보면 안 된다(그 제목엔 메서드 이름이 없다 —
+     * 6c 사전 평가에서 진짜 대상 8건이 이렇게 버려졌다). 반대로 한 청크에 다른 섹션의 본문이 섞여 있거나(앞 메서드의 꼬리 + 대상 메서드)
+     * 첫 제목 위에 본문이 있으면(앞 섹션에서 이어진 글) 거절한다 — 그 본문까지 지우게 되기 때문. 펜스 안의 {@code #} 줄은 제목이 아니다.
+     */
+    public static boolean wholeChunkBelongsTo(String chunkText, String subject) {
+        if (chunkText == null || subject == null || subject.isBlank()) return false;
+        record Section(int level, boolean hit) { }
+        java.util.ArrayDeque<Section> stack = new java.util.ArrayDeque<>();
+        boolean inFence = false, anyHit = false, anyBody = false;
+        for (String raw : chunkText.split("\n", -1)) {
+            String line = raw.strip();
+            if (line.startsWith("```") || line.startsWith("~~~")) inFence = !inFence;
+            else if (!inFence && HEADING.matcher(line).matches()) {
+                int level = 0;
+                while (level < line.length() && line.charAt(level) == '#') level++;
+                while (!stack.isEmpty() && stack.peek().level() >= level) stack.pop();
+                boolean hit = ImpactAnalysisWorkflow.hasStandaloneOccurrence(line, subject) || (!stack.isEmpty() && stack.peek().hit());
+                stack.push(new Section(level, hit));
+                anyHit |= hit;
+                continue;
+            }
+            if (line.isEmpty()) continue;
+            anyBody = true;
+            if (stack.isEmpty() || !stack.peek().hit()) return false;   // 제목 위의 이어진 글이거나 다른 섹션의 본문
+        }
+        return anyHit && anyBody;
+    }
+
     /** 인용이 처음 나오는 자리 위쪽의 가장 가까운 제목 줄 — 없으면 {@code null}. */
     static String sectionHeadingOf(String text, String quote) {
         if (text == null || quote == null) return null;

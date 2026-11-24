@@ -10,7 +10,7 @@ import hashlib, io, json, os, re, sqlite3, struct, sys, time, urllib.parse, urll
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 DATA = ROOT + '/target/e2e-data'
-APP = 'http://127.0.0.1:8098'
+APP = os.environ.get('E2E_APP', 'http://127.0.0.1:8098')
 EMBED = 'http://127.0.0.1:28091/v1/embeddings'
 OLD = sys.argv[1] if len(sys.argv) > 1 else 'BEDU2002'
 NEW = sys.argv[2] if len(sys.argv) > 2 else 'ZNEWBATCH2002'

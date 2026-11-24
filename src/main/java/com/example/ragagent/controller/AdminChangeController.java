@@ -73,12 +73,19 @@ public class AdminChangeController {
     @GetMapping("/admin/change-jobs")
     public String list(@RequestParam(required = false) String error,
                        @RequestParam(required = false) String from,
-                       @RequestParam(required = false) String to, Model model) {
+                       @RequestParam(required = false) String to,
+                       @RequestParam(required = false) String type,
+                       @RequestParam(required = false) String subject,
+                       @RequestParam(required = false) String content, Model model) {
         model.addAttribute("jobs", jobs.recentByKind(ChangeJobRepository.KIND_MAINTENANCE, 30));
         model.addAttribute("error", error);
         // 채팅이 되물으며 건넨 링크 — 바꿀 말·새 말을 폼에 미리 채운다(옵션은 여기서 직접 켠다). 값은 템플릿이 이스케이프한다.
         model.addAttribute("from", from);
         model.addAttribute("to", to);
+        // 채팅이 "이 유형은 화면에서" 로 돌려보낸 링크 — 유형·대상·내용을 미리 채운다. 모르는 유형은 버린다(선택 상자에 없는 값).
+        model.addAttribute("prefillType", type != null && EditIntent.TYPES.contains(type.strip()) ? type.strip() : null);
+        model.addAttribute("prefillSubject", subject);
+        model.addAttribute("prefillContent", content);
         return "admin-change-jobs";
     }
 
@@ -171,7 +178,13 @@ public class AdminChangeController {
     @PostMapping("/admin/change-jobs/{id}/docs/approve")
     public String approve(@PathVariable long id, @RequestParam String docId) {
         requireMaintenanceJob(id);
-        int n = applyService.approveAndApply(id, docId, currentUser.userId());
+        int n;
+        try {
+            n = applyService.approveAndApply(id, docId, currentUser.userId());
+        } catch (ChangeApplyService.BatchNotAllowedException e) {
+            // R10 — 원문을 바꾸는 요청은 문서 단위로 승인하지 않는다(버튼을 숨기는 것과 별개로 서버가 막는다).
+            return "redirect:/admin/change-jobs/" + id + "?notice=review-only";
+        }
         return "redirect:/admin/change-jobs/" + id + (n == 0 ? "?notice=nothing" : "");
     }
 
@@ -234,9 +247,19 @@ public class AdminChangeController {
         return "admin-change-job";
     }
 
+    /**
+     * 진행 폴링의 본문 조각. 작업이 끝나는 것을 보고 있었으면({@code watching} — 화면이 {@code running} 일 때만 붙인다) 대기 수정안이 있을 때 곧바로
+     * 검토 화면으로 넘어간다(AGENT_MCP_DESIGN §10.15.5).
+     */
     @GetMapping("/admin/change-jobs/{id}/body")
-    public String body(@PathVariable long id, Model model) {
+    public String body(@PathVariable long id, @RequestParam(required = false, defaultValue = "false") boolean watching,
+                       Model model, jakarta.servlet.http.HttpServletResponse response) {
         fill(id, model);
+        if (watching && model.getAttribute("job") instanceof ChangeJobRepository.Job job
+                && !ChangeJobRepository.RUNNING.equals(job.status())
+                && model.getAttribute("pendingCount") instanceof Long pending && pending > 0) {
+            response.setHeader("HX-Redirect", "/admin/change-jobs/" + id + "/review");
+        }
         return "admin-change-job :: body";
     }
 
@@ -276,6 +299,8 @@ public class AdminChangeController {
         model.addAttribute("proposedChunks", proposed);
         model.addAttribute("docs", docs);
         model.addAttribute("anyApplied", anyApplied);
+        model.addAttribute("pendingCount", docs.stream().mapToLong(DocView::pending).sum());
+        model.addAttribute("batchAllowed", com.example.ragagent.workflow.ReviewRules.batchAllowed(job));
     }
 
     private static long count(List<ProposalView> views, String status) {

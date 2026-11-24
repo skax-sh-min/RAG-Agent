@@ -115,6 +115,47 @@ class DatabaseBackupServiceTest {
     }
 
     @Test
+    @DisplayName("정기 실행 — 가장 최근 사본 이후 DB 가 바뀌지 않았으면 새 사본을 남기지 않고(같은 내용이면 VACUUM INTO 가 같은 바이트), 바뀌면 남긴다")
+    void scheduledRunSkipsWhenNothingChanged() throws Exception {
+        DatabaseBackupService svc = service(true, 7);
+
+        DatabaseBackupService.RunResult first = svc.run(DatabaseBackupService.SCHEDULED);
+        Thread.sleep(1100);   // 다른 초 — 이름이 겹치지 않게
+        DatabaseBackupService.RunResult second = svc.run(DatabaseBackupService.SCHEDULED);
+
+        assertThat(first.skipped()).isFalse();
+        assertThat(second.ok()).isTrue();
+        assertThat(second.skipped()).isTrue();
+        assertThat(second.unchangedFrom()).isEqualTo(first.file());
+        assertThat(second.file()).isNull();
+        assertThat(names(backupDir)).containsExactly(first.file());   // .partial 도 남지 않는다
+        assertThat(svc.status().last()).isEqualTo(second);
+
+        new JdbcTemplate(ds).update("INSERT INTO conversation_turns(question) VALUES ('셋째 질문')");
+        Thread.sleep(1100);
+        DatabaseBackupService.RunResult third = svc.run(DatabaseBackupService.SCHEDULED);
+
+        assertThat(third.skipped()).isFalse();
+        assertThat(names(backupDir)).containsExactly(first.file(), third.file());
+    }
+
+    @Test
+    @DisplayName("수동·유지보수·업데이트 직전 실행은 바뀐 것이 없어도 언제나 사본을 남긴다(그 시점의 사본 자체가 목적이다)")
+    void otherTriggersAlwaysKeepACopy() throws Exception {
+        DatabaseBackupService svc = service(true, 7);
+
+        svc.run(DatabaseBackupService.SCHEDULED);
+        Thread.sleep(1100);
+        DatabaseBackupService.RunResult manual = svc.run("manual");
+        Thread.sleep(1100);
+        DatabaseBackupService.RunResult change = svc.run("pre-change-3");
+
+        assertThat(manual.skipped()).isFalse();
+        assertThat(change.skipped()).isFalse();
+        assertThat(svc.listBackups()).hasSize(3);
+    }
+
+    @Test
     @DisplayName("run — 앱의 풀 연결을 쓰지 않는다: 풀(1개)의 연결을 쥐고 있어도 백업이 끝난다")
     void run_doesNotNeedThePoolConnection() throws Exception {
         DatabaseBackupService svc = service(true, 7);
@@ -138,6 +179,26 @@ class DatabaseBackupServiceTest {
 
         assertThat(r.ok()).isTrue();
         assertThat(names(backupDir)).containsExactlyInAnyOrder(r.file(), "memory-20260103-030000.db", "notes.txt");
+    }
+
+    @Test
+    @DisplayName("변환 MD 사본 — 백업 옆 폴더에 복사하고(이미 있는 이름은 덮지 않는다), 그 백업이 정리될 때 함께 지운다")
+    void convertedCopiesFollowTheirBackup() throws Exception {
+        Files.createDirectories(backupDir);
+        Files.writeString(backupDir.resolve("memory-20260101-030000.db"), "x");
+        Path md = Files.writeString(tmp.resolve("d1_corrected.md"), "적용 전");
+        DatabaseBackupService svc = service(true, 1);
+
+        svc.copyConvertedFiles("memory-20260101-030000.db", List.of(md));
+        Files.writeString(md, "적용 후");
+        svc.copyConvertedFiles("memory-20260101-030000.db", List.of(md));
+
+        Path copy = svc.convertedCopyDir("memory-20260101-030000.db").resolve("d1_corrected.md");
+        assertThat(Files.readString(copy)).isEqualTo("적용 전");
+
+        svc.run("scheduled");   // keep=1 — 옛 백업이 정리된다
+
+        assertThat(svc.convertedCopyDir("memory-20260101-030000.db")).doesNotExist();
     }
 
     @Test

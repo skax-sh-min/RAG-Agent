@@ -16,9 +16,9 @@ The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-
 
 | OS / architecture | App (jar) | sqlite-vec bundled in the jar | Scripts in `scripts/` |
 |---|---|---|---|
-| Windows 10+ x64 | supported | yes | `windows_*` (`.cmd`) |
-| macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `macos_*` (Docker Desktop, or Apple Container on Apple Silicon) |
-| Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `ubuntu_*` (Docker) |
+| Windows 10+ x64 | supported | yes | `run_by_jar.cmd`, `run_by_mvn.cmd`, `release_windows.cmd` |
+| macOS arm64 (Apple Silicon) · x64 (Intel) | supported | yes | `run_by_jar.sh`, `run_by_mvn.sh`; `macos_*` for Apple Container on Apple Silicon |
+| Linux x64 · arm64 on glibc (Ubuntu, Debian, RHEL family …) | supported | yes | `run_by_jar.sh`, `run_by_mvn.sh`, `ubuntu_*` (Docker) |
 | Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |
 | Anything else (Windows ARM, 32-bit OS/JVM, BSD …) | needs a JVM; untested | no — use the Chroma backend or your own `vec0` | — |
 
@@ -139,7 +139,7 @@ Installed apps learn about a new version from the **latest GitHub release** and 
 | Asset 3 (recommended) | `rag-agent-X.Y.Z-launcher.jar` (+ its `.sha256`) — the ~30 KB launcher a new install starts with; `mvn package` builds it as `target/rag-agent-X.Y.Z-launcher.jar`. Apps never mistake it for the application jar |
 | State | **published** — not a draft, not a pre-release. A release without the jar attached is not announced at all |
 
-> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\windows_release.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
+> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\release_windows.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
 > **If `main` only accepts pull requests, use `--pr`**: it leaves `main` alone, puts the release commit, the tag and the version bump on a `release/X.Y.Z` branch, pushes that branch and the tag, creates the **draft** release and opens the pull request, then stops — merge the PR with **"Create a merge commit"** (a squash or rebase merge makes new commits, so the commit the tag points at would no longer be in `main`'s history), then publish with `gh release edit vX.Y.Z --draft=false`. The JAR files and their checksum files are located in the target\released directory.
 
 The steps below release `0.5.7` while `pom.xml` says `0.5.7-SNAPSHOT`. Run them from the repository root.

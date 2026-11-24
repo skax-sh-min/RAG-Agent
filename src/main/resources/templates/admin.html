@@ -2427,6 +2427,10 @@ if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
         } else if (last.error) {
             box.textContent = '마지막 실행(' + fmtTime(last.finishedAt) + ', ' + last.trigger + ') 실패: ' + last.error;
             box.className = 'mt-2 text-danger';
+        } else if (last.unchangedFrom) {
+            box.textContent = '마지막 실행(' + fmtTime(last.finishedAt) + ', ' + last.trigger + ') 변화 없음 — 건너뜀 (가장 최근 사본 '
+                + last.unchangedFrom + ' 과 같습니다)';
+            box.className = 'mt-2 text-muted';
         } else {
             box.textContent = '마지막 실행(' + fmtTime(last.finishedAt) + ', ' + last.trigger + ') ' + last.file
                 + ' · ' + fmtBytes(last.bytes) + ' · ' + last.millis + ' ms';

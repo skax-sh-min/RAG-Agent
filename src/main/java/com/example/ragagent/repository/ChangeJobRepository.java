@@ -145,6 +145,19 @@ public class ChangeJobRepository {
         return n == null ? 0 : n;
     }
 
+    /**
+     * 이 작업의 첫 코퍼스 쓰기 직전에 만든 DB 백업 파일 이름(V18, AGENT_MCP_DESIGN §10.15 R2) — 아직 쓰지 않았으면 {@code null}.
+     * 레코드 컴포넌트로 두지 않은 이유: {@link Job} 은 테스트·호출부 여럿이 위치 기반으로 만들고, 이 값을 읽는 곳은 적용 서비스 하나뿐이다.
+     */
+    public String backupName(long id) {
+        List<String> rows = jdbc.query("SELECT backup_name FROM change_job WHERE id = ?", (rs, n) -> rs.getString(1), id);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    public void setBackupName(long id, String name) {
+        jdbc.update("UPDATE change_job SET backup_name = ? WHERE id = ?", name, id);
+    }
+
     /** 기동 때 한 번 — 앱이 죽어 {@code running} 으로 남은 작업을 {@code interrupted} 로 표시한다. */
     public int markRunningInterrupted() {
         return jdbc.update("UPDATE change_job SET status = ?, updated_at = ? WHERE status = ?",

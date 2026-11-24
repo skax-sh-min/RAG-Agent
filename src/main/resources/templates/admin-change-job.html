@@ -11,7 +11,7 @@
 <section layout:fragment="content" class="container py-4">
     <!--/* 진행 중이면 3초마다 본문을 다시 받는다 — 단, 고치기 칸이 열려 있는 동안은 건너뛴다(다시 그리면 입력하던 칸이 닫힌다). */-->
     <div th:fragment="body" id="change-job-body"
-         th:attr="hx-get=${running} ? @{/admin/change-jobs/{id}/body(id=${job.id})} : null,
+         th:attr="hx-get=${running} ? @{/admin/change-jobs/{id}/body(id=${job.id},watching=${job.status == 'running'})} : null,
                   hx-trigger=${running} ? 'every 3s [!document.querySelector(\'#change-job-body details[open]\')]' : null,
                   hx-swap=${running} ? 'outerHTML' : null">
 
@@ -25,6 +25,12 @@
             <i class="bi bi-flag me-1"></i><span th:text="#{maint.from-report(${job.reportChunkId()})}">From report</span>
         </div>
 
+        <div th:if="${pendingCount > 0 and job.status != 'running'}" class="mb-3">
+            <a class="btn btn-primary" th:href="@{/admin/change-jobs/{id}/review(id=${job.id})}">
+                <i class="bi bi-ui-checks-grid me-1"></i><span th:text="#{review.start(${pendingCount})}">Start review</span></a>
+        </div>
+        <div th:if="${param.notice != null and param.notice[0] == 'review-only'}" class="alert alert-warning py-2 small"
+             th:text="#{maint.review-only}">Review one by one</div>
         <div th:unless="${anyApplied}" class="alert alert-secondary py-2 small" th:text="#{maint.not-applied}">Nothing has been changed yet.</div>
         <div th:if="${anyApplied}" class="alert alert-warning py-2 small" th:text="#{maint.original-file}">Original files are not changed.</div>
 
@@ -114,7 +120,7 @@
                         <input type="hidden" name="docId" th:value="${d.docId}"/>
                         <button type="submit" class="btn btn-outline-secondary btn-sm" th:text="#{maint.reject}">Reject</button>
                     </form>
-                    <form th:if="${d.pending > 0}" th:action="@{/admin/change-jobs/{id}/docs/approve(id=${job.id})}" method="post"
+                    <form th:if="${d.pending > 0 and batchAllowed}" th:action="@{/admin/change-jobs/{id}/docs/approve(id=${job.id})}" method="post"
                           th:attr="onsubmit='return confirm(\'' + #{maint.approve.confirm} + '\')'">
                         <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}" th:value="${_csrf != null ? _csrf.token : ''}"/>
                         <input type="hidden" name="docId" th:value="${d.docId}"/>

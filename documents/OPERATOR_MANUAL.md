@@ -147,16 +147,18 @@ rag_java/
 
 | OS / 아키텍처 | 앱(jar) | sqlite-vec — jar 에 번들 | 제공 스크립트(`scripts/`) | 비고 |
 |---|---|---|---|---|
-| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `windows_run_by_jar_cmd_no_docker.cmd`, `windows_run_by_mvn_cmd_no_docker.cmd`, `windows_release.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
-| macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `macos_run_by_apple_container.sh`·`macos_run_by_jar_no_docker.sh`·`macos_run_by_mvn_no_docker.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data.sh` | Docker Desktop 또는 Apple Container(위 표) |
-| macOS Intel(x64) | 지원 | 번들(macOS x64) | 위와 같은 `macos_*` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
-| Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
+| Windows 10 이상, x64 | 지원 | 번들(Windows x64) | `run_by_jar.cmd`, `run_by_mvn.cmd`, `release_windows.cmd` | 테스트·런처 업데이트 확인이 이뤄진 환경. 릴리즈 스크립트는 Git for Windows(Git Bash) 필요 |
+| Linux x64 · arm64, **glibc**(Ubuntu · Debian · RHEL 계열 등) | 지원 | 번들(Linux x64 / arm64) | `run_by_jar.sh`·`run_by_mvn.sh`·`ubuntu_run_by_docker.sh`·`ubuntu_stop_by_docker.sh`·`ubuntu_reset_data_by_docker.sh` | arm64(라즈베리 파이 포함)는 **64비트 OS + 64비트 JDK** 여야 합니다 |
+| macOS Apple Silicon(arm64) | 지원 | 번들(macOS arm64) | `run_by_jar.sh`·`run_by_mvn.sh`·`macos_run_by_apple_container.sh`·`macos_stop_by_apple_container.sh`·`macos_reset_data_by_apple_container.sh` | Docker Desktop 또는 Apple Container(위 표) |
+| macOS Intel(x64) | 지원 | 번들(macOS x64) | `run_by_jar.sh`·`run_by_mvn.sh` | Apple Container 는 Apple Silicon 대안이라 Docker Desktop 사용 |
 | Docker 이미지(Alpine = **musl**) | 지원 — 이미지가 Alpine 기반(`eclipse-temurin:21-jre-alpine`) | **번들 사용 불가** | `docker-compose.yml` | sqlite-vec 모드는 musl 용 `vec0` 를 마운트해 `SQLITE_VEC_EXTENSION_PATH` 지정(아래) |
 | 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 | — | chroma 백엔드를 쓰거나 `vec0` 를 직접 받아 `SQLITE_VEC_EXTENSION_PATH` 지정 |
 
 - **검증 수준**: GitHub Actions 를 쓰지 않아 OS 별 자동 검증은 없습니다. 테스트(`mvn test`)와 런처·릴리즈 스크립트의 실제 실행은 **Windows** 에서 확인했습니다. macOS·Linux 는 위 스크립트와 §4 의 절차가 있지만, 번들한 sqlite-vec 의 Windows 외 플랫폼 파일은 SHA-256 만 확인했고 실제 로드는 확인하지 못했습니다(기동 로그의 `vec_version()` 으로 확인하세요).
 - **OCR(Tesseract)**: 스캔 PDF OCR(`IMAGE_OCR_ENABLED`, 기본 켜짐)은 **네이티브 Tesseract + `kor`/`eng` 언어 데이터**가 호스트에 있어야 합니다 — Docker 이미지에는 들어 있고, 로컬(비 Docker) 실행은 OS 별로 설치하거나 `IMAGE_OCR_ENABLED=false` 로 끕니다.
 - **파일 경로·권한**: sqlite-vec 번들은 `{DATA_DIR}/native/` 로 꺼내 로드하므로 그 경로가 쓰기 가능하고 `noexec` 가 아니어야 합니다. DB 파일을 네트워크 공유(NFS/SMB)에 두는 배포는 `mmap_size` 때문에 조건이 붙습니다([§3.3](#33-applicationproperties-전용-설정)의 SQLite 세션 PRAGMA 행).
+
+Windows·linux·macOS 비 Docker 실행 스크립트는 `-b`/`--build`로 `mvn package`, `-cb`/`--clean-build`로 `mvn clean package`를 실행한 뒤 생성된 앱 jar를 시작합니다. 두 빌드 모두 테스트를 실행하며, 실패하면 앱을 시작하지 않습니다. `-h`/`--help`로 옵션을 볼 수 있습니다. 옵션이 없으면 기존처럼 jar 스크립트는 이미 빌드된 jar를, Maven 스크립트는 `mvn spring-boot:run`을 실행합니다.
 
 #### 벡터 스토어 백엔드 선택 (chroma / sqlite-vec)
 
@@ -791,7 +793,7 @@ docker compose down
 JAVA_OPTS=-Xms512m -Xmx3g
 ```
 
-> Docker를 쓰지 않는 실행 경로(`scripts/*_run_by_jar_*`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
+> Docker를 쓰지 않는 실행 경로(`scripts/run_by_jar.sh`, `scripts\run_by_jar.cmd`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
 
 ---
 
@@ -1342,7 +1344,7 @@ Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts +
 
 공통 삭제 대상:
 - `data/memory.db` (+`-wal`/`-shm`)
-- **옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리·벡터가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.2.1](#621-sqlite-파일별-테이블-구성)). `scripts/*_reset_data.sh` 는 두 파일을 모두 지웁니다
+- **옛 `SQLITE_VEC_DB_PATH` 를 설정한 배포라면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리·벡터가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.2.1](#621-sqlite-파일별-테이블-구성)). `scripts/ubuntu_reset_data_by_docker.sh` 와 `scripts/macos_reset_data_by_apple_container.sh` 는 `data/memory.db` 와 `data/vector.db` 를 지웁니다
 - `data/documents/`
 - `data/converted/`
 - `data/images/`
@@ -2071,6 +2073,8 @@ Rename-Item data/vector.db memory.db
 
 앱이 `memory.db` 의 사본을 **매일 03:30**(`app.time-zone`, 기본 KST) 에 떠서 `DATA_DIR/db-backups/` 에 **최근 7개**를 남깁니다. `/admin` 의 **"DB 백업"** 카드에서 설정·마지막 실행 결과·남아 있는 사본을 보고, **[지금 백업]** 으로 바로 뜰 수 있습니다(감사 로그 `admin.db-backup.run`).
 
+**바뀐 것이 없는 날은 정기 백업이 사본을 남기지 않습니다.** 뜬 사본이 가장 최근 사본과 바이트 단위로 같으면 지우고, 카드에 "변화 없음 — 건너뜀"(로그 `[DB-BACKUP] scheduled 건너뜀`)으로 보입니다. 보관이 **개수**라 쓰지 않는 날마다 같은 사본을 쌓으면 오래된 시점이 그만큼 일찍 지워지기 때문입니다 — 그래서 "최근 7개"는 "최근 7일"이 아니라 **"내용이 다른 최근 7개 시점"** 입니다. [지금 백업]·유지보수 적용 직전·업데이트 직전 사본은 바뀐 것이 없어도 늘 남깁니다(같은 7개 안에서 셉니다).
+
 | 설정 | 환경변수 | 기본값 | 설명 |
 |---|---|---|---|
 | `app.backup.enabled` | `DB_BACKUP_ENABLED` | `true` | 정기 백업. `false` 여도 `/admin` 의 수동 백업은 됩니다 |
@@ -2079,6 +2083,22 @@ Rename-Item data/vector.db memory.db
 | `app.backup.dir` | `DB_BACKUP_DIR` | (빈 값 = `DATA_DIR/db-backups`) | 사본 위치 |
 
 `app.backup.enabled`·`app.backup.keep` 은 `/settings` 의 **운영** 카드에서 재기동 없이 고칠 수 있습니다(다음 정기 실행·다음 정리부터, 저장한 값이 환경변수를 이깁니다). cron·폴더는 **재기동 필요**입니다.
+
+**문서 유지보수가 뜨는 사본** — 수정안을 적용하기 직전(관리자 매뉴얼 §10.2)에도 같은 방식으로 사본을 뜹니다. **작업당 한 번**, 그 작업의 첫 적용 직전에만 뜨고 이름을 작업에 남깁니다(`change_job.backup_name`) — 검토 화면에서 청크를 수십 번 확인해도 사본은 하나입니다(정기 백업과 보존 개수 `keep` 을 함께 쓰므로, 확인마다 뜨면 정기 백업이 밀려납니다). 그 사본이 보존 정리로 지워졌으면 다음 적용 때 새로 뜹니다. **되돌릴 때 주의**: 그 사본은 "그 작업의 첫 적용 직전" 시점이라, 작업이 여러 날에 걸쳤다면 그 사이의 다른 변경(대화·업로드·다른 수정)까지 함께 되돌아갑니다. 한두 청크만 되돌리려면 복원 대신 `/admin` 청크 화면에서 다시 고치세요.
+
+**유지보수 작업을 사본으로 되돌릴 때는 변환 MD 도 함께 되돌립니다.** 적용은 `converted/` 의 MD(`…_corrected.md`)에도 수정을 되써 두므로, DB 만 되돌리면 그 문서를 재인덱싱하는 순간 되돌린 수정이 다시 나타납니다. 그래서 작업 사본을 뜰 때 그 작업이 건드릴 문서의 **적용 전 MD 를 사본 옆 폴더** `db-backups/memory-….db.converted/` 에 함께 떠 둡니다(사본이 정리되면 같이 지워집니다). 아래 복구 3) 다음에 이것을 덧붙이세요:
+
+```bash
+# 3-1) 복원하는 사본과 그 뒤 모든 사본의 .converted 를 최신 것부터 converted/ 에 덮어쓴다
+#      (그 사본 뒤에 만든 작업도 DB 에서 함께 사라지므로, 그 작업들이 고친 MD 도 되돌려야 한다 — 마지막에 덮는 것이 복원 시점에 가장 가깝다)
+for d in $(ls -d data/db-backups/memory-*.db.converted | sort -r); do
+  [ "$(basename "$d" .converted)" \< "memory-20261013-033000.db" ] && continue   # 복원하는 사본보다 오래된 것은 건너뛴다
+  cp "$d"/* data/converted/
+done
+```
+
+- `.converted` 폴더가 없는 사본(정기 백업, 또는 2026-11-23 이전의 작업 사본)은 MD 를 담지 않습니다 — 그 시점 이후 적용된 유지보수가 있으면 그 문서의 MD 를 손으로 되돌린 뒤에 재인덱싱하세요(글자 치환이면 새 말 → 옛 말).
+- 되돌린 작업의 수정안은 사본 안에서 '승인됨'이지만, **앱이 기동할 때 '대기'로 돌려놓고** 항목에 사유를 붙입니다(로그 `[APPLY] 적용되지 않은 승인 N건을 대기로 되돌렸다`). 다시 적용하고 싶지 않으면 그 작업은 그대로 두면 됩니다.
 
 **어떻게 뜨는가** — 앱의 커넥션 풀이 아닌 별도 연결에서 `VACUUM INTO` 를 실행합니다. 원본에 읽기 트랜잭션 하나만 쥐므로(WAL) **백업 중에도 채팅·인덱싱의 쓰기가 막히지 않고**, 아직 `memory.db-wal` 에만 있는 최근 기록까지 담긴 일관된 한 파일이 나옵니다(파일을 그냥 복사하면 그것을 놓칩니다). 뜬 사본을 열어 `PRAGMA quick_check` 가 `ok` 일 때만 `memory-yyyyMMdd-HHmmss.db` 이름을 붙이므로, 그 이름의 파일은 전부 검사를 통과한 완성본입니다(중간에 죽으면 `.partial` 이 남고 다음 실행이 지웁니다). 실측: 54 MB DB 에 약 1초.
 
@@ -2183,7 +2203,7 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 | 환경 | 명령 (저장소 루트에서) |
 |---|---|
 | Linux · macOS · Git Bash | `sh scripts/release.sh [버전] [옵션]` |
-| Windows | `scripts\windows_release.cmd [버전] [옵션]` — Git for Windows 의 bash 로 같은 `release.sh` 를 실행합니다(WSL 의 bash 는 쓰지 않습니다). 다른 bash 를 쓰려면 `RELEASE_BASH` |
+| Windows | `scripts\release_windows.cmd [버전] [옵션]` — Git for Windows 의 bash 로 같은 `release.sh` 를 실행합니다(WSL 의 bash 는 쓰지 않습니다). 다른 bash 를 쓰려면 `RELEASE_BASH` |
 
 필요한 것: git, Maven 3.9+ 와 **Java 21**, `unzip`(또는 JDK 의 `jar`), 게시하려면 [GitHub CLI](https://cli.github.com)(`gh auth login` 한 번 — Windows: `winget install GitHub.cli`). Windows 는 Git for Windows.
 

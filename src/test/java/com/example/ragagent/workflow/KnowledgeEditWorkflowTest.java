@@ -142,6 +142,45 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("사용 중단 위치 — 대상 이름이 든 제목 아래, 없으면 대상이 나오는 블록 앞(위치 표시용 상위 제목 아래가 아니다)")
+    void deprecationPositionPrefersTheHeadingThatNamesTheSubject() {
+        // 상위 제목 아래 대상 이름이 든 하위 제목 — 6c 사전 평가 E4B P1 모양
+        String named = "## 47. PUSample — 온디맨드 배치 호출\n\n### 47.1 개요 (키워드: callBatchNow)\n\n본문.";
+        assertThat(insertedAfterLine(named, "callBatchNow")).isEqualTo("### 47.1 개요 (키워드: callBatchNow)");
+
+        // 제목에는 대상이 없고 본문 문단에만 — 상위 제목(3.4·3.4.9) 아래가 아니라 그 문단 앞(E4B P7 모양)
+        String guide = "### 3.4 어플리케이션 호출\n#### 3.4.9 연동거래\n\n연동거래는 여러 방식이 있다.\n\n"
+                + "지연 호출은 reserveCallTimerService 로\n예약한다.\n\n다른 문단.";
+        assertThat(from(guide, "reserveCallTimerService")).startsWith("지연 호출은 reserveCallTimerService");
+        assertThat(from("한 줄.\n둘째 줄 reserveCallTimerService.", "reserveCallTimerService")).startsWith("한 줄.");
+
+        // 제목 바로 밑(빈 줄 없이)의 문단이면 제목을 넘어 올라가지 않는다
+        assertThat(from("## 6. 클래스: ProcessUnit\n메서드 reserveCallTimerService 를 쓴다.", "reserveCallTimerService"))
+                .startsWith("메서드 reserveCallTimerService");
+
+        // 코드 펜스 안에서만 나오면 펜스 여는 줄 앞 — 펜스 안 '# 주석' 은 제목이 아니다
+        assertThat(from("## 예제\n\n설명.\n\n```java\n# callBatchNow 주석\nsvc.callBatchNow(x);\n```", "callBatchNow"))
+                .startsWith("```java");
+
+        // 단어 경계 — callBatchNowAll 제목은 callBatchNow 의 제목이 아니다
+        assertThat(from("## callBatchNowAll\n\ncallBatchNow 는 따로 있다.", "callBatchNow")).startsWith("callBatchNow 는");
+
+        // 대상이 청크에 없으면 예전처럼 첫 제목 아래(청크가 제목으로 시작할 때만), 아니면 맨 앞
+        assertThat(insertedAfterLine("# A 기능\n\n본문.", "없는이름")).isEqualTo("# A 기능");
+        assertThat(KnowledgeEditWorkflow.deprecationPosition("본문만.\n\n## 뒤 제목", "없는이름")).isZero();
+    }
+
+    private static String from(String text, String subject) {
+        return text.substring(KnowledgeEditWorkflow.deprecationPosition(text, subject));
+    }
+
+    /** 위치가 어느 줄의 끝인지 — 그 줄을 돌려준다. */
+    private static String insertedAfterLine(String text, String subject) {
+        String head = text.substring(0, KnowledgeEditWorkflow.deprecationPosition(text, subject));
+        return head.substring(head.lastIndexOf('\n') + 1);
+    }
+
+    @Test
     @DisplayName("다듬은 문장이 뜻을 뒤집으면(부정 표현 수가 다르면) 지시문 기준 문장을 그대로 넣는다(G10)")
     void polishedSentenceThatFlipsMeaningFallsBack() {
         mentions("c1", A_CHUNK);
@@ -275,6 +314,20 @@ class KnowledgeEditWorkflowTest {
     }
 
     @Test
+    @DisplayName("내용 삭제 — 청크가 상위 클래스 제목으로 시작해도 대상 메서드 섹션뿐이면 delete_chunk 가 된다")
+    void removeWholeChunkUnderAClassHeading() {
+        String text = "## 26. 클래스: FileUtils\n### 26.46 메서드: `readLines(java.io.File)`\n\n파일을 줄 단위로 읽는다.";
+        mentions("c1", text);
+        chunk("c1", text, "26.46 메서드: `readLines(java.io.File)`", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"파일을 줄 단위로 읽는다.\"}", "판정: 청크 전체 삭제\n이유: readLines 섹션");
+
+        workflow.propose(jobId, "readLines 내용을 삭제해", new EditIntent("remove", "readLines", null, null, null, null), Locale.KOREAN);
+
+        assertThat(stored()).singleElement().extracting(ChangeProposalRepository.Proposal::kind)
+                .isEqualTo(ChangeProposalRepository.KIND_DELETE_CHUNK);
+    }
+
+    @Test
     @DisplayName("설명 수정 — 지시문에 없는 숫자를 넣은 바꾸기는 G4 가 버린다, 지시문의 숫자는 통과")
     void reviseRejectsInventedNumbers() {
         mentions("c1", A_CHUNK);
@@ -320,6 +373,49 @@ class KnowledgeEditWorkflowTest {
         EditIntent intent = workflow.interpret("A 기능은 더 이상 사용되지 않습니다", Locale.KOREAN);
         assertThat(intent.type()).isEqualTo("deprecate");
         assertThat(intent.subject()).isEqualTo("A 기능");
+    }
+
+    @Test
+    @DisplayName("폼 전용 유형 — 지시문이 내용 삭제·설명 수정으로 해석되면 아무것도 찾지 않고 작업을 사유와 함께 실패시킨다")
+    void interpretedRemoveOrReviseIsRefused() {
+        llm("{\"type\":\"remove\",\"subject\":\"B 기능\"}");
+        workflow.run(jobId, "B 기능에 대한 내용을 삭제해", null, Locale.KOREAN);
+
+        ChangeJobRepository.Job job = jobs.find(jobId).orElseThrow();
+        assertThat(job.status()).isEqualTo(ChangeJobRepository.FAILED);
+        assertThat(job.error()).contains("내용 삭제").contains("수정 유형을 직접");
+        assertThat(job.intentJson()).isNull();
+        assertThat(stored()).isEmpty();
+        verify(keywords, never()).findMentions(eq("latest"), anyString(), anyInt());
+
+        long reviseJob = jobs.create(ChangeJobRepository.KIND_MAINTENANCE, "지시", "root");
+        llm("{\"type\":\"revise\",\"subject\":\"A 기능\",\"content\":\"60초 동안 기다린다\"}");
+        workflow.run(reviseJob, "A 기능은 60초 동안 기다린다로 설명을 고쳐", null, Locale.KOREAN);
+        assertThat(jobs.find(reviseJob).orElseThrow().error()).contains("설명 수정");
+
+        // 신고 폼의 "자동"도 지시문 해석이다
+        long reportJob = jobs.createForReport(ChangeJobRepository.KIND_MAINTENANCE, "B 기능 삭제", "root", "c1");
+        llm("{\"type\":\"remove\",\"subject\":\"B 기능\"}");
+        workflow.runForReport(reportJob, "B 기능에 대한 내용을 삭제해", null, "c1", Locale.KOREAN);
+        assertThat(jobs.find(reportJob).orElseThrow().status()).isEqualTo(ChangeJobRepository.FAILED);
+        assertThat(proposals.listByJob(reportJob)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("폼 전용 유형 — 관리자가 유형을 직접 고른 요청은 그대로 받는다(해석을 지나지 않는다)")
+    void typedRemoveIsStillAccepted() {
+        String text = "## 기능\n\nB 는 이렇게 쓴다.\n\n주의!";
+        mentions("c1", text);
+        chunk("c1", text, "기능", 0);
+        llm("{\"role\":\"describes\",\"quote\":\"B 는 이렇게 쓴다.\"}",
+                "판정: 변경 필요\n이유: B 설명\n@@ 지우기\n처음: B 는 이렇게 쓴다.");
+
+        workflow.run(jobId, "B 에 대한 내용을 삭제해", new EditIntent("remove", "B", null, null, null, null), Locale.KOREAN);
+
+        ChangeJobRepository.Job job = jobs.find(jobId).orElseThrow();
+        assertThat(job.status()).isEqualTo(ChangeJobRepository.DONE);
+        assertThat(job.intentJson()).contains("remove");
+        assertThat(stored()).hasSize(1);
     }
 
     @Test
