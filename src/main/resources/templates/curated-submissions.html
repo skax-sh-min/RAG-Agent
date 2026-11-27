@@ -302,9 +302,10 @@
                                     th:text="#{submission.btn.edit}">수정</button>
                             <form method="post"
                                   th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
-                                  th:attr="onsubmit=|return confirm('${s.curatedActive() > 0
+                                  th:attr="data-confirm=${s.curatedActive() > 0
                                         ? '철회하면 이 내용이 검색에서도 즉시 제외됩니다. 계속할까요?'
-                                        : '이 제안을 철회하시겠습니까?'}');|">
+                                        : '이 제안을 철회하시겠습니까?'}"
+                                  onsubmit="return confirm(this.dataset.confirm);">
                                 <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
                                        th:value="${_csrf != null ? _csrf.token : ''}"/>
                                 <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
