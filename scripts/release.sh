@@ -6,7 +6,7 @@
 #   1. preflight   clean working tree, on main, not behind origin, tag not taken, mvn + Java 21, gh logged in.
 #                  Nothing has been changed yet - a failure here costs nothing.
 #   2. build       sets the pom version to the release version and runs "mvn clean package" (tests included unless
-#                  --skip-tests). A failure puts pom.xml back.
+#                  -st/--skip-test). A failure puts pom.xml back.
 #   3. verify      jar build.version must equal the release version (the app refuses an update whose jar disagrees
 #                  with the tag), Start-Class must be the app's, and the manifest's Min-Launcher-Protocol (the launcher
 #                  generation this version needs) must be a positive integer. Writes the artifacts to target/release/:
@@ -30,7 +30,8 @@
 #   --build-only    stop after step 3: artifacts are built and verified, pom.xml is restored, git is untouched.
 #   --no-publish    do steps 1-4 locally; print the push / gh commands instead of running them.
 #   --pr            release through a pull request (see above). Needs the GitHub CLI unless --no-publish is given.
-#   --skip-tests    pass -DskipTests to Maven (the full suite takes minutes).
+#   -st, --skip-test  pass -DskipTests to Maven (skip the tests; the full suite takes minutes). Default: run the tests.
+#                   (--skip-tests is still accepted.)
 #   --next X.Y.Z-SNAPSHOT   version to continue with. Default: patch + 1.
 #   --notes-file F  release notes from file F. Default: let GitHub generate them from the merged work.
 #   --any-branch    allow releasing from a branch other than main.
@@ -144,7 +145,7 @@ main() {
       --build-only) BUILD_ONLY=1 ;;
       --no-publish) NO_PUBLISH=1 ;;
       --pr) VIA_PR=1 ;;
-      --skip-tests) SKIP_TESTS=1 ;;
+      -st | --skip-test | --skip-tests) SKIP_TESTS=1 ;;
       --any-branch) ANY_BRANCH=1 ;;
       -y | --yes) die "$1 is no longer accepted: a release always asks for confirmation (use --build-only to build without asking)" ;;
       --next) shift; NEXT="${1:-}" ;;

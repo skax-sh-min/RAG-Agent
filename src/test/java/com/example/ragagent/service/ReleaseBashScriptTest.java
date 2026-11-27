@@ -217,6 +217,21 @@ class ReleaseBashScriptTest extends ReleaseHarness {
     }
 
     @Test
+    @DisplayName("-st · --skip-test 도 Maven 에 -DskipTests 를 넘기고, 옵션이 없으면 테스트를 수행한다")
+    void shortSkipTestOptionsPassDskipTests() throws Exception {
+        for (String flag : List.of("-st", "--skip-test")) {
+            Files.deleteIfExists(mvnLog);
+            Result r = run(args(opt(Opt.BUILD_ONLY), flag));
+            assertThat(r.exit()).as(flag + " " + r.out()).isZero();
+            assertThat(Files.readString(mvnLog)).as(flag).contains("clean package").contains("-DskipTests");
+        }
+        Files.deleteIfExists(mvnLog);
+        Result r = run(args(opt(Opt.BUILD_ONLY)));
+        assertThat(r.exit()).as(r.out()).isZero();
+        assertThat(Files.readString(mvnLog)).contains("clean package").doesNotContain("-DskipTests");
+    }
+
+    @Test
     @DisplayName("--notes-file 을 주면 gh 에 --notes-file 로 넘기고 --generate-notes 는 쓰지 않는다")
     void notesFileIsPassedToGh() throws Exception {
         Path notes = tmp.resolve("notes.md");

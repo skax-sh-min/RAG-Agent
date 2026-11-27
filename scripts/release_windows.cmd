@@ -8,11 +8,12 @@ REM lives in release.sh next to this file (read its header for the steps and the
 REM options); this wrapper only finds Git for Windows' bash and runs it, so the
 REM Windows and Linux/macOS releases are the same, tested code.
 REM
-REM   windows_release.cmd --build-only           build + verify only, git untouched
-REM   windows_release.cmd 0.5.7 --skip-tests     release 0.5.7 without running the tests
-REM   windows_release.cmd --pr                   main only accepts pull requests: push a release
+REM   release_windows.cmd --build-only           build + verify only, git untouched
+REM   release_windows.cmd 0.5.7 -st              release 0.5.7 without running the tests
+REM                                              (-st / --skip-test adds -DskipTests; default: run them)
+REM   release_windows.cmd --pr                   main only accepts pull requests: push a release
 REM                                              branch + the tag, open the PR, keep the release a draft
-REM   windows_release.cmd --help
+REM   release_windows.cmd --help
 REM
 REM Every run except --build-only asks in this console before building: make a
 REM release now? is the version right? It asks once more before committing.

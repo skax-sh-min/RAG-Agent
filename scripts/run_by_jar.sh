@@ -3,31 +3,50 @@ set -e
 
 # windows_run_by_jar_cmd_no_docker.cmd 의 macOS 판.
 # Docker 없이 .env 를 로드해 target/rag-agent-*.jar 를 실행한다.
-# -b 는 빌드 후 실행, -cb 는 클린 빌드 후 실행한다.
+# -b 는 빌드 후 실행, -cb 는 클린 빌드 후 실행한다. 빌드는 테스트를 수행하고, -st 를 더하면 -DskipTests 로 건너뛴다.
 
 # 도움말은 .env 나 Maven 없이도 볼 수 있다.
-if [ "$#" -gt 1 ]; then
-  echo "오류: 옵션은 하나만 지정하세요. --help 로 사용법을 확인하세요." >&2
+usage() {
+  echo "사용법: $(basename "$0") [옵션]"
+  echo "  -b,  --build        mvn package 로 빌드한 뒤 JAR 실행"
+  echo "  -cb, --clean-build  mvn clean package 로 빌드한 뒤 JAR 실행"
+  echo "  -st, --skip-test    빌드에 -DskipTests 를 더한다(테스트를 건너뜀). -b 또는 -cb 와 함께 쓴다"
+  echo "                      (--skip-tests 도 받는다) 없으면 빌드가 테스트를 수행한다"
+  echo "  -h,  --help         도움말 표시"
+  echo "  옵션 없음: 기존 JAR 실행"
+  echo "  예: $(basename "$0") -cb -st"
+}
+BUILD_MODE=""
+SKIP_TESTS=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -b|--build|-cb|--clean-build)
+      if [ -n "$BUILD_MODE" ]; then
+        echo "오류: -b 와 -cb 는 하나만 지정하세요. --help 로 사용법을 확인하세요." >&2
+        exit 1
+      fi
+      case "$1" in -b|--build) BUILD_MODE=build ;; *) BUILD_MODE=clean ;; esac
+      ;;
+    -st|--skip-test|--skip-tests)
+      if [ -n "$SKIP_TESTS" ]; then
+        echo "오류: -st 를 두 번 지정했습니다. --help 로 사용법을 확인하세요." >&2
+        exit 1
+      fi
+      SKIP_TESTS=1
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "오류: 알 수 없는 옵션입니다: $1. --help 로 사용법을 확인하세요." >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+# -st 는 빌드 방법만 바꾸므로 빌드 옵션 없이 쓰면 아무 뜻이 없다 — 조용히 무시하지 않고 알린다.
+if [ -n "$SKIP_TESTS" ] && [ -z "$BUILD_MODE" ]; then
+  echo "오류: -st/--skip-test 는 빌드할 때만 쓸 수 있습니다. -b 또는 -cb 를 함께 지정하세요." >&2
   exit 1
 fi
-BUILD_MODE=""
-case "${1:-}" in
-  "") ;;
-  -b|--build) BUILD_MODE=build ;;
-  -cb|--clean-build) BUILD_MODE=clean ;;
-  -h|--help)
-    echo "사용법: $(basename "$0") [옵션]"
-    echo "  -b,  --build        mvn package 로 빌드한 뒤 JAR 실행"
-    echo "  -cb, --clean-build  mvn clean package 로 빌드한 뒤 JAR 실행"
-    echo "  -h,  --help         도움말 표시"
-    echo "  옵션 없음: 기존 JAR 실행"
-    exit 0
-    ;;
-  *)
-    echo "오류: 알 수 없는 옵션입니다: $1. --help 로 사용법을 확인하세요." >&2
-    exit 1
-    ;;
-esac
 
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 cd "$SCRIPT_DIR/.."
@@ -64,10 +83,13 @@ if [ -n "$BUILD_MODE" ]; then
     echo "오류: mvn 을 찾을 수 없습니다. Maven 3.9+ 와 Java 21 을 설치하세요." >&2
     exit 1
   fi
+  MVN_ARGS=""
+  [ -z "$SKIP_TESTS" ] || MVN_ARGS="-DskipTests"
+  # MVN_ARGS 는 비었거나 단어 하나라 일부러 따옴표 없이 펼친다(비었을 때 빈 인자를 넘기지 않게).
   if [ "$BUILD_MODE" = clean ]; then
-    mvn clean package
+    mvn clean package $MVN_ARGS
   else
-    mvn package
+    mvn package $MVN_ARGS
   fi
 fi
 
