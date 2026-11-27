@@ -55,8 +55,9 @@ import java.util.regex.Pattern;
  * 뺐다(답변의 표현이 검색어가 되면 검색이 자기 답변을 다시 찾고, Direct 답변이 지어낸 용어가 검색어로
  * 굳는다). 여기서는 목적이 다르다: 이 문장은 검색어가 아니라 재사용 추천에서 남이 고르는 문장이라, 답변이
  * 실제로 다룬 범위를 말해야 맞다. 대신 <b>검색 경로에는 절대 넣지 않는다</b>(독립화 재료·MultiQuery·답변
- * 프롬프트 어디에도) — 그쪽의 오염 경로는 그대로 닫혀 있다. 답변 전문이 아니라 "## 요약" 섹션만 넘기므로
- * 입력이 작다(소형 모델 계층 {@code MICRO_TEXT}). 출력이 짧아 <b>생각을 끄고</b> 부른다
+ * 프롬프트 어디에도) — 그쪽의 오염 경로는 그대로 닫혀 있다. 다듬은 질문만 받는 호출은 "## 요약" 섹션만,
+ * 추가 질문까지 받는 호출은 답변 본문({@link #MAX_ANSWER_BODY_CHARS} 까지)을 넘긴다 — 핵심 키워드를 골라 물으려면
+ * 본문이 필요하다(소형 모델 계층 {@code MICRO_TEXT}). 추가 질문 호출만 온도를 높인다({@link #FOLLOW_UP_TEMPERATURE}). 출력이 짧아 <b>생각을 끄고</b> 부른다
  * ({@code app.llm.thinking.post-answer}, 출하값 끔 — {@code ThinkingControlChatModel}) — 추론 모델은 한 줄 앞에 수백 토큰을 생각해서, 켠 채로는 로컬 서버에서 턴마다
  * 10~17초의 백그라운드 생성이었고 끄면 1초 안팎(추가 질문까지 받으면 3초 안팎)이다. 스위치를 받지 않는 서버를
  * 위해 출력 예약은 넉넉히 둔다({@link #MAX_OUTPUT_TOKENS}).
@@ -105,8 +106,24 @@ public class PostAnswerService {
     /** 이전 질문 하나당 재료 상한. */
     static final int MAX_MATERIAL_QUESTION_CHARS = 300;
 
-    /** 답변 요약 재료 상한 — 요약 섹션이 없는 답변은 앞부분을 이만큼 쓴다. */
+    /** 답변 요약 재료 상한 — 요약 섹션이 없는 답변은 앞부분을 이만큼 쓴다(다듬은 질문만 받는 호출의 재료). */
     static final int MAX_SUMMARY_CHARS = 1_200;
+
+    /**
+     * 추가 질문 호출에 싣는 답변 본문의 상한(앞에서부터). 요약 몇 줄만 넘기던 동안은 모델이 붙잡을 소재가 적어
+     * 제안이 요약의 주제 하나를 맴돌았다 — 본문을 넘겨야 핵심 키워드(설정 이름·용어)를 골라 물을 수 있다.
+     * 답변은 최대 20,000자라 상한을 둔다: 소형 모델 계층(창 16K 이상 전제)에서 지시·출처·이력·출력 예약과 함께
+     * 들어가는 크기다.
+     */
+    static final int MAX_ANSWER_BODY_CHARS = 4_000;
+
+    /**
+     * 추가 질문 호출의 온도. 다른 백그라운드 호출처럼 인덱싱 온도(0.0~0.1)로 부르면 비슷한 재료에서 거의 같은
+     * 질문이 나왔다 — 이 호출에는 결정성보다 다양성이 필요하다. 같은 호출에서 나오는 다듬은 질문은 {@link #accept}
+     * 의 판정(재료에서 온 낱말이 있어야 받는다)이 걸러 주므로 이 온도에 흔들리지 않는다. 다듬은 질문만 받는 호출
+     * ({@code prompt.postanswer.clarify})은 인덱싱 온도 그대로다.
+     */
+    static final double FOLLOW_UP_TEMPERATURE = 0.6;
 
     /** 다듬은 질문의 길이 상한 — 재사용 추천이 보여주는 상한과 같다(넘으면 어차피 추천에 안 뜬다). */
     static final int MAX_CLARIFIED_CHARS = QuestionReuseService.MAX_SUGGESTION_QUESTION_LENGTH;
@@ -125,7 +142,7 @@ public class PostAnswerService {
     /**
      * 출력 예약 — 한 줄짜리 응답에 프로바이더의 max-tokens 전체를 예약하지 않는다. 그런데도 넉넉한 이유는
      * {@code AnswerService.MAX_EVAL_OUTPUT_TOKENS} 와 같다: 추론(thinking) 모델은 답을 내기 전에 이 예산을 먼저
-     * 쓴다. 이 호출은 생각을 끄고 부르지만({@link #options()}) 그 스위치를 받지 않는 서버(LM Studio 의 OpenAI
+     * 쓴다. 이 호출은 생각을 끄고 부르지만({@link #options(double)}) 그 스위치를 받지 않는 서버(LM Studio 의 OpenAI
      * 호환 경로, 원격 프로바이더)에서는 모델이 여전히 생각한다 — 실측으로 llama.cpp 의 gemma-4-E2B 는 생각을 켠
      * 채 400~700 토큰을 {@code reasoning_content} 로 쓰고 나서야 한 줄을 냈고, 256 에서는 8건 모두 본문이 빈 채
      * {@code finish_reason=length} 로 끝났다(= 기능이 아무것도 하지 않는다). 생각을 끄면 실제로 쓰는 것은 한 줄
@@ -311,7 +328,7 @@ public class PostAnswerService {
             raw = llmRouter.executeWithTracking(ThinkingSite.POST_ANSWER.taskType(), ThinkingSite.POST_ANSWER.fixedRoutingMode(),
                     BackgroundUsage.POSTANSWER_PREFIX,
                     model -> model.call(new Prompt(
-                            List.of(new SystemMessage(systemPrompt), new UserMessage(question)), options())));
+                            List.of(new SystemMessage(systemPrompt), new UserMessage(question)), options(props.llmSafe().indexingTemperature()))));
         } catch (Exception e) {
             // 호출이 실패했다 — NULL 로 남겨 두면 백필이 다시 시도할 수 있다.
             log.warn("[CLARIFY] 질문 다듬기 호출 실패 turnId={}: {}", turnId, e.getMessage());
@@ -338,7 +355,7 @@ public class PostAnswerService {
         if (question == null || question.isBlank()) return Extras.NONE;
         List<String> earlier = earlierQuestions(userId, threadId, turnId);
         String history = historyBlock(earlier);
-        String summary = summaryOf(result.answer());
+        String body = answerBodyOf(result.answer());
         String sources = sourcesOf(result.sources());
         String none = noneFor(locale);
         String raw;
@@ -346,13 +363,13 @@ public class PostAnswerService {
             String systemPrompt = messageSource.getMessage("prompt.postanswer.extras", null, locale)
                     .replace("{history}", history.isBlank() ? none : history)
                     .replace("{sources}", sources.isBlank() ? none : sources)
-                    .replace("{summary}", summary.isBlank() ? none : summary)
+                    .replace("{answer}", body.isBlank() ? none : body)
                     .replace("{count}", Integer.toString(count))
                     .replace("{query}", PromptInjectionGuard.wrap(question));
             raw = llmRouter.executeWithTracking(ThinkingSite.POST_ANSWER.taskType(), ThinkingSite.POST_ANSWER.fixedRoutingMode(),
                     BackgroundUsage.POSTANSWER_PREFIX,
                     model -> model.call(new Prompt(List.of(new SystemMessage(systemPrompt),
-                            new UserMessage(extrasConverter.getFormat())), options())));
+                            new UserMessage(extrasConverter.getFormat())), options(FOLLOW_UP_TEMPERATURE))));
         } catch (Exception e) {
             log.warn("[CLARIFY] 답변 뒤 호출 실패 turnId={}: {}", turnId, e.getMessage());
             return Extras.NONE;
@@ -372,7 +389,7 @@ public class PostAnswerService {
         if (out == null) return Extras.NONE;
 
         String clarified = clarifyOn
-                ? saveClarified(turnId, question, parse(out.clarifiedQuestion()), history + "\n" + summary, raw)
+                ? saveClarified(turnId, question, parse(out.clarifiedQuestion()), history + "\n" + body, raw)
                 : null;
         List<String> followUps = cleanFollowUps(out.followUps(), question, earlier, count);
         log.info("[FOLLOW-UP] turnId={} 추가 질문 {}개", turnId, followUps.size());
@@ -427,6 +444,16 @@ public class PostAnswerService {
         String summary = CuratedTextUtils.extractSummarySection(answer);
         String text = summary.isBlank() ? answer.strip() : summary;
         return text.length() > MAX_SUMMARY_CHARS ? text.substring(0, MAX_SUMMARY_CHARS) + "…" : text;
+    }
+
+    /**
+     * 추가 질문 호출의 답변 재료 — 요약이 아니라 <b>본문</b>({@link #MAX_ANSWER_BODY_CHARS} 까지, 앞에서부터).
+     * 답변 프롬프트와 같은 정리({@code normalizeForPrompt} — 장식 줄·이미지 경로·페이지 표지)를 거친다.
+     */
+    static String answerBodyOf(String answer) {
+        if (answer == null || answer.isBlank()) return "";
+        String text = MarkdownNoiseNormalizer.normalizeForPrompt(answer).strip();
+        return text.length() > MAX_ANSWER_BODY_CHARS ? text.substring(0, MAX_ANSWER_BODY_CHARS) + "…" : text;
     }
 
     /** 답변이 근거로 삼은 문서 — 위치 표시와 짧은 발췌, 검색 순위대로 {@value #MAX_SOURCES}개까지. */
@@ -556,9 +583,9 @@ public class PostAnswerService {
      * 제목 생성과 같은 인덱싱/백그라운드 temperature — 다듬기는 창의 작업이 아니다. 핫이라 매 호출 다시 읽는다.
      * 생각은 끈다(클래스 주석) — 실을지는 받는 프로바이더가 정한다.
      */
-    private OpenAiChatOptions options() {
+    private OpenAiChatOptions options(double temperature) {
         OpenAiChatOptions.Builder builder = ThinkingControl.mark(OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().indexingTemperature()), ThinkingSite.POST_ANSWER);
+                .temperature(temperature), ThinkingSite.POST_ANSWER);
         int base = baseReservation(props.llmSafe().maxTokens());
         if (base > 0) builder.maxTokens(base);
         return builder.build();

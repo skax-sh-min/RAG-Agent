@@ -158,8 +158,11 @@ class PostAnswerServiceTest {
         // 설정값(6000)이 아니라 이 호출의 상한으로 조인다 — 그래도 추론 모델이 생각을 마칠 만큼은 남긴다.
         // 그리고 답변 뒤 다듬기 사이트로 표시한다 — 출하값이 끔이고, 실을지는 받는 프로바이더가 정한다
         // (ThinkingControlChatModel).
-        assertThat(prompt.getValue().getOptions()).isInstanceOfSatisfying(OpenAiChatOptions.class, o ->
-                assertThat(o.getMaxTokens()).isEqualTo(PostAnswerService.MAX_OUTPUT_TOKENS));
+        assertThat(prompt.getValue().getOptions()).isInstanceOfSatisfying(OpenAiChatOptions.class, o -> {
+            assertThat(o.getMaxTokens()).isEqualTo(PostAnswerService.MAX_OUTPUT_TOKENS);
+            assertThat(o.getTemperature()).as("다듬은 질문만 받는 호출은 인덱싱 온도 그대로")
+                    .isEqualTo(mockProps().llmSafe().indexingTemperature());
+        });
         assertThat(ThinkingControl.siteOf(prompt.getValue())).isEqualTo(ThinkingSite.POST_ANSWER);
         assertThat(PostAnswerService.MAX_OUTPUT_TOKENS)
                 .as("추론 모델은 한 줄을 내기 전에 400~700 토큰을 생각한다 — 256 이면 본문이 비어 기능이 조용히 꺼진다")
@@ -260,6 +263,18 @@ class PostAnswerServiceTest {
         assertThat(PostAnswerService.summaryOf("가".repeat(5_000))).hasSize(PostAnswerService.MAX_SUMMARY_CHARS + 1);
     }
 
+    @Test
+    @DisplayName("answerBodyOf — 요약이 아니라 본문 전체(앞에서부터 길이 상한, 이미지 경로는 걷는다)")
+    void answerBodyOf() {
+        assertThat(PostAnswerService.answerBodyOf(ANSWER))
+                .contains("응답 대기 시간에서 바꿉니다", "기본값은 30초");
+        assertThat(PostAnswerService.answerBodyOf("설명\n[이미지: images/abc/p1.png]\n끝"))
+                .contains("[이미지]").doesNotContain("images/abc");
+        assertThat(PostAnswerService.answerBodyOf("가".repeat(20_000)))
+                .hasSize(PostAnswerService.MAX_ANSWER_BODY_CHARS + 1);
+        assertThat(PostAnswerService.answerBodyOf(null)).isEmpty();
+    }
+
     /**
      * 실제 번들의 프롬프트가 통째로 읽히는가 — 여러 줄 값의 줄 끝 {@code \n\} 가 하나라도 빠지면 첫 줄만 값이
      * 되고 자리표시자가 사라진다. 그러면 치환이 아무 일도 하지 않아 모델은 재료 없이 질문만 받는다.
@@ -275,7 +290,9 @@ class PostAnswerServiceTest {
 
             String extras = realMessageSource().getMessage("prompt.postanswer.extras", null, locale);
             assertThat(extras).as("%s extras", locale)
-                    .contains("{history}", "{sources}", "{summary}", "{query}", "[SOURCES]", "clarifiedQuestion", "followUps");
+                    .contains("{history}", "{sources}", "{answer}", "{count}", "{query}", "[SOURCES]", "[ANSWER]",
+                            "clarifiedQuestion", "followUps")
+                    .doesNotContain("{summary}", "[ANSWER_SUMMARY]");
             assertThat(extras.lines().count()).as("%s extras 줄 수", locale).isGreaterThan(15);
         }
     }
@@ -316,8 +333,12 @@ class PostAnswerServiceTest {
         call.getValue().apply(model);
         assertThat(prompt.getValue().getInstructions().get(0).getText())
                 .contains("[SOURCES]", "- 연동 가이드.pdf: 미리보기", "- MCI 연동 구조 알려줘", "응답 대기 시간에서 바꿉니다",
+                        "기본값은 30초",                                   // 요약 밖의 본문도 싣는다
                         "질문 3개")
-                .doesNotContain("{sources}", "{history}", "{summary}", "{query}", "{count}");
+                .doesNotContain("{sources}", "{history}", "{answer}", "{query}", "{count}");
+        assertThat(prompt.getValue().getOptions()).isInstanceOfSatisfying(OpenAiChatOptions.class, o ->
+                assertThat(o.getTemperature()).as("추가 질문 호출은 다양성을 위해 온도를 높인다")
+                        .isEqualTo(PostAnswerService.FOLLOW_UP_TEMPERATURE));
         assertThat(prompt.getValue().getInstructions().get(1).getText())
                 .as("응답 형식(JSON 스키마)은 사용자 메시지로 붙는다").contains("clarifiedQuestion", "followUps");
     }
