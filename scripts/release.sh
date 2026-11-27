@@ -1,6 +1,6 @@
 #!/bin/sh
 # release.sh - build, verify and publish a RAG Agent release from this machine (no GitHub Actions needed).
-# (Windows: scripts\windows_release.cmd runs this very script through Git for Windows' bash - same steps, same options.)
+# (Windows: scripts\release_windows.cmd runs this very script through Git for Windows' bash - same steps, same options.)
 #
 # What it does, in this order:
 #   1. preflight   clean working tree, on main, not behind origin, tag not taken, mvn + Java 21, gh logged in.

@@ -13,30 +13,30 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code scripts/windows_release.cmd} — 로직은 {@code release.sh} 에 있고(그쪽은 {@link ReleaseBashScriptTest} 가 전부 본다) 이 래퍼는 Git for
+ * {@code scripts/release_windows.cmd} — 로직은 {@code release.sh} 에 있고(그쪽은 {@link ReleaseBashScriptTest} 가 전부 본다) 이 래퍼는 Git for
  * Windows 의 bash 를 찾아 넘겨 주기만 한다. 그래서 여기서는 래퍼가 하는 일만 본다: bash 찾기(WSL 의 bash 는 쓰지 않는다) · 인자(값이 있는 옵션·
  * 공백이 든 경로) 그대로 넘기기 · 표준 입력 · 종료 코드 전달. Windows 에서만 돈다(다른 OS 는 스킵).
  */
 // 오래 걸리는 테스트 — 평소 mvn test 에서 빠지고 릴리즈(-Pall-tests)에서 돈다. 따로 돌리려면 mvn test -Plong-running-tests (pom.xml 의 surefire 설명)
 @Tag("long-running")
-@DisplayName("릴리즈 래퍼(windows_release.cmd)")
+@DisplayName("릴리즈 래퍼(release_windows.cmd)")
 class ReleaseCmdWrapperTest extends ReleaseHarness {
 
     @Override
     void assumeRunnable() {
         Assumptions.assumeTrue(WINDOWS, "Windows 에서만 돈다");
-        Assumptions.assumeTrue(Files.exists(Path.of("scripts", "windows_release.cmd")), "래퍼가 없다");
+        Assumptions.assumeTrue(Files.exists(Path.of("scripts", "release_windows.cmd")), "래퍼가 없다");
         assumeBash();
     }
 
     @Override
     List<String> scriptFiles() {
-        return List.of("release.sh", "windows_release.cmd");
+        return List.of("release.sh", "release_windows.cmd");
     }
 
     @Override
     List<String> command(Path scriptsDir) {
-        return List.of("cmd.exe", "/c", scriptsDir.resolve("windows_release.cmd").toString());
+        return List.of("cmd.exe", "/c", scriptsDir.resolve("release_windows.cmd").toString());
     }
 
     @Test
@@ -45,7 +45,7 @@ class ReleaseCmdWrapperTest extends ReleaseHarness {
         Result r = run(args("--help"));
 
         assertThat(r.exit()).as(r.out()).isZero();
-        assertThat(r.out()).contains("Usage:").contains("--build-only").contains("windows_release.cmd");
+        assertThat(r.out()).contains("Usage:").contains("--build-only").contains("release_windows.cmd");
     }
 
     @Test
