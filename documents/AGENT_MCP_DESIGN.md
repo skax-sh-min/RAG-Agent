@@ -1,14 +1,10 @@
 # MCP 기반 Agent 아키텍처 설계서 및 개발 로드맵
 
-> 기준: `fix/opus` 브랜치 HEAD `0f19115`, Spring Boot 4.1.2, Spring AI 2.0.2, Java 21.
-> `클래스:줄` 표기는 이 커밋의 `src/main/java/com/example/ragagent` 아래 파일을 가리킨다.
-> 라이브러리 동작은 Spring AI 2.0.2 문서와 로컬 jar(`javap`, `jshell`)로 확인했다.
-> 검색·리랭크·Tool 호출 수치는 2026-11-05에 로컬 모델과 DB 복사본으로 잰 일회성 실측이다(부록 A). 앱에 구현해 잰 값이 아니므로 구현 뒤 하네스로 다시 잰다.
-> 결정과 진행 상태는 [PLAN.md §6.33](PLAN.md) 이 추적한다.
+> **이 문서는 설계 시점의 기록이다.** §1~§9 는 2026-11-05 설계(Phase 0~5), §10 은 2026-11-17 이후 설계(Phase 6 — 자연어 지식 수정)다. 전부 구현됐고(2026-11-06~23), 구현이 설계와 다른 자리는 **「구현:」** 으로 표시했다. 살아 있는 동작 명세는 코드와 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS, 진행 상태는 [PLAN.md §6.33](PLAN.md).
 >
-> **구현 현황 (2026-11-10)**: Phase 0·1a·1b·2·3·4 구현됨(5: 추적 패널·`agent_tool_call` 은 2026-11-11 구현, 2주 관측과 기본값 판단은 남음). 이 문서는 **설계 시점의 서술**이라 일부는 구현과 다르다 — 같은 자리에 **「구현:」** 으로 표시했다. 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고 새 사이트(`AGENT_PLAN`)를 만들지 않고 `ThinkingSite.CONDENSE` 를 쓴다 ② `getChangeJob` Tool·`onToolCall`/SSE `tool`·`agent_tool_call` 저장은 **만들지 않았다**(작업 조회는 리포트 화면, 추적 패널은 Phase 5) ③ 유지보수 요청은 채팅에서 **되묻고 확정한 뒤에만** 시작하며 관리자 판정은 요청 스레드의 `ThreadContext.admin` 이다. 살아 있는 동작 명세는 CLAUDE.md, 깨지기 쉬운 곳은 PITFALLS.
+> 설계와 구현의 큰 차이 셋: ① Tool 선택은 네이티브 `tools` 가 아니라 **프롬프트 JSON** 이고([AGENT_EVALUATION.md](AGENT_EVALUATION.md) — 정확도 0.939 vs 0.20) 새 사이트 없이 `ThinkingSite.CONDENSE` 를 쓴다 ② `onToolCall`/SSE `tool` 은 만들지 않았다(추적은 `/admin` 패널) ③ 유지보수·지식 수정은 채팅에서 **되묻고 확정한 뒤에만** 시작하고, 적용은 사람이 검토 화면에서 하나씩 확인한다(§10.15).
 >
-> **추가 설계 (2026-11-17, 미구현)**: 자연어 지식 수정 — 사용 중단 표시·내용 삭제·주의 사항 추가·설명 수정, 원문 인용에 고정된 편집, 관리자가 고친 뒤 승인, 변환 MD 구간 되쓰기, MCP 제안 Tool(`findChunks`·`proposeChunkEdit`·`getChangeJob`)은 **§10**.
+> 수치 중 부록 A 는 2026-11-05 의 일회성 스크립트 실측이다. 앱으로 다시 잰 값은 [SEARCH_EVALUATION.md](SEARCH_EVALUATION.md) §7 · AGENT_EVALUATION · [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md).
 
 ## Context
 
@@ -17,10 +13,10 @@
 **결론 여섯 가지.**
 
 1. **검색을 Retriever + Reranker로 바꾼다.** 후보 20개를 찾아 교차 인코더로 재순위화하고 상위 5개만 LLM에 넣는다. 실측에서 LLM에 넣는 청크는 절반이 됐는데 recall은 올랐다(골든셋 0.96에서 1.00, 후속 질문 0.67에서 0.76).
-2. **답을 못 찾으면 다른 검색어로 최대 3회까지 다시 찾는다.** 재검색 여부는 리랭커 점수로 코드가 정하고, 새 검색어는 LLM이 만든다. 후속 질문 recall이 0.90까지 오른다. 로컬 모델이 재검색을 스스로 결정하지 못해서(무관한 결과를 줘도 12건 중 0건) 역할을 이렇게 나눴다. (결정됨)
-3. **LLM은 턴마다 Tool을 한 번 고르고, 답변은 기존 `ANSWER → CRITIC` 이 쓴다.** `searchKnowledge` 를 고르면 `RETRIEVAL` 의 검색 루프로 이어진다. 스트리밍, 프롬프트 축소 사다리, 검증은 바뀌지 않는다. 선택 정확도는 실측 49건 중 44건이었다.
-4. **앱 내부 Tool은 같은 JVM에서 직접 호출하고, 같은 Tool을 MCP Server로 외부에 공개한다.** Retriever와 Reranker는 `searchKnowledge` Tool 안에 있어 양쪽이 같은 검색을 쓴다. MCP Client는 외부 MCP 서버가 생길 때만 붙인다. (테스트 결과 MCP Client의 우선 순위 낮아짐)
-5. **영향도 분석과 유지보수는 자유 루프가 아니라 고정 워크플로다.** LLM은 단계 안의 판단만 한다. 쓰기는 관리자 승인 뒤 워크플로 코드만 수행한다. (미확정)
+2. **답을 못 찾으면 다른 검색어로 최대 3회까지 다시 찾는다.** 재검색 여부는 리랭커 점수로 코드가 정하고, 새 검색어는 LLM이 만든다. 후속 질문 recall이 0.90까지 오른다. 로컬 모델이 재검색을 스스로 결정하지 못해서(무관한 결과를 줘도 12건 중 0건) 역할을 이렇게 나눴다.
+3. **LLM은 턴마다 Tool을 한 번 고르고, 답변은 기존 `ANSWER → CRITIC` 이 쓴다.** `searchKnowledge` 를 고르면 `RETRIEVAL` 의 검색 루프로 이어진다. 스트리밍, 프롬프트 축소 사다리, 검증은 바뀌지 않는다. 선택은 프롬프트 JSON 으로 한다(「구현:」 — 네이티브 Tool Calling 은 사전 평가에서 0.20).
+4. **앱 내부 Tool은 같은 JVM에서 직접 호출하고, 같은 Tool을 MCP Server로 외부에 공개한다.** Retriever와 Reranker는 `searchKnowledge` Tool 안에 있어 양쪽이 같은 검색을 쓴다. MCP Client는 외부 MCP 서버가 생길 때만 붙인다.
+5. **영향도 분석과 유지보수는 자유 루프가 아니라 고정 워크플로다.** LLM은 단계 안의 판단만 한다. 쓰기는 관리자 승인 뒤 워크플로 코드만 수행한다.
 6. **Q&A 품질을 올리는 것은 Tool Calling이 아니라 리랭크와 재검색이다.** Tool 선택의 가치는 지금 못 하는 일(카탈로그 조회, 영향도 분석, 유지보수)로 가는 길을 여는 것이다. 그래서 순서도 검색 개선이 먼저다.
 
 **이번에 정한 결정.**
@@ -36,7 +32,7 @@
 | 리랭커 | 교차 인코더(`bge-reranker-v2-m3`)를 `llama-server --reranking` 으로 운영 |
 | 리랭크 후보 수·최종 컷 | `search-top-k` 하나만 편집한다. 후보 수 = `search-top-k × 2`, 최종 컷 = `max(5, ⌈search-top-k × 2/3⌉)` 로 파생하고 `/settings` 에서 조회 전용으로 보인다(§4.3, 2026-11-06) |
 
-**선결 결함 (Phase 0에서 먼저 처리).** 블로킹 LLM 호출의 요청 본문에 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나갔다. 2026-11-06 요청 본문으로 확인했고 `ModelPinningChatModel` 로 고쳤다. 자세한 내용은 §2.4.
+**선결 결함 (Phase 0, 해결).** 블로킹 LLM 호출의 `model` 이 설정값이 아니라 `gpt-5-mini` 로 나갔다 — `ModelPinningChatModel` 로 고쳤다(§2.4).
 
 **권장 모델 (운영 기준, 2026-11-17).** Agent(`app.agent.enabled`)를 켜는 배포는 LOCAL 모델을 **Gemma 4 12B 이상, 또는 Tool 사용(함수 호출·구조화 출력)에 맞춘 최신 모델**로 둔다. E2B 는 Agent 없는 채팅·검색의 최소 구성이다. 측정이 아니라 운영 기준이다 — 앱 하네스로 잰 모델은 E2B 뿐이고, E2B 는 짧은 수정 명령 인식 4/6, 의미 변경 수정안 통과 1/10, 네이티브 Tool Calling 0.20 으로 판단·형식이 약했다. 모델을 바꾸면 `ToolCallingEvaluationTest` 로 다시 재고 [AGENT_EVALUATION.md](AGENT_EVALUATION.md) 에 남긴다. 운영 절차는 ADMIN_MANUAL §10.1 "Agent 를 켤 때의 모델".
 
@@ -46,132 +42,7 @@
 
 ## 1. 현재 구조 분석
 
-### 1.1 전체 아키텍처
-
-패키지 루트는 `com.example.ragagent`, Java 파일은 235개다. 큰 패키지는 `service`(68), `llm`(44), `ingestion`(18), `config`(16)이다. 프론트엔드는 Thymeleaf + HTMX이고 JS 프레임워크는 없다.
-
-```mermaid
-flowchart TD
-    U[사용자] --> FE["Thymeleaf + HTMX, chat-stream.js"]
-    FE --> CC[ChatController]
-    CC -->|"POST /ui/chat/stream"| SAS[StreamingAgentService]
-    CC -->|"POST /api/v1/chat, /ui/chat"| AS[AgentService]
-    SAS --> AG[AgentGraph]
-    AS --> AG
-    AG --> CS[ClassifierService]
-    AG --> RS[RetrievalService]
-    AG --> ANS[AnswerService]
-    AG --> CR[CriticService]
-    AG --> FS[FinalizeService]
-    AG --> DS[DirectAnswerService]
-    RS --> RG[RagService]
-    RS --> CQ[CuratedQaService]
-    RS --> LV[LazyVisionService]
-    RG --> VF[VectorStoreFacade]
-    RG --> KR[KeywordSearchRepository]
-    VF --> SV["SqliteVecVectorStoreProvider 또는 ChromaVectorStoreProvider"]
-    ANS --> LR[LlmRouter]
-    CS --> LR
-    LR --> CH["데코레이터 체인"]
-    CH --> LLM[("OpenAI 호환 로컬 LLM")]
-    ANS -->|"stream=true, AnswerStreamer"| RAW["LlmProvider.rawModel"]
-    RAW --> LLM
-    SAS --> TP[TurnPersistence]
-    AS --> TP
-    TP --> DB[("memory.db")]
-    KR --> DB
-    SV --> DB
-```
-
-SQLite 파일은 하나(`memory.db`)이고 연결 풀은 1개다. 운영 테이블, `chunk_fts`, sqlite-vec 벡터가 전부 이 파일에 있다. 현재 `.env` 는 `VECTORSTORE_TYPE=sqlite-vec`, `LOCAL_LLM_MODEL=gemma-4-E2B` 다.
-
-### 1.2 요청 처리 흐름
-
-| 경로 | 핸들러 | 호출 대상 |
-|---|---|---|
-| `POST /ui/chat/stream` | `ChatController:183` | 가상 스레드에서 `StreamingAgentService.run()` |
-| `POST /ui/chat` | `ChatController:243` | `AgentService.chat()` 후 HTMX 조각 반환 |
-| `POST /api/v1/chat` | `ChatController:322` | `AgentService.chat()` 후 JSON 반환 |
-
-`StreamingAgentService.run()` 의 순서는 다음과 같다.
-
-1. 질문을 검증하고, 실패하면 SSE `error` 를 보낸다.
-2. 15초 하트비트와 유휴 워치독을 시작한다.
-3. 이력 로드, 후속 질문 독립화(`QuestionCondenser`), 분류(`classifyOnly`)를 병렬로 돌린다.
-4. `agentGraph.runStreaming()` 을 호출한다. 이벤트는 `SseGraphListener` 가 SSE로 내보낸다.
-5. `TurnPersistence.save()` 로 저장하고 `done` 을 보낸다.
-6. 오류가 나면 부분 답변을 `[오류로 중단됨]` 과 함께 저장한다.
-
-SSE 이벤트는 `stage`, `token`, `sources`, `images`, `verifying`, `retry`, `done`, `error` 다.
-
-### 1.3 RAG 처리 흐름
-
-`AgentGraph` 는 상태 기계이고 `AgentState`(불변 레코드, 컴포넌트 38개)를 노드 사이로 넘긴다.
-
-```mermaid
-stateDiagram-v2
-    [*] --> CLASSIFIER
-    [*] --> DIRECT_ANSWER: directMode
-    CLASSIFIER --> DIRECT_ANSWER: meta
-    CLASSIFIER --> RETRIEVAL: 그 외
-    RETRIEVAL --> ANSWER
-    ANSWER --> RETRIEVAL: sufficient=false
-    ANSWER --> CRITIC: 검증하는 모드
-    ANSWER --> FINALIZE: S 모드
-    CRITIC --> ANSWER: grounded=false
-    CRITIC --> FINALIZE
-    DIRECT_ANSWER --> FINALIZE
-    FINALIZE --> [*]
-```
-
-- 재시도 상한은 `app.max-retry-count`(기본 2)다. `sufficient=false` 는 재검색, `grounded=false` 는 재검색 없이 답변만 다시 쓴다.
-- 같은 게이트로 같은 문서 집합을 보고 다시 반려되면 상한이 남아도 멈춘다(`AgentState.repeatsLastRejection`).
-- `CriticService` 는 LLM을 부르지 않는다. 검증 LLM 호출은 `AnswerService.evaluate()` 가 답변 직후 수행하고, CRITIC은 그 결과만 읽는다.
-- 검색 결과가 0건이면 LLM을 부르지 않고 정형 문구로 답한다.
-
-### 1.4 Vector Search 흐름
-
-`RetrievalService.execute(AgentState[, GraphListener])` 가 유일한 공개 API이고 호출자는 `AgentGraph:121` 뿐이다.
-
-1. 후보 수를 계산한다: `effectiveTopK = topK + 재시도 + 모드 부스트 + 이력 부스트`.
-2. 세 축을 가상 스레드로 병렬 실행한다(`:203`).
-   - 키워드 축: `RagService.keywordSearch()`, FTS5 BM25.
-   - 큐레이션 축: `curatedAxis()`. 벡터는 유사도 0.5 미만 제거, 키워드는 내용어 2개 이상 일치 요구.
-   - 벡터 축: `searchBatch()`. 길이 게이트를 넘으면 `MultiQueryExpander` 가 변형 2개를 만든다.
-3. RRF로 합친다(`:257`). k=60, 키워드 가중치 0.5, 큐레이션 가중치 1.0.
-4. 태그 필터, 제외 청크 제거, 리랭크(기본 꺼짐) 또는 컷을 적용한다.
-5. `withStoredText()` 로 키워드 전용 히트를 저장 원문으로 되돌린다(`:285`).
-6. `SourceRef` 와 이미지 참조를 만들고, `LazyVisionService` 가 캐시에 없는 이미지만 Vision으로 설명한다.
-
-벡터 저장소는 `VectorStoreProvider` 인터페이스 뒤에 있고 `VectorStoreFacade` 가 위임한다. 구현체는 `SqliteVecVectorStoreProvider`, `ChromaVectorStoreProvider` 다.
-
-### 1.5 Prompt 생성 흐름
-
-프롬프트는 모두 `messages.properties`, `messages_ko.properties` 의 `prompt.*` 키에 있다. 시스템 프롬프트는 `ResponseMode`(S/N/C)가 고른다.
-
-`AnswerService.buildAnswerPrompt()`(`:1383`)가 사용자 메시지를 다음 순서로 조립한다.
-
-1. `[이전 대화]`
-2. `[검색된 문서]`
-3. `[경고]`
-4. `[직전 시도 메모]`
-5. `[질문]`: `PromptInjectionGuard.wrap(state.question())`, 언제나 원문
-
-창을 넘으면 `fitToBudget()` 이 `PromptLadder` 의 순서대로 줄인다: 과거 질문 자르기, 직전 1턴만 남기기, 문서를 바닥(top-k의 50%)까지, 직전 답변을 요약으로, 이력 전부 빼기, 문서 1개까지. 서버가 컨텍스트 초과로 거절하면 `withShrinkRetry()` 가 다음 걸음으로 다시 보낸다.
-
-### 1.6 Spring AI 사용 방식
-
-| 구분 | 현재 사용 |
-|---|---|
-| 모델 구성 | 자동 구성 제외. `LlmConfig:162-190` 이 프로바이더마다 `OpenAiChatModel` 을 직접 만든다 |
-| 데코레이터 체인 | `ThinkingControlChatModel`, `LoggingChatModel`, `CalibratingChatModel`, `MaxTokensCappingChatModel`, `OpenAiChatModel` 순서(`LlmConfig:201-212`) |
-| 게이트·사용량 | 체인이 아니라 `LlmRouter.executeSingleTracked()` 에 있다 |
-| 주 호출 패턴 | `router.executeGated*(..., model -> model.call(prompt))`. 앱 코드에 `ChatClient.prompt()...call()` 은 없다 |
-| 채팅 스트리밍 | `AnswerStreamer` 가 체인을 우회해 `rawModel().stream()` 을 부른다 |
-| 구조화 출력 | `BeanOutputConverter.getFormat()` 을 프롬프트에 붙이고 텍스트를 파싱한다. `responseFormat` 은 쓰지 않는다 |
-| Advisor | 앱 코드에 없다 |
-| Tool Calling, MCP | **0건.** API만 클래스패스에 있다. `pom.xml` 에 MCP 의존성이 없다 |
-| RAG 모듈 | `spring-ai-rag` 의 `MultiQueryExpander` 만 쓴다 |
+설계 당시(HEAD `0f19115`)의 구조 스냅샷 — 아키텍처 그림, 요청·RAG·검색·프롬프트 흐름, Spring AI 사용 방식 — 은 줄 번호와 파일 수가 낡아 걷었다(git 이력에 있다). 지금 구조는 CLAUDE.md 의 Architecture 와 Key Files 가 단일 출처다. 설계에 영향을 준 사실만 남긴다: 질문은 늘 같은 순서(분류 → 검색 → 답변 → 검증)로 처리됐고 LLM 이 도구를 고르지 않았다 · 앱 코드에 `ChatClient`·Advisor·Tool Calling·MCP 가 없었다(모델은 `LlmRouter` 의 게이트 클로저 안에서 `model.call()` 로 부른다) · 채팅 스트리밍은 데코레이터 체인을 우회한다(`AnswerStreamer`).
 
 ---
 
@@ -207,56 +78,11 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 
 ### 2.3 재사용 가능한 컴포넌트
 
-**그대로 재사용**
-
-| 영역 | 클래스 |
-|---|---|
-| Embedding | `EmbeddingBeanConfig`, `LoadBalancingEmbeddingModel` |
-| Vector 저장소 | `VectorStoreProvider`, `VectorStoreFacade`, 두 구현체 |
-| Chunking·인덱싱 | `ChunkSplitter`, `DocumentIndexer`, `KeywordExtractor`, `SearchTextBuilder` |
-| 답변 생성 | `AnswerService`, `AnswerStreamer`, `StreamFailover`, `PromptLadder`, `CriticService`, `FinalizeService` |
-| Prompt | `ResponseMode`, `prompt.*` 번들, `PromptInjectionGuard.wrap()` |
-| 예산 | `PromptBudget`, `ThinkingBudget`, `TokenEstimator`, `ProviderContextWindows` |
-| Diff·승인 패턴 | `ChunkDiff`, `CuratedSubmissionRepository` 의 compare-and-set 상태 전이 |
-| 백그라운드 양보 | `ClarifiedQuestionBackfill` 의 "대화형 게이트가 비어야 보낸다" 패턴 |
-| 운영 | `AuditLogger`, `MdcPropagation`, `DatabaseBackupService` |
-
-**일부 수정 후 재사용**
-
-| 클래스 | 수정 |
-|---|---|
-| `RetrievalService` | 축 조립과 융합을 `HybridSearchService` 로 옮기고, 검색 루프를 부르는 어댑터로 축소 |
-| `RerankerService` | LLM 리랭커로 남긴다. `ChunkReranker` 인터페이스를 구현하고, 교차 인코더가 없을 때만 쓴다 |
-| `AgentGraph`, `AgentState` | `TOOL` 노드 추가, 상태 컴포넌트 추가(`AgentState.of()` 동시 수정) |
-| `AgentService`, `StreamingAgentService` | 사전 단계에 Tool 계획 future 추가 |
-| `RoutedChatModel` | 대화의 라우팅 모드를 받는 생성자 추가 |
-| `LlmRouter` | 실패해도 차단하지 않는 호출 경로, Tool 미지원 기억 |
-| `GraphListener`, `SseGraphListener`, `chat-stream.js` | `onToolCall` 이벤트와 SSE `tool` |
-| `ThinkingSite` | `SEARCH_REWRITE`, `AGENT_PLAN` 등 사이트 추가 |
-| `PromptLadder` | 문서 바닥(top-k의 50%)이 실제 컷을 기준으로 잡히게 입력 수정 |
-| `SourceRef` | 리랭크 점수 추가(nullable) |
-| `ResponseMode` | `allowsAgent()` 성질 추가 |
-| `LlmCurlLogger`, `CalibratingChatModel`, `ThinkingObservations` | Tool 메시지 인식(§2.4) |
-| `SecurityConfig`, `NoAuthAutoLoginFilter`, `RateLimitFilter` | MCP 전용 체인, 통과 경로, 전용 버킷 |
-| `KeywordSearchRepository` | `findMentions()` 추가 |
-| `AdminService` | `applyChunkEdit()` 추가 |
-| `DocumentExportService` | `reassembledText()` 공개 |
-| `AppProperties`, `SettingsKeys` | `app.agent.*`, `agentSafe()` |
-
-**신규 개발**
-
-| 영역 | 클래스 |
-|---|---|
-| Tool 계층 | `ToolCatalog`, `ToolCaller`, `ToolGuard`, 각 `*Tool` |
-| Agent | `ToolPlanService`, `ToolDispatchService`, `ToolPlan` |
-| 검색 | `HybridSearchService`, `SearchLoopService`, `ChunkReranker`, `CrossEncoderReranker`, `SearchQueryRewriter` |
-| MCP Server | `McpServerConfig`, `McpApiKeyFilter` |
-| 워크플로 | `ImpactAnalysisWorkflow`, `MaintenanceWorkflow`, `ChangeProposalService`, `ChangeApplyService`, `MarkdownWriteBack` |
-| 저장 | Flyway `V12` 이후, `ChangeJobRepository`, `ChangeProposalRepository`, `AgentToolCallRepository` |
-| 화면 | `/admin` 변경 승인 대기열, 리포트 화면 |
-| 측정 | `ToolCallingEvaluationTest`, `agent-eval/tool-gold.json` |
+기존 검색·답변·예산·승인 패턴(임베딩·벡터 저장소·청킹·`AnswerService`·`PromptLadder`·`ChunkDiff`·compare-and-set 상태 전이·`DatabaseBackupService`)은 그대로 썼고, 새로 만든 것은 Tool 계층·Tool 선택·검색 루프·MCP 서버·워크플로·저장소다. 클래스 목록은 §6.1 과 CLAUDE.md Key Files.
 
 ### 2.4 Spring AI 2.0.2에서 실제로 확인한 제약
+
+> 「구현:」 Tool 선택을 프롬프트 JSON 으로 해서 요청에 `tools` 를 싣지 않으므로, 아래 중 `tools`·`tool_calls`·`RoutedChatModel` 에 관한 줄(계획 호출용 비차단 경로·계측 수정 등)은 대응할 필요가 없어졌다. Spring AI 의 사실로는 여전히 맞아 LLM 자율 Tool 루프를 다시 열 때(§7) 필요하다.
 
 | 사실 | 근거 | 설계 영향 |
 |---|---|---|
@@ -279,24 +105,9 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 | LM Studio에는 `/v1/rerank` 가 없다 | 실측 | 리랭커는 별도 `llama-server --reranking` 으로 돌린다 |
 | llama.cpp는 `--jinja` 가 있어야 Tool Calling이 되고, 병렬 호출은 기본 꺼짐이다 | llama.cpp 문서 | 운영 매뉴얼과 Phase 3 사전 평가의 사전 조건에 넣는다 |
 
-**선결 결함: 블로킹 호출의 `model` 누락.**
+**선결 결함: 블로킹 호출의 `model` 누락 (2026-11-06 해결).** 호출자가 옵션을 주면 `OpenAiChatModel` 은 기본 옵션을 병합하지 않고, 모델을 싣지 않은 옵션의 `model` 은 라이브러리 기본값 `gpt-5-mini` 다 — 분류·검증·독립화 같은 블로킹 호출이 그 이름으로 나갔다(모델 이름을 무시하는 llama-server 에서는 안 보인다). 체인 가장 안쪽의 `ModelPinningChatModel` 이 고치고, `ThinkingControlWireTest` 가 요청 본문의 `model` 을 단언한다.
 
-- `OpenAiChatOptions.builder().temperature(..).maxTokens(..).build().getModel()` 은 `gpt-5-mini` 를 돌려준다(`jshell` 로 실행 확인).
-- `OpenAiChatModel.buildRequestPrompt` 는 프롬프트 옵션이 null일 때만 기본 옵션을 쓰고 병합하지 않는다(바이트코드 확인).
-- 앱에서 채팅 옵션에 `.model()` 을 싣는 자리는 `LlmConfig:175, :187`, `AnswerStreamer:102` 뿐이다. `ClassifierService:97` 같은 블로킹 호출부는 싣지 않는다.
-- 따라서 분류, 검증, 독립화 등 블로킹 호출은 `gpt-5-mini` 로 나간다. **2026-11-06 요청 본문으로 확인했다**(`ThinkingControlWireTest.blockingCallsSendTheConfiguredModel`, 고치기 전 세 호출 모두 `gpt-5-mini`).
-- llama-server처럼 모델 이름을 무시하는 서버에서는 증상이 안 보일 수 있다. 원격 프로바이더는 다른 모델 호출이나 404에 이어 차단으로 갈 수 있다.
-- `ThinkingControlWireTest` 가 `model` 을 단언하지 않아 잡히지 않았다. Spring AI 2.0 업그레이드 커밋(`a8e1f78`) 이후의 회귀일 가능성이 있다(1.x 동작은 확인하지 않았다).
-- **수정(2026-11-06).** 체인 가장 안쪽에 `ModelPinningChatModel` 을 두어 프로바이더의 모델을 모든 호출에 싣는다. 같은 와이어 테스트가 이제 설정값을 단언한다.
-
-**알려진 제약: LM Studio의 생각 끄기.**
-
-- `ThinkingDialect.AUTO` 는 LOCAL 프로바이더를 `TEMPLATE_KWARGS` 로 풀어 `chat_template_kwargs.enable_thinking=false` 를 보낸다(`ThinkingDialect:33`).
-- LM Studio는 이 필드를 오류 없이 무시한다. 같은 요청의 지연과 출력 토큰이 필드를 넣어도 그대로였고(23.8초, 301토큰), `reasoning_effort: none` 만 2.6초, 31토큰, 생각 0으로 줄었다.
-- 따라서 사이트 21곳을 전부 `off` 로 출하했어도 **LM Studio에 연결된 배포에서는 분류, 독립화, 검증 같은 호출이 지금도 생각을 하고 있다.** `THINKING_EVALUATION.md` 의 수치는 llama-server 직결 측정이라 이 문제가 드러나지 않았다.
-- 고치지 않기로 했다(2026-11-05 운영 결정). `application.properties` 의 `thinking-dialect` 설명에 주석으로 남겼다.
-- 이 문서의 새 검색어(1.5초)와 Tool 선택(2.6초) 지연은 생각을 끈 값이다. 앱 설정 그대로 LM Studio에 붙이면 이 호출들도 생각을 하며, Tool 선택은 그때 약 13초였다.
-- 다시 필요해지면 LM Studio 프로바이더에 `thinking-dialect=openai-effort` 를 준다. 기본값을 바꾸면 llama-server 쪽이 깨질 수 있어 배포별로 건다.
+**알려진 제약: LM Studio의 생각 끄기.** LM Studio 는 `chat_template_kwargs.enable_thinking=false` 를 오류 없이 무시하고 `reasoning_effort: none` 만 듣는다(부록 A.2). 그래서 LM Studio 에 붙인 배포에서는 생각 수준을 전부 끔으로 출하했어도 분류·독립화·검증이 생각을 한다. 고치지 않기로 했다(2026-11-05 운영 결정) — 필요하면 그 프로바이더에 `thinking-dialect=openai-effort` 를 준다(기본값을 바꾸면 llama-server 가 깨질 수 있다).
 
 ---
 
@@ -304,7 +115,7 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 
 ### 3.1 원칙
 
-- **Q&A에서 LLM에게 보이는 Tool은 4개(관리자 5개)다.** Tool 스키마는 입력 토큰을 쓰고, 소형 모델은 선택지가 많을수록 틀릴 가능성이 커진다. 실제 수치는 Phase 3 직전의 사전 평가에서 잰다.
+- **Q&A에서 LLM에게 보이는 Tool은 4개(관리자 5개)다.** 소형 모델은 선택지가 많을수록 틀릴 가능성이 커진다(사전 평가는 AGENT_EVALUATION).
 - **인자는 짧은 평문만 받는다.** `version`, `userId` 는 인자에 없다. 서버가 정한다.
 - **결과는 짧게 돌려준다.** 행 수와 발췌 길이에 상한을 둔다(발췌 300자, 50행).
 - **호출자에 따라 목록을 거른다.** `ToolCatalog.forCaller(caller)` 가 권한 없는 Tool은 스키마조차 주지 않는다. 모든 Tool 메서드는 첫 줄에서 `ToolGuard` 를 지난다.
@@ -320,12 +131,12 @@ Tool은 컨트롤러를 거치지 않고 서비스를 직접 부르므로, 컨�
 | `findRelatedDocuments` | `findRelatedDocuments()` | O | O | 읽기 |
 | `queryCatalog` | `searchDatabase()` | O | O | 조회마다 다름 |
 | `analyzeImpact` | 영향도 분석 | O | O | 읽기 |
-| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 — **채팅은 되묻고 "네"를 받은 뒤에만**(`PendingChangeConfirmations`), 옵션(`semantic`·`caseVariants`)은 채팅에서 못 켠다. **설계(§10): 지시문만 받으면 자연어 수정 워크플로** | ADMIN만 | 제안 |
-| `findChunks` | `find_chunk` (§10.9, 설계) | X | ADMIN만 | ADMIN 읽기 |
-| `proposeChunkEdit` | `update_chunk`, `delete_chunk_section` (§10.9, 설계) | X | ADMIN만 | 제안 — 대기열에만 쌓인다 |
+| `requestDocumentChange` | `updateDocument()` 대체 | ADMIN만 — **채팅은 되묻고 "네"를 받은 뒤에만**(`PendingChangeConfirmations`), 옵션(`semantic`·`caseVariants`)은 채팅에서 못 켠다. 지시문만 받으면 자연어 수정 워크플로(§10) | ADMIN만 | 제안 |
+| `findChunks` | `find_chunk` (§10.9) | X | ADMIN만 | ADMIN 읽기 |
+| `proposeChunkEdit` | `update_chunk`, `delete_chunk_section` (§10.9) | X | ADMIN만 | 제안 — 대기열에만 쌓인다 |
 | `getChunkContext` | 추가 | X | O | 읽기 |
 | `getDocument` | `getDocument()` | X | ADMIN만 | ADMIN 읽기 |
-| `getChangeJob` | 추가 | X | O | 읽기 — **구현: 만들지 않았다**(작업 조회는 리포트 화면 `/ui/impact-jobs/{id}`·`/admin/change-jobs/{id}`, MCP 에서는 `analyzeImpact`/`requestDocumentChange` 가 돌려준 번호로 화면을 연다). **§10.9 에서 ADMIN 으로 다시 만든다(설계)** — 외부 에이전트가 가드 위반을 읽고 고쳐 다시 내야 한다 |
+| `getChangeJob` | 추가 | X | ADMIN만 | 읽기 — 「구현:」 4단계에서는 만들지 않았고 6b(§10.9)에서 ADMIN 으로 만들었다(외부 에이전트가 가드 위반을 읽고 고쳐 다시 내야 한다) |
 | `generateDiff` | `generateDiff()` | X | O | 읽기 |
 
 Tool이 아닌 내부 기능: `ChangeApplyService.apply()`(`updateDocument` 의 실제 쓰기)와 재색인(`reindexKnowledge` 에 해당). 둘 다 관리자 승인 뒤 워크플로만 호출한다.
@@ -339,7 +150,7 @@ Tool이 아닌 내부 기능: `ChangeApplyService.apply()`(`updateDocument` 의 
 | 목적 | 문서와 큐레이션 Q&A를 찾는다. Retriever(하이브리드 검색)와 Reranker(교차 인코더)가 이 Tool 안에 있다 |
 | 입력 | `query`(필수), `keywords`(선택), `tags`(선택), `topK`(선택, 리랭크 컷 이하) |
 | 출력 | `hits[{chunkId, file, page, snippet, score}]`, `totalHits`, `lowConfidence` |
-| 구현 | 신규 `KnowledgeSearchTool` 이 `HybridSearchService.search()` 와 `ChunkReranker.rerank()` 를 잇는다. 채팅은 `RETRIEVAL` 노드의 검색 루프(§5.2)로 같은 두 서비스를 쓰고, MCP 호출은 재검색 없이 1회 검색한다. 외부 LLM은 `score`, `lowConfidence` 를 보고 스스로 다시 부를 수 있다 |
+| 구현 | 신규 `KnowledgeSearchTool` 이 `HybridSearchService.search()` 와 `CrossEncoderReranker.rerank()` 를 잇는다. 채팅은 `RETRIEVAL` 노드의 검색 루프(§5.2)로 같은 두 서비스를 쓰고, MCP 호출은 재검색 없이 1회 검색한다. 외부 LLM은 `score`, `lowConfidence` 를 보고 스스로 다시 부를 수 있다 |
 | 재사용 | 높음. 리랭커가 켜지면 질의 확장은 끈다. 측정상 골든셋 26건 중 0~1건만 바뀌고 검색마다 LLM 1회와 약 1.1초를 쓴다 |
 
 **findRelatedDocuments**
@@ -406,7 +217,7 @@ Tool이 아닌 내부 기능: `ChangeApplyService.apply()`(`updateDocument` 의 
 
 | Tool | 입력 | 출력 | 구현 |
 |---|---|---|---|
-| `getChangeJob` | `jobId` | 상태, 수정안 수, 요약 | `ChangeJobRepository`. 요청자와 ADMIN만 |
+| `getChangeJob` | `jobId` | 상태, 수정안 목록, 축약 Diff, 검토 URL | `ChangeProposalService.jobSummary`. ADMIN만(§10.9) |
 | `generateDiff` | `before`, `after` | 변경 구간 요약 | `ChunkDiff.compare()` + 신규 `UnifiedDiffFormatter`. `lines` 에 같은 줄이 전부 들어 있고 `tooLarge` 일 수 있어 축약이 필요하다 |
 
 ---
@@ -419,8 +230,7 @@ flowchart TD
     FE --> CC[ChatController]
     CC --> SAS["StreamingAgentService, AgentService"]
     SAS -->|"사전 단계, 분류와 병렬"| TPS[ToolPlanService]
-    TPS --> RCM["RoutedChatModel, tools 포함 1회"]
-    RCM --> LR[LlmRouter]
+    TPS -->|"프롬프트 JSON 1회 (CONDENSE)"| LR[LlmRouter]
     LR --> LLM[("Local LLM")]
     SAS --> AG[AgentGraph]
     AG -->|"searchKnowledge, 호출 없음, 실패"| RET["RETRIEVAL: 검색 루프"]
@@ -528,9 +338,7 @@ app.search-max-attempts=${SEARCH_MAX_ATTEMPTS:3}
 | 후보 수 | 2 | 4 | 8 | 20 | 22 | 40 | 100 |
 | 최종 컷 | 2 | 4 | 5 | 5 | 6 | 10 | 25 |
 
-- 두 값은 `AppProperties` 의 파생 메서드다. 프로퍼티, 환경변수, `SettingsKeys`·`SEARCH_HOT_SPECS` 항목이 없다. `search-top-k` 를 핫 편집하면 다음 검색부터 함께 바뀐다(매 호출 다시 계산하고 필드에 캐시하지 않는다). 하나만 열어 두므로 후보 수가 최종 컷보다 작은 조합 같은 어긋난 설정이 만들어질 수 없다.
-- `/settings` 검색 튜닝 카드의 `search-top-k` 바로 아래에 **조회 전용 항목 둘**(후보 수, 최종 컷)을 둔다. `SettingsService.searchHotItems()` 가 `readOnly(...)` 로 만들고, 값은 위 두 메서드가 돌려주는 것이라 다음 검색이 쓰는 값과 같다(`effectiveValue()` 와 같은 원칙). 키가 없는 `editable=false` 항목은 `settings-item.html` 이 입력칸 없이 값만 그리므로 템플릿 변경은 필요 없고, 편집 카드 안에 놓았을 때 모양은 구현 때 화면으로 확인한다.
-- 라벨 `settings.item.rerank-candidates`, `settings.item.rerank-top-k` 와 풍선 설명 `settings.desc.*` 를 한/영 번들에 둔다. 설명에 식(`search-top-k × 2`, `max(5, search-top-k × 2/3)`)을 보인다. 리랭커가 꺼져 있으면(`app.reranker.base-url` 이 비었거나 연결 실패) 항목 옆 배지로 "리랭커 꺼짐 — 적용되지 않음" 을 알린다. 값은 항상 보인다.
+- 두 값은 `AppProperties` 의 파생 메서드라 프로퍼티·환경변수가 없고, `search-top-k` 를 핫 편집하면 다음 검색부터 함께 바뀐다. 하나만 열어 두므로 후보 수가 최종 컷보다 작은 설정이 만들어질 수 없다. `/settings` 의 `search-top-k` 아래에 조회 전용으로 보인다(리랭커가 꺼졌으면 "적용되지 않음" 배지).
 - 기본값 10에서 20 / 5는 부록 A의 실측 구성과 같다. 다른 `search-top-k` 에서의 recall은 측정하지 않았다.
 - **위험.** 후보 수가 `search-top-k` 를 따라 커진다. 20개에 약 3초(CPU)를 선형으로 가정하면 상한(50)에서는 후보 100개에 약 15초다(미측정). 상한을 두지 않았다. 필요하면 측정한 뒤 후보 수 상한을 더한다.
 
@@ -569,45 +377,20 @@ sequenceDiagram
     A-->>U: 토큰 스트림
 ```
 
-Tool 계획 호출의 뼈대는 다음과 같다. Spring AI 2.0에서 `model.call()` 은 Tool을 실행하지 않으므로 `tool_calls` 만 읽고 끝난다.
-
-```java
-ChatModel model = new ThinkingSiteChatModel(
-        new RoutedChatModel(router, ThinkingSite.AGENT_PLAN, state.routingMode()),
-        ThinkingSite.AGENT_PLAN);
-OpenAiChatOptions options = ThinkingControl.mark(OpenAiChatOptions.builder()
-        .toolCallbacks(catalog.forCaller(caller))
-        .parallelToolCalls(false)
-        .maxTokens(baseReservation), ThinkingSite.AGENT_PLAN).build();
-
-ChatResponse response = model.call(new Prompt(messages, options));
-return ToolPlan.from(response, catalog);   // 첫 호출만 읽는다. 형식 실패와 잘린 응답은 NONE
-```
+「구현:」 계획 호출은 네이티브 `tools` 가 아니라 **프롬프트 JSON 한 번**이다(`ToolPlanService` — 도구 목록을 프롬프트 `prompt.agent.plan` 에 적고 `{"tool": "...", "arguments": {...}}` 를 받는다). 요청에 `tools` 를 싣지 않으므로 설계가 걱정한 서버의 `tools` 거부·형식이 틀린 tool 호출·계측 3곳의 Tool 메시지 문제가 생기지 않는다. 호출 지점은 `ThinkingSite.CONDENSE`(생각 끔 · 출력 예약 256 · 고정 라우팅).
 
 **규칙.**
 
 | 항목 | 내용 |
 |---|---|
 | 입력 | 시스템 프롬프트 `prompt.agent.plan` + `effectiveSearchQuestion()`. 이력을 넣지 않아 §6.31 이력 제외와 충돌하지 않는다 |
-| 실행 | 첫 `tool_call` 하나만 쓴다. Tool은 그래프 노드에서 퍼밋 밖으로 실행한다 |
-| 우선순위 | 분류가 `meta` 면 Tool 계획을 무시하고 `afterClassify()` 를 그대로 지난다 |
+| 실행 | 고른 Tool 하나만 쓴다. Tool은 그래프 노드에서 퍼밋 밖으로 실행한다 |
+| 우선순위 | 분류가 `meta` 면 Tool 계획을 무시하고 `afterClassify()` 를 그대로 지난다(되묻기에 "네" 로 확정된 계획만 meta 보다 앞선다) |
 | 대상 턴 | `ResponseMode.allowsAgent()`, 시작은 N 모드만. `directMode` 는 제외 |
-| 라우팅 | 대화의 라우팅 모드를 따른다. LOCAL_ONLY 대화가 원격으로 나가지 않는다 |
-| 생각 수준 | `AGENT_PLAN` 출하값 off |
 | 근거 문서 | `retrievedDocs` 에 넣고 `sources` 는 비운다. 재사용 출처가 만들어지지 않아 시간이 지나면 낡는 카탈로그 답변이 재사용되지 않는다 |
 | 재시도 | `sufficient=false` 는 기존 `RETRIEVAL` 로 간다. 카탈로그로 못 답한 질문이 문서 검색으로 내려가는 효과가 있다 |
 
-**실패 처리.** 어떤 실패도 턴을 실패시키지 않는다. 사용자 중단(인터럽트)만 그대로 전파한다.
-
-| 상황 | 동작 |
-|---|---|
-| Tool 호출 없음 | `RETRIEVAL` |
-| 잘린 응답(`finishReason=length`) | `RETRIEVAL` |
-| 본문에 `[TOOL_REQUEST]`, `<tool_call>` 이 보임 | 형식 실패로 기록하고 `RETRIEVAL` |
-| 모르는 Tool, 인자 오류 | `RETRIEVAL` |
-| 서버가 `tools` 거부 | 프로바이더를 차단하지 않고 미지원으로 기억, 이후 턴은 계획 호출을 건너뛴다 |
-| 게이트 대기 초과, 소진, 타임아웃 | Tool 계획을 건너뛰고 `RETRIEVAL`. 진짜 장애면 기존 경로가 기존 방식으로 보고한다 |
-| Tool 실행 예외 | 기록하고 `RETRIEVAL` |
+**실패 처리.** 어떤 실패도 턴을 실패시키지 않는다 — 호출 실패·형식 오류·`NONE`·모르는/보이지 않는/권한 없는 Tool·스키마와 안 맞는 인자·Tool 예외는 전부 계획 없음이고 그래프는 `RETRIEVAL` 이다(D3). 사용자 중단(인터럽트)만 그대로 전파한다.
 
 ### 5.2 검색 루프 (Retriever + Reranker)
 
@@ -644,10 +427,10 @@ flowchart TD
 | 최종 컷 | `max(5, ⌈search-top-k × 2/3⌉)`(기본 7, §4.3), 후보 수를 넘지 않는다. 기본값에서는 후보의 35%다. 처음 설계(÷ 2 → 기본 5, 후보의 1/4)는 문서 수가 너무 작아 2/3 로 올렸다(2026-11-12) |
 | 최대 횟수 | `app.search-max-attempts=3`. 첫 검색을 포함한다 |
 | 재검색 조건 | 리랭커 1위 점수가 `app.search-rerank-min-score`(0.0) 미만. 실측에서 답을 못 찾은 5건을 모두 잡았고 불필요한 재검색은 6건이었다 |
-| 새 검색어 | 입력은 질문, 앞 질문, 지금까지 쓴 검색어, 상위 3개 발췌(160자). 출력은 `{"nextQuery": "..."}`. 사이트는 `SEARCH_REWRITE`, 호출은 `QuestionCondenser.distill()` 과 같은 블로킹 경로, 대화의 라우팅 모드를 따른다 |
+| 새 검색어 | 입력은 질문, 앞 질문, 지금까지 쓴 검색어, 상위 3개 발췌(160자). 출력은 `{"nextQuery": "..."}`. 「구현:」 새 사이트 없이 `ThinkingSite.CONDENSE`(`QuestionCondenser.distill()` 과 같은 자리) |
 | 종료 | 문턱 이상, 횟수 소진, 새 검색어가 비거나 이미 쓴 것일 때 |
 | 합치기 | 회차별 점수의 최댓값으로 같은 청크를 합치고 점수순으로 자른다 |
-| 원문 치환 | 리랭크 전에 `withStoredText` 를 지난다. 키워드 축 히트는 파생 텍스트라 지금은 컷 뒤에서 되돌린다(`RetrievalService:285`) |
+| 원문 치환 | 리랭크 전에 `withStoredText` 를 지난다(키워드 축 히트는 파생 텍스트다) |
 | 질의 확장 | 리랭커가 동작하면 `MultiQueryExpander` 를 건너뛴다. 턴의 전처리 LLM 호출을 늘리지 않는다 |
 | 사후 재시도 | 루프는 턴의 첫 `RETRIEVAL` 에서만 돈다. `sufficient=false` 재시도는 지금처럼 1회 검색이라 최악의 호출 수가 곱해지지 않는다 |
 | 낮은 관련도 | 3회 뒤에도 문턱 미만이면 `retrievalWarnings` 로 `[경고]` 에 남긴다 |
@@ -663,13 +446,7 @@ flowchart TD
 | 새 검색어 생성 실패 | 그때까지 찾은 결과로 진행 |
 | 재검색 결과가 나쁨 | 점수 최댓값으로 합치므로 첫 결과를 잃지 않는다 |
 
-**구현 지점.** `RetrievalService:269-271` 의 분기와 `:185-187` 의 후보 계산이 바뀐다. `ChunkReranker.rerank(query, candidates, topK)` 는 문서와 점수를 함께 돌려준다. 지금 `RerankerService.rerank()` 는 `List<Document>` 만 돌려줘 점수를 전달하지 못한다. Spring AI에 리랭크 추상이 없으므로 `CrossEncoderReranker` 는 `/v1/rerank` 를 직접 호출한다. 동시 호출은 임베딩처럼 자체 세마포어로 제한한다.
-
-**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`effectiveRerankTopK()`)이 곧 답변·검증의 문서 수이므로 `/settings` 미리보기가 이 값을 봐야 한다. `PromptLadder.floor()` 는 `search-top-k` 기준 그대로 둔다(2026-11-06 결정) — 문서가 5개면 바닥이 문서 수와 같아 '문서를 바닥까지' 칸이 순서에서 빠지고 이력을 먼저 줄인 뒤 문서를 줄인다. 칸 순서는 측정으로 정한 값이라 바꾸지 않았다. `search-eval` 골든셋은 `topK: 10` 으로 재므로 recall@5 판정을 하네스에 더한다.
-
-**결정(2026-11-06).** 재시도 증가분(+1)과 이력 제외·모드 부스트는 리랭크 최종 컷 위에 그대로 더한다(기존 동작 유지). 리랭커가 실패하면 컷을 `search-top-k` 기준으로 되돌려 후보 풀 앞쪽을 쓴다. **구현·측정 결과**는 `SEARCH_EVALUATION.md` §7.5.
-
-**(이전 열린 항목)** 지금 `effectiveTopK` 는 `search-top-k` 에 재시도 증가분(회당 +1), 모드 부스트, 이력 제외 부스트를 더한 값이다(`RetrievalService:166-168`). 리랭커가 동작할 때 이 증가분을 `effectiveRerankTopK()` 에 더할지는 Phase 1a 구현에서 정한다. 더하지 않으면 재시도가 문서를 늘리지 못하고, 더하면 최종 컷이 5보다 커질 수 있다.
+**청크 수를 줄일 때의 파급.** 리랭크 최종 컷(`effectiveRerankTopK()`)이 곧 답변·검증의 문서 수다. `PromptLadder.floor()` 는 `search-top-k` 기준 그대로 둔다(2026-11-06 결정) — 문서가 5개면 바닥이 문서 수와 같아 '문서를 바닥까지' 칸이 빠지고 이력을 먼저 줄인다. 재시도 증가분(+1)과 이력 제외·모드 부스트는 최종 컷 위에 그대로 더하고, 리랭커가 실패하면 컷을 `search-top-k` 기준으로 되돌린다. 「구현:」 `ChunkReranker` 인터페이스는 만들지 않았다(소비자가 둘이 되지 않았다) — `CrossEncoderReranker` 를 직접 쓴다. 측정은 `SEARCH_EVALUATION.md` §7.5.
 
 ### 5.3 Tool을 고르는 대표 사례
 
@@ -776,21 +553,11 @@ sequenceDiagram
 
 알려진 한계가 둘 있다. MD 반영에 성공해도 `edited_at` 이 찍혀 재인덱싱 경고가 뜬다(`AdminService:407-419`). 문서 재인덱싱은 청크 id를 바꾸므로 대기 중인 수정안은 `stale` 이 된다.
 
-> 글자 치환이 아닌 자연어 지시(사용 중단 표시·내용 삭제·주의 사항 추가·설명 수정)로 넓히는 설계 — 원문 인용에 고정된 편집, 관리자가 고친 뒤 승인, 청크 삭제, 변환 MD 구간 되쓰기 — 는 **§10**(2026-11-17, 미구현).
+> 글자 치환이 아닌 자연어 지시(사용 중단 표시·내용 삭제·주의 사항 추가·설명 수정)로 넓힌 설계는 **§10**. 「구현:」 승인은 6e 부터 문서 단위가 아니라 검토 화면에서 하나씩이다(§10.15 R10).
 
 ### 5.6 저장 구조 (Flyway `V12` 이후)
 
-```text
-agent_tool_call   id, thread_id, turn_id, user_id, tool_name, args_json, plan_status,
-                  result_size, duration_ms, created_at
-change_job        id, kind(impact|maintenance), request_text, requested_by, status,
-                  summary_json, created_at, updated_at
-change_proposal   id, job_id, doc_id, chunk_id, kind(literal|semantic),
-                  before_text, after_text, before_hash, rationale, status,
-                  md_status, reviewed_by, reviewed_at, applied_at
-```
-
-`change_proposal.status` 는 `pending`, `approved`, `rejected`, `applied`, `stale`, `failed` 다.
+`change_job`(작업 — 영향도·유지보수, 요약 JSON) · `change_proposal`(수정안 — before/after·해시·상태·`md_status`) · `agent_tool_call`(V14 — 「구현:」 질문 본문·인자는 저장하지 않는다). 컬럼과 상태 값의 단일 출처는 [DATABASE.md](DATABASE.md). `change_proposal.status` 의 상태 전이는 `ChangeProposalRepository.transition()` 의 compare-and-set 뿐이다.
 
 ---
 
@@ -802,27 +569,28 @@ change_proposal   id, job_id, doc_id, chunk_id, kind(literal|semantic),
 
 ```text
 com.example.ragagent
-├─ agent/                기존: AgentGraph, AgentState
-│  └─ tool/              ToolPlanService, ToolDispatchService, ToolPlan
-├─ tool/                 ToolCatalog, ToolCaller, ToolAccess, ToolGuard, ToolResultFormatter
+├─ agent/                기존: AgentGraph(TOOL 노드 추가), AgentState
+├─ tool/                 ToolCatalog, ToolCaller, ToolAccess, ToolGuard, ToolResultFormatter,
+│                        ToolPlanService, ToolDispatchService, ToolPlan, PendingChangeConfirmations
 │  ├─ knowledge/         KnowledgeSearchTool, DocumentLookupTool
 │  ├─ catalog/           CatalogQueryTool
-│  └─ change/            ImpactAnalysisTool, ChangeRequestTool, DiffTool
+│  └─ change/            ImpactAnalysisTool, ChangeRequestTool, ChunkEditTool, DiffTool
 ├─ mcp/
-│  └─ server/            McpServerConfig, McpApiKeyFilter
-├─ workflow/             WorkflowJobService, ImpactAnalysisWorkflow, MaintenanceWorkflow,
+│  └─ server/            McpSecurityConfig, McpApiKeyFilter, McpToolsConfig, McpProperties
+├─ workflow/             ImpactAnalysisWorkflow, MaintenanceWorkflow, KnowledgeEditWorkflow,
 │                        ChangeProposalService, ChangeApplyService, MarkdownWriteBack,
-│                        UnifiedDiffFormatter
-├─ service/              기존 + HybridSearchService, SearchLoopService, ChunkReranker,
-│                        CrossEncoderReranker, SearchQueryRewriter, CatalogQueryService
+│                        AnchoredEdit, EditGuards, EditIntent, ReviewRules, ReviewDiff, UnifiedDiffFormatter
+├─ service/              기존 + HybridSearchService, SearchLoopService, CrossEncoderReranker,
+│                        SearchQueryRewriter, CatalogQueryService
 ├─ repository/           기존 + ChangeJobRepository, ChangeProposalRepository, AgentToolCallRepository
-└─ controller/           기존 + AdminChangeController
+└─ controller/           기존 + AdminChangeController, AdminChangeReviewController, ImpactJobController
 ```
+
+「구현:」 설계의 `agent.tool` 패키지·`WorkflowJobService`·`McpServerConfig`·`ChunkReranker` 는 만들지 않았다(Tool 선택은 `tool/` 에 두었다).
 
 | 패키지 | 역할 | 의존 방향 |
 |---|---|---|
-| `agent.tool` | Tool 선택과 실행 연결 | `tool`, `llm` |
-| `tool` | 전송 중립 Tool 정의, 권한, 결과 축약 | `service`, `workflow` |
+| `tool` | 전송 중립 Tool 정의, 권한, 결과 축약, Tool 선택과 실행 연결 | `service`, `workflow`, `llm` |
 | `mcp.server` | MCP 노출과 인증. 비즈니스 로직 없음 | `tool` |
 | `workflow` | 고정 단계 작업, 승인, 적용 | `service`, `repository`, `llm` |
 
@@ -830,224 +598,24 @@ com.example.ragagent
 
 ### 6.2 클래스 구조
 
-```mermaid
-classDiagram
-    class ChatController
-    class StreamingAgentService
-    class AgentService
-    class AgentGraph
-    class ToolPlanService {
-        +plan(question, caller, mode) ToolPlan
-    }
-    class ToolDispatchService {
-        +execute(state, listener) AgentState
-    }
-    class ToolPlan {
-        +toolName
-        +argumentsJson
-        +status
-    }
-    class ToolCatalog {
-        +forCaller(caller) ToolCallback[]
-        +find(name) ToolCallback
-        +mcpExposedTools() ToolCallbackProvider
-    }
-    class ToolGuard {
-        +require(caller, access)
-    }
-    class KnowledgeSearchTool {
-        +searchKnowledge()
-        +findRelatedDocuments()
-    }
-    class DocumentLookupTool {
-        +getChunkContext()
-        +getDocument()
-    }
-    class CatalogQueryTool {
-        +queryCatalog()
-    }
-    class ImpactAnalysisTool {
-        +analyzeImpact()
-    }
-    class ChangeRequestTool {
-        +requestDocumentChange()
-        +getChangeJob()
-    }
-    class DiffTool {
-        +generateDiff()
-    }
-    class HybridSearchService {
-        +search(request) SearchResult
-    }
-    class SearchLoopService {
-        +search(request) LoopResult
-    }
-    class ChunkReranker {
-        <<interface>>
-        +rerank(query, candidates, topK) Reranked
-    }
-    class CrossEncoderReranker
-    class RerankerService
-    class SearchQueryRewriter {
-        +nextQuery(question, used, found) String
-    }
-    class RetrievalService
-    class ImpactAnalysisWorkflow
-    class MaintenanceWorkflow
-    class ChangeProposalService
-    class ChangeApplyService
-    class AdminChangeController
-    class McpApiKeyFilter
-    class RoutedChatModel
-    class AdminService
-    class ChunkDiff
-
-    ChatController --> StreamingAgentService
-    ChatController --> AgentService
-    StreamingAgentService --> ToolPlanService
-    AgentService --> ToolPlanService
-    StreamingAgentService --> AgentGraph
-    AgentService --> AgentGraph
-    ToolPlanService --> RoutedChatModel
-    ToolPlanService --> ToolCatalog
-    ToolPlanService --> ToolPlan
-    AgentGraph --> ToolDispatchService
-    AgentGraph --> RetrievalService
-    ToolDispatchService --> ToolCatalog
-    ToolCatalog --> ToolGuard
-    ToolCatalog --> KnowledgeSearchTool
-    ToolCatalog --> DocumentLookupTool
-    ToolCatalog --> CatalogQueryTool
-    ToolCatalog --> ImpactAnalysisTool
-    ToolCatalog --> ChangeRequestTool
-    ToolCatalog --> DiffTool
-    KnowledgeSearchTool --> HybridSearchService
-    KnowledgeSearchTool --> ChunkReranker
-    RetrievalService --> SearchLoopService
-    SearchLoopService --> HybridSearchService
-    SearchLoopService --> ChunkReranker
-    SearchLoopService --> SearchQueryRewriter
-    CrossEncoderReranker ..|> ChunkReranker
-    RerankerService ..|> ChunkReranker
-    DocumentLookupTool --> AdminService
-    ImpactAnalysisTool --> ImpactAnalysisWorkflow
-    ChangeRequestTool --> MaintenanceWorkflow
-    DiffTool --> ChunkDiff
-    MaintenanceWorkflow --> ChangeProposalService
-    AdminChangeController --> ChangeApplyService
-    ChangeApplyService --> AdminService
-    McpApiKeyFilter ..> ToolCatalog : 호출자 결정
-```
-
-요청서의 클래스 예시와 대응은 다음과 같다. `AgentService` 는 기존 클래스를 그대로 쓴다. `ToolProvider` 는 `ToolCatalog`, `WorkflowService` 는 두 워크플로와 `WorkflowJobService`, `KnowledgeSearchTool`, `DiffTool` 은 같은 이름, `DocumentUpdateTool` 은 제안만 하는 `ChangeRequestTool`, `ReindexTool` 은 Tool이 아니라 `ChangeApplyService` 안의 단계다.
+설계 때의 클래스 다이어그램은 구현과 어긋나(인터페이스 `ChunkReranker`, `RoutedChatModel` 경유 계획 호출) 걷었다. 지금의 클래스와 역할은 CLAUDE.md Key Files(`tool/*`·`workflow/*`·`mcp/server/*` 행)가 단일 출처다. 경계 규칙은 그대로다 — Tool 은 `ToolCatalog` 를 거쳐서만 공개되고(채팅·MCP 가 같은 콜백) 각 Tool 메서드의 첫 줄이 `ToolGuard.require()` 이며, Tool 계층은 쓰기·임베딩·승인 경로를 부르지 않는다(`ToolBoundaryConventionTest`).
 
 ---
 
 ## 7. 개발 로드맵
 
-요청서의 Phase 1~5 앞에 **Phase 0** 을 더했다. `model` 누락이 측정을 흔들 수 있고, 1a가 검색 코드를 옮기기 전에 기준선이 있어야 하기 때문이다. 측정 하네스 확장, 여러 청크 질문 골든셋, Tool 평가는 처음에는 Phase 0에 있었으나 필요한 단계로 옮겼다(2026-11-06). Phase 1은 Retriever와 Reranker가 들어가면서 커져 둘로 나눴다. 1a는 MCP와 무관하게 채팅 품질을 올리는 단계라 가장 먼저 효과가 난다. 완료 기준의 숫자는 일회성 실측을 근거로 한 제안값이다.
+Phase 0 은 1a 가 검색 코드를 옮기기 전의 기준선과 선결 결함 수정이고, 1a 는 MCP 와 무관하게 채팅 품질을 올리는 단계라 먼저 했다. 각 단계의 작업 목록과 완료 기준 전문은 git 이력에 있다(이 절은 2026-11-27 에 결과만 남겼다).
 
-| Phase | 내용 | 난이도 | 선행 |
-|---|---|---|---|
-| 0 | 선결 결함 수정, 검색 기준선 (둘 다 완료) | 하 | 없음 |
-| 1a | Retriever + Reranker + 재검색 루프 | 중 | 0 |
-| 1b | Tool 계층 | 중 | 1a |
-| 2 | MCP Server | 중 | 1b |
-| 3 | Agent 도입(Tool 선택 1회). 시작 전에 Tool 사전 평가 | 중 | 1b |
-| 4 | 영향도 분석, 문서 유지보수 | 상 | 1b |
-| 5 | 운영 적용 | 중 | 2, 3, 4 |
-| 6 | 자연어 지식 수정(§10) — 6a 관리자 고치기·MD 구간 되쓰기 · 6b MCP 제안 Tool · 6c 앱 안 워크플로 · 6d 신고 연결 | 상 | 4 (6b는 2도) |
-
-Phase 2, 3, 4는 서로 의존하지 않아 병행할 수 있다. 다만 Phase 3의 워크플로 Tool은 Phase 4가 끝나야 켠다.
-
-**상태 (2026-11-10)**: 0 ✅ · 1a ✅(후속 질문 recall@5 0.857 — 2026-11-11 충족, 여유 한 건) · 1b ✅ · 2 ✅(외부 클라이언트 연결 미확인) · 3 ✅(기본 꺼짐) · 4 ✅(영향도 실모델 실측 남음) · 5 🔵 미착수 · 6 🟡 6a·6b·6c 구현(2026-11-17, **6c 사전 평가 완료(2026-11-20, 사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% — [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md): `deprecate`·`add_note` 만, `deprecate` 배치 규칙은 같은 날 고쳐 수용 93.5%)** · 6e 수정안 검토 화면(설계 2026-11-20, 구현 2026-11-23, §10.15) · 종단 확인 · 실제 MCP 클라이언트 확인 남음) · 6d 구현(2026-11-18 — 신고 상세의 「이 신고로 수정안 만들기」, 대상 청크 고정, 적용되면 신고 해결, `change_job.report_chunk_id` V17).
-
-### Phase 0. 선결 결함과 검색 기준선
-
-2026-11-06에 범위를 줄였다. 이후 단계가 실제로 의존하는 것만 남기고 나머지는 필요한 단계로 옮겼다.
-
-- **작업**
-  - `model` 누락을 와이어 테스트로 확정하고 고친다. `ThinkingControlWireTest` 에 `model` 단언을 더한다. **완료(2026-11-06).**
-  - 현재 검색 기준선을 잰다. 코드를 바꾸지 않은 기존 `SearchQualityEvaluationTest`(골든셋 26건 + 후속 질문 21건)를 스크래치 DB 복사본에 돌려 recall@10, nDCG@10, 검색 중앙값 지연을 `SEARCH_EVALUATION.md` 에 남긴다. Phase 1a가 `HybridSearchService` 를 추출하기 **직전**에 한 번 한다. 기존 기록(2026-10-13)은 Spring AI 2.0 업그레이드(2026-11-05) 전의 값이라 새로 잰다. **완료(2026-11-06, `SEARCH_EVALUATION.md` §7).**
-- **옮긴 항목** (결정 2026-11-06). 해당 단계가 오기 전에는 이 항목들이 막는 것이 없다.
-
-| 항목 | 옮긴 곳 | 이유 |
+| Phase | 내용 | 상태 |
 |---|---|---|
-| `SearchQualityEvaluationTest` 확장: recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연 | Phase 1a 도중 | 리랭크 코드가 있어야 켬·끔을 잴 수 있고, 1a 완료 판정에 쓴다 |
-| 여러 청크가 필요한 질문 골든셋 | Phase 1a 끝, 리랭크를 켜기 전 | 지금 골든셋은 첫 정답 청크 하나만 봐서 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭커가 꺼져 있는 동안은 영향이 없다 |
-| `agent-eval/tool-gold.json`, `ToolCallingEvaluationTest` | Phase 3 직전 | Phase 3의 Tool 선택 방식을 정하는 데만 쓴다 |
-| 모델 비교(`gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it`) | Phase 3 직전 | 같다 |
-
-- **위험**: 기준선을 건너뛰면 1a에서 분리한 뒤 "결과가 분리 전과 같다"를 판정할 근거가 없다.
-- **완료 기준**
-  - 블로킹 요청 본문의 `model` 이 설정값임을 테스트가 고정한다. **완료(2026-11-06).**
-  - 검색 기준선이 `SEARCH_EVALUATION.md` 에 기록돼 있다. **완료(2026-11-06, §7).**
-
-### Phase 1a. Retriever + Reranker + 재검색 루프
-
-- **작업**
-  - **시작 전**: Phase 0의 검색 기준선(`SEARCH_EVALUATION.md` §7)을 비교 기준으로 쓴다. 그 사이 문서·설정·DB가 바뀌었으면 분리 전 코드로 다시 잰다.
-  - `HybridSearchService` 추출, `RetrievalService` 를 어댑터로 축소한다. 범위는 `:173` 의 try 안 축 실행부터 `withStoredText` 까지다. `state` 의존(`:207, :222, :241, :267`)은 `SearchRequest` 필드로 옮기고, 예외 폴백(`:272-282`)은 새 서비스 안에 두며, 정적 메서드는 테스트가 참조하므로 위임으로 남긴다. **완료(2026-11-06)** — 축 실행부터 제외까지, `withStoredText`, 질의 확장기를 `HybridSearchService` 로 옮겼다(`search()` · `fallbackSearch()`). 최종 컷 · LLM 리랭크 · 출처 · 이미지는 `RetrievalService` 에 남았고, 기존 이름을 부르는 테스트 때문에 정적 위임과 `RrfResult` · `RrfMetrics` 레코드도 거기 있다. 기존 `Retrieval*Test` 는 수정 없이 통과했고 결정적 기준선과 같다(`SEARCH_EVALUATION.md` §7.4).
-  - `ChunkReranker` 인터페이스, `CrossEncoderReranker`, `SearchLoopService`, `SearchQueryRewriter` 를 만든다. `RerankerService` 는 `ChunkReranker` 구현으로 옮긴다. **완료(2026-11-06)** — `CrossEncoderReranker` · `SearchLoopService` · `SearchQueryRewriter`. **`ChunkReranker` 인터페이스는 1b 로 미뤘다**(소비자가 `SearchLoopService` 하나라 `KnowledgeSearchTool` 이 두 번째 소비자가 될 때 만든다). `RerankerService` 는 그대로다.
-  - §4.3의 설정(리랭커 접속, `min-score`, `max-attempts`)과 `/settings` 핫 키, 파생값 두 개(`effectiveRerankCandidates()`, `effectiveRerankTopK()`)와 그 조회 전용 항목 둘, 리랭커 상태 표시를 더한다. **완료(2026-11-06)** — 핫 키 둘(`search-rerank-min-score` −20~20 · `search-max-attempts` 1~5), `search-top-k` 아래 조회 전용 두 항목, 꺼짐 · 연결 실패로 건너뛰는 중 배지.
-  - `ThinkingSite.SEARCH_REWRITE`, `prompt.retrieval.rewrite` 한/영 번들을 더한다. **완료(2026-11-06) — 사이트는 만들지 않았다**: 새 검색어 호출은 `QuestionCondenser.distill()` 과 같이 `ThinkingSite.CONDENSE` 를 쓴다(생각 끔 · 출력 예약 256 · 고정 라우팅). 사이트가 늘면 생각 수준 카드 · 미리보기 · "21곳" 문서가 함께 바뀌는 비용 대비 얻는 것이 별도 손잡이 하나뿐이다. 프롬프트 번들은 더했다.
-  - `GraphListener` 재검색 이벤트, `SourceRef` 점수, `/admin` 검색 진단 표시를 더한다. **일부 완료(2026-11-06)** — `GraphListener.onSearchRetry` → SSE `stage`(`search_retry`)만 했다. `SourceRef` 점수와 `/admin` 표시는 남았다(로그 `[RETRIEVAL] 교차 인코더 리랭크 — 검색 N회 …` 에만 있다).
-  - 운영 매뉴얼에 리랭크 서버 기동 방법을 넣는다.
-  - `SearchQualityEvaluationTest` 를 넓힌다(Phase 0에서 옮김). recall@3·5·10 동시 출력, 리랭크 켬·끔, 재검색 켬·끔, 재검색 횟수와 지연을 낸다. **완료(2026-11-06)** — `-Dsearch-eval.rerank-url` · `-Dsearch-eval.max-attempts`, 결과 `SEARCH_EVALUATION.md` §7.6.
-  - 여러 청크가 필요한 질문을 골든셋에 더한다(Phase 0에서 옮김). 지금 골든셋은 첫 정답 청크 하나만 보므로 5개로 줄일 때의 위험(§8.5)을 재지 못한다. 리랭크를 기본값으로 켜기 전에 끝낸다. **완료(2026-11-06)** — `search-eval/nexcore-multi.json` 12건(`-Dsearch-eval.multi=true`). 근거 재료의 재현율이고 답변 품질 판정은 하지 않았다.
-- **난이도**: 중. 코드량보다 검색 회귀가 어렵다.
-- **위험**: 분리가 검색 동작을 흔든다. `AnswerPromptGoldenTest` 는 문서를 미리 넣어 돌기 때문에 이 회귀를 잡지 못한다. 청크 5개가 비교형 질문에 모자랄 수 있다.
-- **완료 기준**
-  - 리랭커가 꺼져 있으면 `execute` 를 타는 `Retrieval*Test` 가 수정 없이 통과하고 `SearchQualityEvaluationTest` 결과가 분리 전 기준선(Phase 0)과 같다.
-  - 켰을 때 앱 하네스에서 골든셋 recall@5가 끔 상태의 recall@10 이상이고, 후속 질문 recall@5가 0.85 이상이다(독립화와 큐레이션 축 포함).
-  - 리랭크를 기본값으로 켜기 전에, 여러 청크 질문의 답변 품질이 청크 10개일 때보다 낮아지지 않는다.
-  - 리랭크 서버 중단 주입에서 답변이 나오고 동작이 현재와 같다.
-  - 턴당 검색 호출이 설정 상한을 넘지 않음을 테스트가 고정한다.
-  - `search-top-k` 별 후보 수·최종 컷(§4.3 표)과 "후보 수 ≥ 최종 컷"을 단위 테스트가 고정하고, `/settings` 의 조회 전용 두 항목이 검색이 쓰는 값과 같음을 고정한다.
-
-### Phase 1b. Tool 계층
-
-- **작업**
-  - `tool` 패키지(`ToolCatalog`, `ToolCaller`, `ToolGuard`, 읽기 Tool)를 만든다. **완료(2026-11-06)** — `searchKnowledge`·`findRelatedDocuments`·`getChunkContext`·`getDocument`(ADMIN)·`queryCatalog`·`generateDiff` 여섯. `analyzeImpact`·`requestDocumentChange`·`getChangeJob` 은 워크플로가 필요해 Phase 4 로 둔다.
-  - `KeywordSearchRepository.findMentions()`, `DocumentExportService.reassembledText()`, `CatalogQueryService`, `UnifiedDiffFormatter` 를 추가한다. **`findMentions` 만 미뤘다**(소비자인 `analyzeImpact` 가 Phase 4). 나머지 셋은 완료.
-- **난이도**: 중.
-- **위험**: Tool이 URL 권한을 우회한다.
-- **완료 기준**
-  - Tool별 단위 테스트와 권한 거부 테스트가 있다.
-  - `curated` 네임스페이스, 민감 테이블에 닿는 입력이 없음을 테스트가 고정한다.
-
-### Phase 2. MCP Server 구축
-
-- **작업**
-  - `spring-ai-starter-mcp-server-webmvc` 추가, §4.2 설정. **완료(2026-11-06)** — 기본 꺼짐(`MCP_SERVER_ENABLED`).
-  - 전용 `SecurityFilterChain`, `McpApiKeyFilter`, `NoAuthAutoLoginFilter` 통과 경로, `mcp` 레이트리밋 버킷, 감사 로그. **완료(2026-11-06)** — 감사는 인증 실패(`mcp.auth.denied`)와 `ToolGuard` 의 `tool.call`/`tool.denied`.
-  - 외부 클라이언트로 연결 확인. 공개 Tool은 읽기 위주로 시작한다. **일부(2026-11-06)** — 직접 만든 JSON-RPC 클라이언트로 `initialize`·`tools/list`·`tools/call` 를 확인했다. MCP Inspector / Claude Code 는 미확인.
-- **난이도**: 중.
-- **위험**: no-auth 모드에서 무인증 노출. 스타터 추가로 자동 구성이 늘어 기존 빈과 충돌.
-- **완료 기준**
-  - `MCP_SERVER_ENABLED=false` 면 경로가 없고 기존 테스트가 그대로 통과한다.
-  - 켜도 `spring.jackson.*` 설정이 앱 `JsonMapper` 에 살아 있음을 테스트가 고정한다.
-  - 세 보안 모드에서 키 없음 401, 읽기 키로 ADMIN Tool 거부, 관리자 없는 상태의 no-auth도 같은 결과임을 테스트가 고정한다.
-  - MCP Inspector 또는 Claude Code에서 `tools/list`, `tools/call` 이 동작한다.
-
-### Phase 3. Agent 도입
-
-- **작업**
-  - **사전 평가(구현 전, Phase 0에서 옮김). 완료(2026-11-06) — 결과와 결정은 [AGENT_EVALUATION.md](AGENT_EVALUATION.md): 프롬프트 JSON 방식(E2B 하나만 쟀다 — e4b · 31b 는 미측정). 아래 "Tool 계획 호출"의 네이티브 `tools` 뼈대(§5.1)와 `AGENT_PLAN` 옵션은 이 결정에 맞게 `tools` 없이 프롬프트 JSON 으로 바꿔 구현한다.** `agent-eval/tool-gold.json` 과 `ToolCallingEvaluationTest` 를 만든다. 기존 골든셋에 기대 Tool을 더하고 카탈로그, 영향도, 유지보수 요청과 잡담을 추가한다. `ThinkingLevelEvaluationTest` 의 시스템 프로퍼티 게이팅과 JSONL 출력을 따른다. `gemma-4-E2B`, `gemma-4-e4b`, 원격 `gemma-4-31b-it` 를 비교해 선택 정확도, 잘못된 우회율, 인자 유효율, 형식 실패율, 지연을 `documents/AGENT_EVALUATION.md` 에 기록하고 아래 판단표로 방식을 정한다. 일회성 실측의 E2B는 선택 정확도 0.90, 형식 실패 0건이었다(부록 A.3). 그 실측이 어떤 서버에서 이뤄졌는지 기록이 LM Studio로 되어 있으므로 재측정 때 확인한다. 지연은 생각이 꺼지지 않는 서버에서는 부풀기 때문에 생각을 끌 수 있는 서버(llama-server)에서 잰다.
-  - `ToolPlanService`, `ToolPlan`, `ToolDispatchService`, `TOOL` 노드, `AgentState` 컴포넌트(`toolPlan`, `caller`).
-  - 두 진입점의 사전 단계에 Tool 계획 future 추가. 호출자는 요청 스레드에서 만든다.
-  - `ThinkingSite.AGENT_PLAN`, `RoutedChatModel` 모드 생성자, `LlmRouter` 비차단 호출 경로와 미지원 기억. **구현: 만들지 않았다** — 프롬프트 JSON 이라 `tools` 를 싣지 않아 비차단 경로·미지원 기억이 필요 없고, 호출 지점은 `ThinkingSite.CONDENSE`(생각 끔 · 출력 예약 256 · `COST_FIRST` 고정 — `SearchQueryRewriter` 와 같은 선례)를 재사용한다.
-  - `prompt.agent.plan` 한/영 번들.
-  - `GraphListener.onToolCall`, SSE `tool`, 유휴 워치독 활동 처리, `chat-stream.js` 표시. **구현: 만들지 않았다**(Tool 노드는 기존 노드 진입 이벤트로 표시된다 — 추적 표시는 Phase 5).
-  - 계측 3곳 수정, `agent_tool_call` 저장, `app.agent.*` 설정과 `/settings` 토글. **구현: `app.agent.enabled`(`AGENT_ENABLED`, 기본 꺼짐, 재기동) 하나뿐** — 계측 수정은 `tools` 를 싣지 않아 불필요, `agent_tool_call`·`/settings` 토글은 Phase 5.
-- **난이도**: 중. Tool 계획이 기존 경로를 건드리지 않아서 낮아졌다.
-- **위험**: 문서 질문을 다른 Tool로 잘못 보냄. 영향도·유지보수 요청을 놓침(실측 10건 중 3건, `RETRIEVAL` 로 내려가 답변은 나온다). 로컬 서버 부하 증가(턴당 LLM 호출 1회 추가).
-- **완료 기준**
-  - 에이전트 꺼짐에서 기존 동작이 같고 `AnswerPromptGoldenTest` 가 바이트 단위로 같다.
-  - `searchKnowledge` 또는 호출 없음이면 답변 프롬프트가 꺼짐과 같다.
-  - `ToolCallingEvaluationTest` 가 사전 평가 판단표의 기준을 넘는다.
-  - 고의 실패 주입(형식 오류, 400, 500, 타임아웃, 소진)에서 모두 답변이 나오고 프로바이더가 차단되지 않는다.
-  - 턴 지연 중앙값 증가가 합의한 범위 안이다(제안: 1초 이내).
+| 0 | 선결 결함(`model` 누락) · 검색 기준선 | ✅ 11-06 |
+| 1a | `HybridSearchService` 추출 · 교차 인코더 · 재검색 루프 · 하네스 확장 · 여러 청크 골든셋 | ✅ 11-06~11 — 골든셋 recall@5 1.000 · 후속 질문 0.857(기준 0.85). **남은 것**: `SourceRef` 리랭크 점수와 `/admin` 진단 표시(지금은 로그에만) |
+| 1b | Tool 계층(`ToolCatalog`·`ToolGuard`·읽기 Tool 여섯) | ✅ 11-06 — 경계는 `ToolBoundaryConventionTest` |
+| 2 | MCP Server(전용 체인·API 키·`mcp` 버킷·감사) | ✅ 11-06 — 세 보안 모드 테스트. **남은 것**: MCP Inspector·Claude Code 연결 확인 |
+| 3 | Tool 선택(`ToolPlanService`·`TOOL` 노드, 기본 꺼짐) | ✅ 11-10 — 사전 평가로 프롬프트 JSON(아래 판단표 둘째 줄) |
+| 4 | 영향도(4a) · 유지보수 수정안·적용(4b) | ✅ 11-10 — 실코퍼스 종단 확인(`scripts/maintenance_e2e/`), 영향도 회수 24/24. **남은 것**: 가짜 인용 걸러냄의 실모델 확인 |
+| 5 | Tool 호출 추적(`agent_tool_call` V14, `/admin` 패널) · 매뉴얼 · 백업 되돌리기 리허설 | 🟡 구현 11-11, 리허설 11-23. **남은 것**: `AGENT_ENABLED=true` 2주 관측(폴백 비율·턴 지연) → 기본값 판단 |
+| 6 | 자연어 지식 수정(§10) — 6a~6e | ✅ 11-17~23. **남은 것**: 6e 한글 IME · MCP 클라이언트로 끝까지 |
 
 **사전 평가 판단표** (구현 전에 Tool 선택 방식을 정한다)
 
@@ -1069,51 +637,6 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 - 결과는 이어 붙이지 말고 재순위화해 자른다. 그대로 이으면 발췌 상한 32,000자를 넘어 부정 판정이 버려진다(`AnswerService:1103-1110`).
 - Tool 본문 예외는 문자열로 LLM에 돌아가므로 강등 조건을 형식 오류와 컨텍스트 초과로 좁힌다.
 
-### Phase 4. 영향도 분석과 문서 유지보수
-
-> **구현 완료 2026-11-10** — 4a 영향도(V12) · 4b-1 수정안 · 4b-2 문서 단위 승인·적용 · 의미 변경 옵션 · 대소문자 변형 옵션 · 채팅 관리자 호출 · 문서 쓰기 잠금(`DocumentWriteLocks`). 실제 코퍼스 복사본 종단 확인과 하네스는 `scripts/maintenance_e2e/`. 아래 완료 기준 중 **영향도 실모델 실측**(심은 언급 100% 회수)은 남았다(단위 테스트로는 고정). **임베딩 실패 주입의 종단 확인**은 2026-11-23 검토 화면 경로로 했다(`scripts/maintenance_e2e/review.py fail`). 요약은 [PLAN.md §6.33](PLAN.md) "4단계 요약".
-
-- **작업 (4a, 영향도)**: `ImpactAnalysisWorkflow`, `change_job`, 판정 프롬프트, 리포트 화면, 진행 이벤트.
-- **작업 (4b, 유지보수)**: `MaintenanceWorkflow`, `change_proposal`, 불변식 검사, `/admin` 대기열(Diff 화면은 `fragments/admin-chunk-reports.html` 재사용), `AdminService.applyChunkEdit()`, `ChangeApplyService`, `MarkdownWriteBack`, 결과 리포트.
-- **난이도**: 상.
-- **위험**: LLM 수정안이 마커나 표를 깨뜨림. 적용 중간 실패로 벡터·FTS·MD가 어긋남. 청크와 MD의 본문 차이로 되쓰기 실패.
-- **완료 기준**
-  - 영향도: 심어 둔 언급을 전수 조회가 100% 찾고, 인용 검증이 가짜 인용을 걸러낸다.
-  - 유지보수: 승인 없이 벡터·FTS·MD가 바뀌지 않음을 테스트가 고정한다.
-  - 승인 뒤 새 용어로 검색되고 옛 용어로 검색되지 않으며 청크 id가 유지된다.
-  - 임베딩 실패 주입에서 본문이 바뀌지 않는다.
-  - 문서 재인덱싱 뒤에도 MD에 반영된 수정이 남고, 내보내기에 중복이 없다.
-  - 경합(승인 사이에 청크가 바뀜)이 `stale` 로 처리된다.
-  - 큐레이션 청크는 수정안이 만들어지지 않는다.
-
-### Phase 5. 운영 적용
-
-- **작업**
-  - `/admin` Tool 호출 추적 패널. Tool별 선택 분포, 성공률, 지연, 폴백 비율.
-  - `OPERATOR_MANUAL.md`, `USER_MANUAL.md`, `DATABASE.md`, `PITFALLS.md`, `CLAUDE.md` 갱신.
-  - 단계적 전환: 관리자 계정 먼저, 그다음 기본값 판단.
-  - 복구 절차 리허설(백업에서 되돌리기).
-- **난이도**: 중.
-- **위험**: 폴백이 조용히 늘어도 아무도 모른다. 로그에 문서 본문이 남는다.
-- **완료 기준**
-  - 2주 관측에서 폴백 비율과 턴 지연이 합의한 범위 안이다.
-  - 설정 하나로 기존 경로로 돌아가는 것을 운영에서 확인했다.
-  - 기본값 변경은 측정 문서를 갱신한 뒤에만 한다.
-
-### 규약 테스트가 막는 코드
-
-구현할 때 빌드가 먼저 알려 줄 항목이다.
-
-| 테스트 | 걸리는 코드 |
-|---|---|
-| `ThinkingSiteConventionTest` | 변수에 담은 빌더의 `mark(b, site)`, `.tokens()` 없는 `new PromptBudget(`, `TaskType` 리터럴 |
-| `ThinkingSiteTest`, `ThinkingPreviewMessagesTest`, `ThinkingPreviewService.shapeOf` | 새 사이트의 properties 줄, 번들 키, shape 누락 |
-| `ResponseModeBranchConventionTest` | `allowsAgent()` 대신 쓴 `== ResponseMode.X` |
-| `SpringBeanConstructorConventionTest` | 생성자를 더한 빈의 `@Autowired` 누락 |
-| `AppPropertiesSafeAccessorTest` | `agentSafe()` 없이 raw `props.agent()` 접근 |
-| `ParallelIsolationConventionTest` | MCP 보안 `@WebMvcTest` 의 `@ResourceLock` 누락 |
-| `MessageBundleConventionTest` | `prompt.agent.*` 의 한/영 불일치, 줄 끝 `\n\` 누락. `@Tool` 설명은 검사 밖이다 |
-
 ---
 
 ## 8. 리스크 분석
@@ -1134,11 +657,8 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 |---|---|---|
 | 로컬 모델이 재검색을 스스로 결정하지 못함 | 확인됨 | 코드 주도 재검색(D1a). LLM은 새 검색어만 만든다 |
 | 로컬 모델의 충분 여부 판단이 치우침 | 확인됨 | 판단을 맡기지 않고 리랭커 점수를 쓴다 |
-| Tool 선택 품질 | 중간 | 실측 0.90. 49건 표본이라 Phase 3 직전 사전 평가, 세 갈래 판단표 |
+| Tool 선택 품질 | 중간 | 사전 평가로 프롬프트 JSON(0.939). 실사용 질문으로 재측정이 남았다 |
 | LM Studio에서 생각이 꺼지지 않아 호출마다 약 13초 | 중간 | 고치지 않기로 한 알려진 제약(§2.4). llama-server에서는 꺼진다 |
-| 형식이 틀린 호출이 `content` 로 샘 | 낮음 | 실측 0건. 본문 패턴 검사, `RETRIEVAL` |
-| 서버가 `tools` 를 거부하면 프로바이더 차단 | 높음 | 비차단 경로, 미지원 기억 |
-| Tool 스키마가 입력 토큰을 잠식 | 낮음 | 4~5개, 짧은 설명. 입력이 자립 질문뿐이라 창에 여유가 있다 |
 | 수정안 품질 | 높음 | 청크 단위, 리터럴 우선, 불변식 검사, 사람 승인 |
 
 ### 8.3 Tool Calling 품질
@@ -1202,24 +722,14 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 ## 9. 최종 권고안
 
-### 지금 당장 해야 할 일
+「구현:」 설계 때의 "지금 당장"·"나중에" 목록은 대부분 끝났다(§7 표). 남은 것:
 
-1. `model` 누락을 확정하고 고친다. Agent와 무관하게 지금도 영향이 있다. **완료(2026-11-06).**
-2. 현재 검색 기준선은 측정했다(2026-11-06, `SEARCH_EVALUATION.md` §7). 1a 시작 전에 문서·설정·DB가 바뀌었으면 다시 잰다.
-3. 리랭크 서버를 띄우고 Phase 1a를 구현한다. 채팅 품질이 가장 크게 오르고 MCP 없이도 효과가 난다. **완료(2026-11-06).**
-4. 1a 도중에 측정 하네스를 넓혀 일회성 실측을 앱 코드로 다시 잰다. 리랭크를 켜기 전에 여러 청크가 필요한 질문과 큐레이션을 본다. **완료(2026-11-06, `SEARCH_EVALUATION.md` §7).**
-5. 읽기 Tool과 `ToolGuard` 를 만든다. **완료(2026-11-06).**
-
-### 나중에 해야 할 일
-
-1. Agent 켜기: Phase 3 직전의 Tool 사전 평가(Tool 골든셋, 모델 비교)로 네이티브 또는 JSON 방식을 정한 뒤. **사전 평가·구현 완료(프롬프트 JSON, 기본 꺼짐) — 기본값을 켜는 것은 2주 관측(Phase 5) 뒤.**
-2. MCP Server 공개: 외부 클라이언트 수요가 확인된 뒤. **서버는 구현됨(기본 꺼짐) — MCP Inspector·Claude Code 연결 확인은 아직.**
-3. 영향도 분석을 먼저, 유지보수를 그다음에. 영향도는 읽기뿐이라 위험이 낮고 전수 조회를 공유한다. **둘 다 구현됨 — 영향도 실모델 실측이 남았다.**
-4. 분류기를 Tool 선택으로 합치는 최적화: 측정 뒤.
-5. MCP Client: 외부 MCP 서버가 실제로 생기면.
-6. 원본 DOCX 쓰기: 수요가 확인되면 별도 과제로.
-7. LLM 자율 Tool 루프: 재개 신호(§7)가 관측되면.
-8. 자연어 지식 수정(§10): LLM 이 필요 없는 6a(관리자 고치기·MD 구간 되쓰기)부터. 앱 안 워크플로(6c)는 사전 평가 뒤.
+1. Agent 기본값 켜기 — 2주 관측(Phase 5) 뒤.
+2. MCP 외부 클라이언트(MCP Inspector·Claude Code) 연결 확인.
+3. 분류기를 Tool 선택으로 합치는 최적화 — 측정 뒤.
+4. MCP Client — 외부 MCP 서버가 실제로 생기면.
+5. 원본 DOCX 쓰기 — 수요가 확인되면 별도 과제로.
+6. LLM 자율 Tool 루프 — 재개 신호(§7)가 관측되면.
 
 ### 하지 말아야 할 일
 
@@ -1238,15 +748,12 @@ LLM이 `ToolCallingManager` 수동 루프로 재검색을 스스로 결정하는
 
 ## 10. 자연어 지식 수정 (추가 설계, 2026-11-17 — 6a 구현)
 
-> 기준: `fix/opus` HEAD `089515a`. Phase 4(§5.4·§5.5)가 구현된 상태 위의 설계다. 숫자 상한·문턱은 제안값이고 6c 사전 평가(§10.12)에서 다시 정한다.
+> 기준: `fix/opus` HEAD `089515a`. Phase 4(§5.4·§5.5)가 구현된 상태 위의 설계다. 6a·6b·6c 2026-11-17, 6d 11-18, 6e 11-23 구현. 설계와 다른 곳(구현 순):
 >
-> **구현: 6a (2026-11-17)** — V16 · 관리자 고치기·빼기(`ChangeApplyService.editProposal`/`withdrawProposal`, `fragments/change-proposal-card.html`) · 줄 구간 MD 되쓰기(`MarkdownWriteBack.applyEdits`) · `applyChunkDelete` · `applyChunkEdit` 의 `image_paths` 동기화 · 감사 로그 `change.*`. 설계와 다른 곳: 청크 삭제의 MD 되쓰기는 줄 비교가 아니라 본문 덩어리 찾기이고(PITFALLS "자연어 지식 수정 6a"), 겹침 짝의 해시 사전 대조는 짝이 있는 수정안만 한다.
->
-> **구현: 6b (2026-11-17)** — `AnchoredEdit`(작업 넷, G1·G2·G5·G6·G7) · `ChangeProposalService.proposeExternal`/`jobSummary` · `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`, 모두 ADMIN) · `getChunkContext` 출력에 `contentHash`·`heading`·`chunkContext`. 설계와 다른 곳: 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 G3·G4·G10(지시문이 있어야 하는 가드)을 걸지 않는다 · `newText` 는 크기 상한이 2만 자(G5 의 `revise` 30% 대신).
->
-> **6e (설계 2026-11-20, 구현 2026-11-23)** — 수정안 검토 화면(목록 : 수정 전 : 수정 후 = 1 : 3 : 3, 수정 후 칸에서 바로 고치고 [확인] 으로 그 청크 하나를 적용 — 맥락·키워드 재생성 → 임베딩 → 저장 → FTS → MD. 일괄 적용은 `deprecate`·`add_note` 만, `remove`·`revise` 등은 모두 하나씩). §10.15.
->
-> **구현: 6c (2026-11-17)** — `EditIntent`(해석·근거 검사) · `EditGuards`(G3·G4·G10) · `KnowledgeEditWorkflow`(①③④⑤⑥⑦⑧⑩, `proposeForChunks`) · `/admin/change-jobs` 의 유형 선택·자연어 리포트·추가 적용 후보 · 채팅 되묻기(`ToolDispatchService.askNaturalLanguage`, `Pending` 에 해석 저장) · `requestDocumentChange` 의 자연어·`type` 인자. **설계와 다른 곳**: ① **사전 평가 없이 구현했다**(사용자 요청 — 처음에는 네 유형 모두 열었다. 사전 평가는 뒤에 했다(2026-11-20, [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md) — 12B·E4B 는 판단표 둘째 줄, E2B 는 셋째 줄). **그 결정대로 2026-11-23 에 `remove`·`revise` 를 자연어 경로(채팅 되묻기·`/admin`·신고 폼의 "자동"·MCP `requestDocumentChange`)에서 닫았다** — 유형을 직접 고른 폼과 6b 로만 받는다(`EditIntent.FORM_ONLY`)) ② 청크 삭제 승격은 **남은 본문이 전혀 없을 때만**(설계 40자 — G3 을 지나 남은 무관한 문장까지 지우게 되어 바꿨다. 글자가 남으면 늘 문장 수정) ③ 겹침 짝(⑨)은 만들지 않았다(기본 `chunk_overlap=0`) ④ `revise` 의 G5(바뀐 글자 30%)는 걸지 않았다 — G3·G4 와 `AnchoredEdit` 의 바꾸기 2,000자 상한만 ⑤ 지우기 요청에서 일부 작업이 버려져도 남은 작업으로 수정안을 만든다(외부 제안과 달리 — 사람이 검토하고 리포트에 사유가 남는다) ⑥ 의도 해석의 `unclear` 는 작업 실패로 끝난다.
+> - **6a** — 청크 삭제의 MD 되쓰기는 줄 비교가 아니라 본문 덩어리 찾기(PITFALLS "자연어 지식 수정 6a") · 겹침 짝의 해시 사전 대조는 짝이 있는 수정안만.
+> - **6b** — 편집 하나라도 가드에 걸리면 제안 전체를 받지 않는다 · 외부 제안에는 겹침 짝(⑨)과 지시문이 있어야 하는 가드(G3·G4·G10)를 걸지 않는다 · `newText` 상한 2만 자.
+> - **6c** — 사전 평가 없이 네 유형을 먼저 열었다가 사전 평가(11-20, 판단표 둘째 줄)대로 **`remove`·`revise` 를 지시문 경로에서 닫았다**(11-23 — 유형을 고른 폼과 6b 로만, `EditIntent.FORM_ONLY`) · 청크 삭제는 남은 본문이 전혀 없을 때만 · 겹침 짝(⑨)은 만들지 않았다(기본 `chunk_overlap=0`) · `revise` 의 G5 는 걸지 않았다 · 일부 작업이 버려져도 남은 작업으로 수정안을 만든다 · 해석의 `unclear` 는 작업 실패.
+> - **6e** — §10.15 머리말.
 
 **왜 하는가.** 지식 오류를 고치려면 지금 운영자가 일곱 단계를 손으로 한다 — 관련 청크 검색 → 내용 확인 → 대상 선정 → 수정 → 저장 → 임베딩 재생성 → 인덱스 갱신. 유지보수 워크플로(§5.5)가 이 중 대부분을 자동으로 하지만 **글자 치환(A → B)만** 받는다. "A 기능은 더 이상 사용되지 않음", "B 기능에 대한 내용을 삭제", "B 에 C 와 같은 주의 사항 추가", "이 문단의 설명을 고쳐" 같은 지시는 치환으로 표현되지 않는다. 의미 변경 옵션(`semantic`)은 치환 결과를 LLM 이 통째 다시 쓰는 방식이라 실측에서 9청크 중 1개만 가드를 통과했다(PITFALLS "의미 변경 수정안").
 
@@ -1529,7 +1036,6 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 - `change_proposal.kind` 에 `edit`, `delete_chunk` 을 더한다(`literal`, `semantic` 은 그대로). `delete_chunk` 의 `after_text` 는 빈 문자열이다.
 - `status` 에 `withdrawn` 을 더한다(관리자가 뺌).
 - 시각은 `DbTimestamp.now()`(UTC). 리포트 JSON 은 필드가 늘어도 옛 작업이 읽히도록 `LenientJson.MAPPER` 로 읽는다(PITFALLS "의미 변경 수정안").
-- 구현 때 `DATABASE.md` 표를 함께 고친다.
 
 ### 10.12 단계와 완료 기준
 
@@ -1539,7 +1045,7 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 | 6b | MCP 제안 Tool(`findChunks` · `getChunkContext` 확장 · `proposeChunkEdit` · `getChangeJob`) + 앵커 편집과 가드(`AnchoredEdit`·`EditGuards`, 순수 클래스) | 6a | 대상 식별과 편집 작성을 큰 외부 모델이 하고 앱은 검증만 한다. 소형 모델 품질과 무관하게 바로 쓸 수 있고, 가드 코드는 6c와 같다 |
 | 6c | 앱 안 워크플로(`KnowledgeEditWorkflow` — 해석·후보·판정·편집·맥락 재생성) · `/admin` 요청 폼의 유형 선택 · 채팅 되묻기 | 6b, 사전 평가 | 소형 모델이 맡는 단계가 셋이라 측정으로 열 범위를 정한다 |
 | 6e | 수정안 검토 화면(§10.15) — 3분할(목록 1 : 수정 전 3 : 수정 후 3) · 바뀐 곳 배경 강조(`ChunkDiff`, 고치는 대로 다시 계산) · 수정 후 칸 직접 편집 · [확인] = 그 청크 하나 승인·적용(맥락·키워드 재생성 → 임베딩 → MD) · 일괄 적용은 `deprecate`·`add_note` 의 넣기만 수정안에만(그 밖은 모두 하나씩, 문서 단위 승인도 같은 규칙) · 작업당 DB 백업 한 번(`V18 change_job.backup_name`) · 작업별 순차 적용 실행기. **LLM 은 맥락 재생성 1회뿐** | 6a~6d, 6c 사전 평가 | 사전 평가 수용률이 94.6%(`deprecate`+`add_note`, E4B)라 쓸 만하지만 Agent 에게 적용까지 맡길 정도는 아니다 — 사람이 청크 하나씩 보고 고쳐 확정하는 길이 필요하다 |
-| 6d (선택) | 청크 오류 신고에서 시작 — `/admin/chunk-reports` 의 "이 신고로 수정안 만들기"(코멘트를 지시문으로, 대상은 그 청크로 고정). 적용되면 신고를 해결로 닫는다(`ChunkReportService.resolveChunk`). **구현(2026-11-18)**: `KnowledgeEditWorkflow.startFromReport` — 후보 찾기·판정을 건너뛰고 그 청크에만 ⑥~⑩, 글자 바꾸기면 `MaintenanceWorkflow.proposeForChunk`(그 청크만, 옵션 없음). 작업에 `change_job.report_chunk_id`(V17)를 남기고 `ChangeApplyService` 가 그 청크의 수정안이 `applied` 일 때만 신고를 닫는다(낡음·실패면 열린 채). 신고 작업의 글자 치환은 발생 수 대조가 아니라 줄 구간 대조로 MD 에 되쓴다 | 6c | 오류를 발견하는 실제 입구가 신고다 |
+| 6d (선택) | 청크 오류 신고에서 시작 — `/admin` 신고 상세의 "이 신고로 수정안 만들기"(코멘트를 지시문으로, 대상은 그 청크 하나 — 후보 찾기·판정 없음). 그 수정안이 `applied` 일 때만 신고를 닫는다(`change_job.report_chunk_id`, V17) · 신고 작업의 MD 되쓰기는 줄 구간 대조 | 6c | 오류를 발견하는 실제 입구가 신고다 |
 
 **6c 사전 평가.** 대상 모델은 권장 기준(Gemma 4 12B 이상 또는 Tool 사용에 맞춘 최신 모델, Context 절)을 만족하는 것으로 한다 — E2B 로 재면 판단표의 셋째 줄로 떨어질 가능성이 크고, 그 결과로 기능 범위를 정하면 큰 모델 배포까지 묶인다. 비교용으로 E2B 도 함께 잰다. `KnowledgeEditEvaluationTest` + `agent-eval/edit-gold.json`(코퍼스 복사본, 유형 넷 × 지시 5~8건). 지시 해석 정확도(유형·대상), 대상 recall·precision(설명함), 가드 통과율, 사람 수용률(고치지 않고 승인할 만한 비율, 수동 라벨)을 `documents/KNOWLEDGE_EDIT_EVALUATION.md` 에 남긴다. 생각을 끌 수 있는 서버(llama-server)에서 잰다.
 
@@ -1549,17 +1055,9 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 | 해석·대상은 되지만 편집 품질이 낮다 | 코드가 문장을 넣는 `deprecate`·`add_note` 만 열고 `remove`·`revise` 는 외부 에이전트(6b)나 관리자 고치기로 |
 | 해석부터 불안정 | 폼 입력(유형·대상·문장을 사람이 고른다)만 두고 LLM 은 판정만 한다 |
 
-**완료 기준.**
+**완료 기준.** 6a~6e 모두 충족(11-17~23) — 단 6b 의 "Claude Code(MCP)로 사용 중단 시나리오를 끝까지 한 번"은 남았다. 전문은 git 이력.
 
-- 6a: 관리자가 고친 수정안이 청크·벡터·FTS·MD 에 같은 내용으로 반영되고 기계 수정안이 `machine_after_text` 로 남는다. 마커를 깨는 편집은 저장되지 않고 사유가 보인다. 의미 변경·사람 편집이 MD 에 반영돼 재인덱싱 뒤에도 남는다(`scripts/maintenance_e2e` 확장). `delete_chunk` 적용 뒤 청크·벡터·FTS·레지스트리 청크 수·재사용 표시가 맞고 MD 에서 그 구간이 사라진다. 승인 없이 아무것도 바뀌지 않음을 테스트가 고정한다(기존 `nothingHappensWithoutApproval` 확장).
-- 6b: 읽기 키의 `proposeChunkEdit` 은 거부, 관리자 키는 대기열에만 쌓인다(코퍼스 불변). 가드 위반은 사유와 함께 돌아오고, `baseHash` 불일치는 제안 단계에서 거절된다. 가드 하나하나에 위반·통과 단위 테스트가 있다. Claude Code(MCP)로 "사용 중단" 시나리오를 끝까지 한 번 확인한다.
-- 6c: 사전 평가 판단표가 허락한 범위만 연다. 해석 실패·판정 형식 오류·가드 위반 주입에서 작업이 사유와 함께 끝나고 코퍼스는 불변이다. 같은 지시를 두 번 돌려도 안내가 두 번 들어가지 않는다. 채팅 되묻기에 해석된 유형·대상이 보이고 "네" 뒤 같은 의도로 시작한다.
-- 6d: 신고에서 시작한 작업의 대상이 그 청크로 고정되고, 적용되면 신고가 닫힌다.
-- 6e: §10.15 의 완료 기준.
-
-**구현 때 함께 고칠 문서.** `CLAUDE.md` Key Files(새 클래스) · `PITFALLS.md` · `DATABASE.md` · `ADMIN_MANUAL.md` §10 · `USER_MANUAL.md` §2.8 · `PLAN.md` §6.33.
-
-**패키지.** 새 패키지는 없다. `workflow/` 에 `KnowledgeEditWorkflow`·`EditIntent`·`AnchoredEdit`·`EditGuards`·`ChangeProposalService`, `tool/change/` 에 `ChunkEditTool`(`findChunks`·`proposeChunkEdit`·`getChangeJob`)을 둔다. 영향도의 판정 호출은 `ChunkJudge` 로 떼어 두 워크플로가 공유한다.
+**패키지.** 새 패키지는 없다(§6.1).
 
 ### 10.13 리스크
 
@@ -1595,7 +1093,7 @@ change_proposal  + ops_json           앵커 편집 목록 [{op, anchor..., text
 
 ### 10.15 수정안 검토 화면 (6e — 설계 2026-11-20, 구현 2026-11-23)
 
-> **구현:** `AdminChangeReviewController` · `workflow/ReviewRules`(R10) · `workflow/ReviewDiff`(R5) · `ChangeApplyService.confirmOne`/`saveDraft`/`restoreMachine`/`approveBatch`/`drain`/`applyReviewed`/`ensureJobBackup` · V18. 설계와 다른 곳: ① 992px 미만은 탭 전환이 아니라 칸을 위아래로 쌓는다 ② 수정 전 칸의 근거 인용 밑줄은 없다(위쪽 띠에 인용으로) ③ 임시 저장 성공은 목록 항목 조각이 아니라 204 + 목록 새로 읽기, 거절은 422 + 사유 평문 ④ 맥락 재생성의 "대화형 게이트 30초 상한"은 따로 두지 않았다(`KeywordExtractor` 의 기존 호출 그대로) ⑤ 미뤄진 적용의 다시 시도는 작업 화면이 아니라 검토 화면 목록의 [미뤄진 적용 다시 시도] ⑥ 채팅·신고의 작업 링크는 작업 화면 그대로다(작업이 끝나면 작업 화면이 검토 화면으로 넘긴다), MCP 의 검토 주소만 `/review` 로 바꿨다. 브라우저 확인(시드 DB, 임베딩 서버 없음): 강조 층 정렬(긴 줄 줄바꿈 포함)·입력 중 옛 강조 숨김·2초 뒤 갱신·커서 유지·임시 저장·마커 가드·청크 삭제 적용·작업당 백업 한 번·다크 모드. 실제 임베딩으로의 적용과 한글 IME 조합 입력은 아직 보지 않았다. 함정은 PITFALLS 「수정안 검토 화면 6e」.
+> **구현:** `AdminChangeReviewController` · `workflow/ReviewRules`(R10) · `workflow/ReviewDiff`(R5) · `ChangeApplyService` 의 확인 경로 · V18. 설계와 다른 곳: ① 992px 미만은 탭이 아니라 칸을 위아래로 쌓는다 ② 근거 인용 밑줄 없음(위쪽 띠에 인용) ③ 임시 저장 성공은 204 + 목록 새로 읽기, 거절은 422 + 사유 평문 ④ 맥락 재생성에 따로 30초 상한을 두지 않았다 ⑤ 미뤄진 적용의 다시 시도는 검토 화면 목록에 ⑥ 채팅·신고의 작업 링크는 작업 화면 그대로(끝나면 검토 화면으로 넘긴다), MCP 검토 주소만 `/review`. 실코퍼스 종단 확인·백업 되돌리기 리허설 11-23. **남은 것**: 한글 IME 조합 입력. 함정은 PITFALLS 「수정안 검토 화면 6e」.
 
 **왜.** 6c 사전 평가([KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md))에서 E4B 의 `deprecate` 수용률은 배치 수정 뒤 93.5%, `deprecate`+`add_note` 는 94.6% 다. 쓸 만하지만 **스무 개 중 하나는 틀린다**. 그래서 Agent 에게 적용까지 맡기지 않고 사람이 청크 하나씩 보고 고쳐서 확정하는 화면을 둔다. 지금 `/admin/change-jobs/{id}` 는 문서별 카드에 Diff 가 세로로 쌓이고, 고치기는 카드 안의 폼이며, 승인은 문서 단위다. 수정안이 수십 개면 훑어보기 어렵고, 고친 결과를 Diff 로 다시 볼 수 없고, 한 청크만 확정할 수도 없다.
 
@@ -1728,9 +1226,8 @@ sequenceDiagram
 change_job  + backup_name   이 작업의 첫 적용 직전에 만든 DB 백업 파일 이름(R2). NULL = 아직 쓰지 않음
 ```
 
-- 수정안 단위 MD 결과는 기존 `change_proposal.md_status` 를 **그 수정안 행에만** 쓴다(지금 `setMdStatus(jobId, docId)` 는 (작업, 문서)의 행 전부에 쓴다 — 수정안 단위 메서드를 더한다).
+- 수정안 단위 MD 결과는 `change_proposal.md_status` 를 **그 수정안 행에만** 쓴다(`setMdStatusFor`).
 - "적용 중"은 새 상태가 아니라 기존 `approved` 다. "편집함"은 `pending` 에 `machine_after_text IS NOT NULL` 이다.
-- 구현 때 `DATABASE.md` 표를 함께 고친다.
 
 #### 10.15.7 리스크
 
@@ -1747,24 +1244,13 @@ change_job  + backup_name   이 작업의 첫 적용 직전에 만든 DB 백업 
 
 **하지 않는 것.** 원문을 바꾸는 요청(`remove`·`revise`·글자 바꾸기·외부 제안)의 일괄 적용(R10) · 렌더된 미리보기(R6) · 맥락·키워드를 손으로 고치기(그것은 `/admin` 청크 화면의 편집 — `EDITABLE_CHUNK_META_KEYS`) · 삭제 수정안을 편집 수정안으로 바꾸기 · 적용한 수정 되돌리기(DB 백업 복구 또는 청크 화면에서 다시 고친다).
 
-**완료 기준.**
-
-- 목록에서 고르면 수정 전·후가 함께 바뀌고, 사라진·더한 줄과 낱말이 배경색으로 보인다. 수정 후 칸을 고치면 입력이 멈추고 2초 안팎 뒤 두 칸의 강조가 새 본문 기준으로 바뀌고 커서는 그대로다(브라우저에서 확인).
-- 확인한 청크 하나만 청크·벡터·FTS·변환 MD 에 같은 내용으로 반영된다. 사람이 고쳤으면 맥락·키워드가 확정 본문으로 다시 만들어지고, 고치지 않았고 ⑧ 값이 있으면 LLM 을 부르지 않는다(단위 테스트로 호출 수를 고정).
-- 같은 작업에서 여러 번 확인해도 DB 백업은 한 번만 만들어진다. 그 파일이 지워졌으면 다시 만든다.
-- 같은 문서의 두 청크를 연달아 확인해도 둘 다 적용된다(순차 실행기). 재인덱싱 중이면 `approved` 로 남고 다시 시도로 이어진다.
-- 낡은 수정안은 확인할 수 없다. 동시 편집은 409 다. 마커를 깨는 편집은 저장도 확인도 안 되고 사유가 보인다.
-- 맥락 재생성 실패를 주입해도 본문은 적용되고 경고가 남는다.
-- 일괄 적용은 `deprecate`·`add_note` 자연어 작업에서만 되고, 그 안에서도 원문 줄을 지우거나 바꾼 수정안(선택 문장 고치기·관리자 편집)은 건너뛴다. `remove`·`revise`·글자 바꾸기·외부 제안 작업에서는 이 화면의 일괄 적용과 작업 화면의 문서 단위 승인이 **둘 다** 409 다(버튼을 숨긴 것과 별개로 엔드포인트를 테스트로 고정).
-- 승인 없이 아무것도 바뀌지 않음(`nothingHappensWithoutApproval`)을 이 경로까지 넓힌다.
-
-**구현 때 함께 고칠 문서.** `CLAUDE.md` Key Files(`AdminChangeReviewController`·확인 경로) · `PITFALLS.md`(강조 층 정렬, 작업당 백업) · `DATABASE.md`(V18) · `ADMIN_MANUAL.md` §10(검토 화면 사용법) · `OPERATOR_MANUAL.md` §6.2.2(작업당 백업과 되돌리기) · `PLAN.md` §6.33.
+**완료 기준.** 충족(2026-11-23 — 단위·슬라이스 테스트 + 브라우저 + 실코퍼스 종단 `scripts/maintenance_e2e/review.py`). 한글 IME 확인만 남았다. 전문은 git 이력.
 
 ---
 
 ## 부록 A. 실측 기록 (2026-11-05)
 
-앱 코드가 아니라 일회성 스크립트로 쟀다. 구현 뒤에는 검색은 Phase 1a에서 넓힌 하네스로, Tool 선택은 Phase 3 직전의 사전 평가로 다시 잰다.
+앱 코드가 아니라 일회성 스크립트로 쟀다. 구현 뒤 다시 잰 값: 검색은 `SEARCH_EVALUATION.md` §7, Tool 선택은 [AGENT_EVALUATION.md](AGENT_EVALUATION.md). 설계 결정(후보 20·컷·문턱 0.0·코드 주도 재검색)의 근거로 남긴다.
 
 **환경.** `gemma-4-E2B`(LM Studio, 컨텍스트 65,536), 임베딩 `bge-m3-Q4_K_M`(llama-server, CPU), 리랭커 `bge-reranker-v2-m3-Q8_0`(llama.cpp b11433, CPU), 벡터 sqlite-vec, `memory.db` 복사본 2,388청크, 골든셋 26건, 후속 질문 21건.
 
