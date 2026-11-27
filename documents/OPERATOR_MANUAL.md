@@ -226,7 +226,7 @@ copy .env.example .env
 | `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b-2, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 모델·role·priority(4)가 동일한 gemma-4-31b 2대로(이름은 `gemma-4-31b-1`/`-2` 로 **반드시 달라야** 한다 — 세마포어·서킷브레이커·토글이 이름을 키로 쓴다), 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
 | `GEMINI_MODEL` | — | `gemini-3.5-flash-lite` | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 두 provider는 **기본값까지 같은 모델**(`gemini-3.5-flash-lite`)을 서로 다른 키(`GEMINI_API_KEY1`/`2`)로 부르는 로드밸런싱 쌍이라(둘 다 priority 2), 이 변수 하나로 둘을 함께 바꾼다. 서로 다른 모델을 쓰려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 — 그러면 같은 priority 안에서 두 모델이 least-in-flight 로 번갈아 뽑힌다 |
-| `EMBED_BASE_URLS` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. **`;` 로 여러 주소**를 적을 수 있다(`http://gpu-a:1234/v1;http://gpu-b:1234/v1` — §6.21 E1: 같은 모델·차원의 복제본에 least-in-flight 로드밸런싱 + **장애 전환**, 닿지 않는 주소는 30초 건너뛰고 같은 호출을 다음 주소로. **모두 `EMBED_MODEL` 을 같은 차원으로 서빙해야 함** — 섞이면 벡터 인덱스 손상. 상세는 아래 "임베딩 병렬화"). 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정. 예전 이름 `EMBED_BASE_URL`(단일 주소)도 이 변수가 없을 때는 읽는다 |
+| `EMBED_BASE_URLS` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. **`,` 로 여러 주소**를 적을 수 있다 — **`,` 를 권장합니다**: `;` 도 받지만 Linux·macOS 실행 스크립트는 `.env` 를 셸로 읽어 `;` 에서 명령이 끊기므로, Windows·Linux·macOS·Docker 에서 같은 `.env` 를 쓰려면 `,` 로 적으세요(`http://gpu-a:1234/v1,http://gpu-b:1234/v1` — §6.21 E1: 같은 모델·차원의 복제본에 least-in-flight 로드밸런싱 + **장애 전환**, 닿지 않는 주소는 30초 건너뛰고 같은 호출을 다음 주소로. **모두 `EMBED_MODEL` 을 같은 차원으로 서빙해야 함** — 섞이면 벡터 인덱스 손상. 상세는 아래 "임베딩 병렬화"). 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정. 예전 이름 `EMBED_BASE_URL`(단일 주소)도 이 변수가 없을 때는 읽는다 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 그냥 바꾸지 마세요** — 벡터 차원이 달라지면 기존 검색이 깨지고, 차원이 같아도 옛 벡터와 새 벡터는 서로 비교할 수 없습니다. 바꾸려면 **전체를 다시 임베딩**해야 합니다 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` 만 DROP — 차원이 DDL에 고정되며 `EMBED_DIMENSIONS`도 함께 변경). **sqlite-vec 은 `/admin` 의 「임베딩 재생성」 카드로 앱 안에서 합니다(백업 → 설정 변경·재기동 → 카드 → 검증 → 롤백 — [§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec))** — 디렉터리 동기화·재업로드로는 다시 임베딩되지 않습니다 |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast). **이미 만들어진 `vec_embeddings` 의 차원과 다르면** 기동 로그에 ERROR 가 남고(앱은 뜹니다) 벡터 색인·검색이 실패합니다 — 모델을 바꿨다면 `/admin` 의 「임베딩 재생성」 카드로 다시 만드세요([§7.3](#73-임베딩-모델-교체--기존-데이터가-있을-때-sqlite-vec)) |
@@ -260,7 +260,7 @@ copy .env.example .env
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 이와 별개로 **응용(C) 모드는 최종 컷에 +3** 을 더한다(코드 상수 `ResponseMode.retrievalBoost`) — 컨텍스트 창을 알 때만, 검증 발췌 예산(발췌 글자 상한 32,000자 · 창에 들어가는 문서 수) 안에서만 들어가고 검색 뒤에는 꼬리부터 덜어낸다(창을 모르거나 작으면 0). N·S 는 0 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프. **권장하지 않는다** — 이득이 작고 느리다: 답변 전 지연이 p50 약 15.7초(생각 끔), 생각을 낮게로 올리면 p50 60.7초·p95 123초이고 점수가 없어 재검색 판단에도 못 쓴다(리랭크 없음 ≈ 1초, 교차 인코더 ≈ 2.4초 — SEARCH_EVALUATION §7.5·7.6, THINKING_EVALUATION §3). 순서: ① `RERANK_BASE_URLS`(교차 인코더) ② 리랭크 없이 RRF 만 ③ LLM 리랭크는 **리랭커 서버를 둘 수 없고, 지연이 늘어도 되며, 순서 품질이 꼭 필요할 때만**(그때는 `llm.thinking.rerank` 를 `off` 로 두고 빠른 모델로 라우팅 — 작은 모델은 순서 판단 품질이 떨어질 수 있다). 교차 인코더가 설정돼 있으면 이 값은 쓰이지 않는다 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | LLM 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
-| `RERANK_BASE_URLS` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소 — **`;` 로 여러 주소**를 적으면(같은 리랭커의 복제본) 호출을 진행 중인 호출이 가장 적은 주소로 나누고, 닿지 못한 주소는 30초 건너뛰며 같은 호출이 다음 주소로 간다(예전 이름 `RERANK_BASE_URL` 도 이 변수가 없을 때는 읽는다)(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -b 2048 -ub 2048 …` — **`-ub 2048` 필수**: 기본 512 면 (질의+문서) 한 쌍이 512토큰을 넘는 호출이 500 으로 실패한다, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K × 2/3⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다(기본 10 이면 후보 20 · 최종 컷 7 — 컷이 5 로 너무 작아 2/3 로 올렸다). LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다. `/settings` LLM 라우팅 카드 하단의 리랭커 줄에 모델·주소와 접속 상태 배지가 보인다(관리자 매뉴얼 §2) |
+| `RERANK_BASE_URLS` | _(비면 꺼짐)_ | URL | **교차 인코더 리랭커** 서버 주소 — **`,` 로 여러 주소**(권장 — `;` 도 받지만 셸 실행 스크립트에서 깨진다)를 적으면(같은 리랭커의 복제본) 호출을 진행 중인 호출이 가장 적은 주소로 나누고, 닿지 못한 주소는 30초 건너뛰며 같은 호출이 다음 주소로 간다(예전 이름 `RERANK_BASE_URL` 도 이 변수가 없을 때는 읽는다)(`llama-server -m bge-reranker-v2-m3-Q8_0.gguf --reranking -b 2048 -ub 2048 …` — **`-ub 2048` 필수**: 기본 512 면 (질의+문서) 한 쌍이 512토큰을 넘는 호출이 500 으로 실패한다, 예: `http://localhost:28095`). 값이 있으면 `SEARCH_TOP_K × 2` 개 후보를 점수로 재순위하고 최종 컷은 `max(5, ⌈SEARCH_TOP_K × 2/3⌉)` — 둘 다 `SEARCH_TOP_K` 에서 파생하며 `/settings` 에 조회 전용으로 보인다(기본 10 이면 후보 20 · 최종 컷 7 — 컷이 5 로 너무 작아 2/3 로 올렸다). LLM 리랭킹(`SEARCH_RERANK_ENABLED`)을 대신한다. **재기동 필요.** 서버가 죽으면 리랭크를 건너뛰고 RRF 순서로 `SEARCH_TOP_K` 만큼 자른다. `/settings` LLM 라우팅 카드 하단의 리랭커 줄에 모델·주소와 접속 상태 배지가 보인다(관리자 매뉴얼 §2) |
 | `RERANK_API_KEY` | _(비어 있음)_ | 비밀 | 선택. 리랭커로 `Authorization: Bearer <키>` 를 보낸다(`llama-server --api-key`, 원격 리랭크 API). 임베딩의 `EMBED_API_KEY` 와 같은 역할이며 비면 헤더를 싣지 않는다 |
 | `RERANK_MODEL` | `bge-reranker-v2-m3` | 이름 | 재순위 요청의 `model` (llama-server 는 무시한다) |
 | `RERANK_CONNECT_TIMEOUT_SECONDS` / `RERANK_TIMEOUT_SECONDS` / `RERANK_MAX_CONCURRENT` | `5` / `15` / `2` | 초 / 초 / 개 | 연결 타임아웃 / 한 호출의 읽기 타임아웃 / 동시에 나가는 호출 수 |
@@ -337,7 +337,7 @@ copy .env.example .env
 
 임베딩 처리량을 여러 엔드포인트·병렬 서브배치로 확장한다. 셋 다 **기본 비활성(회귀 0)**인 opt-in이다.
 
-- **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_BASE_URLS` 에 `;` 로 나열): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 `A;B;C` 로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
+- **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_BASE_URLS` 에 `,` 로 나열): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 `A,B,C` 로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
   - **장애 전환**: 엔드포인트에 **닿지 못하면**(연결 거부·연결 타임아웃·DNS·경로 없음) 그 엔드포인트를 30초 후보에서 빼고 같은 호출을 다음 엔드포인트로 다시 보낸다(로그 `[EMBED-FAILOVER]`). 전부 막혔으면 가장 먼저 풀리는 하나만 한 번 시도한다 — 서버가 돌아오면 차단을 기다리지 않고 바로 낫는다. HTTP 5xx(예: llama.cpp 의 "input is too large")·읽기 타임아웃은 **넘기지 않는다** — 요청 자체의 문제라 다른 엔드포인트도 같은 이유로 거절하고, 넘기면 멀쩡한 서버를 차례로 막는다.
   - **채팅 로컬 서버를 두 대(`LOCAL_LLM_URL_2`)로 이중화했다면 여기에도 다른 서버를 적을 것** — 임베딩은 LLM 라우터 밖이라 채팅의 장애 전환을 받지 못한다. `EMBED_BASE_URLS` 이 비어 `LOCAL_LLM_URL` 로 떨어진 채 그 서버가 죽으면, 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 실패한다. 이 구성을 보면 기동 로그가 `[EMBED CONFIG]` 경고를 남긴다(앱이 `LOCAL_LLM_URL_2` 에서 자동으로 만들지 않는 이유: 두 서버가 같은 임베딩 모델·차원을 띄웠다는 보장이 없다).
 - **E2 — 병렬 서브배치 임베딩** (`EMBED_MAX_CONCURRENT_BATCHES`, 기본 1): 한 문서를 인덱싱할 때 토큰 단위 서브배치들을 동시에 임베딩한다. E1과 결합하면 **단일 대용량 문서**도 여러 엔드포인트를 동시에 채운다. 대략 `(엔드포인트 수 × 엔드포인트별 --parallel)`로 설정.
@@ -349,12 +349,12 @@ copy .env.example .env
 **설정 예 (임베딩 서버 2대)**:
 ```properties
 # 같은 nomic-embed 모델을 2대(다른 포트/장비)에 서빙
-app.embedding.base-url=http://gpu-a:1234/v1;http://gpu-b:1234/v1
+app.embedding.base-url=http://gpu-a:1234/v1,http://gpu-b:1234/v1
 app.embedding.model=text-embedding-nomic-embed-text-v1.5
 # 단일 문서도 두 서버를 동시에 쓰도록 병렬 서브배치(2대 × 서버별 병렬 2 = 4)
 app.embedding.max-concurrent-batches=4
 ```
-환경변수로는 `EMBED_BASE_URLS=http://gpu-a:1234/v1;http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
+환경변수로는 `EMBED_BASE_URLS=http://gpu-a:1234/v1,http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
 
 > **`INDEXING_MAX_LLM`과의 관계**: 둘 다 인덱싱 파이프라인의 동시성 제한이지만 서로 다른 단계·리소스를 게이팅하는 완전히 독립적인 세마포어라 직접적인 종속 관계는 없다. `INDEXING_MAX_LLM`(`app.indexing.max-concurrent-llm-calls`)은 키워드/컨텍스트 추출·MD 교정·TXT 구조화·Vision 이미지 설명 등 **채팅형 LLM 호출**을 제한하며, 소비자마다 자기 세마포어를 만들어 씀(공유 풀 아님). `EMBED_MAX_CONCURRENT_BATCHES`는 **임베딩** 서브배치 호출만 제한한다. 같은 문서를 인덱싱하는 동안 키워드 추출은 `INDEXING_MAX_LLM`만큼, 그 문서의 임베딩 서브배치는 `EMBED_MAX_CONCURRENT_BATCHES`만큼 각자 병렬로 동작하며, 서로 다른 백엔드 서버(LLM 서버 vs 임베딩 서버)를 겨냥하므로 한쪽 값이 다른 쪽 상한이나 동작에 영향을 주지 않는다. 튜닝도 각각 독립적으로: `INDEXING_MAX_LLM`은 LLM 서버의 `--parallel`에, `EMBED_MAX_CONCURRENT_BATCHES`는 `(임베딩 엔드포인트 수 × 엔드포인트별 병렬)`에 맞춘다.
 
@@ -1741,7 +1741,7 @@ app.llm.providers[1].concurrency=4
 - `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
 - 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
 - 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
-- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 기동 시에 한 대가 안 떠 있어도 앱은 뜹니다 — 그 서버는 30초 차단된 채 시작하고 요청은 살아 있는 쪽으로 갑니다(두 대 모두 안 닿으면 기동 실패, [§5.2 G3 의 복제본 예외](#프로바이더-활성화-게이트-llmconfig-g1g3) 참고). **임베딩은 이 라우팅 밖입니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URLS`(`;` 로 여러 주소, 비우면 `LOCAL_LLM_URL`)로만 갑니다. 두 서버가 같은 임베딩 모델을 띄우고 있다면 **다른 서버를 `EMBED_BASE_URLS` 에도 `;` 로 적으세요** — 그 목록은 부하 분산과 함께 장애 전환(닿지 않는 엔드포인트를 30초 건너뜀)을 하므로, 그래야 한 대가 죽어도 RAG 질문이 검색 단계에서 실패하지 않습니다. 적지 않은 채 `LOCAL_LLM_URL` 쪽이 죽으면 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 오류가 납니다(기동 로그의 `[EMBED CONFIG]` 경고가 이 구성을 알려 줍니다).
+- **한 대가 죽으면 나머지 한 대로 자동 전환됩니다** — 연결 거부(프로세스 종료)·연결 타임아웃(호스트 다운)·HTTP 5xx·429/503 이면 그 서버를 30초 차단하고 같은 요청을 다른 서버로 보냅니다(분류·검증·질의 확장 같은 블로킹 호출은 같은 호출 안에서, 채팅 답변은 **첫 토큰이 나가기 전이면** 스트림을 다시 엽니다). 다음 요청은 처음부터 살아 있는 서버로 갑니다. **전환되지 않는 것**: 읽기 타임아웃(연결은 받고 응답이 없는 멈춘 서버 — `LLM_READ_TIMEOUT_SECONDS` 까지 기다린 뒤 오류), 이미 토큰이 나간 답변, 사용자 중단. 기동 시에 한 대가 안 떠 있어도 앱은 뜹니다 — 그 서버는 30초 차단된 채 시작하고 요청은 살아 있는 쪽으로 갑니다(두 대 모두 안 닿으면 기동 실패, [§5.2 G3 의 복제본 예외](#프로바이더-활성화-게이트-llmconfig-g1g3) 참고). **임베딩은 이 라우팅 밖입니다** — 질문 임베딩과 인덱싱은 `EMBED_BASE_URLS`(`,` 로 여러 주소, 비우면 `LOCAL_LLM_URL`)로만 갑니다. 두 서버가 같은 임베딩 모델을 띄우고 있다면 **다른 서버를 `EMBED_BASE_URLS` 에도 `,` 로 적으세요** — 그 목록은 부하 분산과 함께 장애 전환(닿지 않는 엔드포인트를 30초 건너뜀)을 하므로, 그래야 한 대가 죽어도 RAG 질문이 검색 단계에서 실패하지 않습니다. 적지 않은 채 `LOCAL_LLM_URL` 쪽이 죽으면 채팅 모델은 넘어가도 RAG 질문은 질문 임베딩에서 오류가 납니다(기동 로그의 `[EMBED CONFIG]` 경고가 이 구성을 알려 줍니다).
 
 COST_FIRST 흐름:
 ```
@@ -1909,7 +1909,7 @@ app.llm.providers[8].concurrency=4
 - `priority`가 다르면 부하와 무관하게 낮은 `priority`가 항상 우선합니다 — 로드밸런싱은 **동일 priority 그룹 내부에서만** 일어나고, 서로 다른 priority 간 자동 전환은 여전히 프로바이더 실패(§5.5 Circuit Breaker) 시에만 일어납니다.
 - 총 동시 처리량 = 등록 대수 × per-provider `concurrency`(예: LOCAL 2대 × 3 = 6).
 - `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
-- 임베딩 엔드포인트는 이 LLM 게이트와 별개의 `EmbeddingModel` 데코레이터 체인에서 따로 로드밸런싱됩니다(§6.21 E1, `LoadBalancingEmbeddingModel` — `EMBED_BASE_URLS` 의 `;` 목록). 설정은 [§3.2 "임베딩 병렬화"](#32-환경변수-전체-목록) 참고.
+- 임베딩 엔드포인트는 이 LLM 게이트와 별개의 `EmbeddingModel` 데코레이터 체인에서 따로 로드밸런싱됩니다(§6.21 E1, `LoadBalancingEmbeddingModel` — `EMBED_BASE_URLS` 의 `,` 목록). 설정은 [§3.2 "임베딩 병렬화"](#32-환경변수-전체-목록) 참고.
 
 **헤더 LLM 동시성 표시기**: 웹 UI 우측 상단에 `LLM: {사용중}/{용량}`으로 실시간 포화도를 보여줍니다(`GET /api/v1/llm/concurrency`, ~3초마다 폴링). `사용중` 값이 `용량`에 도달하면(완전 포화) 숫자가 굵은 빨간색으로 강조됩니다 — 위 429/`[BACKPRESSURE]` 로그를 매번 찾아보지 않아도 한눈에 확인할 수 있는 보조 지표입니다.
 - `role=LOCAL, priority=1`(주 응답용 로컬 티어 — MICRO_TEXT 전용 소형 오프로딩 모델은 제외) 프로바이더들의 `concurrency` 합계가 용량이고, 실제 게이트에서 점유 중인 슬롯 수가 사용중 값입니다.
@@ -2414,7 +2414,7 @@ API 키가 필요한 서버면 `-H "Authorization: Bearer <EMBED_API_KEY>"` 를 
 
 - **입력 한도**: 새 모델의 최대 입력(토큰)이 옛 모델보다 작으면, 긴 청크는 서버가 `input (N tokens) is too large` 로 거절합니다. 앱은 입력을 줄여 최대 8번 다시 보내므로 그 청크는 **앞부분만으로 임베딩**됩니다(끝까지 줄여도 안 되면 그 청크의 재임베딩이 실패). 한도가 크게 줄었다면 `EMBED_MAX_CHUNK_CHARS` 와 §8 「임베딩 서버 배치/토큰 초과」를 먼저 보세요.
 - **접두사**: `query:`/`passage:`, `search_query:`/`search_document:` 처럼 질의·문서 접두사를 요구하는 모델이라면 **앱은 접두사를 붙이지 않습니다** — 접두사 없이도 쓸 만한지 4단계에서 품질로 확인하세요.
-- **여러 임베딩 서버**(`EMBED_BASE_URLS` 에 `;`)를 쓴다면 **모든 주소가 같은 새 모델을 같은 차원으로** 서빙해야 합니다.
+- **여러 임베딩 서버**(`EMBED_BASE_URLS` 에 `,`)를 쓴다면 **모든 주소가 같은 새 모델을 같은 차원으로** 서빙해야 합니다.
 
 #### 1) 백업
 

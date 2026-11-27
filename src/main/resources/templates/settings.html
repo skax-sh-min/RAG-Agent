@@ -138,7 +138,7 @@
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
             <!--/* 임베딩·리랭커 — LLM 라우터 밖의 서버. 위 프로바이더 표와 같은 모양(table-sm · 연한 머리글 · 같은 글자 크기)으로
-                 바로 아래에 둔다. 주소가 여럿이면(A;B) 주소마다 한 줄에 접속 상태 배지가 붙고, 배지는 GET /settings/llm-status 가
+                 바로 아래에 둔다. 주소가 여럿이면(A,B) 주소마다 한 줄에 접속 상태 배지가 붙고, 배지는 GET /settings/llm-status 가
                  id(embed-status-N · rerank-status-N)로 채운다. 주소 칸을 넓게, 기타 칸을 좁게. */-->
             <div class="table-responsive border-top">
                 <table class="table table-sm mb-0 align-middle" style="table-layout: fixed; min-width: 720px;">

@@ -137,7 +137,7 @@ class AppPropertiesRerankTest {
         }
     }
 
-    // ── 주소 목록(EMBED_BASE_URLS / RERANK_BASE_URLS = A;B;C) ────────────────────
+    // ── 주소 목록(EMBED_BASE_URLS / RERANK_BASE_URLS = A,B,C — ; 도 받는다) ────────────────────
 
     @Test
     @DisplayName("parseUrls — ; 로 나누고 공백·빈 항목·같은 주소는 버린다, 순서는 그대로")

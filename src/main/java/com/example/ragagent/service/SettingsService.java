@@ -539,7 +539,7 @@ public class SettingsService implements AppProperties.OverrideSource, Environmen
                 new ProviderConnectivity.Endpoint(ProviderConnectivity.RERANKER_KEY, props.rerankerBaseUrls(), r.apiKey(), r.model()));
     }
 
-    /** 임베딩 서버 주소 전부(EMBED_BASE_URLS 의 {@code ;} 목록) — 주소가 없으면 빈 목록. */
+    /** 임베딩 서버 주소 전부(EMBED_BASE_URLS 의 {@code ,} 목록, {@code ;} 도 받는다) — 주소가 없으면 빈 목록. */
     private List<String> embeddingUrls() {
         AppProperties.EmbeddingConfig e = props.embeddingSafe();
         List<String> urls = new ArrayList<>();

@@ -413,7 +413,7 @@ public record AppProperties(
      * ({@link AppProperties#effectiveRerankCandidates()} · {@link AppProperties#effectiveRerankTopK()}).
      */
     public record RerankerConfig(
-            String baseUrl,                // app.reranker.base-url / RERANK_BASE_URLS — 비면 꺼짐. `;` 로 여럿(A;B;C). 뒤의 /v1 은 있어도 없어도 된다
+            String baseUrl,                // app.reranker.base-url / RERANK_BASE_URLS — 비면 꺼짐. `,` 로 여럿(A,B,C — 권장, `;` 도 받는다). 뒤의 /v1 은 있어도 없어도 된다
             String model,                  // app.reranker.model / RERANK_MODEL — 요청 본문의 model, 기본 bge-reranker-v2-m3
             Integer connectTimeoutSeconds, // app.reranker.connect-timeout-seconds, 기본 5
             Integer timeoutSeconds,        // app.reranker.timeout-seconds — 읽기 타임아웃(= 한 호출의 상한), 기본 15
@@ -998,7 +998,7 @@ public record AppProperties(
         Integer maxCharsRaw = maxCharsOverride != null ? maxCharsOverride : embedding.maxChunkChars();
         int maxChunkChars = (maxCharsRaw != null && maxCharsRaw > 0) ? maxCharsRaw : 0;
         // §6.21 E1/E2 — null-safe defaults: no extra endpoints, serial sub-batch embedding.
-        // 주소는 EMBED_BASE_URLS 하나에 {@code ;} 로 여럿 적는다 — 첫 주소가 baseUrl, 나머지가 추가 엔드포인트다.
+        // 주소는 EMBED_BASE_URLS 하나에 {@code ,} 로 여럿 적는다({@code ;} 도 받는다) — 첫 주소가 baseUrl, 나머지가 추가 엔드포인트다.
         List<String> urls = parseUrls(embedding.baseUrl());
         List<String> additionalBaseUrls = urls.size() > 1 ? List.copyOf(urls.subList(1, urls.size())) : List.of();
         Integer batchesRaw = batchesOverride != null ? batchesOverride : embedding.maxConcurrentBatches();
@@ -1051,14 +1051,15 @@ public record AppProperties(
         return Math.min(n, MAX_SEARCH_MAX_ATTEMPTS);
     }
 
-    /** 리랭커 서버 주소 전부 — {@code app.reranker.base-urls}(RERANK_BASE_URLS)의 {@code ;} 구분 목록. 없으면 빈 목록(= 꺼짐). */
+    /** 리랭커 서버 주소 전부 — {@code app.reranker.base-urls}(RERANK_BASE_URLS)의 {@code ,} 구분 목록({@code ;} 도 받는다). 없으면 빈 목록(= 꺼짐). */
     public List<String> rerankerBaseUrls() {
         return parseUrls(reranker == null ? null : reranker.baseUrl());
     }
 
     /**
-     * {@code A;B;C} 형태의 주소 목록을 나눈다 — 공백·빈 항목은 버리고 같은 주소(끝의 {@code /} 무시)는 한 번만 센다. 쉼표도
-     * 구분자로 받는다(예전 목록 변수의 습관). 순서는 입력 그대로다(첫 주소가 먼저 쓰인다).
+     * {@code A,B,C} 형태의 주소 목록을 나눈다 — 공백·빈 항목은 버리고 같은 주소(끝의 {@code /} 무시)는 한 번만 센다. 권장 구분자는
+     * 쉼표이고 {@code ;} 도 받는다 — 예전 기본이 {@code ;} 였는데 Linux·macOS 실행 스크립트가 {@code .env} 를 셸로 읽어
+     * {@code ;} 에서 명령이 끊겼다. 기존 설정이 깨지지 않게 둘 다 받는다. 순서는 입력 그대로다(첫 주소가 먼저 쓰인다).
      */
     public static List<String> parseUrls(String raw) {
         if (raw == null || raw.isBlank()) return List.of();

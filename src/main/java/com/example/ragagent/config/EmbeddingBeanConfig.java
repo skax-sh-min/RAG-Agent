@@ -88,7 +88,7 @@ public class EmbeddingBeanConfig {
                 .ifPresent(p -> log.warn("""
                         [EMBED CONFIG] chat runs on {} replicated local servers, but embeddings use only {} (provider [{}]) — \
                         if that server goes down, RAG turns fail at the query embedding even though chat switches over.
-                          -> Add the other server(s) to EMBED_BASE_URLS (A;B), if they serve the same embedding model (EMBED_MODEL) at the same dimension.""",
+                          -> Add the other server(s) to EMBED_BASE_URLS (A,B), if they serve the same embedding model (EMBED_MODEL) at the same dimension.""",
                         1 + LocalReplicas.peersOf(p, providers).size(), embedUrl, p.name()));
     }
 

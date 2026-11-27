@@ -262,7 +262,7 @@ class CrossEncoderRerankerTest {
         assertThat(maxSeen.get()).isEqualTo(2);
     }
 
-    // ── 주소 여럿(RERANK_BASE_URLS = A;B) ────────────────────────────────────────
+    // ── 주소 여럿(RERANK_BASE_URLS = A,B) ────────────────────────────────────────
 
     private HttpServer extraServer;
     private final AtomicInteger extraHits = new AtomicInteger();
