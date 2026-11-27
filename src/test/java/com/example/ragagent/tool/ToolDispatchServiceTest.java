@@ -300,6 +300,34 @@ class ToolDispatchServiceTest {
     }
 
     @Test
+    @DisplayName("만료 안내 계획은 Tool 을 부르지 않고 실제 번들의 만료 문구를 정형 답(S)으로 남긴다 — 무엇이 만료됐는지 말한다")
+    void expiredConfirmationAnswersWithoutStarting() {
+        changeSetUp();
+
+        AgentState nl = changeDispatch.execute(adminState(ToolPlan.expiredConfirmation(
+                "{\"instruction\":\"x\",\"type\":\"deprecate\",\"subject\":\"sendKakaoTok 메서드\"}"), true));
+        AgentState replace = changeDispatch.execute(adminState(ToolPlan.expiredConfirmation(ARGS), true));
+
+        assertThat(nl.answer()).contains("「sendKakaoTok 메서드」").contains("5분").contains("시작하지 않았습니다").doesNotContain("{0}").doesNotContain("{1}");
+        assertThat(nl.responseMode()).isEqualTo(com.example.ragagent.model.ResponseMode.S);
+        assertThat(nl.retrievedDocs()).isEmpty();
+        assertThat(replace.answer()).contains("PostgreSQL → Oracle");
+        verify(changeWorkflow, org.mockito.Mockito.never()).start(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any());
+    }
+
+    @Test
+    @DisplayName("관리자가 아니면 만료 안내도 하지 않고 검색으로 내려간다")
+    void expiredConfirmationForNonAdminFallsBack() {
+        changeSetUp();
+
+        AgentState out = changeDispatch.execute(adminState(ToolPlan.expiredConfirmation(ARGS), false));
+
+        assertThat(out.toolPlan()).isNull();
+        assertThat(out.answer()).isNull();
+    }
+
+    @Test
     @DisplayName("이미 진행 중이면 예외로 던지지 않고 안내만 한다(검색으로 내려가면 안내가 사라진다)")
     void busyIsAnAnswerNotAFallback() {
         changeSetUp();

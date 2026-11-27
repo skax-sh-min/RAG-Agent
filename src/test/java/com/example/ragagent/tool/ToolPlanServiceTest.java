@@ -283,6 +283,27 @@ class ToolPlanServiceTest {
     }
 
     @Test
+    @DisplayName("만료된 되묻기에 \"네\" — 모델을 부르지 않고 만료 안내 계획(확정 표지)으로 간다. 유지보수 Tool 계획이 아니다")
+    void aLateConfirmationBecomesAnExpiryNotice() {
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000);
+        PendingChangeConfirmations pending = new PendingChangeConfirmations(now::get);
+        pending.put("root", "t1", new PendingChangeConfirmations.Pending("sendKakaoTok 사용 중단", null, null,
+                "deprecate", "sendKakaoTok 메서드", null, null));
+        now.addAndGet(PendingChangeConfirmations.TTL_MINUTES * 60_000L + 1);
+        LlmRouter router = mock(LlmRouter.class);
+        ToolPlanService svc = new ToolPlanService(router, catalogWithChange(), bundle(), props(), true, pending);
+
+        ToolPlanService.Planned planned = svc.planFor(false, ResponseMode.N, "네", "root", true, "t1", Locale.KOREAN);
+
+        assertThat(planned.called()).isFalse();
+        assertThat(planned.plan().isExpiredConfirmation()).isTrue();
+        assertThat(planned.plan().toolName()).isNotEqualTo("requestDocumentChange");
+        assertThat(planned.plan().confirmed()).as("그래프가 meta 보다 앞서 TOOL 로 보내도록").isTrue();
+        assertThat(planned.plan().argumentsJson()).contains("sendKakaoTok 메서드");
+        verify(router, never()).executeGatedWithUsage(any(TaskType.class), any(RoutingMode.class), any());
+    }
+
+    @Test
     @DisplayName("긍정이 아닌 다른 말은 대기를 지우고 평소처럼 Tool 선택으로 간다")
     void anythingElseCancelsAndPlansNormally() {
         PendingChangeConfirmations pending = new PendingChangeConfirmations();

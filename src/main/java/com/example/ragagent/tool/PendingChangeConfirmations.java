@@ -21,6 +21,7 @@ import java.util.function.LongSupplier;
  *   <li>그 대화의 <b>바로 다음 메시지</b>가 해소한다: 긍정 표현({@link #isAffirmative})과 <b>정확히</b> 같을 때만 확정이고, 그 밖의 어떤 말이든 취소다
  *       (대기는 어느 쪽이든 지워진다 — "네 근데 …" 같은 섞인 말은 확정으로 읽지 않는다).</li>
  *   <li>확정된 대기는 한 번만 쓰인다(꺼내면 지워진다).</li>
+ *   <li>만료된 되묻기에 긍정 표현으로 답하면 시작하지 않고 만료를 알린다({@link #resolveReply} → {@link Outcome#EXPIRED}).</li>
  * </ul>
  * 관리자 호출자만 이 저장소를 부른다(호출하는 쪽이 보장) — 일반 사용자의 "네" 는 대기를 건드리지 못한다.
  */
@@ -78,10 +79,37 @@ public class PendingChangeConfirmations {
      * 만료되지 않았을 때만 확정된 요청을 돌려준다.
      */
     public Optional<Pending> resolve(String userId, String threadId, String message) {
+        Resolution r = resolveReply(userId, threadId, message);
+        return r.outcome() == Outcome.CONFIRMED ? Optional.of(r.pending()) : Optional.empty();
+    }
+
+    /** 되묻기에 대한 답의 결과. */
+    public enum Outcome {
+        /** 기다리던 되묻기가 없거나, 긍정 표현이 아니라 취소됐다 — 평소처럼 진행한다. */
+        NONE,
+        /** 만료 전의 긍정 표현 — 기억한 요청 그대로 시작한다. */
+        CONFIRMED,
+        /**
+         * 긍정 표현이지만 되묻기가 {@value #TTL_MINUTES}분을 넘겨 만료됐다 — 시작하지 않고 만료를 알린다. 이 구분이 없으면 늦은 "네" 가 평범한 질문으로
+         * 흘러 모델이 "수정안을 작성하겠습니다" 같은 답을 지어내, 아무 작업도 없는데 시작된 것처럼 보였다.
+         */
+        EXPIRED
+    }
+
+    /** @param pending {@link Outcome#NONE} 이면 {@code null}, 그 밖에는 기억했던 요청(만료됐어도 무엇이 만료됐는지 알리려고 싣는다) */
+    public record Resolution(Outcome outcome, Pending pending) {
+        static final Resolution NONE = new Resolution(Outcome.NONE, null);
+    }
+
+    /**
+     * {@link #resolve} 와 같은 규칙으로 대기를 해소하되 만료된 되묻기에 대한 긍정 표현을 {@link Outcome#EXPIRED} 로 가른다. 대기는 어느 경우든 지워진다.
+     * 만료된 대기는 메모리에서 바로 치우지 않으므로 그 대화의 다음 메시지까지는 알아볼 수 있다(재기동하면 사라져 알아볼 수 없다).
+     */
+    public Resolution resolveReply(String userId, String threadId, String message) {
         Entry e = entries.remove(key(userId, threadId));
-        if (e == null) return Optional.empty();
-        if (e.expiresAtMs() <= clockMs.getAsLong()) return Optional.empty();
-        return isAffirmative(message) ? Optional.of(e.pending()) : Optional.empty();
+        if (e == null || !isAffirmative(message)) return Resolution.NONE;
+        if (e.expiresAtMs() <= clockMs.getAsLong()) return new Resolution(Outcome.EXPIRED, e.pending());
+        return new Resolution(Outcome.CONFIRMED, e.pending());
     }
 
     /** 이 (사용자, 대화) 가 되묻기에 답하는 중인가 — 화면 안내·테스트용. 지우지 않는다. */

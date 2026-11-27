@@ -133,23 +133,30 @@ public class ToolPlanService {
         if (!appliesTo(directMode, mode)) return Planned.none();
         if (admin && pending != null) {
             // 되묻기에 대한 답이면(바로 다음 메시지가 긍정 표현과 정확히 같을 때) 모델을 부르지 않고 확정 계획으로 간다. 어떤 말이든 대기는 지워진다.
-            Optional<PendingChangeConfirmations.Pending> confirmed = pending.resolve(userId, threadId, question);
-            if (confirmed.isPresent()) {
-                PendingChangeConfirmations.Pending c = confirmed.get();
-                tools.jackson.databind.node.ObjectNode node = MAPPER.createObjectNode().put("instruction", c.instruction());
-                if (c.from() != null) node.put("from", c.from());
-                if (c.to() != null) node.put("to", c.to());
-                // 자연어 수정은 되물을 때 보여 준 해석을 그대로 싣는다 — 확정 뒤 다시 해석하면 사용자가 "네" 한 것과 다른 일이 시작될 수 있다.
-                if (c.type() != null) node.put("type", c.type());
-                if (c.subject() != null) node.put("subject", c.subject());
-                if (c.content() != null) node.put("content", c.content());
-                if (c.replacement() != null) node.put("replacement", c.replacement());
-                String args = node.toString();
+            PendingChangeConfirmations.Resolution reply = pending.resolveReply(userId, threadId, question);
+            if (reply.outcome() == PendingChangeConfirmations.Outcome.EXPIRED) {
+                // 늦은 "네" — 시작하지 않는다. 모델에 넘기면 "작성하겠습니다" 같은 답을 지어내 시작된 것처럼 보이므로 만료 안내를 정형 답으로 남긴다.
+                log.info("[TOOL-PLAN] 유지보수 되묻기 만료 뒤의 긍정 답 user={} thread={}", userId, threadId);
+                return new Planned(ToolPlan.expiredConfirmation(argumentsOf(reply.pending())), 0, 0, false);
+            }
+            if (reply.outcome() == PendingChangeConfirmations.Outcome.CONFIRMED) {
                 log.info("[TOOL-PLAN] 유지보수 되묻기 확정 user={} thread={}", userId, threadId);
-                return new Planned(new ToolPlan(ToolDispatchService.CHANGE_TOOL, args, true), 0, 0, false);
+                return new Planned(new ToolPlan(ToolDispatchService.CHANGE_TOOL, argumentsOf(reply.pending()), true), 0, 0, false);
             }
         }
         return plan(question, new ToolCaller(userId, admin, "chat"), locale, threadId);
+    }
+
+    /** 기억한 되묻기를 Tool 인자 JSON 으로 — 자연어 수정은 되물을 때 보여 준 해석을 그대로 싣는다(확정 뒤 다시 해석하면 "네" 한 것과 다른 일이 시작될 수 있다). */
+    private static String argumentsOf(PendingChangeConfirmations.Pending c) {
+        tools.jackson.databind.node.ObjectNode node = MAPPER.createObjectNode().put("instruction", c.instruction());
+        if (c.from() != null) node.put("from", c.from());
+        if (c.to() != null) node.put("to", c.to());
+        if (c.type() != null) node.put("type", c.type());
+        if (c.subject() != null) node.put("subject", c.subject());
+        if (c.content() != null) node.put("content", c.content());
+        if (c.replacement() != null) node.put("replacement", c.replacement());
+        return node.toString();
     }
 
     /**

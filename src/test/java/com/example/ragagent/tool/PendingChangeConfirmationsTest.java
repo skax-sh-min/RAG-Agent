@@ -84,6 +84,37 @@ class PendingChangeConfirmationsTest {
     }
 
     @Test
+    @DisplayName("만료된 되묻기에 긍정으로 답하면 EXPIRED — 무엇이 만료됐는지 싣고, 대기는 지워진다")
+    void affirmativeAfterExpiryIsReportedAsExpired() {
+        store.put("u1", "t1", P);
+        now.addAndGet(PendingChangeConfirmations.TTL_MINUTES * 60_000L + 1);
+
+        PendingChangeConfirmations.Resolution r = store.resolveReply("u1", "t1", "네");
+
+        assertThat(r.outcome()).isEqualTo(PendingChangeConfirmations.Outcome.EXPIRED);
+        assertThat(r.pending()).isEqualTo(P);
+        assertThat(store.resolveReply("u1", "t1", "네").outcome()).as("한 번만 알린다").isEqualTo(PendingChangeConfirmations.Outcome.NONE);
+    }
+
+    @Test
+    @DisplayName("만료된 되묻기에 긍정이 아닌 말이면 NONE — 평소처럼 진행한다(만료 안내를 끼워 넣지 않는다)")
+    void nonAffirmativeAfterExpiryIsNone() {
+        store.put("u1", "t1", P);
+        now.addAndGet(PendingChangeConfirmations.TTL_MINUTES * 60_000L + 1);
+
+        assertThat(store.resolveReply("u1", "t1", "다른 질문인데요").outcome()).isEqualTo(PendingChangeConfirmations.Outcome.NONE);
+        assertThat(store.resolveReply("u1", "t1", "네").outcome()).as("그 말로 대기는 이미 지워졌다").isEqualTo(PendingChangeConfirmations.Outcome.NONE);
+    }
+
+    @Test
+    @DisplayName("만료 전의 긍정은 CONFIRMED, 대기가 없으면 NONE")
+    void resolveReplyOutcomes() {
+        store.put("u1", "t1", P);
+        assertThat(store.resolveReply("u1", "t1", "네")).isEqualTo(new PendingChangeConfirmations.Resolution(PendingChangeConfirmations.Outcome.CONFIRMED, P));
+        assertThat(store.resolveReply("u9", "t9", "네").outcome()).isEqualTo(PendingChangeConfirmations.Outcome.NONE);
+    }
+
+    @Test
     @DisplayName("대기가 없으면 \"네\" 는 아무 일도 아니다")
     void nothingPendingNothingHappens() {
         assertThat(store.resolve("u1", "t1", "네")).isEmpty();

@@ -19,6 +19,22 @@ public record ToolPlan(String toolName, String argumentsJson, boolean confirmed)
     /** 검색 Tool — 이 Tool 을 고르면 그래프는 새 경로를 타지 않고 기존 {@code RETRIEVAL}(검색 루프)로 간다(설계서 D1). */
     public static final String SEARCH_TOOL = "searchKnowledge";
 
+    /**
+     * 만료된 되묻기에 "네" 라고 답한 턴의 계획 이름 — Tool 이 아니라 표지다. {@link ToolDispatchService} 가 아무것도 부르지 않고 만료 안내만 답으로 남긴다.
+     * 확정 계획({@code confirmed=true})으로 만드는 것은 그래프가 meta 분류보다 앞서 {@code TOOL} 로 보내게 하려는 것이다("네" 는 잡담으로 분류되기 쉽다).
+     */
+    public static final String EXPIRED_CONFIRMATION = "__expiredChangeConfirmation";
+
+    /** 만료 안내 계획 — 인자는 만료된 요청을 알리는 데만 쓴다(관리자 화면의 되묻기 대기에서 온 값이지 모델이 만든 값이 아니다). */
+    public static ToolPlan expiredConfirmation(String argumentsJson) {
+        return new ToolPlan(EXPIRED_CONFIRMATION, argumentsJson, true);
+    }
+
+    /** 만료 안내 계획인가. */
+    public boolean isExpiredConfirmation() {
+        return EXPIRED_CONFIRMATION.equals(toolName);
+    }
+
     /** 그래프가 {@code TOOL} 노드로 보내야 하는가 — 검색 Tool 이 아닌 Tool 을 골랐을 때만. */
     public boolean routesToToolNode() {
         return !SEARCH_TOOL.equals(toolName);

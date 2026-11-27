@@ -101,6 +101,9 @@ public class ToolDispatchService {
         // 호출자는 서버가 정한다 — 요청 스레드에서 구해 상태에 실린 관리자 여부(모델이 만든 인자·이름은 권한을 넓히지 못한다).
         ToolCaller caller = new ToolCaller(state.userId(), state.callerAdmin(), "chat");
         try {
+            if (plan.isExpiredConfirmation()) {
+                return expiredAnswer(state, plan);   // 아무것도 부르지 않는다
+            }
             if (CHANGE_TOOL.equals(plan.toolName())) {
                 AgentState changed = changeRequest(state, plan, caller);
                 observe(state, plan, changed.toolPlan() == null ? AgentToolCallRepository.ERROR : AgentToolCallRepository.OK, null, startedAt);
@@ -237,6 +240,24 @@ public class ToolDispatchService {
                 ? "「{0}」을(를) 사용 중단으로 표시하는 수정안을 만들까요? {0} 을(를) 설명하는 섹션마다 안내 문장을 넣고 원문은 지우지 않습니다. 만들려면 네 라고 답해 주세요."
                 : "「{0}」 관련 청크에 다음 주의 사항을 넣는 수정안을 만들까요? 만들려면 네 라고 답해 주세요.\n\n> {1}";
         return fixedAnswer(state, text(key, fallback, state, intent.subject(), intent.content() == null ? "" : intent.content()));
+    }
+
+    /**
+     * 만료된 되묻기에 "네" 라고 답한 턴 — Tool 을 부르지 않고 "확인 시간이 지나 시작하지 않았다"를 정형 답으로 남긴다. 무엇이 만료됐는지는 기억했던
+     * 요청(바꿀 말 → 새 말, 또는 자연어 수정의 대상)으로 말한다. 관리자가 아니면(저장소는 관리자만 부르지만) 검색으로 내려간다.
+     */
+    private AgentState expiredAnswer(AgentState state, ToolPlan plan) {
+        if (!state.callerAdmin()) return state.toBuilder().toolPlan(null).build();
+        JsonNode a = MAPPER.readTree(plan.argumentsJson());
+        String from = a.path("from").asString("").strip();
+        String to = a.path("to").asString("").strip();
+        String subject = a.path("subject").asString("").strip();
+        String what = !from.isEmpty() && !to.isEmpty() ? from + " → " + to
+                : !subject.isEmpty() ? subject : a.path("instruction").asString("").strip();
+        log.info("[TOOL] 유지보수 되묻기 만료 — 시작하지 않는다 user={} thread={}", state.userId(), state.threadId());
+        return fixedAnswer(state, text("chat.answer.change-expired",
+                "「{0}」 수정안 요청의 확인 시간({1}분)이 지나 취소되었습니다. 아무 작업도 시작하지 않았습니다. 다시 요청하시면 새로 확인합니다.",
+                state, what, String.valueOf(PendingChangeConfirmations.TTL_MINUTES)));
     }
 
     /** 확정된 자연어 수정을 시작한다 — 관리자 권한은 {@link ToolCatalog#call} 이 한 번 더 본다. */
