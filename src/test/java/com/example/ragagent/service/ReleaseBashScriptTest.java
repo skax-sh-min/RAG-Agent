@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -14,6 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code scripts/release.sh} 를 실제 bash 로 돌려 릴리즈 흐름 전체(사전 점검 · 빌드 · 검증 · 커밋/태그/다음 SNAPSHOT · 푸시 · 게시)를 확인한다.
  * Windows 에서는 Git Bash 가 있어야 하고 없으면 스킵한다. 공통 바탕은 {@link ReleaseHarness}.
  */
+// 오래 걸리는 테스트 — 평소 mvn test 에서 빠지고 릴리즈(-Pall-tests)에서 돈다. 따로 돌리려면 mvn test -Plong-running-tests (pom.xml 의 surefire 설명)
+@Tag("long-running")
 @DisplayName("릴리즈 스크립트(bash)")
 class ReleaseBashScriptTest extends ReleaseHarness {
 
@@ -40,7 +43,8 @@ class ReleaseBashScriptTest extends ReleaseHarness {
         assertThat(Files.readString(repo.resolve("target/release/rag-agent-0.5.6-launcher.jar.sha256")))
                 .isEqualTo(sha256(launcher) + "  rag-agent-0.5.6-launcher.jar\n");
         assertThat(jarEntry(launcher, "META-INF/MANIFEST.MF")).contains("Main-Class: com.example.ragagent.launcher.Launcher");
-        assertThat(Files.readString(mvnLog)).contains("clean package").doesNotContain("-DskipTests");
+        // 테스트를 돌리는 릴리즈 빌드는 오래 걸리는 테스트(@Tag("long-running"))까지 전부 돌린다
+        assertThat(Files.readString(mvnLog)).contains("clean package").contains("-Pall-tests").doesNotContain("-DskipTests");
         assertNothingChanged();
         assertThat(ghCalls()).as("--build-only 는 gh 를 부르지 않는다").isEmpty();
         assertThat(r.out()).contains("built and verified");
@@ -217,18 +221,12 @@ class ReleaseBashScriptTest extends ReleaseHarness {
     }
 
     @Test
-    @DisplayName("-st · --skip-test 도 Maven 에 -DskipTests 를 넘기고, 옵션이 없으면 테스트를 수행한다")
-    void shortSkipTestOptionsPassDskipTests() throws Exception {
-        for (String flag : List.of("-st", "--skip-test")) {
-            Files.deleteIfExists(mvnLog);
-            Result r = run(args(opt(Opt.BUILD_ONLY), flag));
-            assertThat(r.exit()).as(flag + " " + r.out()).isZero();
-            assertThat(Files.readString(mvnLog)).as(flag).contains("clean package").contains("-DskipTests");
-        }
-        Files.deleteIfExists(mvnLog);
-        Result r = run(args(opt(Opt.BUILD_ONLY)));
+    @DisplayName("-st 도 Maven 에 -DskipTests 를 넘긴다(--skip-test 는 같은 분기라 따로 돌리지 않는다 — 스크립트 한 번이 수십 초다)")
+    void shortSkipTestOptionPassesDskipTests() throws Exception {
+        Result r = run(args(opt(Opt.BUILD_ONLY), "-st"));
+
         assertThat(r.exit()).as(r.out()).isZero();
-        assertThat(Files.readString(mvnLog)).contains("clean package").doesNotContain("-DskipTests");
+        assertThat(Files.readString(mvnLog)).contains("clean package").contains("-DskipTests");
     }
 
     @Test

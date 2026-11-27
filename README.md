@@ -22,7 +22,7 @@ The app runs on any 64-bit OS with a Java 21 JDK/JRE; the native pieces (sqlite-
 | Docker image (Alpine / musl) | supported | **no** — mount your own `vec0` | `docker-compose.yml` |
 | Anything else (Windows ARM, 32-bit OS/JVM, BSD …) | needs a JVM; untested | no — use the Chroma backend or your own `vec0` | — |
 
-There is no CI matrix (GitHub Actions is not used): the tests and the launcher/release scripts were actually run on Windows; macOS and Linux rely on the scripts and procedures here, and the bundled sqlite-vec files for platforms other than Windows were only checksum-verified, not loaded. Local (non-Docker) runs need native Tesseract (kor + eng) for scanned-PDF OCR, or `IMAGE_OCR_ENABLED=false`. Details: [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+There is no CI matrix (GitHub Actions is not used): the tests (`mvn test -Pall-tests`) and the launcher/release scripts were actually run on Windows; macOS and Linux rely on the scripts and procedures here, and the bundled sqlite-vec files for platforms other than Windows were only checksum-verified, not loaded. Local (non-Docker) runs need native Tesseract (kor + eng) for scanned-PDF OCR, or `IMAGE_OCR_ENABLED=false`. Details: [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
 
 ## Getting Started
 
@@ -39,8 +39,11 @@ docker-compose up --build
 # Install git hooks (run once after cloning)
 sh scripts/install-hooks.sh
 
-# Build with tests
+# Build with tests (the everyday set - the long-running tests are left out, see below)
 mvn clean package
+
+# Build with ALL tests, the long-running ones too (what a release build runs)
+mvn clean package -Pall-tests
 
 # Build without tests (faster)
 mvn clean package -DskipTests
@@ -49,6 +52,14 @@ mvn clean package -DskipTests
 mvn clean package -DskipTests
 java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/extracted
 ```
+
+**Test sets** — a few test classes start real processes dozens of times (the release script tests and the launcher scenarios, `@Tag("long-running")`, together well over 10 minutes) and would set the length of every build on their own, so a plain `mvn test` / `mvn package` leaves them out. The release build runs everything.
+
+| Command | Runs |
+|---|---|
+| `mvn test` | everyday set — `long-running` left out |
+| `mvn test -Pall-tests` | everything (`scripts/release.sh` builds with this) |
+| `mvn test -Plong-running-tests` | only the long-running ones — run this after changing the release scripts or the launcher |
 
 The built JAR is generated at `target/rag-agent-*.jar`.
 
@@ -139,7 +150,7 @@ Installed apps learn about a new version from the **latest GitHub release** and 
 | Asset 3 (recommended) | `rag-agent-X.Y.Z-launcher.jar` (+ its `.sha256`) — the ~30 KB launcher a new install starts with; `mvn package` builds it as `target/rag-agent-X.Y.Z-launcher.jar`. Apps never mistake it for the application jar |
 | State | **published** — not a draft, not a pre-release. A release without the jar attached is not announced at all |
 
-> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\release_windows.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
+> **Script:** `sh scripts/release.sh` (Linux / macOS / Git Bash) or `scripts\release_windows.cmd` (Windows — runs the same script through Git for Windows' bash) does steps 1–7 below for you and refuses to start when something is off (dirty tree, not on `main`, behind origin, tag taken, jar version ≠ tag). It builds with all tests, the long-running ones too (`-Pall-tests`; `-st` / `--skip-test` skips the tests). Try `--build-only` first: it builds and verifies the release files (app jar, launcher jar, checksums) and touches nothing in git. Options and the exact order: [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트). Publishing from the script needs the GitHub CLI (`gh auth login`); without it use `--no-publish` (it commits and tags locally, then prints the push / upload commands) and do steps 6–7 by hand.
 > **If `main` only accepts pull requests, use `--pr`**: it leaves `main` alone, puts the release commit, the tag and the version bump on a `release/X.Y.Z` branch, pushes that branch and the tag, creates the **draft** release and opens the pull request, then stops — merge the PR with **"Create a merge commit"** (a squash or rebase merge makes new commits, so the commit the tag points at would no longer be in `main`'s history), then publish with `gh release edit vX.Y.Z --draft=false`. The JAR files and their checksum files are located in the target\released directory.
 
 The steps below release `0.5.7` while `pom.xml` says `0.5.7-SNAPSHOT`. Run them from the repository root.
@@ -156,7 +167,7 @@ git status          # must say: nothing to commit, working tree clean
 **3. Build with tests**
 
 ```bash
-mvn clean package            # → target/rag-agent-0.5.7.jar
+mvn clean package -Pall-tests   # → target/rag-agent-0.5.7.jar (all tests, the long-running ones too)
 ```
 
 Check that the jar carries the right version:

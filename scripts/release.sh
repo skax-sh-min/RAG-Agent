@@ -5,8 +5,9 @@
 # What it does, in this order:
 #   1. preflight   clean working tree, on main, not behind origin, tag not taken, mvn + Java 21, gh logged in.
 #                  Nothing has been changed yet - a failure here costs nothing.
-#   2. build       sets the pom version to the release version and runs "mvn clean package" (tests included unless
-#                  -st/--skip-test). A failure puts pom.xml back.
+#   2. build       sets the pom version to the release version and runs "mvn clean package" with ALL tests - including the
+#                  long-running ones a normal "mvn test" leaves out (@Tag("long-running"): this script's own tests and the launcher
+#                  scenarios, pom profile all-tests) - unless -st/--skip-test. A failure puts pom.xml back.
 #   3. verify      jar build.version must equal the release version (the app refuses an update whose jar disagrees
 #                  with the tag), Start-Class must be the app's, and the manifest's Min-Launcher-Protocol (the launcher
 #                  generation this version needs) must be a positive integer. Writes the artifacts to target/release/:
@@ -30,7 +31,8 @@
 #   --build-only    stop after step 3: artifacts are built and verified, pom.xml is restored, git is untouched.
 #   --no-publish    do steps 1-4 locally; print the push / gh commands instead of running them.
 #   --pr            release through a pull request (see above). Needs the GitHub CLI unless --no-publish is given.
-#   -st, --skip-test  pass -DskipTests to Maven (skip the tests; the full suite takes minutes). Default: run the tests.
+#   -st, --skip-test  pass -DskipTests to Maven (skip the tests; the full suite takes minutes). Default: run all tests,
+#                   the long-running ones too (-Pall-tests).
 #                   (--skip-tests is still accepted.)
 #   --next X.Y.Z-SNAPSHOT   version to continue with. Default: patch + 1.
 #   --notes-file F  release notes from file F. Default: let GitHub generate them from the merged work.
@@ -253,8 +255,9 @@ $(git status --short)"
     info "building (tests skipped): $MVN -B clean package -DskipTests"
     "$MVN" -B clean package -DskipTests || die "build failed"
   else
-    info "building with tests: $MVN -B clean package   (this takes a few minutes)"
-    "$MVN" -B clean package || die "build failed"
+    # -Pall-tests: also the long-running tests a normal "mvn test" skips (@Tag("long-running") - release scripts, launcher scenarios)
+    info "building with all tests: $MVN -B clean package -Pall-tests   (this takes a while - the long-running tests run too)"
+    "$MVN" -B clean package -Pall-tests || die "build failed"
   fi
 
   # ---- 3. verify + artifacts --------------------------------------------------------------------------------------

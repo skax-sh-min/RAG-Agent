@@ -154,11 +154,11 @@ rag_java/
 | Docker 이미지(Alpine = **musl**) | 지원 — 이미지가 Alpine 기반(`eclipse-temurin:21-jre-alpine`) | **번들 사용 불가** | `docker-compose.yml` | sqlite-vec 모드는 musl 용 `vec0` 를 마운트해 `SQLITE_VEC_EXTENSION_PATH` 지정(아래) |
 | 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 | — | chroma 백엔드를 쓰거나 `vec0` 를 직접 받아 `SQLITE_VEC_EXTENSION_PATH` 지정 |
 
-- **검증 수준**: GitHub Actions 를 쓰지 않아 OS 별 자동 검증은 없습니다. 테스트(`mvn test`)와 런처·릴리즈 스크립트의 실제 실행은 **Windows** 에서 확인했습니다. macOS·Linux 는 위 스크립트와 §4 의 절차가 있지만, 번들한 sqlite-vec 의 Windows 외 플랫폼 파일은 SHA-256 만 확인했고 실제 로드는 확인하지 못했습니다(기동 로그의 `vec_version()` 으로 확인하세요).
+- **검증 수준**: GitHub Actions 를 쓰지 않아 OS 별 자동 검증은 없습니다. 테스트(`mvn test -Pall-tests`)와 런처·릴리즈 스크립트의 실제 실행은 **Windows** 에서 확인했습니다. macOS·Linux 는 위 스크립트와 §4 의 절차가 있지만, 번들한 sqlite-vec 의 Windows 외 플랫폼 파일은 SHA-256 만 확인했고 실제 로드는 확인하지 못했습니다(기동 로그의 `vec_version()` 으로 확인하세요).
 - **OCR(Tesseract)**: 스캔 PDF OCR(`IMAGE_OCR_ENABLED`, 기본 켜짐)은 **네이티브 Tesseract + `kor`/`eng` 언어 데이터**가 호스트에 있어야 합니다 — Docker 이미지에는 들어 있고, 로컬(비 Docker) 실행은 OS 별로 설치하거나 `IMAGE_OCR_ENABLED=false` 로 끕니다.
 - **파일 경로·권한**: sqlite-vec 번들은 `{DATA_DIR}/native/` 로 꺼내 로드하므로 그 경로가 쓰기 가능하고 `noexec` 가 아니어야 합니다. DB 파일을 네트워크 공유(NFS/SMB)에 두는 배포는 `mmap_size` 때문에 조건이 붙습니다([§3.3](#33-applicationproperties-전용-설정)의 SQLite 세션 PRAGMA 행).
 
-Windows·linux·macOS 비 Docker 실행 스크립트는 `-b`/`--build`로 `mvn package`, `-cb`/`--clean-build`로 `mvn clean package`를 실행한 뒤 생성된 앱 jar를 시작합니다. 두 빌드 모두 기본으로 테스트를 실행하며, 실패하면 앱을 시작하지 않습니다. jar 스크립트(`run_by_jar.cmd`·`run_by_jar.sh`)는 `-st`/`--skip-test`(`--skip-tests` 도 됩니다)를 함께 주면 빌드에 `-DskipTests`를 더해 테스트를 건너뜁니다(예: `-cb -st`). `-b`·`-cb` 없이 `-st`만 주면 오류입니다. `-h`/`--help`로 옵션을 볼 수 있습니다. 옵션이 없으면 기존처럼 jar 스크립트는 이미 빌드된 jar를, Maven 스크립트는 `mvn spring-boot:run`을 실행합니다.
+Windows·linux·macOS 비 Docker 실행 스크립트는 `-b`/`--build`로 `mvn package`, `-cb`/`--clean-build`로 `mvn clean package`를 실행한 뒤 생성된 앱 jar를 시작합니다. 두 빌드 모두 기본으로 테스트를 실행하며, 실패하면 앱을 시작하지 않습니다. jar 스크립트(`run_by_jar.cmd`·`run_by_jar.sh`)는 `-st`/`--skip-test`(`--skip-tests` 도 됩니다)를 함께 주면 빌드에 `-DskipTests`를 더해 테스트를 건너뜁니다(예: `-cb -st`). `-b`·`-cb` 없이 `-st`만 주면 오류입니다. 이 빌드의 테스트는 **평소 묶음**입니다 — 오래 걸리는 테스트(`@Tag("long-running")`: 릴리즈 스크립트·런처 시나리오, 합쳐 10분이 넘는다)는 빠지고 릴리즈 빌드(§6.2.4)에서만 돕니다. 직접 돌릴 때: `mvn test`(평소) · `mvn test -Pall-tests`(전부) · `mvn test -Plong-running-tests`(오래 걸리는 것만). `-h`/`--help`로 옵션을 볼 수 있습니다. 옵션이 없으면 기존처럼 jar 스크립트는 이미 빌드된 jar를, Maven 스크립트는 `mvn spring-boot:run`을 실행합니다.
 
 #### 벡터 스토어 백엔드 선택 (chroma / sqlite-vec)
 
@@ -2212,7 +2212,7 @@ launcher.lock                        ← 같은 폴더에 런처 둘을 막는 �
 | `버전` | 릴리즈 버전 `X.Y.Z`. 생략하면 pom 버전에서 `-SNAPSHOT` 을 뗀 값 |
 | `--build-only` | **빌드·검증까지만** — 산출물을 `target/release/` 에 만들고 pom 은 되돌리며 git 은 건드리지 않습니다. 처음에는 이걸로 시험하세요 |
 | `--no-publish` | 커밋·태그·다음 SNAPSHOT 까지 로컬에서만 하고, 푸시·게시 명령은 출력만 합니다(`gh` 없이 쓸 때) |
-| `-st`, `--skip-test` | Maven 에 `-DskipTests` — 테스트를 건너뜁니다(전체 테스트는 몇 분 걸립니다). 없으면 테스트를 수행합니다. 예전 이름 `--skip-tests` 도 받습니다 |
+| `-st`, `--skip-test` | Maven 에 `-DskipTests` — 테스트를 건너뜁니다. 없으면 **오래 걸리는 테스트까지 전부** 수행합니다(`-Pall-tests` — 평소 `mvn test` 가 빼는 릴리즈 스크립트·런처 시나리오 테스트 포함, 20분 안팎). 예전 이름 `--skip-tests` 도 받습니다 |
 | `--next X.Y.Z-SNAPSHOT` | 이어 갈 버전. 기본은 patch + 1 (0.5.9 → 0.5.10-SNAPSHOT) |
 | `--notes-file 파일` | 릴리즈 노트 파일. 기본은 GitHub 이 자동 생성 |
 | `--pr` | **`main` 이 풀 리퀘스트로만 받는 저장소**용 — 아래 「PR 로만 받는 main」 |

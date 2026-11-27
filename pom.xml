@@ -31,6 +31,9 @@
         <sqlite-vec.cache.dir>${user.home}/.m2/sqlite-vec/${sqlite-vec.version}</sqlite-vec.cache.dir>
         <!-- -Dsqlite-vec.skip=true: 받지도 jar 에 넣지도 않는다(네트워크 없이 빌드). 그때 앱은 SQLITE_VEC_EXTENSION_PATH 를 직접 받아야 한다 -->
         <sqlite-vec.skip>false</sqlite-vec.skip>
+        <!-- 테스트 묶음(maven-surefire-plugin 설명 참고) — 기본은 @Tag("long-running") 를 뺀다. 프로파일 all-tests / long-running-tests 가 바꾼다 -->
+        <test.groups></test.groups>
+        <test.excludedGroups>long-running</test.excludedGroups>
         <sqlite-vec.sha256.windows-x86_64>51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983</sqlite-vec.sha256.windows-x86_64>
         <sqlite-vec.sha256.macos-aarch64>8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29</sqlite-vec.sha256.macos-aarch64>
         <sqlite-vec.sha256.macos-x86_64>53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713</sqlite-vec.sha256.macos-x86_64>
@@ -387,6 +390,21 @@
                 </executions>
             </plugin>
 
+            <!-- 오래 걸리는 테스트(@Tag("long-running") — 릴리즈 스크립트 · 런처 시나리오: 실제 프로세스를 수십 번 띄워 전체 실행 시간을 혼자 정한다)는
+                 평소 빌드에서 뺀다. 릴리즈(scripts/release.sh)는 -Pall-tests 로 전부 돌린다.
+                   mvn test                          평소 — long-running 제외
+                   mvn test -Pall-tests              전부(릴리즈 전)
+                   mvn test -Plong-running-tests     long-running 만
+                 값은 아래 프로파일이 바꾸는 속성 둘(test.groups · test.excludedGroups)이다. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <groups>${test.groups}</groups>
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
+                </configuration>
+            </plugin>
+
             <!-- JaCoCo: code coverage measurement + threshold gate -->
             <!-- 베이스라인 (Sprint 1 회귀 안전망 완료 시점): -->
             <!--   agent      = 88.2% → gate 70% -->
@@ -466,6 +484,24 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- 전부 — 오래 걸리는 테스트(@Tag("long-running"))까지. scripts/release.sh 가 릴리즈 빌드에 붙인다 -->
+        <profile>
+            <id>all-tests</id>
+            <properties>
+                <test.excludedGroups></test.excludedGroups>
+            </properties>
+        </profile>
+        <!-- 오래 걸리는 테스트만 -->
+        <profile>
+            <id>long-running-tests</id>
+            <properties>
+                <test.groups>long-running</test.groups>
+                <test.excludedGroups></test.excludedGroups>
+            </properties>
+        </profile>
+    </profiles>
 
     <repositories>
         <repository>

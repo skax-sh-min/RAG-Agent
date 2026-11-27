@@ -23,7 +23,7 @@ Spring Boot 4.1 + Spring AI 2.0, Java 21 기반이며 Thymeleaf + HTMX 웹 UI(�
 | Docker 이미지(Alpine / musl) | 지원 | **번들 사용 불가** — 직접 준 `vec0` 마운트 | `docker-compose.yml` |
 | 그 밖(Windows ARM · 32비트 OS/JVM · BSD 등) | JVM 이 있으면 실행은 되나 미검증 | 번들 없음 — chroma 백엔드 또는 직접 준 `vec0` | — |
 
-OS 별 자동 검증(CI)은 없습니다(GitHub Actions 미사용): 테스트와 런처·릴리즈 스크립트는 **Windows** 에서 실제로 돌려 확인했고, macOS·Linux 는 여기의 스크립트와 절차를 따르며, Windows 외 플랫폼의 번들 sqlite-vec 파일은 체크섬만 확인했고 실제 로드는 확인하지 못했습니다. 로컬(비 Docker) 실행에서 스캔 PDF OCR 을 쓰려면 호스트에 Tesseract(kor + eng)가 필요하고, 아니면 `IMAGE_OCR_ENABLED=false` 로 끕니다. 자세한 내용은 [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
+OS 별 자동 검증(CI)은 없습니다(GitHub Actions 미사용): 테스트(`mvn test -Pall-tests`)와 런처·릴리즈 스크립트는 **Windows** 에서 실제로 돌려 확인했고, macOS·Linux 는 여기의 스크립트와 절차를 따르며, Windows 외 플랫폼의 번들 sqlite-vec 파일은 체크섬만 확인했고 실제 로드는 확인하지 못했습니다. 로컬(비 Docker) 실행에서 스캔 PDF OCR 을 쓰려면 호스트에 Tesseract(kor + eng)가 필요하고, 아니면 `IMAGE_OCR_ENABLED=false` 로 끕니다. 자세한 내용은 [OPERATOR_MANUAL.md §3.1](documents/OPERATOR_MANUAL.md#31-필수-소프트웨어).
 
 ## 실행 방법
 
@@ -40,8 +40,11 @@ docker-compose up --build
 # git 훅 설치 (클론 후 1회 실행)
 sh scripts/install-hooks.sh
 
-# 테스트 포함 빌드
+# 테스트 포함 빌드 (평소 묶음 — 오래 걸리는 테스트는 빠진다, 아래 참고)
 mvn clean package
+
+# 오래 걸리는 테스트까지 전부 포함한 빌드 (릴리즈 빌드가 하는 것)
+mvn clean package -Pall-tests
 
 # 테스트 생략 빌드 (빠름)
 mvn clean package -DskipTests
@@ -52,6 +55,14 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 ```
 
 빌드 완료 후 `target/rag-agent-*.jar` 파일이 생성됩니다.
+
+**테스트 묶음** — 실제 프로세스를 수십 번 띄우는 테스트 클래스 몇 개(릴리즈 스크립트 테스트·런처 시나리오, `@Tag("long-running")`, 합쳐 10분이 넘는다)는 혼자 빌드 시간을 정해서 평소 `mvn test`·`mvn package` 에서는 빠집니다. 릴리즈 빌드는 전부 돌립니다.
+
+| 명령 | 도는 테스트 |
+|---|---|
+| `mvn test` | 평소 묶음 — `long-running` 제외 |
+| `mvn test -Pall-tests` | 전부 (`scripts/release.sh` 가 이것으로 빌드) |
+| `mvn test -Plong-running-tests` | 오래 걸리는 것만 — 릴리즈 스크립트나 런처를 고친 뒤 돌린다 |
 
 > **Exploded 실행** — 위 `extract` 단계 완료 후, 풀어진 레이아웃에서 바로 실행합니다. JVM이 런타임에 JAR을 해제할 필요가 없어 기동이 빠릅니다:
 > ```bash
@@ -142,7 +153,7 @@ container system stop
 | 첨부 파일 3 (권장) | `rag-agent-X.Y.Z-launcher.jar`(+ `.sha256`) — 새로 설치할 때 시작하는 약 30KB 짜리 런처. `mvn package` 가 `target/rag-agent-X.Y.Z-launcher.jar` 로 만듭니다. 앱은 이 파일을 앱 jar 로 오인하지 않습니다 |
 | 상태 | **게시됨** — 초안(draft)도, 시험판(pre-release)도 아니어야 합니다. jar가 첨부되지 않은 릴리즈는 아예 알리지 않습니다 |
 
-> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\release_windows.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
+> **스크립트:** `sh scripts/release.sh`(Linux / macOS / Git Bash) 또는 `scripts\release_windows.cmd`(Windows — Git for Windows 의 bash 로 같은 스크립트를 실행)가 아래 1~7단계를 대신 해 주고, 이상이 있으면(작업 트리가 더러움 · `main` 이 아님 · 원격보다 뒤처짐 · 태그가 이미 있음 · jar 버전 ≠ 태그) 시작하지 않습니다. 빌드는 오래 걸리는 테스트까지 전부 돌립니다(`-Pall-tests`, `-st`/`--skip-test` 를 주면 테스트를 건너뜀). 먼저 `--build-only` 로 시험해 보세요 — 릴리즈 파일(앱 jar·런처 jar·체크섬)을 빌드·검증만 하고 git 은 건드리지 않습니다. 옵션과 정확한 순서는 [OPERATOR_MANUAL.md §6.2.4](documents/OPERATOR_MANUAL.md#624-릴리즈-만들기-로컬-스크립트) 에 있습니다. 스크립트로 게시하려면 GitHub CLI(`gh auth login`)가 필요하며, 없으면 `--no-publish`(로컬에서 커밋·태그까지 하고 푸시·업로드 명령을 출력)로 6~7단계를 손으로 하세요.
 > **`main` 이 풀 리퀘스트로만 받는다면 `--pr`**: `main` 은 건드리지 않고 `release/X.Y.Z` 브랜치에 커밋·태그를 만들어 그 브랜치와 태그를 푸시하고, **초안** 릴리즈와 PR 을 만든 뒤 멈춥니다 — PR 을 **"Create a merge commit"** 으로 병합하고(스쿼시·리베이스는 태그가 가리키는 커밋이 `main` 이력에서 빠집니다) `gh release edit vX.Y.Z --draft=false` 로 게시하세요. jar 파일과 체크섬은 target\release 디렉토리에 있습니다.
 
 아래는 `pom.xml`이 `0.5.7-SNAPSHOT`일 때 `0.5.7`을 릴리즈하는 순서입니다. 저장소 루트에서 실행하세요.
@@ -159,7 +170,7 @@ git status          # "nothing to commit, working tree clean" 이어야 함
 **3. 테스트 포함 빌드**
 
 ```bash
-mvn clean package            # → target/rag-agent-0.5.7.jar
+mvn clean package -Pall-tests   # → target/rag-agent-0.5.7.jar (오래 걸리는 테스트까지 전부)
 ```
 
 jar에 올바른 버전이 들어갔는지 확인합니다:

@@ -2,6 +2,7 @@ package com.example.ragagent.launcher;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -26,6 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 스크립트가 없으니 어느 OS 에서나 같은 시나리오가 돈다 — 예전에는 bash 판과 PowerShell 판을 따로 돌렸다.
  * 설정은 설치 폴더의 {@code .env} 로 준다(런처가 읽는 것이자 자식에게 환경변수로 넘어가는 것).
  */
+// 오래 걸리는 테스트 — 평소 mvn test 에서 빠지고 릴리즈(-Pall-tests)에서 돈다. 따로 돌리려면 mvn test -Plong-running-tests (pom.xml 의 surefire 설명)
+@Tag("long-running")
 class LauncherScenariosTest {
 
     @TempDir Path home;
