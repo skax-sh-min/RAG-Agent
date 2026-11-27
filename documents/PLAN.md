@@ -7,15 +7,11 @@
 
 ## 📊 전체 현황 대시보드
 
-> 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다.
->
-> **문서 분리 (2026-09-02 적용)**: 완료 절의 «유지해야 할 결정»·«계획이 틀렸던 지점»과 해소된 이슈는 [PITFALLS.md](PITFALLS.md) 로 옮겼다. 이 파일은 **앞으로 할 일과 이미 한 일의 요약**을 담고, **왜 그렇게 했고 무엇이 틀렸는지**는 그쪽이다 — 계획을 볼 때와 코드를 고칠 때 필요한 것이 다르기 때문이다.
-
-> **완료 항목 압축 원칙 (2026-08-22 적용)**: ✅ 완료된 항목은 **① 무엇을 왜 그렇게 했는가 ② 앞으로도 지켜야 할 결정·함정 ③ 남은 열린 항목**만 남기고, 구현 과정 서술·테스트 통계·CLAUDE.md에 이미 있는 메커니즘 설명은 걷어낸다. 살아 있는 동작 명세의 단일 출처는 **코드와 CLAUDE.md**이고, 이 문서는 "왜 그렇게 결정했는가"의 기록이다 — 양쪽에 같은 설명을 두면 드리프트만 생긴다(§12가 의존성에 대해 같은 판단을 이미 적용했다).
+> 이 파일은 **앞으로 할 일과 이미 한 일의 요약**이다. 완료 항목은 무엇을 왜 했는가 · 지켜야 할 결정 · 남은 열린 항목만 둔다. 살아 있는 동작 명세는 코드와 CLAUDE.md, 결정 근거와 함정은 [PITFALLS.md](PITFALLS.md) — 같은 설명을 두 곳에 두지 않는다. 압축 전 전문은 git 이력에 있다(마지막 대규모 압축 2026-11-27).
 
 ### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.16.2·6.19.1·6.20 제외)
 
-> **최근 완료 요약 (최신순)** — 날짜별 한두 문장이다. 구현 설명·측정·열린 항목은 각 § 절과 [PITFALLS.md](PITFALLS.md), 측정 보고서에 있다. 압축 전 전문은 커밋 `d1f7290`(2026-10-26 판) · 이 파일을 한 번 더 줄인 2026-11-11 이전 판본은 그 직전 커밋의 이 대시보드에 있다.
+> **최근 완료 요약 (최신순)** — 날짜별 한두 문장. 상세는 각 § 절과 [PITFALLS.md](PITFALLS.md), 측정 보고서.
 >
 > - **2026-11-17~18 §6.33 6단계 자연어 지식 수정(6a~6d)** — 관리자 고치기·줄 구간 MD 되쓰기(V16) · MCP 제안 Tool(`findChunks`·`proposeChunkEdit`) · 앱 안 워크플로(사용 중단·내용 삭제·주의 사항·설명 수정) · 신고에서 수정안 만들기(대상 청크 고정, 적용되면 신고 해결, V17). 6c 사전 평가는 2026-11-20 세 모델로 쟀다(사람 수용률 E4B 55.9% · `deprecate`+`add_note` 76.9% → `deprecate`·`add_note` 만, [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md)).
 > - **2026-11-12 열린 항목 정리** — 질문 한도의 열린 전제 둘(요약 입력의 과거 질문 500자 · Direct 축소 재시도) · §6.24 `4-c`(C 만 +3, 검증 발췌 예산 안에서만 — C 답변 품질 전후 비교와 64K 이상 창은 미측정) · §6.29 (e) 유휴 워치독의 블로킹 호출 · (f) 측정 못 한 사이트 셋(모두 끔 유지).
@@ -33,19 +29,15 @@
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도·속도·메모리 개선 + recall@k/nDCG@k 평가 하네스(baseline recall@10=0.962). **+ §10.10** — 좋아요 기반 큐레이션 Q&A 지식화(스냅샷·임베딩·검색 융합·관리 UI) 완료 | §10 |
 
-추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, 환경변수 외부화 4건, 의존성 최신 stable 일괄 업데이트(정확한 버전은 pom.xml 참조).
-
 ### 🔵 진행할 것 (우선순위 순)
 
-> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). ⚠️ **§6.19는 이 판단이 절반만 맞았다** — 2026-09-07 실사에서 no-auth·management-only 조합에서만 성립하는 노출면이 여럿 나와 §6.19.4로 처리했다. 남은 것은 §6.19.1(API CSRF)뿐이고 그것은 여전히 인증 모드 전용이다. §6.15(스토리지 쿼터)는 전역 상한이라 단일 운영자에도 적용되므로 이 그룹에 남겨 두었고, 2026-09-01 완료됐다. **§6.25(관리자 대화 목록)도 이름은 §7.3(Phase 4) 계열이지만 같은 이유로 지금 진행 그룹이다** — `app.auth.guest-identity`가 `shared`가 아니면 no-auth 단일 운영자 배포에도 방문자별 대화가 쌓이고, 그중 Step 1은 인증 모드와 무관한 검색 오염 버그 수정이다.
+> 실배포(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**은 후속으로 둔다. 다만 "멀티유저 전용"인지는 항목마다 다시 물어야 한다 — §6.19 는 no-auth·management-only 에서만 성립하는 노출면이 나와 대부분 먼저 처리했다(§6.19.4).
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
-> 끝난 항목(§10.11~10.14 · §6.29~6.32 · §6.33 0단계 등)의 취소선 행은 2026-11-11 에, 2026-11-12 에 끝난 셋(질문 한도 전제 · `4-c` · §6.29 열린 항목)은 2026-11-18 에 걷었다 — 위 요약과 각 절을 본다. 이 표에는 **남은 일만** 둔다.
-
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.33 Agent·MCP 전환** 마무리 | 🟡 0~5단계 구현·종단 확인 완료. **남은 것**: `AGENT_ENABLED=true` 로 켠 실사용 2주 관측(폴백 비율·턴 지연) → 기본값 판단 · 백업에서 되돌리기 리허설 · 실제 질문 로그로의 Tool 선택 재측정 · MCP Inspector·Claude Code 연결 확인 · 영향도 실모델 실측의 가짜 인용 검증. **6단계(자연어 지식 수정)**: 6a~6d 구현(2026-11-17~18) · 6c 사전 평가(2026-11-20, 수용률 포함 — `deprecate`·`add_note` 만) — `deprecate` 배치 규칙 고침(11-20, 수용 72.7% → 93.5%) — **6e 수정안 검토 화면 구현(2026-11-23**, `/admin/change-jobs/{id}/review`, V18 — 브라우저에서 강조 정렬·편집·임시 저장·가드·삭제 적용·작업당 백업 확인, 실제 임베딩 적용·한글 IME 는 미확인) — `remove`·`revise` 자연어 경로 닫음(2026-11-23 — 채팅·`/admin`·신고 폼의 "자동"·MCP, 유형을 고른 폼과 6b 로만) — **검토 화면 실코퍼스 종단 확인 · 백업 되돌리기 리허설(2026-11-23**, `scripts/maintenance_e2e/review.py`·`restore.py` — 적용·재인덱싱 유지·일괄 적용·임베딩 실패 확인, MD 되쓰기 맥락 좁히기 고침; 거기서 나온 셋도 같은 날 고침: 작업 사본 옆에 적용 전 변환 MD(`.db.converted/`) — 복원하면 재인덱싱이 수정을 되살리지 않음 · 기동 때 백업 이름 없는 작업의 '승인됨'을 대기로 · `failed` 항목에 사유와 [다시 적용]) — 남은 것 한글 IME 확인. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
+| 1 | **§6.33 Agent·MCP 전환** 마무리 | 🟡 0~6단계 구현 · 실코퍼스 종단 확인 · 백업 되돌리기 리허설 완료(2026-11-23). **남은 것**: `AGENT_ENABLED=true` 실사용 2주 관측(폴백 비율·턴 지연) → 기본값 판단 · 실제 질문 로그로 Tool 선택 재측정 · MCP Inspector·Claude Code 연결 확인 · 영향도 실측의 가짜 인용 걸러냄 확인 · 6e 검토 화면의 한글 IME 확인. [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md) |
 | 2 | 운영 준비 잔여 — Caddy 인증서 만료 모니터링 | 미착수. (SQLite 정기 백업은 2026-10-13 완료 — 앱 안의 `DatabaseBackupService`, 담지 않는 것은 문서 파일·Chroma 벡터, OPERATOR_MANUAL §6.2.2) |
 | 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
@@ -55,14 +47,12 @@
 
 | 순위 | 항목 | 트리거 |
 |---|---|---|
-| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · **로그인 전용 rate-limit 버킷**(§6.1 참조 — 문서에만 있고 코드엔 없던 항목) ※ **6.19.2(`/admin/**` + actuator ROLE_ADMIN 게이트)는 2026-09-06 완료, 6.19.3(XFF)은 §6.22와 함께 완료** | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
+| 1 | **§6.19.1 API CSRF/세션 혼용** · **로그인 전용 rate-limit 버킷**(§6.1) | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
 | 2 | **§6.20 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
 
-> 검색 고도화 **Phase 7-D**(sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 재검토에서 범위 제외(사유·재개 신호는 §10.5) — Phase 7의 유일한 미착수였던 항목. 이 중 cross-encoder 리랭커는 제외 사유가 사라져 2026-11-05 §6.33 으로 되살렸다.
->
-> 스키마 관리: **운영 테이블은 Flyway 로 일원화**(2026-09-29, V4) — 신규 테이블·컬럼·인덱스는 `V5` 이후의 SQL 마이그레이션 파일로 추가한다. 저장소의 런타임 DDL 은 없어졌다([DATABASE.md](DATABASE.md) §2.1).
+> 범위에서 뺀 것과 재개 신호는 §10.5(Phase 7-D — 그중 교차 인코더 리랭커는 2026-11-05 §6.33 으로 되살렸다).
 
 ---
 
@@ -86,27 +76,13 @@
 
 ## 1. 요약 (Executive Summary)
 
-**목표**: 로컬 단일 사용자 RAG 에이전트를 인증·HTTPS·멀티유저 격리·모바일 대응이 갖춰진 온라인 서비스로 확장한다.
-
-**전제**: SQLite를 가능한 한 유지하고, 명확한 한계 신호가 발생할 때만 PostgreSQL로 전환한다.
-
-| Phase | 핵심 산출물 | 우선순위 | 상태 |
-|-------|-----------|---------|------|
-| Phase 1 — 보안 기반 | Caddy/HTTPS, Spring Security, 멀티유저 격리, Flyway | **필수** | ✅ 완료 |
-| Phase 2 — 모바일 UI | Offcanvas, 하단 고정 입력, PWA | **필수** | ✅ 완료 |
-| Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
-| Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
-| Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 (Step 5.1~5.10) |
-| Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
-| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 정확도 마무리·속도·메모리(7-E) · 큐레이션 Q&A·지식 제안·질의 독립화·청크 신고(§10.10~10.14) | 중요 | ✅ 완료 (7-D 만 범위 제외, §10.5) |
+**목표**: 로컬 단일 사용자 RAG 에이전트를 인증·HTTPS·멀티유저 격리·모바일 대응이 갖춰진 온라인 서비스로 확장한다. **전제**: SQLite 를 유지하고 한계 신호가 실측될 때만 PostgreSQL 로 간다. Phase 별 상태는 위 대시보드.
 
 ---
 
 ## 2. 현재 구조 분석
 
-**강점** — JdbcTemplate 직접 사용(Postgres 전환 시 ANSI SQL만 유지하면 매끄러움) · Immutable Record 상태(`AgentState`/`ChatResponse` 등, 동시성 안전) · Java 21 Virtual Threads · HTMX 서버 렌더링(모바일/PWA 대응 단순) · `VectorStoreRegistry`(컬렉션 키 추상화, 멀티테넌시 전환에 자연스럽게 맞물림).
-
-**Phase 1 착수 시점의 약점** — Phase 1~3에서 전부 해소됨: 인증 없음(→Spring Security 폼 로그인 + no-auth 병행, Step 1.3), `threadId` 소유 개념 없음(→Repository에 userId 강제, Step 1.4), 파일 저장 격리 없음(→이후 공유 저장소로 재단순화, `DocRegistry.SHARED`), HTTPS 미적용(→Caddy, Step 1.1), 마이그레이션 도구 없음(→Flyway, Step 1.2), 모바일 UI 없음(→Offcanvas/PWA, Phase 2), Rate limit 없음(→Bucket4j, §6.1).
+Phase 1 착수 시점의 약점(인증·소유권·HTTPS·마이그레이션·모바일·rate limit 없음)은 Phase 1~3 에서 모두 해소됐다. 지금 구조에서 계획에 영향을 주는 성질은 둘 — 모든 DB 접근이 `JdbcTemplate` 의 ANSI SQL 이라 Postgres 전환이 막히지 않는다 · 문서 저장소는 사용자 구분 없이 공유된다(`DocRegistry.SHARED`).
 
 ---
 
@@ -118,7 +94,7 @@
 
 **3.3 SQLite 지속 전략**: 읽기 우세 워크로드라 SQLite 유지, 모든 SQL을 ANSI 표준 + Flyway로 작성해 Postgres 전환을 대비만 해둔다(JdbcTemplate 그대로 사용 가능). **전환 트리거**: `SQLITE_BUSY` 빈도 1%/분 초과, 다중 인스턴스 배포 필요, 응답 지연을 풀 분리로도 해결 불가, 실시간 백업·복제가 요구사항이 됨.
 
-**3.4 멀티테넌시 모델**: Row-level(`user_id` 컬럼) + 사용자별 Chroma 컬렉션 채택(Schema/DB per tenant는 B2B 전용이라 과함) — SQLite 한 파일로 운영 가능. Repository 시그니처를 `getHistory(userId, threadId)`로 강제해 **userId 누락 시 컴파일 에러**가 나도록 안전장치를 걸었다.
+**3.4 멀티테넌시 모델**: Row-level(`user_id` 컬럼) 채택(Schema/DB per tenant는 B2B 전용이라 과함) — SQLite 한 파일로 운영 가능. 대화·사용량은 `user_id` 로 격리하고 Repository 시그니처를 `getHistory(userId, threadId)`로 강제해 **userId 누락 시 컴파일 에러**가 나게 했다. 문서·벡터는 처음의 사용자별 컬렉션 계획을 버리고 **공유**로 단순화했다(`DocRegistry.SHARED` — 사내 지식 베이스라 사용자별 문서가 필요 없었다).
 
 > 각 결정의 대안·트레이드오프 비교표는 [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기) 참고.
 
@@ -138,11 +114,11 @@ Caddy 리버스 프록시(자동 TLS, 보안 헤더, `forward-headers-strategy=f
 
 ## 6. Phase 3 — 운영 견고화 🟡 일부 완료
 
-> **재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§12·§13)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
+> 절 순서는 번호 순이 아니다(완료 항목이 앞, 미착수가 뒤). 번호는 소스 주석과 다른 문서가 가리키므로 바꾸지 않는다.
 
 ### 6.1 Rate Limiting — Bucket4j ✅ 완료
 
-`RateLimitFilter` 가 엔드포인트별 인메모리 버킷을 적용한다(인증 시 userId, 아니면 IP — `ClientIpResolver`). 값과 환경변수는 OPERATOR_MANUAL "Rate Limiting" 이 단일 출처다(여기에 숫자를 복제하면 드리프트만 생긴다). **업로드 버킷은 쓰기 요청만 센다**(예전엔 경로에 `/documents` 만 들어가면 페이지 로드·목록 갱신·내보내기까지 같은 10/분을 먹어 파일 10개 업로드가 마지막에서 429 였다). 🔵 **미착수 — 로그인 전용 버킷**: "로그인 분당 10회/IP"는 문서에만 있고 `policyFor()` 에 login 분기는 존재한 적이 없다(`/login` 은 `default` 120/분). 계정 잠금은 **계정 단위**라 아이디를 바꿔 가는 시도는 못 막는다 — 노출면이 `auth.enabled=true` 배포뿐이라 **로그인을 실제로 여는 시점에 §6.19 와 함께** 넣는다. 다중 인스턴스는 Redis 백엔드(부록).
+`RateLimitFilter` 가 엔드포인트별 인메모리 버킷을 적용한다(인증 시 userId, 아니면 IP — `ClientIpResolver`). 값은 OPERATOR_MANUAL "Rate Limiting" 이 단일 출처, 버킷 규칙은 CLAUDE.md Conventions. 🔵 **미착수 — 로그인 전용 버킷**: `/login` 은 `default` 120/분이고 계정 잠금은 계정 단위라 아이디를 바꿔 가는 시도를 못 막는다 — 노출면이 `auth.enabled=true` 뿐이라 **로그인을 여는 시점에 §6.19.1 과 함께** 넣는다. 다중 인스턴스는 Redis 백엔드(부록).
 
 ### 6.2 파일 업로드 보안 ✅ 완료
 
@@ -154,7 +130,7 @@ Caddy 리버스 프록시(자동 TLS, 보안 헤더, `forward-headers-strategy=f
 - **6.4 감사 로그** — SQLite 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`(`data/audit/audit.log` NDJSON, 일별 + 10MB 분할, gzip, 7일, 100MB 상한, `app.audit.enabled`). 이벤트 목록의 단일 출처는 OPERATOR_MANUAL §3.3.
 - **6.5~6.7 사용량 표시** — 임베딩은 `TrackingEmbeddingModel` 이 채팅과 분리 기록(2026-09-30 이름을 모델명 없는 `embed` 하나로, 옛 행은 Flyway V5 가 합침) · 키 없는 프로바이더는 이력이 없으면 숨김(`usedProviders()`) · 설정에서 사라진 프로바이더의 기록은 `type=ORPHAN` 으로 노출하고 `DELETE /admin/llm-usage/{provider:.+}` 로 삭제.
 - **6.8 피드백** — 👍/👎(`conversation_turns.feedback`). `DISLIKE` 턴은 `getHistory()` 에서 하드 제외, `LIKE` 는 §10.10~10.11 에서 지식 제안 폼을 여는 신호로만 쓰인다(Direct 턴의 재사용 자격으로 읽던 규칙은 근거 청크가 없어 2026-09-21 제거).
-- **6.9 요약 선계산** — 입력 시작 시 `ConversationSummarizerService` 가 이전 대화를 미리 요약(스레드별 LRU 3개, TTL 15초; 없으면 `getHistory()` 로 폴백). RAG 답변은 이미 `## 요약` 이 있어 그것을 쓰고 LLM 재요약을 생략하며, 요약 섹션이 없는 답변(Direct/meta)만 소형 모델(`MICRO_TEXT`)이 등록됐을 때 1회 요약한다(부가 기능이 답변용 로컬 모델의 슬롯을 잠식하지 않게). 소형 미설정이면 그 답변만 `UNSUMMARIZED_ANSWER_CAP`(300자)로 자른다 — 앞에서부터 자르는 `truncate()` 라 앞쪽의 긴 Direct 답변 하나가 최신 턴을 밀어내기 때문. **같은 이유로 과거 질문도 모든 경로에서 500자로 자른다**(그리고 1,000자 초과 질문은 LLM 검색문을 `conversation_turns.history_question`(V15)에 저장해 이후 턴의 이력이 원문 대신 싣는다 — 2026-11-12, PITFALLS `LongQuestionQuery`; `clarified_question` 은 원문 사본 대신 빈 문자열 "시도함" 표시)(`buildSummaryInput`, `HistoryPolicy.PAST_QUESTION_CAP` — 질문 한도가 10,000자라 긴 질문 하나가 요약 예산을 다 먹었다, 2026-11-12; 질문 전문은 `[Recent]` 에서 본다).
+- **6.9 요약 선계산** — 입력 시작 시 `ConversationSummarizerService` 가 이전 대화를 미리 요약(스레드별 LRU 3개, TTL 15초; 없으면 `getHistory()` 로 폴백). RAG 답변은 자기 `## 요약` 을 쓰고, 요약이 없는 답변(Direct/meta)만 소형 모델(`MICRO_TEXT`)이 있을 때 1회 요약한다(없으면 300자로 자른다). 앞쪽의 긴 턴이 최신 턴을 밀어내지 않도록 과거 질문은 모든 경로에서 500자(`HistoryPolicy.PAST_QUESTION_CAP`), 1,000자 초과 질문은 LLM 검색문(`history_question`, V15)으로 이력에 싣는다(2026-11-12).
 - **6.10 백그라운드 사용량** — 채팅 외 호출(요약·키워드·서식교정·TXT→MD·제목)을 `BackgroundUsage` 접두사로 분리 기록, `/llm-usage` 에 `type=BACKGROUND` 카드.
 - **6.11 컨텍스트 예산** — `MemoryService.maxConversationChars()`(`max(1000, LLM_MAX_TOKENS × 0.5)`)를 단일 진실 원천으로 통일하고 하드코딩 5개를 `app.memory.*`/`app.summary.*` 로 외부화.
 
@@ -162,7 +138,7 @@ Caddy 리버스 프록시(자동 TLS, 보안 헤더, `forward-headers-strategy=f
 
 ### 6.12 다중 사용자 동시 LLM 요청 처리 — 동시성 제어 + 처리량 확장 ✅ 완료
 
-채팅 경로에 동시성 제한이 없어(세마포어는 인덱싱뿐) 여러 사용자가 겹치면 폴백 없는 유일 프로바이더가 서킷브레이커로 전면 차단되던 문제를 해결: ① 프로바이더별 동시성 세마포어(`LlmRouter.executeGated`, `app.llm.providers[].concurrency`) ② 대기상한 초과 시 429 백프레셔(`LlmBackpressureException`, 브레이커 없음) ③ `CachingEmbeddingModel` single-flight ④ 폴백 없는 유일 프로바이더의 단축 차단(30초) ⑤ 동일 role·priority 프로바이더 간 least-in-flight 로드밸런싱. **⑥ 장애 전환(2026-10-08)** — 연결 타임아웃은 차단 + 같은 호출 안에서 다음 서버로, 채팅 답변 스트리밍은 첫 토큰 전 서버 장애에 한해 `StreamFailover`/`LlmRouter.failOver()` 로 다시 열고, 질의 확장은 `RoutedChatModel` 로 호출마다 라우팅(읽기 타임아웃은 그대로). **⑦ 이중화 마무리(2026-10-12)** — 임베딩은 `LoadBalancingEmbeddingModel` 이 자기 목록(`EMBED_BASE_URLS` 의 `,` 목록) 안에서 **닿지 않는 엔드포인트만** 30초 건너뛰고(5xx·읽기 타임아웃은 요청 모양 문제라 넘기지 않는다), 기동 검증(G3)은 같은 type·priority 복제본이 통과하면 닿지 않는/5xx 서버를 30초 차단된 채 등록하고 기동한다(설정 오류는 여전히 실패). 남은 한계는 멈춘 서버(읽기 타임아웃) 하나이며 근거는 PITFALLS `llm/StreamFailover.java`.
+여러 사용자가 겹치면 폴백 없는 유일 프로바이더가 서킷브레이커로 전면 차단되던 문제를 해결: ① 프로바이더별 동시성 세마포어(`LlmRouter.executeGated`) ② 대기상한 초과 시 429 백프레셔(브레이커 없음) ③ `CachingEmbeddingModel` single-flight ④ 폴백 없는 유일 프로바이더의 단축 차단 ⑤ 같은 role·priority 간 least-in-flight 로드밸런싱 ⑥ 장애 전환(2026-10-08 — 연결 계열 장애는 같은 호출 안에서 다음 서버로, 스트리밍은 첫 토큰 전에만 `StreamFailover`) ⑦ 이중화 마무리(2026-10-12 — 임베딩 `LoadBalancingEmbeddingModel`, 기동 검증의 복제본 예외). 남은 한계는 멈춘 서버(읽기 타임아웃) 하나 — PITFALLS `llm/StreamFailover.java`.
 
 ---
 
@@ -174,7 +150,7 @@ Caddy 리버스 프록시(자동 TLS, 보안 헤더, `forward-headers-strategy=f
 
 ### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료
 
-`AnswerService`·`DirectAnswerService`·`ClassifierService`·`RerankerService`·`VisionDescriptionService`·`RetrievalService` 의 `MultiQueryExpander` 등이 `LlmRouter` 를 거치지 않아 실제 채팅 사용량이 `/llm-usage` 에 안 잡히던 문제를 수정 — 블로킹은 `executeWithTracking()`, 스트리밍은 `LlmRouter.recordApproxUsage()`, `MultiQueryExpander` 는 한때 `TrackingChatModel` 데코레이터였다가 2026-10-08 부터 호출마다 라우터를 지나는 `RoutedChatModel` 로 대체됐다(§6.12 ⑥).
+채팅 경로의 호출 다수가 `LlmRouter` 를 거치지 않아 `/llm-usage` 에 안 잡히던 문제를 수정 — 블로킹은 `executeWithTracking()`, 스트리밍은 `LlmRouter.recordApproxUsage()`, 질의 확장은 `RoutedChatModel`(§6.12 ⑥).
 
 ---
 
@@ -209,7 +185,7 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ### 6.19 보안 하드닝 🟡 §6.19.2·6.19.3·6.19.4 완료 · §6.19.1만 남음
 
-> **범위 판단의 교훈**: 처음엔 세 건 모두 `app.auth.enabled=true` 전용으로 보고 조건부로 뒀지만 그 전제가 절반만 맞았다 — §6.19.3(XFF)은 §6.22 에서 IP 가 식별자가 되면서 no-auth 배포의 선행 필수가 됐고, 2026-09-07 실사에서는 **no-auth·management-only 조합에서만 성립하는** 노출면이 여럿 나왔다(§6.19.4). **"어느 모드에서 성립하는가"를 항목마다 다시 묻는 편이 낫다.**
+> 처음엔 전부 인증 모드 전용으로 봤지만 §6.19.3·6.19.4 는 no-auth 에서 먼저 성립했다 — **"어느 모드에서 성립하는가"는 항목마다 다시 묻는다.**
 
 **6.19.1 `/api/v1/**` CSRF 비활성 + 세션 인증 혼용** 🟡 노출면 축소, 원 항목 미해결 — `SecurityConfig` 가 인증 모드에서 API 전체를 CSRF 예외로 두는데 같은 엔드포인트가 **세션 쿠키 인증**이라, `multipart/form-data` POST(CSRF "simple request")인 `POST /api/v1/documents` 는 크로스사이트 폼으로 인증 사용자의 브라우저에서 업로드를 유발할 수 있다. 2026-09-07 에 ① `/api/**` CORS 와일드카드 제거 ② 문서 쓰기 3종 `ROLE_ADMIN` 게이트로 좁혔지만 관리자의 브라우저는 여전히 CSRF 대상이다. 개선안은 (A) API 를 세션이 아닌 별도 인증(토큰/헤더) 전용으로 못박거나 (B) `/api/v1/**` 도 CSRF 토큰을 요구 — 자동화가 이미 로그인 세션을 쓰므로 (B)가 자연스럽다. **완료 기준**: 인증 모드에서 크로스사이트 폼 제출로 인증 사용자의 업로드/삭제가 트리거되지 않음(테스트로 재현 → 차단), no-auth 회귀 0.
 
@@ -249,9 +225,9 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 관리자가 `/admin` 에서 **전 사용자의 대화 목록**(제목·최종 활동·턴 수·재사용 수·피드백)을 보고, 삭제하고, 그 대화의 검색 진단 수치로 내려간다(§7.3 의 "대화 관리" 선반영 — 계정 관리·감사 로그 뷰는 §7.3 에 남는다). **새 스키마 0개**: `ThreadAdminRepository`/`ThreadAdminService` · `fragments/admin-threads.html` · `fragments/admin-source-table.html`(진단 패널과 공유) · `AdminController` 의 `/admin/threads*`. **Step 1**(선행 버그 픽스): 대화를 통째로 지우면 좋아요로 승격된 `curated_qa` 행과 벡터가 남아 검색에 계속 기여했다 — `CuratedQaService.onThreadDeleted()` 를 사용자·관리자 경로가 함께 부른다.
 
-**소스 주석이 가리키는 결정**: **결정 3** — 답변 원문은 목록과 다른 쿼리(`findTurnContent()`)로만 나가고 내용이 실제로 나갈 때 `admin.thread.read` 감사를 남긴다(목록의 `TurnRow` 에는 `answer` 필드가 아예 없다 — 감추는 것을 템플릿이 아니라 구조로 강제한다, **Step 6**). **결정 4** — 대화 삭제는 큐레이션을 먼저 회수한다(수동 제안 행은 `source_turn_id IS NOT NULL` 로 배제). 그 밖의 결정·함정은 PITFALLS [`ThreadAdminRepository`](PITFALLS.md#repositorythreadadminrepositoryjava--servicethreadadminservicejava)·[대화 삭제](PITFALLS.md#대화). 재현 환경 함정: `spring-boot:run` 은 템플릿 사본을 캐시하므로 프래그먼트 수정은 `mvn compile` + 재시작이 필요하고, `-DDATA_DIR` 에 git-bash 경로(`/c/Users/...`)를 넘기면 엉뚱한 곳에 빈 DB 가 생긴다.
+**소스 주석이 가리키는 결정**: **결정 3** — 답변 원문은 목록과 다른 쿼리(`findTurnContent()`)로만 나가고 내용이 실제로 나갈 때 `admin.thread.read` 감사를 남긴다(목록의 `TurnRow` 에는 `answer` 필드가 아예 없다 — 감추는 것을 템플릿이 아니라 구조로 강제한다, **Step 6**). **결정 4** — 대화 삭제는 큐레이션을 먼저 회수한다(수동 제안 행은 `source_turn_id IS NOT NULL` 로 배제). 그 밖의 결정·함정은 PITFALLS [`ThreadAdminRepository`](PITFALLS.md#repositorythreadadminrepositoryjava--servicethreadadminservicejava)·[대화 삭제](PITFALLS.md#대화).
 
-**남은 열린 항목**: `curated_qa.source_thread_id` 인덱스(대화 목록에 큐레이션 수 열을 넣고 싶어질 때) · 전사 트랜스크립트 검색/뷰어(필요해지면 §7.3). (저장 시각의 존 통일은 2026-10-14, 고아 `turn_source_ref` 는 10-12 에 해소.)
+**남은 열린 항목**: `curated_qa.source_thread_id` 인덱스(대화 목록에 큐레이션 수 열을 넣고 싶어질 때) · 전사 트랜스크립트 검색/뷰어(필요해지면 §7.3).
 
 ---
 
@@ -277,9 +253,9 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 실배포 로그에서 시작했다: `Context size has been exceeded.` → `CircuitBreaker` 가 유일한 LOCAL 프로바이더를 30초 차단 → 그동안 들어온 **작아서 통과했을 요청까지** `All providers exhausted` 로 함께 실패. 원인은 프롬프트 크기인데 증상은 프로바이더 장애였다. 11단계로 풀었다 — 1 **차단하지 않기**(`isContextOverflow` — 결정적 오류라 기다려도 같다; `isTimeoutLike`·`isVisionUnsupported` 에 이은 세 번째 "프로바이더가 아픈 게 아니다") · 2 오류 구분(`LlmContextOverflowException`, `RAG-LLM-003`) · 3 프로바이더별 `max-tokens` · 4 컨텍스트 창 학습(`context-size` 선언 또는 `ContextWindowProbe`) · 5 토큰 추정 통일(`TokenEstimator`) · 6 입력 예산 사전 축소(`PromptBudget` + `AnswerService.fitToBudget()`) · 7 축소 사실 노출(`budgetNote` + 출처별 `미사용`) · 8 인덱싱 입력 예산(`PromptBudget.rewriteInputChars()` — 정작 사고가 났던 경로는 답변이 아니라 **MD 교정**이었다).
 
-- **9 축소 후 재시도(A4 · 소스의 `§6.26-9`, `withShrinkRetry()`)** — 1~8 이 모두 **추정** 위에 서 있다는 사실을 받아내는 마지막 층. 채팅 답변 스트리밍에서는 2026-10-02 에야 실제로 발동하기 시작했다(§6.29 3단계, `LlmErrorText`).
-- **10 창 재탐지(A5, `reprobeContextWindows()`)** — 4 가 기동 시 1회라 값이 낡는다. 고치는 시점을 **사람이 정하게** 한 이유는 예산이 스스로 움직이면 재현이 안 되기 때문이다. 2026-09-28 에 **컨텍스트 초과 시 자동 재탐지**(`ContextWindowRefresher` — 초과는 "기록된 창이 틀렸다"는 서버의 증언), 2026-10-19 부터 채팅 스트리밍의 초과도 재탐지를 건다. 커진 창은 초과가 나지 않으므로 여전히 버튼의 몫이다.
-- **11 `max-tokens` 핫 편집(A6, `MaxTokensCappingChatModel` 이 `IntSupplier` 로)** — 페이지에 마지막 남은 조회 전용 값이자 이 §의 거의 모든 계산이 파생되는 값이었다.
+- **9 축소 후 재시도(A4 · 소스의 `§6.26-9`, `withShrinkRetry()`)** — 1~8 이 모두 **추정** 위에 서 있다는 사실을 받아내는 마지막 층.
+- **10 창 재탐지(A5, `reprobeContextWindows()`)** — 기동 때 잰 창은 낡는다. 버튼 + 컨텍스트 초과 시 자동 재탐지(`ContextWindowRefresher`). 커진 창은 초과가 나지 않으므로 버튼의 몫이다.
+- **11 `max-tokens` 핫 편집(A6, `MaxTokensCappingChatModel` 이 `IntSupplier` 로)**.
 
 **자리가 `AnswerService` 인 이유**: 라우터는 호출을 불투명한 클로저로 받아 프롬프트 안을 못 보므로 무엇을 버릴지 아는 곳은 프롬프트를 조립하는 여기뿐이다. 라우터의 순회("다른 곳에 물어본다")와 층이 달라 방해하지 않는다("더 작게 물어본다"). 답변(블로킹·스트리밍·PROGRESSIVE)과 **검증** 양쪽에 걸린다.
 
@@ -295,13 +271,11 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 추론이 필요 없는 고빈도 백그라운드 호출(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 확장)을 신규 `TaskType.MICRO_TEXT`(`LIGHT_TEXT`/`BOTH`에 폴백)로 분리해 500MB급 소형 로컬 모델로 오프로딩 — 분류·직답은 품질 유지를 위해 큰 모델에 남김. 임베딩은 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)+서브배치 병렬화로 처리량 확장, 대화 응답 쪽은 §6.12 재사용. **전부 opt-in(미등록 시 기존 동작 그대로) → 회귀 0**. 설정·런북: [LLM_ROUTING.md §9](LLM_ROUTING.md) · [OPERATOR_MANUAL §3.2·§5.4](OPERATOR_MANUAL.md).
 
-**주의**: 임베딩 다중 엔드포인트는 **동일 모델·차원이어야 한다**(섞으면 인덱스 손상). 소형+대형 co-located 시 VRAM/RAM 합산 확인.
-
-**실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어로 §10.7.5 하네스 실행 시 색인된 골든셋 6건 전부 recall@10=1.0 — 소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인. 전체 baseline(0.962) 정식 대조는 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 재현 가능.
+**주의**: 임베딩 다중 엔드포인트는 **동일 모델·차원이어야 한다**(섞으면 인덱스 손상). 소형+대형 co-located 시 VRAM/RAM 합산 확인. 검증은 부분적이다(골든셋 중 색인된 6건 recall@10 1.0).
 
 ### 6.29 호출 지점별 생각(추론) 수준 제어 ✅ 완료 2026-10-07 (1~6단계) — 설계 2026-10-02
 
-> 압축 전 전문은 커밋 `7e2c4db` 의 이 절 · 설계 원문(목업·배지 조건표·사이트별 표, 소스 주석의 `⑦-다`~`⑦-바` 세부 라벨)은 커밋 `02f308b`·`c9a9ec4`. 동작은 CLAUDE.md(`ThinkingSite`·`ThinkingControlChatModel`·`ThinkingBudget`·`AnswerStreamer`·`ThinkingPreviewService`), 함정은 PITFALLS, 실측은 [THINKING_EVALUATION.md](THINKING_EVALUATION.md).
+> 설계 원문(소스 주석의 `⑦-다`~`⑦-바` 세부 라벨 포함)은 커밋 `02f308b`·`c9a9ec4`. 동작은 CLAUDE.md, 함정은 PITFALLS, 실측은 [THINKING_EVALUATION.md](THINKING_EVALUATION.md).
 
 **요약.** LLM 호출 지점 21곳마다 생각을 끔/낮게/중간/높게로 정하고 `/settings`(관리자 전용)에서 핫 편집한다. 실측(gemma-4-E2B)에서 생각이 이득을 준 곳은 응답 검증과 C 답변의 코드뿐이고 나머지는 같은 품질에 10~40배 느렸다 — **출하값은 속도를 택해 21곳 전부 끔**(2026-10-07 운영 결정, `ThinkingSiteTest` 가 고정). llama.cpp·gemma-4·Qwen3 는 켬/끔만 받아 세 단계가 켬으로 접히고, 접힘은 화면에 보인다.
 
@@ -313,17 +287,17 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 ### 6.30 프롬프트 축소 사다리 — 바닥값이 있는 단계형 (RAG 답변) ✅ 완료 2026-10-26 (설계 2026-10-21)
 
-> 설계 전문은 커밋 `d1f7290`, 압축 전 요약은 `7e2c4db` 의 이 절. 결정·함정은 [PITFALLS](PITFALLS.md#servicepromptladderjava), 측정은 [PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md).
+> 설계 전문은 커밋 `d1f7290`. 결정·함정은 [PITFALLS](PITFALLS.md#servicepromptladderjava), 측정은 [PROMPT_LADDER_EVALUATION.md](PROMPT_LADDER_EVALUATION.md).
 
 **요약.** 넘치면 늘 하위 문서부터 버리던 규칙을 **잃는 것이 작은 조각부터 자르고 문서에 top-k 50% 바닥**을 두는 사다리(`PromptLadder`, 순수 클래스)로 바꿨다. 사전 예산·축소 재시도·`/settings` 미리보기가 같은 `Plan` 을 부른다. **칸 1~7**(라벨은 소스 주석): 과거 질문 500자 → 직전 1턴 → 문서를 바닥까지 → 직전 Direct 답변 요약 → 이력 전부 → 문서 1개 → 최상위만(거절되면 축소 재시도). 멈춘 칸에서 앞 칸들을 되돌려 채운다. 범위는 RAG 답변만(Direct 는 2026-11-12 에 이력 칸만의 축소 재시도를 따로 받았다).
 
 **검증 실패 재시도(A~D)** — 판단은 모델이 실제로 본 문서("보낸 집합")로: A 교체는 그 안에서만 · B 조기 종료도 그 집합으로 · C 이력을 직전보다 더 줄이지 않음 · D 새로 들어온 문서를 나중에 뺀다. E(즉시 업그레이드)는 측정으로 넣지 않았다.
 
-**측정·남은 것.** 16K·12K 창 43사례에서 완료 기준 충족(긴 질문 첫 시도 문서 +1.0~1.2 · 재시도·LLM 호출 감소). 남은 것: 서버 쪽 초과를 좁게 띄운 실서버로 한 번 · 칸 1·4 의 세부 손실 사례. 질문 한도 연관 작업(③ 과거 질문 500자 · ④ Direct 축소 재시도)은 2026-11-12 에 닫혔다.
+**측정·남은 것.** 16K·12K 창 43사례에서 완료 기준 충족(긴 질문 첫 시도 문서 +1.0~1.2 · 재시도·LLM 호출 감소). 남은 것: 서버 쪽 초과를 좁게 띄운 실서버로 한 번 · 칸 1·4 의 세부 손실 사례.
 
 ### 6.31 이력 제외 체크박스 — 이전 대화 대신 문서를 더 (RAG 답변) ✅ 완료 2026-10-27 (설계 2026-10-23)
 
-> 설계 전문은 커밋 `d1f7290`, 압축 전 요약은 `7e2c4db`. 결정·함정은 [PITFALLS](PITFALLS.md#이력-제외-631), 측정은 [PROMPT_LADDER_EVALUATION.md §8](PROMPT_LADDER_EVALUATION.md), 사용법은 USER_MANUAL §2.2.
+> 설계 전문은 커밋 `d1f7290`. 결정·함정은 [PITFALLS](PITFALLS.md#이력-제외-631), 측정은 [PROMPT_LADDER_EVALUATION.md §8](PROMPT_LADDER_EVALUATION.md), 사용법은 USER_MANUAL §2.2.
 
 **요약.** 입력줄 체크박스(기본 꺼짐)를 켜면 그 턴의 `[이전 대화]` 를 빼고 그 자리만큼(`이력 상한 ÷ chunk-size`, 기본 +4) 문서를 더 싣는다 — §6.30 의 수동 쪽. 부스트는 검증 쪽 상한 둘(발췌 글자 상한 · 검색 뒤 실제 발췌 예산) 안에서만. Direct 는 이력만 뺀다(2026-11-13). 꺼진 상태 프롬프트는 `AnswerPromptGoldenTest` 가 바이트 단위로 고정, 저장은 켠 턴만(V11).
 
@@ -331,15 +305,15 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 
 ### 6.32 긴 질문 검색 · 그림 설명 · 청크 그림 편집 ✅ 완료 2026-11-04
 
-> 압축 전 전문은 커밋 `7e2c4db` 의 이 절. 동작은 CLAUDE.md(`LongQuestionQuery`·`QuestionLimit`·`MarkdownNoiseNormalizer`·`VisionDescriptionService`·`ChunkImageEditor`), 함정은 PITFALLS.
+> 동작은 CLAUDE.md(`LongQuestionQuery`·`QuestionLimit`·`MarkdownNoiseNormalizer`·`VisionDescriptionService`·`ChunkImageEditor`), 함정은 PITFALLS.
 
 **요약.** 공통점은 저장된 원문과 검색·LLM 용 형태를 갈라 두는 것. **①** 질문 한도 10,000자 + 창 기준 상한(`QuestionLimit`), 500자 초과 질문은 검색에만 결정적 질의(앞 300+뒤 200 · 낱말 20개), 1,000자 초과는 LLM 검색문·키워드 추가(턴당 전처리 LLM 호출은 여전히 하나) · **②** 답변·검증 프롬프트에서만 이미지 경로·페이지 표지 축약(`normalizeForPrompt`, 임베딩·해시는 그대로) · **③** 그림 설명 프롬프트 단일화(`형식: 한두 문장`) · `/admin` 청크 그림 추가·교체·삭제(텍스트 변환, 저장은 청크 「저장」 하나) · 이미지 유형 분류기 제거.
 
 **열린 항목**: 긴 질문 검색 품질 미측정(골든셋 없음) · 새 설명 프롬프트의 실제 품질과 옛 설명의 재생성 · `images/chunks/` 고아 파일 정리 없음.
 
-### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 구현 완료(0~6단계, 2026-11-06~18) — 실사용 2주 관측·기본값 판단이 남음 (6e 검토 화면 · `remove`/`revise` 닫기 2026-11-23)
+### 6.33 Agent·MCP 전환 — 검색 개선 · Tool · 고정 워크플로 🟡 구현 완료(0~6단계, 2026-11-06~23) — 실사용 2주 관측·기본값 판단이 남음
 
-> 구조·Tool 명세·시퀀스·클래스·리스크·실측 표는 [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md), 측정은 [SEARCH_EVALUATION.md](SEARCH_EVALUATION.md) §7 · [AGENT_EVALUATION.md](AGENT_EVALUATION.md), 동작은 CLAUDE.md 표, 함정은 PITFALLS("자연어 지식 수정 6a~6d" 외), 사용은 ADMIN_MANUAL §10. 압축 전 결정 표·단계 요약 전문은 커밋 `7e2c4db` 의 이 절.
+> 구조·Tool 명세·시퀀스·클래스·리스크·실측 표는 [AGENT_MCP_DESIGN.md](AGENT_MCP_DESIGN.md), 측정은 [SEARCH_EVALUATION.md](SEARCH_EVALUATION.md) §7 · [AGENT_EVALUATION.md](AGENT_EVALUATION.md) · [KNOWLEDGE_EDIT_EVALUATION.md](KNOWLEDGE_EDIT_EVALUATION.md), 동작은 CLAUDE.md 표, 함정은 PITFALLS, 사용은 ADMIN_MANUAL §10.
 
 **무엇을 왜.** 고정 순서 `AgentGraph` 위에서 LLM 이 Tool 을 골라 문서 검색·카탈로그 조회로 답하고, 영향도 분석·문서 유지보수·자연어 지식 수정까지 하게 한다.
 
@@ -355,12 +329,11 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 | 2 | MCP Server | ✅ 11-06 — **MCP Inspector·Claude Code 연결 미확인** |
 | 3 | Tool 선택(`ToolPlanService`·`TOOL` 노드, 기본 꺼짐) | ✅ 11-10 — 앱 경로 49건 비관리자 47 · 관리자 46, 문서 질문의 잘못된 우회 0/26 |
 | 4 | 영향도(4a) · 유지보수 수정안(4b) · 적용(4b-2) | ✅ 11-10 — 실제 코퍼스 복사본 종단 확인([scripts/maintenance_e2e](../scripts/maintenance_e2e/README.md)), 영향도 회수 24/24 |
-| 5 | Tool 호출 추적(`agent_tool_call` V14) · 매뉴얼 | 🟡 11-11 구현 — **실사용 2주 관측 · 기본값 판단 · 백업 되돌리기 리허설 남음** |
-| 6 | 자연어 지식 수정 — 6a 관리자 고치기·줄 구간 MD 되쓰기(V16) · 6b MCP 제안 Tool · 6c 앱 안 워크플로 · 6d 신고 연결(V17) · 6e 수정안 검토 화면(V18) | 🟡 6a~6c 11-17 · 6d 11-18 구현 — **6c 사전 평가 11-20(수용률 포함, 판단표 둘째 줄) · 6e 설계 11-20 · **구현 11-23**(일괄 적용은 `deprecate`·`add_note` 만, 4b 글자 치환의 문서 단위 승인은 사라짐) · 실모델·종단·MCP 클라이언트 확인 남음** |
+| 5 | Tool 호출 추적(`agent_tool_call` V14) · 매뉴얼 | 🟡 11-11 구현 — **실사용 2주 관측 · 기본값 판단 남음** |
+| 6 | 자연어 지식 수정 — 6a 관리자 고치기·줄 구간 MD 되쓰기(V16) · 6b MCP 제안 Tool · 6c 앱 안 워크플로 · 6d 신고 연결(V17) · 6e 수정안 검토 화면(V18) | ✅ 11-17~23 — 6c 사전 평가 11-20(`deprecate`·`add_note` 만 지시문으로, `remove`·`revise` 는 유형을 고른 폼만) · 6e 실코퍼스 종단·백업 되돌리기 리허설 11-23 · **한글 IME·MCP 클라이언트 확인 남음** |
 
-- **4단계 요점**: 영향도는 전수 조회 → 청크별 판정 → **인용 검증은 코드**(단어 경계 가드) · 유지보수는 결정적 치환(`TermReplacement`) + 불변식(마커·펜스), 선택 `semantic`·`caseVariants` · 적용은 문서 잠금(`DocumentWriteLocks`, 재인덱싱과 공유) → **DB 백업** → 임베딩 먼저 → 변환 MD 되쓰기 · 채팅의 관리자 요청은 되묻고 바로 다음 "네" 일 때만. 종단 확인이 잡은 결함: `heading` 의 옛 말 · sqlite-vec `add()` 의 선삭제(임베딩 실패 시 청크 소실).
-- **6단계 요점**: LLM 은 본문을 다시 쓰지 않고 **원문 인용에 고정된 편집**을 낸다(`AnchoredEdit`) · 넣는 문장은 다듬되 사실은 G10 으로 대조(어기면 지시문 문장 그대로) · 사용 중단은 원문을 지우지 않는다 · 청크 삭제는 남은 본문이 전혀 없을 때만 · 해석 값은 지시문의 부분 문자열 · **6d**: `/admin` 신고 상세의 「이 신고로 수정안 만들기」 — 코멘트를 지시문으로 채우고 **대상은 그 청크 하나**(후보 찾기·판정 없음, 글자 바꾸기도 그 청크만), 그 수정안이 적용되면 신고가 「처리 완료」로 닫힌다(`change_job.report_chunk_id`). 6c 는 **사전 평가 없이** 네 유형 모두 열었다(사용자 요청).
-- **6e 수정안 검토 화면 (설계 2026-11-20, 구현 2026-11-23)** — 구현: `AdminChangeReviewController` · `ReviewRules`(R10) · `ReviewDiff`(R5) · `ChangeApplyService.confirmOne`/`approveBatch`/순차 실행기 · V18. 설계와 다른 곳(좁은 화면은 탭이 아니라 위아래로 쌓기 · 근거 인용 밑줄 없음 · 임시 저장 응답 204)과 함정은 PITFALLS 「수정안 검토 화면 6e」. 검증: 단위·슬라이스 25건 + 브라우저(시드 DB, 임베딩 서버 없음 — 적용은 `failed` 로 끝나는 것까지). 설계 요약 — 사전 평가 수용률이 높아도(E4B `deprecate`+`add_note` 94.6%) Agent 에게 적용까지 맡기지 않고, 작업이 끝나면 사람이 청크 하나씩 보고 고쳐 확정한다. 화면은 `/admin/change-jobs/{id}/review`, 3분할이다(목록 1 : 수정 전 3 : 수정 후 3). 목록에서 고르면 수정 전·후가 함께 바뀌고 사라진·더한 곳은 배경색으로 보인다(`ChunkDiff` 를 서버가 계산하고, 수정 후 칸은 투명 `textarea` + 강조 층이라 입력이 2초 멈추면 다시 칠한다). [확인] 은 **그 청크 하나**를 승인하고 작업별 순차 실행기가 적용한다: 맥락·키워드 재생성(사람이 고쳤을 때 — `KeywordExtractor` 1회, 실패해도 옛 맥락으로 적용) → 문서 잠금 → DB 백업(**작업당 한 번**, `V18 change_job.backup_name` — 백업 보존 7개를 정기 백업과 함께 쓰므로 확인마다 백업하면 정기 백업을 밀어낸다) → 임베딩 먼저 → 저장·FTS → 그 청크의 변환 MD 줄 구간 되쓰기. 사람 편집은 G2·G6 만, 낡은 수정안은 확인 불가, 동시 편집은 기대 해시로 409. **일괄 적용은 원문을 건드리지 않는 요청에만** — 자연어 `deprecate`·`add_note` 작업의 "넣기만" 수정안(`ChunkDiff` 에 사라진 줄 0)에 [일괄 적용] 이 열리고, `remove`·`revise`·글자 바꾸기(4b)·외부 제안(6b)이 섞인 요청은 **모두 하나씩 직접 확인**한다. 같은 규칙을 작업 화면의 문서 단위 승인에도 서버가 건다(4b 글자 치환도 이제 하나씩 — 2026-11-20 확정). 결정 R1~R10·엔드포인트·완료 기준은 설계서 §10.15.
+- **4단계 요점**: 영향도는 전수 조회 → 청크별 판정 → **인용 검증은 코드**(단어 경계 가드) · 유지보수는 결정적 치환(`TermReplacement`) + 불변식(마커·펜스) · 적용은 문서 잠금 → **DB 백업** → 임베딩 먼저 → 변환 MD 되쓰기 · 채팅의 관리자 요청은 되묻고 바로 다음 "네" 일 때만.
+- **6단계 요점**: LLM 은 본문을 다시 쓰지 않고 **원문 인용에 고정된 편집**을 낸다(`AnchoredEdit`) · 넣는 문장의 사실은 G10 으로 대조 · 사용 중단은 원문을 지우지 않는다 · 6d 신고에서 만든 작업은 그 청크 하나가 대상이고 적용되면 신고가 닫힌다 · **6e**: Agent 에게 적용까지 맡기지 않고 사람이 청크 하나씩 보고 고쳐 확정한다(`/admin/change-jobs/{id}/review`, DB 백업은 작업당 한 번) — **일괄 적용은 원문을 건드리지 않는 `deprecate`·`add_note` 의 "넣기만" 수정안에만**, 나머지는 모두 하나씩(결정 R1~R10 은 설계서 §10.15, 함정은 PITFALLS 「수정안 검토 화면 6e」).
 - **소형 모델(E2B)의 한계**: 의미 변경 수확이 작다 · 대상 없는 짧은 수정 명령은 검색으로 빠지는 일이 많다 — 화면 요청이 대안.
 
 **하지 않기로 한 것**: LLM 자율 Tool 루프(재개 신호: 스스로 Tool 을 이어 부르는 모델이 코드 주도보다 앞서는 것이 측정될 때) · LM Studio 의 생각 끄기(오류 없이 무시 — 알려진 제약, 설계서 부록 A.2) · ReAct 교체 · 자유 SQL Tool · 자기 서버를 MCP Client 로 호출 · MCP 별도 프로세스 · 스트리밍에 tools 싣기 · C 모드 변경.
@@ -369,7 +342,7 @@ no-auth 배포에서 모든 방문자가 게스트 id 하나를 공유해 스레
 - 2주 관측의 판정 기준은 **폴백 비율**과 턴 지연(추적 패널은 질문 본문을 담지 않는다) · 실제 질문 로그로 Tool 선택 재측정.
 - 청크 5개가 비교형·종합형 질문에 모자라면 컷을 6~7 로(핫 편집) · 리랭크 뒤 큐레이션 RRF 가중치가 사라진다 · 문턱 0.0 은 모델 원점수라 모델을 바꾸면 다시 잰다.
 - Chroma 백엔드: `AdminService.collectionFor()` 의 `manual_` 과 `VectorStoreRegistry` 컬렉션 이름 불일치(미확인) — 유지보수를 Chroma 에서 지원하기 전에 확인.
-- 영향도 실측의 가짜 인용 걸러냄 미확인(모델이 지어낸 적이 없었다) · 더 큰 모델의 의미 변경 품질. (임베딩 실패 주입의 종단 확인은 2026-11-23 검토 화면 경로로 했다 — `failed`, 청크·벡터·FTS 불변.)
+- 영향도 실측의 가짜 인용 걸러냄 미확인(모델이 지어낸 적이 없었다) · 더 큰 모델의 의미 변경 품질.
 - 6단계: 6e 검토 화면의 한글 IME 입력 확인 · MCP 클라이언트 확인 · **겹침 짝**(중요도 낮음 — 기본 `CHUNK_OVERLAP=0`).
 
 ---
@@ -414,7 +387,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 - **Step 5.1~5.8** — `VectorStoreProvider` 추상화(Chroma 무행위 리팩토링) · sqlite-vec 확장 로딩(`DataSourceConfig`, `SqliteVecVerifier`) · 스키마 초기화(`SqliteVecSchemaInitializer`, 차원 미설정 시 fail-fast) · `SqliteVecVectorStoreProvider`(upsert 미지원이라 add = DELETE 후 INSERT) · 조건부 빈 스위치 · 설정 외부화(`.env`·compose profiles) · 데이터 이전(백엔드 전환은 항상 재인덱싱 — 원본 보존·무손실) · `/admin` 백엔드 공통 상태 카드와 청크 브라우징 패리티.
 - **Step 5.9 태그 기반 검색 스코프** — 업로드 다중 태그 + 채팅의 태그 선택으로 **엄격 AND 필터**(Chroma·sqlite-vec·하이브리드 공통). provider 가 배열 포함 연산자를 지원하지 않아 `RetrievalService` 가 융합 직후 Java post-filter 로 걸고 결과 부족에 대비해 `candidateK` 를 선제 확대한다(`app.search-tag-candidate-multiplier`). 태그의 **권위 있는 출처는 `doc_registry.tags`** 다(Key Constraints 참고).
-- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** `SQLITE_VEC_DB_PATH` 로 벡터/FTS 를 별도 `vector.db` 로 분리하려 했으나 **한 번도 실효된 적이 없다** — `vectorJdbcTemplate` 빈이 정의되는 순간 Boot 의 `JdbcTemplate` 자동설정이 물러나 운영 저장소까지 전부 `vector.db` 에 썼고(2026-09-04 확인) `memory.db` 는 Flyway 만 닿는 빈 파일이었다. 게다가 `QuestionReuseRepository.findSourcePreviewRows()` 가 운영 테이블과 FTS/벡터 테이블을 SQL 하나로 조인하게 되어, 배선만 고치면 기존 배포는 데이터가 사라진 것처럼 보였다. 측정된 적 없는 락 분리를 위해 그 조인 해소 + 이전을 하는 대신 **DataSource 를 하나로 합쳤다**(`DataSourceConfig`): 기본 `{DATA_DIR}/memory.db` 하나, 옛 스위치 값은 sqlite-vec 에서 **그 한 파일의 경로**로만 읽는다(데이터가 전부 거기 있으므로 이전 불필요). 이력 없는 옛 파일은 `spring.flyway.baseline-version=3`(`FlywayBaselineTest`). 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 운영자 절차는 OPERATOR_MANUAL §6.2.1, 재개 신호는 부록 결정표.
+- **Step 5.10 sqlite-vec 운영 DB 분리 → ↩ 2026-09-28 단일 파일로 환원.** 분리는 배선 사고로 한 번도 실효된 적이 없어(운영 테이블까지 전부 벡터 파일로 갔다) **DataSource 를 하나로 합쳤다** — `{DATA_DIR}/memory.db` 하나, 옛 스위치 `SQLITE_VEC_DB_PATH` 는 그 한 파일의 경로로만 읽는다. 경위·함정은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource), 재개 신호는 부록 결정표.
 
 ---
 
@@ -463,7 +436,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | 제외 항목 | 원래 개선안 | 제외 사유 | 재개 신호 |
 |---|---|---|---|
 | **sqlite-vec 배치 검색 단일 스캔** | vec0 brute-force KNN(O(n))을 다중 쿼리 1회 스캔으로 최적화 | 현 코퍼스 규모에선 병목이 임베딩 배치 생성(1 HTTP)이고 JDBC 루프는 수 ms라 체감 이득이 작다(JDBC 루프 N회는 수 ms — 실측 후 CTE 전환을 검토한다는 같은 판단) | 대규모 코퍼스에서 검색 지연 실측 악화 |
-| **Cross-Encoder 리랭커** | LLM 리랭커를 ONNX bge-reranker 등 로컬 cross-encoder로 교체 | ONNX 런타임/모델 도입 + 폐쇄망 모델 파일 조달 비용이 크고, 현 opt-in `Optional<RerankerService>` LLM 리랭커로 충분. **인터페이스 유지 구조라 필요 시 구현만 교체 가능**(지금 만들 이유는 없음) | LLM 리랭크 정확도/지연 불만이 실사용에서 반복 보고. **2026-11-05 재개(§6.33)** — 임베딩과 같은 `llama-server --reranking` 이면 ONNX 가 필요 없고 GGUF 도 이미 있어 제외 사유가 사라졌다. LLM 리랭커는 p50 15.7초에 점수가 없어 재검색 판단에 쓸 수 없다 |
+| ~~**Cross-Encoder 리랭커**~~ | — | — | **2026-11-05 재개 · 구현 완료(§6.33)** — `llama-server --reranking` 이면 ONNX 가 필요 없어 제외 사유(런타임·모델 조달)가 사라졌다 |
 | **시맨틱 응답 캐시** | 질문 임베딩 유사도 > 임계값이면 캐시 답변 반환 | stale 답변 위험 + 무효화 복잡도(재인덱싱·버전 변경·§6.8 DISLIKE 연동) 대비 이득이 불확실 | FAQ성 반복 트래픽이 지배적이고 지연이 문제화될 때 |
 
 > **§10.10과의 관계**: 아래 §10.10(좋아요 기반 큐레이션 Q&A)이 "시맨틱 응답 캐시"의 stale 위험을 우회한 변형이다 — 캐시처럼 답변을 verbatim 반환하지 않고 인간이 편집·검수한 Q&A를 **가중 RRF 축의 근거**로만 주입하므로 무효화 복잡도가 낮다. 순수 자동 캐시(위 항목)는 여전히 재개 신호 대기.
@@ -472,7 +445,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 세부 산출물은 위 표 참고. 보완 메모: §10.8.2 배치 실패 시 곧장 개별 TF 폴백 · §10.8.3 트랜잭션 결합으로 고아 `vec_embeddings` 행 방지 · §10.9.2 BLOB 직렬화는 기존 데이터와 호환(백필 불필요, 백엔드 전환 시 문서 1건으로 먼저 확인 권장) · §10.9.4 캐시 키는 SHA-256 해시로 고정 크기화.
 
-§10.7.5 의 실 코퍼스 골든셋(26문항) + recall@k/nDCG@k 하네스(`-Dsearch-eval.enabled=true`)로 **2026-07-16 baseline recall@10 0.962 / nDCG@10 0.810**(유일한 미스 `sample-02`)을 확보해 §10.7.2·§10.7.3 의 무측정 결정을 데이터로 재검증했다. **재측정**([SEARCH_EVALUATION.md](SEARCH_EVALUATION.md)): 2026-10-12 코퍼스가 23종·2,388청크로 커진 뒤에도 0.962(운영 설정 + 질의 확장은 1.000) — 그 전에 골든셋 정답 문자열 6개를 바로잡았고(고치기 전엔 0.923) 하네스가 매번 코퍼스 점검(정답이 코퍼스에 있는 케이스 수 = recall 상한)을 찍는다 · 10-13 키워드 검색어 개선(조사·어미를 뗀 어간을 원래 형태 옆에 더함 — 3글자 이상 토큰의 26% 가 0건이었다) 뒤 두 구성 모두 **1.000**(§3.5). **질의 확장(MultiQuery)은 켠 채 유지**(2026-10-12) — 이 코퍼스에서 되찾는 것은 1건뿐이지만 대가(검색당 약 1.1초 + LLM 1회)가 답변 생성(12~50초)에 비해 작다. 코퍼스가 더 커지면 확장의 몫이 커질 수 있다.
+§10.7.5 의 골든셋(26문항) + recall@k/nDCG@k 하네스(`-Dsearch-eval.enabled=true`)가 검색 튜닝의 기준이다. baseline recall@10 0.962(2026-07-16) → 키워드 검색어에 어간 추가 뒤 **1.000**(2026-10-13). **질의 확장(MultiQuery)은 켠 채 유지** — 되찾는 것은 1건뿐이지만 대가(검색당 약 1.1초)가 답변 생성(12~50초)에 비해 작다. 측정 이력은 [SEARCH_EVALUATION.md](SEARCH_EVALUATION.md).
 
 ---
 
@@ -482,19 +455,15 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 **확정된 정책**: 가시성 = 전체 공유, 답변은 **LLM 근거로 주입**(오답 증폭 방지) · 편집은 §10.11 에서 바뀌었다(본인은 **지식 제안 페이지**에서만, 관리자는 `/admin` 에서 전부) · **대화 삭제 시 큐레이션도 함께 회수**(§6.25 — 최초 정책은 반대였다; 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 더 혼란스럽고 턴 삭제는 처음부터 회수하고 있었다. `CuratedQaService.onThreadDeleted()` 를 사용자·관리자 경로가 함께 부르고 `origin='manual'` 제안은 제외) · **문서 삭제와는 연동 없음**.
 
-**열린 항목 (b)** — doc_id 인용 추적 + 문서 삭제 시 재검토 플래그: 지금은 `turn_source_ref`(§6.23)가 좋아요 출신 행의 출처 청크·`doc_id` 를 갖지만(손으로 쓴 제안에는 출처 문서가 없다) 연동은 미착수 — stale 인용이 실사용에서 보고되면 착수. (a) 큐레이션 축 문턱 별도화(`search-curated-qa-min-similarity` 기본 0.5 + 키워드 전용 히트는 내용어 둘 — `gateCurated()`, 2026-10-13) · (c) BM25 축 편입(2026-09-07 — `indexFts()`, `"curated"` 네임스페이스로 한 번 더 묻는다, CLAUDE.md Key Constraints) · (d) 골든셋 재측정(2026-10-12, 0.962 그대로) · (e) 프라이버시 트레이드오프는 §6.25 회수 정책으로 해소.
-
----
-
-> **§10.11 · §10.12 · §10.13 구현 순서 — `10.11 → 10.13 → 10.12`** (셋 다 완료). §10.13 이 Direct 답변(문서에 근거하지 않은 텍스트)을 이력에 많이 남기고 §10.12 가 그 이력을 재료로 검색어를 만들어, §10.12 를 먼저 만들면 깨끗한 환경에서 통과시킨 뒤 §10.13 이 조건을 바꿔 오염이 나중에 드러난다. §10.11 이 먼저인 이유는 가장 위험한 구멍(무검토 유입)을 막는 사고 예방이라서다.
+**열린 항목 (b)** — doc_id 인용 추적 + 문서 삭제 시 재검토 플래그: `turn_source_ref`(§6.23)가 좋아요 출신 행의 출처 청크를 갖지만 연동은 미착수 — stale 인용이 실사용에서 보고되면 착수. (a)·(c)·(d)·(e) 는 해소(축 문턱 별도화 `gateCurated()` · BM25 축 편입 · 골든셋 재측정 · 삭제 회수 정책).
 
 ### 10.11 좋아요 → 지식 제안 경유 (§10.10 유입 경로 대체) ✅ 완료 (2026-09-02)
 
 **무엇을 왜.** 검색 코퍼스로 들어가는 문이 둘인데 경비가 정반대였다 — 제안은 관리자 승인 필수, 좋아요는 게이트 없이 3초 뒤 반영. 가장 날카로운 모양이 **문서를 하나도 안 본 Direct 답변이 좋아요 한 번에 전체 검색 지식이 되는 것**이었다. `direct_mode` 가드를 박는 대신 **문을 하나로 모았다** — 좋아요는 제안 폼을 열어 줄 뿐이고 `curated_qa` 에 쓰는 경로는 관리자 승인 둘(`createFromSubmission`/`createFromLikedTurn`)뿐이다.
 
-**유지해야 할 결정**: **채팅 = 감상, 제안 페이지 = 지식 관리**(채팅은 큐레이션 상태를 표시하지 않는다 — 좋아요 확인의 "예"는 좋아요 + 프리필 이동, "아니오"는 좋아요 취소) · **저장 모양이 출처마다 다르다**(손으로 쓴 제안 = 승인 시 N개 행, 좋아요 출신 = turn 키 행 하나 → 임베딩 시점에 벡터 N개 — 좋아요 출신을 `insertManual` 로 태우면 `UNIQUE(source_turn_id)`·삭제 회수·재승인이 함께 죽는다) · 승인 시 `source_submission_id` 필수(제안의 상태가 전부 그 컬럼으로 세어진다) · **수정은 등록본을 내리지 않고 재승인이 교체**한다(정책 3 — 제안은 이전 행을 먼저 내리고 새 id, 좋아요 출신은 제자리 upsert: 먼저 내리면 백그라운드 벡터 삭제가 방금 쓴 벡터를 지운다) · 좋아요 취소는 회수하지 않고 턴/대화 삭제는 **무조건** 회수한다 · 좋아요 출신은 pending 상한에서 제외한다. 정책 변경 3건 적용: ① 큐레이션 검색축 통합 ② C 개방 + S 사유 교체(`allowsCuration()` → `allowsSubmission()`) ③ 수정 중에도 등록본 유지. **계획이 틀렸던 지점**: `source_submission_id` 가 빠진 증상은 "승인 직후 회수됨"이 아니라 **청크 0개짜리 '등록 완료'** 였다(더 눈에 덜 띈다) · `chunkCount()` 를 행 수에서 `SUM(chunk_count)` 로 바꿨다.
+**유지해야 할 결정**: **채팅 = 감상, 제안 페이지 = 지식 관리**(채팅은 큐레이션 상태를 표시하지 않는다 — 좋아요 확인의 "예"는 좋아요 + 프리필 이동, "아니오"는 좋아요 취소) · **저장 모양이 출처마다 다르다**(손으로 쓴 제안 = 승인 시 N개 행, 좋아요 출신 = turn 키 행 하나 → 임베딩 시점에 벡터 N개 — 좋아요 출신을 `insertManual` 로 태우면 `UNIQUE(source_turn_id)`·삭제 회수·재승인이 함께 죽는다) · 승인 시 `source_submission_id` 필수(제안의 상태가 전부 그 컬럼으로 세어진다) · **수정은 등록본을 내리지 않고 재승인이 교체**한다(정책 3 — 제안은 이전 행을 먼저 내리고 새 id, 좋아요 출신은 제자리 upsert: 먼저 내리면 백그라운드 벡터 삭제가 방금 쓴 벡터를 지운다) · 좋아요 취소는 회수하지 않고 턴/대화 삭제는 **무조건** 회수한다 · 좋아요 출신은 pending 상한에서 제외한다.
 
-**열린 항목**: §10.10 (b)(문서 삭제 연동)만 남았다. 기존 `origin='like'` 활성 행은 마이그레이션하지 않았다(이미 `/admin` 에서 보이고 회수되며 합쳐진 축의 단일 가중치로 검색된다).
+**열린 항목**: §10.10 (b)(문서 삭제 연동)만 남았다.
 
 ---
 
@@ -512,7 +481,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 **무엇을 왜.** Direct 답변의 프롬프트에는 `[검색된 문서]` 블록이 없다. 기본 설정에서 그 자리는 `topK 10 × chunk-size 1,500` ≈ 15,000자인데 이력 상한은 모드와 무관하게 고정(당시 5,000자)이라 이력만으로 답해야 하는 모드가 이력을 가장 적게 받았다. 규칙과 렌더는 `HistoryPolicy` 하나 — 근거·함정은 PITFALLS [`HistoryPolicy`](PITFALLS.md#servicehistorypolicyjava).
 
-**유지해야 할 결정**: 규칙은 "Direct 라서"가 아니라 **"문서 자리가 비어서"** 다(`이력 상한 = 입력 예산 − 문서가 차지할 자리`) · 1차 적용이 Direct 뿐인 이유는 모드가 아니라 **타이밍**이다(이력은 검색보다 먼저 로딩되고 Direct 만 문서 0 이 확정 — `meta` 분류는 Direct 로 세지 않는다) · 두 이력 경로가 같은 규칙을 읽는다(갈리면 요약 캐시 TTL 을 기점으로 맥락이 바뀐다) · 렌더는 두 축의 조합(지금 묻는 턴이 *얼마나*, 이전 턴의 모드가 *무엇을*) · 캡 제거와 예산 인상은 한 커밋 · 1단계(DN 도 `## 요약` 을 낸다)는 강제하지 않고 형식 미준수는 전문 폴백으로 수렴한다. **계획이 틀렸던 지점**: 좁은 창에서는 고정값보다 **작게** 나오고 그것이 옳다(Direct 경로에 예산 가드가 없어 고정값이 이미 창을 넘기고 있었다) · `ResponseModeBranchConventionTest` 는 텍스트 검사라 주석의 금지 패턴에도 빌드가 깨진다. **이후(2026-09-04)**: 이전 턴이 **Direct 였으면** RAG 로 물어도 전문을 싣는다(그 턴에는 복제될 문서가 없었다) · 프롬프트에 싣는 턴 수 상한 `HistoryPolicy.promptTurnCap()`(가져오는 창의 절반, 기본 5).
+**유지해야 할 결정**: 규칙은 "Direct 라서"가 아니라 **"문서 자리가 비어서"** 다(`이력 상한 = 입력 예산 − 문서가 차지할 자리`) · 1차 적용이 Direct 뿐인 이유는 모드가 아니라 **타이밍**이다(이력은 검색보다 먼저 로딩되고 Direct 만 문서 0 이 확정 — `meta` 분류는 Direct 로 세지 않는다) · 두 이력 경로가 같은 규칙을 읽는다(갈리면 요약 캐시 TTL 을 기점으로 맥락이 바뀐다) · 렌더는 두 축의 조합(지금 묻는 턴이 *얼마나*, 이전 턴의 모드가 *무엇을*) · 좁은 창에서는 고정값보다 **작게** 나오고 그것이 옳다. 이후(2026-09-04): 이전 턴이 **Direct 였으면** RAG 로 물어도 전문을 싣는다 · 프롬프트 턴 수 상한 `HistoryPolicy.promptTurnCap()`(기본 5).
 
 **열린 항목**: (a) RAG 턴에도 같은 계산을 적용할지(로딩 시점엔 `topK × chunk-size` 로 과대 추정할 수밖에 없다) · (b) RAG 턴에 대한 두 경로의 분량 차이 — 재현성 문제가 보고되면 착수 · (c) 넓어진 사실을 보일지(줄어든 쪽만 `budgetNote` 로 말한다).
 
@@ -524,7 +493,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 **무엇을 왜.** 출처 배지로 원문까지 연 사용자가 **청크가 틀렸거나 오래됐다는 것을 발견해도 말할 곳이 없었다** — 👍/👎 는 답변 평가라 청크를 담지 못하고, "현재 대화에서 이 청크 제거"는 표시 전용 동작이라 틀린 청크가 그 대화에서만 치워지고 다음 사람에게 똑같이 검색됐다. §10.11 이 코퍼스에 **넣는** 문을 관리자 승인 하나로 모았다면 이것은 **"고치자"의 문**을 같은 모양(사용자 제출 → 관리자 판단)으로 낸다. 구현: `ChunkReportRepository`(`chunk_report`)·`ChunkReportService`·`ChunkReportController`(`POST /ui/chunk-reports`)·`AdminController` 의 `/admin/chunk-reports/**` 넷 · 채팅 원문 모달의 🚩 버튼 · `/admin` 의 청크 단위 대기열 · 헤더 배지.
 
-**유지해야 할 결정**: 신고는 **순수 대기열**이다(검색·재사용·벡터/FTS 어디도 바꾸지 않고 반영은 관리자가 청크를 실제로 고칠 때) · 신고자는 고칠 수 없다(사유 `WRONG`·`OUTDATED`·`BROKEN`·`OTHER` + 필수 코멘트 500자) · 관리자는 **청크 단위**로 본다(배지도 열린 신고를 가진 청크 수) · 중복 방지 키는 **(청크, 신고자, 대화)**(`guest-identity=shared` 면 전 방문자가 같은 id 라 청크당 한 명만 신고할 수 있게 되기 때문) · "수정됨/삭제됨"은 저장하지 않고 조회 시점에 파생(`chunk_hash` 대조) · 관리자 조치는 판정만 · 신고자 알림은 범위 밖. **두 동작의 경계는 라벨이 말한다** — *제거*(「이 답변과 상관없는 청크」, 참여도 0%일 때만 노출)와 *신고*(「내용이 틀렸거나 업데이트가 필요함」, 항상 노출); 사유 코드에 "질문과 무관"을 두면 표시 전용 동작이 관리자 대기열로 흘러든다. **계획대로 되지 않은 지점**: `fragments/message-assistant.html` 만 `data-chunk-id` 를 빠뜨려 논스트리밍 폴백에서 출처를 눌러도 모달이 안 열렸다(`ChatControllerHtmxTest` 가 고정) · `AdminController` 생성자에 서비스를 더하면 기존 WebMvc 테스트 둘의 컨텍스트가 안 뜬다 · `vec_document_chunks` 가 없는 배포에서는 쿼리 자체가 예외가 된다(테이블 존재 확인 후 조회).
+**유지해야 할 결정**: 신고는 **순수 대기열**이다(검색·재사용·벡터/FTS 어디도 바꾸지 않고 반영은 관리자가 청크를 실제로 고칠 때) · 신고자는 고칠 수 없다(사유 `WRONG`·`OUTDATED`·`BROKEN`·`OTHER` + 필수 코멘트 500자) · 관리자는 **청크 단위**로 본다(배지도 열린 신고를 가진 청크 수) · 중복 방지 키는 **(청크, 신고자, 대화)**(`guest-identity=shared` 면 전 방문자가 같은 id 라 청크당 한 명만 신고할 수 있게 되기 때문) · "수정됨/삭제됨"은 저장하지 않고 조회 시점에 파생(`chunk_hash` 대조) · 관리자 조치는 판정만 · 신고자 알림은 범위 밖. **두 동작의 경계는 라벨이 말한다** — *제거*(「이 답변과 상관없는 청크」, 참여도 0%일 때만 노출)와 *신고*(「내용이 틀렸거나 업데이트가 필요함」, 항상 노출); 사유 코드에 "질문과 무관"을 두면 표시 전용 동작이 관리자 대기열로 흘러든다. 신고는 2026-11-18 부터 수정안 작업의 입구도 된다(§6.33 6d).
 
 **열린 항목**: (a) 문서 단위 묶음 보기(한 문서에 신고가 흩어지면 "다시 인덱싱"이 진짜 조치일 수 있다 — 그런 패턴이 보일 때) · (b) 신고를 검색 품질 지표로 쓸 것인가(골든셋의 "사람이 표시한 오답 청크" 라벨) · (c) 개별 신고 반려(그룹 단위 동선이 기본이어야 한다).
 
@@ -554,15 +523,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ## 11.1 Spring AI 2.0 업그레이드 & Chroma 버전 정책 ✅ 업그레이드 완료 (Chroma 1.1.x 검증만 남음)
 
-**Chroma v2 API 는 이미 적용된 상태다.** Spring AI 의 `ChromaApi` 는 v2 경로만 호출하므로 이 앱은 v1 전용 Chroma 서버(0.5.x 이하)에서는 동작하지 않는다. 남아 있던 v1 잔재는 배포 설정이었고 조치 완료: 헬스체크 `/api/v2/heartbeat`, 이미지 태그 `1.0.21` 고정.
-
-| 항목 | 내용 | 상태 |
-|------|------|------|
-| Chroma 태그 고정 | `:latest` → `1.0.21`, 헬스체크 v2 경로 | ✅ 완료 |
-| Chroma 1.1.x 검증 | `ChromaApi` 가 쓰는 v2 엔드포인트 스키마가 그대로인지 실기동 확인 후 태그 상향 | 🔜 |
-| Spring AI 2.0 업그레이드 | Spring Boot 4.1 · Spring AI 2.0. OpenAI 모듈이 SDK 기반이라 LLM 계층을 다시 썼다 — 결정 근거·실측은 [PITFALLS](PITFALLS.md#spring-boot-4--spring-ai-20-마이그레이션-2026-11-05) | ✅ 2026-11-05 — 전체 테스트 + sqlite-vec/로컬 LLM 실기동. **Chroma 백엔드 실기동은 미확인**(`ChromaApi`/`ChromaVectorStore` 빌더 시그니처와 `upsertEmbeddings()`·`QueryRequest.Include` 를 직접 호출하는 `ChromaConfig`·`VectorStoreRegistry`·`ChromaVectorStoreProvider` 가 대상) |
-
-> 자동설정 exclude 와 Jackson 3·`OpenAiChatOptions` 불변 등 2.0 의 주의점은 CLAUDE.md Conventions·Key Constraints 에 있다.
+Spring Boot 4 · Spring AI 2.0 업그레이드는 2026-11-05 완료(근거·실측은 [PITFALLS](PITFALLS.md#spring-boot-4--spring-ai-20-마이그레이션-2026-11-05), 주의점은 CLAUDE.md Conventions). Spring AI 의 `ChromaApi` 는 v2 경로만 부르므로 v1 전용 Chroma(0.5.x 이하)에서는 동작하지 않고, 이미지 태그는 `1.0.21` 로 고정돼 있다. **남은 것**: ① **Chroma 백엔드 실기동 미확인** — `ChromaConfig`·`VectorStoreRegistry`·`ChromaVectorStoreProvider` 가 `ChromaApi` 빌더·`upsertEmbeddings()`·`QueryRequest.Include` 를 직접 부른다 ② Chroma 1.1.x 에서 v2 엔드포인트 스키마가 그대로인지 확인한 뒤 태그 상향.
 
 ---
 
@@ -587,7 +548,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | SQLite 파일 구성 | 단일 파일 `memory.db` (2026-09-28, Step 5.10 환원) | 운영/벡터 파일 분리 — Step 5.10 이 시도했으나 배선 사고로 실효된 적 없음. 재개 신호: 대량 인덱싱 중 채팅 지연이 **실측**될 때. 선행: `QuestionReuseRepository.findSourcePreviewRows()` 교차 조인 해소(ATTACH/2단계 조회) + 기존 배포 운영 테이블 이전 |
 | 마이그레이션 | Flyway + ANSI SQL | Liquibase |
 | 운영 테이블 스키마 | Flyway 일원화 (2026-09-29) — V4(Java)가 옛 런타임 DDL 상태들을 한 모양으로 모으고, 이후 변경은 V5+ SQL 파일 ([DATABASE.md](DATABASE.md) §2.1) | 저장소별 런타임 멱등 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER`) — 스키마가 V1–V3 와 저장소 11곳에 흩어지고 저장소 테스트가 손으로 만든 축소 스키마로 돌았다 |
-| 멀티테넌시 | Row-level + 사용자별 Chroma 컬렉션 | Schema/DB per tenant |
+| 멀티테넌시 | Row-level(`user_id`) — 대화·사용량만. 문서·벡터는 공유(`DocRegistry.SHARED`) | 사용자별 컬렉션(처음 계획, 버림) · Schema/DB per tenant |
 | 세션 저장소 | 인메모리 (단일 인스턴스) | Spring Session + Redis (스케일아웃 시) |
 | CSRF | Spring Security 기본 + HTMX 자동 주입 | Double-submit cookie |
 | Rate limit | Bucket4j 인메모리 | Redis 백엔드 (스케일아웃 시) |
